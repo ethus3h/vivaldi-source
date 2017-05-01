@@ -14,10 +14,11 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/media_galleries/fileapi/itunes_data_provider.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
@@ -83,19 +84,22 @@ class TestITunesDataProvider : public ITunesDataProvider {
   }
 
   const base::FilePath& auto_add_path() const override {
-    return fake_auto_add_dir_.path();
+    return fake_auto_add_dir_path_;
   }
 
   void SetProvideAutoAddDir(bool provide_auto_add_dir) {
     if (provide_auto_add_dir) {
       if (!fake_auto_add_dir_.IsValid())
         ASSERT_TRUE(fake_auto_add_dir_.CreateUniqueTempDir());
+      fake_auto_add_dir_path_ = fake_auto_add_dir_.GetPath();
     } else {
       ASSERT_TRUE(fake_auto_add_dir_.Delete());
+      fake_auto_add_dir_path_.clear();
     }
   }
 
  private:
+  base::FilePath fake_auto_add_dir_path_;
   base::ScopedTempDir fake_auto_add_dir_;
 };
 
@@ -132,7 +136,7 @@ class TestMediaFileSystemBackend : public MediaFileSystemBackend {
   }
 
  private:
-  scoped_ptr<storage::AsyncFileUtil> test_file_util_;
+  std::unique_ptr<storage::AsyncFileUtil> test_file_util_;
 };
 
 class ItunesFileUtilTest : public testing::Test {
@@ -143,15 +147,12 @@ class ItunesFileUtilTest : public testing::Test {
 
   void SetUpDataProvider() {
     ASSERT_TRUE(fake_library_dir_.CreateUniqueTempDir());
-    ASSERT_EQ(
-        0,
-        base::WriteFile(
-            fake_library_dir_.path().AppendASCII(kITunesLibraryXML),
-            NULL,
-            0));
+    ASSERT_EQ(0, base::WriteFile(
+                     fake_library_dir_.GetPath().AppendASCII(kITunesLibraryXML),
+                     NULL, 0));
 
     itunes_data_provider_.reset(
-        new TestITunesDataProvider(fake_library_dir_.path()));
+        new TestITunesDataProvider(fake_library_dir_.GetPath()));
   }
 
   void SetUp() override {
@@ -166,16 +167,18 @@ class ItunesFileUtilTest : public testing::Test {
         FROM_HERE,
         base::Bind(&ItunesFileUtilTest::SetUpDataProvider,
                    base::Unretained(this)));
-    base::WaitableEvent event(true, false /* initially_signalled */);
+    base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
+                              base::WaitableEvent::InitialState::NOT_SIGNALED);
     MediaFileSystemBackend::MediaTaskRunner()->PostTask(
         FROM_HERE,
         base::Bind(&base::WaitableEvent::Signal, base::Unretained(&event)));
     event.Wait();
 
     media_path_filter_.reset(new MediaPathFilter());
-    ScopedVector<storage::FileSystemBackend> additional_providers;
-    additional_providers.push_back(new TestMediaFileSystemBackend(
-        profile_dir_.path(),
+    std::vector<std::unique_ptr<storage::FileSystemBackend>>
+        additional_providers;
+    additional_providers.push_back(base::MakeUnique<TestMediaFileSystemBackend>(
+        profile_dir_.GetPath(),
         new TestITunesFileUtil(media_path_filter_.get(),
                                itunes_data_provider_.get())));
 
@@ -184,8 +187,8 @@ class ItunesFileUtilTest : public testing::Test {
         base::ThreadTaskRunnerHandle::Get().get(),
         storage::ExternalMountPoints::CreateRefCounted().get(),
         storage_policy.get(), NULL, std::move(additional_providers),
-        std::vector<storage::URLRequestAutoMountHandler>(), profile_dir_.path(),
-        content::CreateAllowFileAccessOptions());
+        std::vector<storage::URLRequestAutoMountHandler>(),
+        profile_dir_.GetPath(), content::CreateAllowFileAccessOptions());
   }
 
  protected:
@@ -229,8 +232,8 @@ class ItunesFileUtilTest : public testing::Test {
   base::ScopedTempDir fake_library_dir_;
 
   scoped_refptr<storage::FileSystemContext> file_system_context_;
-  scoped_ptr<MediaPathFilter> media_path_filter_;
-  scoped_ptr<TestITunesDataProvider> itunes_data_provider_;
+  std::unique_ptr<MediaPathFilter> media_path_filter_;
+  std::unique_ptr<TestITunesDataProvider> itunes_data_provider_;
 
   DISALLOW_COPY_AND_ASSIGN(ItunesFileUtilTest);
 };

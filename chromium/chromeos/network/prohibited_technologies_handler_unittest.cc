@@ -4,6 +4,7 @@
 
 #include "chromeos/network/prohibited_technologies_handler.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -11,7 +12,6 @@
 #include "base/callback.h"
 #include "base/json/json_reader.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -51,7 +51,7 @@ class ProhibitedTechnologiesHandlerTest : public testing::Test {
         "user_profile_path", kUserHash);
 
     base::RunLoop().RunUntilIdle();
-    network_state_handler_.reset(NetworkStateHandler::InitializeForTest());
+    network_state_handler_ = NetworkStateHandler::InitializeForTest();
     network_config_handler_.reset(
         NetworkConfigurationHandler::InitializeForTest(
             network_state_handler_.get(), NULL /* network_device_handler */));
@@ -76,7 +76,7 @@ class ProhibitedTechnologiesHandlerTest : public testing::Test {
   }
 
   void PreparePolicies() {
-    scoped_ptr<base::ListValue> val(new base::ListValue());
+    std::unique_ptr<base::ListValue> val(new base::ListValue());
     val->AppendString("WiFi");
     global_config_disable_wifi.Set("DisableNetworkTypes", std::move(val));
     val.reset(new base::ListValue());
@@ -87,6 +87,7 @@ class ProhibitedTechnologiesHandlerTest : public testing::Test {
   }
 
   void TearDown() override {
+    network_state_handler_->Shutdown();
     prohibited_technologies_handler_.reset();
     managed_config_handler_.reset();
     network_profile_handler_.reset();
@@ -117,11 +118,13 @@ class ProhibitedTechnologiesHandlerTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  scoped_ptr<ProhibitedTechnologiesHandler> prohibited_technologies_handler_;
-  scoped_ptr<NetworkStateHandler> network_state_handler_;
-  scoped_ptr<NetworkConfigurationHandler> network_config_handler_;
-  scoped_ptr<ManagedNetworkConfigurationHandlerImpl> managed_config_handler_;
-  scoped_ptr<NetworkProfileHandler> network_profile_handler_;
+  std::unique_ptr<ProhibitedTechnologiesHandler>
+      prohibited_technologies_handler_;
+  std::unique_ptr<NetworkStateHandler> network_state_handler_;
+  std::unique_ptr<NetworkConfigurationHandler> network_config_handler_;
+  std::unique_ptr<ManagedNetworkConfigurationHandlerImpl>
+      managed_config_handler_;
+  std::unique_ptr<NetworkProfileHandler> network_profile_handler_;
   ShillManagerClient::TestInterface* test_manager_client_;
   base::MessageLoopForUI message_loop_;
   base::DictionaryValue global_config_disable_wifi;
@@ -142,7 +145,7 @@ TEST_F(ProhibitedTechnologiesHandlerTest,
       network_state_handler_->IsTechnologyEnabled(NetworkTypePattern::WiFi()));
   EXPECT_TRUE(network_state_handler_->IsTechnologyEnabled(
       NetworkTypePattern::Cellular()));
-};
+}
 
 TEST_F(ProhibitedTechnologiesHandlerTest,
        ProhibitedTechnologiesNotAllowedUserSession) {
@@ -171,7 +174,7 @@ TEST_F(ProhibitedTechnologiesHandlerTest,
       NetworkTypePattern::WiFi(), true, network_handler::ErrorCallback());
   network_state_handler_->SetTechnologyEnabled(
       NetworkTypePattern::Cellular(), true, network_handler::ErrorCallback());
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(
       network_state_handler_->IsTechnologyEnabled(NetworkTypePattern::WiFi()));
   EXPECT_FALSE(network_state_handler_->IsTechnologyEnabled(
@@ -183,11 +186,11 @@ TEST_F(ProhibitedTechnologiesHandlerTest,
       NetworkTypePattern::WiFi(), true, network_handler::ErrorCallback());
   network_state_handler_->SetTechnologyEnabled(
       NetworkTypePattern::Cellular(), true, network_handler::ErrorCallback());
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(
       network_state_handler_->IsTechnologyEnabled(NetworkTypePattern::WiFi()));
   EXPECT_TRUE(network_state_handler_->IsTechnologyEnabled(
       NetworkTypePattern::Cellular()));
-};
+}
 
 }  // namespace chromeos

@@ -153,7 +153,7 @@ int SearchResultListView::GetYSize() {
   return num_results();
 }
 
-int SearchResultListView::Update() {
+int SearchResultListView::DoUpdate() {
   std::vector<SearchResult*> display_results =
       AppListModel::FilterSearchResultsByDisplayType(
           results(),
@@ -192,7 +192,7 @@ void SearchResultListView::UpdateSelectedIndex(int old_selected,
     SearchResultView* selected_view = GetResultViewAt(new_selected);
     selected_view->ClearSelectedAction();
     selected_view->SchedulePaint();
-    selected_view->NotifyAccessibilityEvent(ui::AX_EVENT_FOCUS, true);
+    selected_view->NotifyAccessibilityEvent(ui::AX_EVENT_SELECTION, true);
   }
 }
 

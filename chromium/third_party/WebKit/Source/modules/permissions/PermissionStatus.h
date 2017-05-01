@@ -5,12 +5,12 @@
 #ifndef PermissionStatus_h
 #define PermissionStatus_h
 
-#include "core/dom/ActiveDOMObject.h"
+#include "bindings/core/v8/ActiveScriptWrappable.h"
+#include "core/dom/SuspendableObject.h"
 #include "core/events/EventTarget.h"
+#include "mojo/public/cpp/bindings/binding.h"
 #include "platform/heap/Handle.h"
-#include "public/platform/modules/permissions/WebPermissionObserver.h"
-#include "public/platform/modules/permissions/WebPermissionStatus.h"
-#include "public/platform/modules/permissions/WebPermissionType.h"
+#include "public/platform/modules/permissions/permission.mojom-blink.h"
 #include "wtf/text/AtomicString.h"
 #include "wtf/text/WTFString.h"
 
@@ -21,49 +21,61 @@ class ScriptPromiseResolver;
 
 // Expose the status of a given WebPermissionType for the current
 // ExecutionContext.
-class PermissionStatus final
-    : public RefCountedGarbageCollectedEventTargetWithInlineData<PermissionStatus>
-    , public ActiveDOMObject
-    , public WebPermissionObserver {
-    REFCOUNTED_GARBAGE_COLLECTED_EVENT_TARGET(PermissionStatus);
-    WILL_BE_USING_GARBAGE_COLLECTED_MIXIN(PermissionStatus);
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    static PermissionStatus* take(ScriptPromiseResolver*, WebPermissionStatus, WebPermissionType);
+class PermissionStatus final : public EventTargetWithInlineData,
+                               public ActiveScriptWrappable<PermissionStatus>,
+                               public SuspendableObject,
+                               public mojom::blink::PermissionObserver {
+  USING_GARBAGE_COLLECTED_MIXIN(PermissionStatus);
+  DEFINE_WRAPPERTYPEINFO();
+  USING_PRE_FINALIZER(PermissionStatus, dispose);
 
-    static PermissionStatus* createAndListen(ExecutionContext*, WebPermissionStatus, WebPermissionType);
-    ~PermissionStatus() override;
+  using MojoPermissionDescriptor = mojom::blink::PermissionDescriptorPtr;
+  using MojoPermissionStatus = mojom::blink::PermissionStatus;
 
-    // EventTarget implementation.
-    const AtomicString& interfaceName() const override;
-    ExecutionContext* executionContext() const override;
+ public:
+  static PermissionStatus* take(ScriptPromiseResolver*,
+                                MojoPermissionStatus,
+                                MojoPermissionDescriptor);
 
-    // WebPermissionObserver implementation.
-    void permissionChanged(WebPermissionType, WebPermissionStatus) override;
+  static PermissionStatus* createAndListen(ExecutionContext*,
+                                           MojoPermissionStatus,
+                                           MojoPermissionDescriptor);
+  ~PermissionStatus() override;
+  void dispose();
 
-    // ActiveDOMObject implementation.
-    bool hasPendingActivity() const override;
-    void suspend() override;
-    void resume() override;
-    void stop() override;
+  // EventTarget implementation.
+  const AtomicString& interfaceName() const override;
+  ExecutionContext* getExecutionContext() const override;
 
-    String state() const;
+  // ScriptWrappable implementation.
+  bool hasPendingActivity() const final;
 
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(change);
+  // SuspendableObject implementation.
+  void suspend() override;
+  void resume() override;
+  void contextDestroyed(ExecutionContext*) override;
 
-    DECLARE_VIRTUAL_TRACE();
+  String state() const;
 
-private:
-    PermissionStatus(ExecutionContext*, WebPermissionStatus, WebPermissionType);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(change);
 
-    void startListening();
-    void stopListening();
+  DECLARE_VIRTUAL_TRACE();
 
-    WebPermissionStatus m_status;
-    WebPermissionType m_type;
-    bool m_listening;
+ private:
+  PermissionStatus(ExecutionContext*,
+                   MojoPermissionStatus,
+                   MojoPermissionDescriptor);
+
+  void startListening();
+  void stopListening();
+
+  void OnPermissionStatusChange(MojoPermissionStatus);
+
+  MojoPermissionStatus m_status;
+  MojoPermissionDescriptor m_descriptor;
+  mojo::Binding<mojom::blink::PermissionObserver> m_binding;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // PermissionStatus_h
+#endif  // PermissionStatus_h

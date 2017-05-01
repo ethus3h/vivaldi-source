@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/strings/string16.h"
+#include "printing/features/features.h"
 #include "ui/gfx/geometry/size.h"
 
 #define IPC_MESSAGE_IMPL
@@ -15,6 +16,12 @@
 // Generate destructors.
 #include "ipc/struct_destructor_macros.h"
 #include "components/printing/common/print_messages.h"
+
+// Generate param traits size methods.
+#include "ipc/param_traits_size_macros.h"
+namespace IPC {
+#include "components/printing/common/print_messages.h"
+}
 
 // Generate param traits write methods.
 #include "ipc/param_traits_write_macros.h"
@@ -35,28 +42,30 @@ namespace IPC {
 }  // namespace IPC
 
 PrintMsg_Print_Params::PrintMsg_Print_Params()
-  : page_size(),
-    content_size(),
-    printable_area(),
-    margin_top(0),
-    margin_left(0),
-    dpi(0),
-    min_shrink(0),
-    max_shrink(0),
-    desired_dpi(0),
-    document_cookie(0),
-    selection_only(false),
-    supports_alpha_blend(false),
-    preview_ui_id(-1),
-    preview_request_id(0),
-    is_first_request(false),
-    print_scaling_option(blink::WebPrintScalingOptionSourceSize),
-    print_to_pdf(false),
-    display_header_footer(false),
-    title(),
-    url(),
-    should_print_backgrounds(false) {
-}
+    : page_size(),
+      content_size(),
+      printable_area(),
+      margin_top(0),
+      margin_left(0),
+      dpi(0),
+      scale_factor(1.0f),
+      desired_dpi(0),
+      rasterize_pdf(false),
+      document_cookie(0),
+      selection_only(false),
+      supports_alpha_blend(false),
+      preview_ui_id(-1),
+      preview_request_id(0),
+      is_first_request(false),
+      print_scaling_option(blink::WebPrintScalingOptionSourceSize),
+      print_to_pdf(false),
+      display_header_footer(false),
+      title(),
+      url(),
+      should_print_backgrounds(false) {}
+
+PrintMsg_Print_Params::PrintMsg_Print_Params(
+    const PrintMsg_Print_Params& other) = default;
 
 PrintMsg_Print_Params::~PrintMsg_Print_Params() {}
 
@@ -67,9 +76,9 @@ void PrintMsg_Print_Params::Reset() {
   margin_top = 0;
   margin_left = 0;
   dpi = 0;
-  min_shrink = 0;
-  max_shrink = 0;
+  scale_factor = 1.0f;
   desired_dpi = 0;
+  rasterize_pdf = false;
   document_cookie = 0;
   selection_only = false;
   supports_alpha_blend = false;
@@ -88,6 +97,9 @@ PrintMsg_PrintPages_Params::PrintMsg_PrintPages_Params()
   : pages() {
 }
 
+PrintMsg_PrintPages_Params::PrintMsg_PrintPages_Params(
+    const PrintMsg_PrintPages_Params& other) = default;
+
 PrintMsg_PrintPages_Params::~PrintMsg_PrintPages_Params() {}
 
 void PrintMsg_PrintPages_Params::Reset() {
@@ -95,7 +107,7 @@ void PrintMsg_PrintPages_Params::Reset() {
   pages = std::vector<int>();
 }
 
-#if defined(ENABLE_PRINT_PREVIEW)
+#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 PrintHostMsg_RequestPrintPreview_Params::
     PrintHostMsg_RequestPrintPreview_Params()
     : is_modifiable(false),
@@ -117,4 +129,4 @@ PrintHostMsg_SetOptionsFromDocument_Params::
 PrintHostMsg_SetOptionsFromDocument_Params::
     ~PrintHostMsg_SetOptionsFromDocument_Params() {
 }
-#endif  // defined(ENABLE_PRINT_PREVIEW)
+#endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)

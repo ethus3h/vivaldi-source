@@ -6,9 +6,10 @@
 #define CONTENT_BROWSER_RENDERER_HOST_INPUT_MOCK_INPUT_ACK_HANDLER_H_
 
 #include <stddef.h>
+
+#include <memory>
 #include <utility>
 
-#include "base/memory/scoped_ptr.h"
 #include "content/browser/renderer_host/input/input_ack_handler.h"
 
 namespace content {
@@ -39,11 +40,13 @@ class MockInputAckHandler : public InputAckHandler {
     input_router_ = input_router;
   }
 
-  void set_followup_touch_event(scoped_ptr<GestureEventWithLatencyInfo> event) {
+  void set_followup_touch_event(
+      std::unique_ptr<GestureEventWithLatencyInfo> event) {
     gesture_followup_event_ = std::move(event);
   }
 
-  void set_followup_touch_event(scoped_ptr<TouchEventWithLatencyInfo> event) {
+  void set_followup_touch_event(
+      std::unique_ptr<TouchEventWithLatencyInfo> event) {
     touch_followup_event_ = std::move(event);
   }
 
@@ -55,7 +58,7 @@ class MockInputAckHandler : public InputAckHandler {
   blink::WebInputEvent::Type ack_event_type() const { return ack_event_type_; }
 
   const NativeWebKeyboardEvent& acked_keyboard_event() const {
-    return acked_key_event_;
+    return *acked_key_event_;
   }
   const blink::WebMouseWheelEvent& acked_wheel_event() const {
     return acked_wheel_event_;
@@ -77,14 +80,14 @@ class MockInputAckHandler : public InputAckHandler {
   bool unexpected_event_ack_called_;
   blink::WebInputEvent::Type ack_event_type_;
   InputEventAckState ack_state_;
-  NativeWebKeyboardEvent acked_key_event_;
+  std::unique_ptr<NativeWebKeyboardEvent> acked_key_event_;
   blink::WebMouseWheelEvent acked_wheel_event_;
   TouchEventWithLatencyInfo acked_touch_event_;
   blink::WebGestureEvent acked_gesture_event_;
   blink::WebMouseEvent acked_mouse_event_;
 
-  scoped_ptr<GestureEventWithLatencyInfo> gesture_followup_event_;
-  scoped_ptr<TouchEventWithLatencyInfo> touch_followup_event_;
+  std::unique_ptr<GestureEventWithLatencyInfo> gesture_followup_event_;
+  std::unique_ptr<TouchEventWithLatencyInfo> touch_followup_event_;
 };
 
 }  // namespace content

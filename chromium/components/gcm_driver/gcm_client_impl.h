@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -16,7 +17,6 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/gcm_driver/gcm_client.h"
 #include "components/gcm_driver/gcm_stats_recorder_impl.h"
@@ -28,6 +28,7 @@
 #include "google_apis/gcm/engine/unregistration_request.h"
 #include "google_apis/gcm/protocol/android_checkin.pb.h"
 #include "google_apis/gcm/protocol/checkin.pb.h"
+#include "net/http/http_status_code.h"
 #include "net/url_request/url_request_context_getter.h"
 
 class GURL;
@@ -58,14 +59,14 @@ class GCMInternalsBuilder {
   GCMInternalsBuilder();
   virtual ~GCMInternalsBuilder();
 
-  virtual scoped_ptr<base::Clock> BuildClock();
-  virtual scoped_ptr<MCSClient> BuildMCSClient(
+  virtual std::unique_ptr<base::Clock> BuildClock();
+  virtual std::unique_ptr<MCSClient> BuildMCSClient(
       const std::string& version,
       base::Clock* clock,
       ConnectionFactory* connection_factory,
       GCMStore* gcm_store,
       GCMStatsRecorder* recorder);
-  virtual scoped_ptr<ConnectionFactory> BuildConnectionFactory(
+  virtual std::unique_ptr<ConnectionFactory> BuildConnectionFactory(
       const std::vector<GURL>& endpoints,
       const net::BackoffEntry::Policy& backoff_policy,
       net::HttpNetworkSession* gcm_network_session,
@@ -99,7 +100,8 @@ class GCMClientImpl
     READY,
   };
 
-  explicit GCMClientImpl(scoped_ptr<GCMInternalsBuilder> internals_builder);
+  explicit GCMClientImpl(
+      std::unique_ptr<GCMInternalsBuilder> internals_builder);
   ~GCMClientImpl() override;
 
   // GCMClient implementation.
@@ -109,7 +111,7 @@ class GCMClientImpl
       const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
       const scoped_refptr<net::URLRequestContextGetter>&
           url_request_context_getter,
-      scoped_ptr<Encryptor> encryptor,
+      std::unique_ptr<Encryptor> encryptor,
       GCMClient::Delegate* delegate) override;
   void Start(StartMode start_mode) override;
   void Stop() override;
@@ -119,6 +121,9 @@ class GCMClientImpl
   void Send(const std::string& app_id,
             const std::string& receiver_id,
             const OutgoingMessage& message) override;
+  void RecordDecryptionFailure(const std::string& app_id,
+                               GCMEncryptionProvider::DecryptionResult result)
+      override;
   void SetRecording(bool recording) override;
   void ClearActivityLogs() override;
   GCMStatistics GetStatistics() const override;
@@ -127,7 +132,7 @@ class GCMClientImpl
   void UpdateAccountMapping(const AccountMapping& account_mapping) override;
   void RemoveAccountMapping(const std::string& account_id) override;
   void SetLastTokenFetchTime(const base::Time& time) override;
-  void UpdateHeartbeatTimer(scoped_ptr<base::Timer> timer) override;
+  void UpdateHeartbeatTimer(std::unique_ptr<base::Timer> timer) override;
   void AddInstanceIDData(const std::string& app_id,
                          const std::string& instance_id,
                          const std::string& extra_data) override;
@@ -170,19 +175,30 @@ class GCMClientImpl
     std::set<std::string> last_checkin_accounts;
   };
 
+  // Reasons for resetting the GCM Store.
+  // Note: this enum is recorded into a histogram. Do not change enum value
+  // or order.
+  enum ResetReason {
+    LOAD_FAILURE,      // GCM store failed to load, but the store exists.
+    CHECKIN_REJECTED,  // Checkin was rejected by server.
+
+    RESET_REASON_COUNT,
+  };
+
   // Collection of pending registration requests. Keys are RegistrationInfo
   // instance, while values are pending registration requests to obtain a
   // registration ID for requesting application.
-  using PendingRegistrationRequests = std::map<linked_ptr<RegistrationInfo>,
-                                               scoped_ptr<RegistrationRequest>,
-                                               RegistrationInfoComparer>;
+  using PendingRegistrationRequests =
+      std::map<linked_ptr<RegistrationInfo>,
+               std::unique_ptr<RegistrationRequest>,
+               RegistrationInfoComparer>;
 
   // Collection of pending unregistration requests. Keys are RegistrationInfo
   // instance, while values are pending unregistration requests to disable the
   // registration ID currently assigned to the application.
   using PendingUnregistrationRequests =
       std::map<linked_ptr<RegistrationInfo>,
-               scoped_ptr<UnregistrationRequest>,
+               std::unique_ptr<UnregistrationRequest>,
                RegistrationInfoComparer>;
 
   friend class GCMClientImplTest;
@@ -204,7 +220,7 @@ class GCMClientImpl
 
   // Runs after GCM Store load is done to trigger continuation of the
   // initialization.
-  void OnLoadCompleted(scoped_ptr<GCMStore::LoadResult> result);
+  void OnLoadCompleted(std::unique_ptr<GCMStore::LoadResult> result);
   // Starts the GCM.
   void StartGCM();
   // Initializes mcs_client_, which handles the connection to MCS.
@@ -225,6 +241,7 @@ class GCMClientImpl
   // Completes the device checkin request by parsing the |checkin_response|.
   // Function also cleans up the pending checkin.
   void OnCheckinCompleted(
+      net::HttpStatusCode response_code,
       const checkin_proto::AndroidCheckinResponse& checkin_response);
 
   // Callback passed to GCMStore::SetGServicesSettings.
@@ -278,12 +295,22 @@ class GCMClientImpl
   // Fires OnMessageReceived event on the delegate of this class, based on the
   // details in |data_message_stanza| and |message_data|.
   void HandleIncomingDataMessage(
+      const std::string& app_id,
+      bool was_subtype,
       const mcs_proto::DataMessageStanza& data_message_stanza,
       MessageData& message_data);
 
-  // Fires OnMessageSendError event on the delegate of this calss, based on the
+  // Fires OnMessagesDeleted event on the delegate of this class, based on the
+  // details in |data_message_stanza| and |message_data|.
+  void HandleIncomingDeletedMessages(
+      const std::string& app_id,
+      const mcs_proto::DataMessageStanza& data_message_stanza,
+      MessageData& message_data);
+
+  // Fires OnMessageSendError event on the delegate of this class, based on the
   // details in |data_message_stanza| and |message_data|.
   void HandleIncomingSendError(
+      const std::string& app_id,
       const mcs_proto::DataMessageStanza& data_message_stanza,
       MessageData& message_data);
 
@@ -297,7 +324,7 @@ class GCMClientImpl
   void ResetCache();
 
   // Builder for the GCM internals (mcs client, etc.).
-  scoped_ptr<GCMInternalsBuilder> internals_builder_;
+  std::unique_ptr<GCMInternalsBuilder> internals_builder_;
 
   // Recorder that logs GCM activities.
   GCMStatsRecorderImpl recorder_;
@@ -318,7 +345,7 @@ class GCMClientImpl
 
   // Clock used for timing of retry logic. Passed in for testing. Owned by
   // GCMClientImpl.
-  scoped_ptr<base::Clock> clock_;
+  std::unique_ptr<base::Clock> clock_;
 
   // Information about the chrome build.
   // TODO(fgorski): Check if it can be passed in constructor and made const.
@@ -326,24 +353,24 @@ class GCMClientImpl
 
   // Persistent data store for keeping device credentials, messages and user to
   // serial number mappings.
-  scoped_ptr<GCMStore> gcm_store_;
+  std::unique_ptr<GCMStore> gcm_store_;
 
   // Data loaded from the GCM store.
-  scoped_ptr<GCMStore::LoadResult> load_result_;
+  std::unique_ptr<GCMStore::LoadResult> load_result_;
 
   // Tracks if the GCM store has been reset. This is used to prevent from
   // resetting and loading from the store again and again.
   bool gcm_store_reset_;
 
-  scoped_ptr<net::HttpNetworkSession> network_session_;
-  scoped_ptr<ConnectionFactory> connection_factory_;
+  std::unique_ptr<net::HttpNetworkSession> network_session_;
+  std::unique_ptr<ConnectionFactory> connection_factory_;
   scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
 
   // Controls receiving and sending of packets and reliable message queueing.
   // Must be destroyed before |network_session_|.
-  scoped_ptr<MCSClient> mcs_client_;
+  std::unique_ptr<MCSClient> mcs_client_;
 
-  scoped_ptr<CheckinRequest> checkin_request_;
+  std::unique_ptr<CheckinRequest> checkin_request_;
 
   // Cached registration info.
   RegistrationInfoMap registrations_;

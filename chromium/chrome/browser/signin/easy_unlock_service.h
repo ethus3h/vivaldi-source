@@ -5,12 +5,12 @@
 #ifndef CHROME_BROWSER_SIGNIN_EASY_UNLOCK_SERVICE_H_
 #define CHROME_BROWSER_SIGNIN_EASY_UNLOCK_SERVICE_H_
 
+#include <memory>
 #include <set>
 #include <string>
 
 #include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "build/build_config.h"
@@ -18,8 +18,8 @@
 #include "chrome/browser/signin/easy_unlock_auth_attempt.h"
 #include "chrome/browser/signin/easy_unlock_metrics.h"
 #include "chrome/browser/signin/easy_unlock_screenlock_state_handler.h"
+#include "components/cryptauth/remote_device.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/proximity_auth/remote_device.h"
 #include "components/proximity_auth/screenlock_state.h"
 
 #if defined(OS_CHROMEOS)
@@ -42,7 +42,6 @@ class PrefRegistrySyncable;
 }
 
 namespace proximity_auth {
-class ProximityAuthBleSystem;
 class ProximityAuthSystem;
 }
 
@@ -78,7 +77,7 @@ class EasyUnlockService : public KeyedService {
   static EasyUnlockService* Get(Profile* profile);
 
   // Gets EasyUnlockService instance associated with a user if the user is
-  // logged in and his profile is initialized.
+  // logged in and their profile is initialized.
   static EasyUnlockService* GetForUser(const user_manager::User& user);
 
   // Registers Easy Unlock profile preferences.
@@ -150,15 +149,16 @@ class EasyUnlockService : public KeyedService {
   virtual void SetAutoPairingResult(bool success, const std::string& error) = 0;
 
   // Sets the service up and schedules service initialization.
-  void Initialize(scoped_ptr<EasyUnlockAppManager> app_manager);
+  void Initialize(std::unique_ptr<EasyUnlockAppManager> app_manager);
 
   // Whether easy unlock is allowed to be used. If the controlling preference
   // is set (from policy), this returns the preference value. Otherwise, it is
-  // permitted if the flag is enabled.
-  bool IsAllowed() const;
+  // permitted if the flag is enabled. Virtual to allow override for testing.
+  virtual bool IsAllowed() const;
 
-  // Whether Easy Unlock is currently enabled for this user.
-  bool IsEnabled() const;
+  // Whether Easy Unlock is currently enabled for this user. Virtual to allow
+  // override for testing.
+  virtual bool IsEnabled() const;
 
   // Sets the hardlock state for the associated user.
   void SetHardlockState(EasyUnlockScreenlockStateHandler::HardlockState state);
@@ -303,7 +303,7 @@ class EasyUnlockService : public KeyedService {
   // are loaded for |account_id|.
   void SetProximityAuthDevices(
       const AccountId& account_id,
-      const proximity_auth::RemoteDeviceList& remote_devices);
+      const cryptauth::RemoteDeviceList& remote_devices);
 
  private:
   // A class to detect whether a bluetooth adapter is present.
@@ -342,17 +342,17 @@ class EasyUnlockService : public KeyedService {
 
   ChromeProximityAuthClient proximity_auth_client_;
 
-  scoped_ptr<EasyUnlockAppManager> app_manager_;
+  std::unique_ptr<EasyUnlockAppManager> app_manager_;
 
   // Created lazily in |GetScreenlockStateHandler|.
-  scoped_ptr<EasyUnlockScreenlockStateHandler> screenlock_state_handler_;
+  std::unique_ptr<EasyUnlockScreenlockStateHandler> screenlock_state_handler_;
 
   // The handler for the current auth attempt. Set iff an auth attempt is in
   // progress.
-  scoped_ptr<EasyUnlockAuthAttempt> auth_attempt_;
+  std::unique_ptr<EasyUnlockAuthAttempt> auth_attempt_;
 
   // Detects when the system Bluetooth adapter status changes.
-  scoped_ptr<BluetoothDetector> bluetooth_detector_;
+  std::unique_ptr<BluetoothDetector> bluetooth_detector_;
 
   // Handles connecting, authenticating, and updating the UI on the lock/sign-in
   // screen. After a |RemoteDevice| instance is provided, this object will
@@ -360,12 +360,12 @@ class EasyUnlockService : public KeyedService {
   // TODO(tengs): This object is intended as a replacement of the background
   // page of the easy_unlock Chrome app. We are in the process of removing the
   // app in favor of |proximity_auth_system_|.
-  scoped_ptr<proximity_auth::ProximityAuthSystem> proximity_auth_system_;
+  std::unique_ptr<proximity_auth::ProximityAuthSystem> proximity_auth_system_;
 
 #if defined(OS_CHROMEOS)
   // Monitors suspend and wake state of ChromeOS.
   class PowerMonitor;
-  scoped_ptr<PowerMonitor> power_monitor_;
+  std::unique_ptr<PowerMonitor> power_monitor_;
 #endif
 
   // Whether the service has been shut down.

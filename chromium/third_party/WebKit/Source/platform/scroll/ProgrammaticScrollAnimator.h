@@ -5,56 +5,60 @@
 #ifndef ProgrammaticScrollAnimator_h
 #define ProgrammaticScrollAnimator_h
 
-#include "platform/geometry/FloatPoint.h"
 #include "platform/heap/Handle.h"
 #include "platform/scroll/ScrollAnimatorCompositorCoordinator.h"
 #include "wtf/Allocator.h"
 #include "wtf/Noncopyable.h"
-#include "wtf/OwnPtr.h"
-#include "wtf/PassOwnPtr.h"
+#include <memory>
 
 namespace blink {
 
 class ScrollableArea;
-class WebCompositorAnimationTimeline;
-class WebScrollOffsetAnimationCurve;
+class CompositorAnimationTimeline;
+class CompositorScrollOffsetAnimationCurve;
 
 // Animator for fixed-destination scrolls, such as those triggered by
 // CSSOM View scroll APIs.
 class ProgrammaticScrollAnimator : public ScrollAnimatorCompositorCoordinator {
-    WTF_MAKE_NONCOPYABLE(ProgrammaticScrollAnimator);
-    USING_FAST_MALLOC_WILL_BE_REMOVED(ProgrammaticScrollAnimator);
-public:
-    static PassOwnPtrWillBeRawPtr<ProgrammaticScrollAnimator> create(ScrollableArea*);
+  WTF_MAKE_NONCOPYABLE(ProgrammaticScrollAnimator);
 
-    virtual ~ProgrammaticScrollAnimator();
+ public:
+  static ProgrammaticScrollAnimator* create(ScrollableArea* scrollableArea) {
+    return new ProgrammaticScrollAnimator(scrollableArea);
+  }
 
-    void scrollToOffsetWithoutAnimation(const FloatPoint&);
-    void animateToOffset(FloatPoint);
+  virtual ~ProgrammaticScrollAnimator();
 
-    // ScrollAnimatorCompositorCoordinator implementation.
-    void resetAnimationState() override;
-    void cancelAnimation() override;
-    ScrollableArea* scrollableArea() const override { return m_scrollableArea; }
-    void tickAnimation(double monotonicTime) override;
-    void updateCompositorAnimations() override;
-    void notifyCompositorAnimationFinished(int groupId) override;
-    void notifyCompositorAnimationAborted(int groupId) override { };
-    void layerForCompositedScrollingDidChange(WebCompositorAnimationTimeline*) override;
+  void scrollToOffsetWithoutAnimation(const ScrollOffset&);
+  void animateToOffset(const ScrollOffset&);
 
-    DECLARE_TRACE();
+  // ScrollAnimatorCompositorCoordinator implementation.
+  void resetAnimationState() override;
+  void cancelAnimation() override;
+  void takeOverCompositorAnimation() override{};
+  ScrollableArea* getScrollableArea() const override {
+    return m_scrollableArea;
+  }
+  void tickAnimation(double monotonicTime) override;
+  void updateCompositorAnimations() override;
+  void notifyCompositorAnimationFinished(int groupId) override;
+  void notifyCompositorAnimationAborted(int groupId) override{};
+  void layerForCompositedScrollingDidChange(
+      CompositorAnimationTimeline*) override;
 
-private:
-    explicit ProgrammaticScrollAnimator(ScrollableArea*);
+  DECLARE_TRACE();
 
-    void notifyPositionChanged(const DoublePoint&);
+ private:
+  explicit ProgrammaticScrollAnimator(ScrollableArea*);
 
-    RawPtrWillBeMember<ScrollableArea> m_scrollableArea;
-    OwnPtr<WebScrollOffsetAnimationCurve> m_animationCurve;
-    FloatPoint m_targetOffset;
-    double m_startTime;
+  void notifyOffsetChanged(const ScrollOffset&);
+
+  Member<ScrollableArea> m_scrollableArea;
+  std::unique_ptr<CompositorScrollOffsetAnimationCurve> m_animationCurve;
+  ScrollOffset m_targetOffset;
+  double m_startTime;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // ProgrammaticScrollAnimator_h
+#endif  // ProgrammaticScrollAnimator_h

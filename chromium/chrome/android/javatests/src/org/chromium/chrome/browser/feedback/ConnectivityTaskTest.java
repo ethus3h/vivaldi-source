@@ -4,8 +4,8 @@
 
 package org.chromium.chrome.browser.feedback;
 
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.MediumTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
@@ -31,21 +31,20 @@ public class ConnectivityTaskTest extends ConnectivityCheckerTestBase {
 
     @MediumTest
     @Feature({"Feedback"})
-    public void testNormalCaseShouldWork() throws InterruptedException {
+    public void testNormalCaseShouldWork() {
         final ConnectivityTask task = ThreadUtils.runOnUiThreadBlockingNoException(
                 new Callable<ConnectivityTask>() {
                     @Override
                     public ConnectivityTask call() {
                         // Intentionally make HTTPS-connection fail which should result in
                         // NOT_CONNECTED.
-                        ConnectivityChecker.overrideUrlsForTest(GENERATE_204_URL,
-                                GENERATE_404_URL);
+                        ConnectivityChecker.overrideUrlsForTest(mGenerate204Url, mGenerate404Url);
                         return ConnectivityTask.create(Profile.getLastUsedProfile(), TIMEOUT_MS,
                                 null);
                     }
                 });
 
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria("Should be finished by now.") {
+        CriteriaHelper.pollUiThread(new Criteria("Should be finished by now.") {
             @Override
             public boolean isSatisfied() {
                 return task.isDone();
@@ -99,7 +98,7 @@ public class ConnectivityTaskTest extends ConnectivityCheckerTestBase {
             @Override
             public void run() {
                 // Intentionally make HTTPS-connection fail which should result in NOT_CONNECTED.
-                ConnectivityChecker.overrideUrlsForTest(GENERATE_204_URL, GENERATE_404_URL);
+                ConnectivityChecker.overrideUrlsForTest(mGenerate204Url, mGenerate404Url);
                 ConnectivityTask.create(Profile.getLastUsedProfile(), TIMEOUT_MS, callback);
             }
         });
@@ -114,7 +113,7 @@ public class ConnectivityTaskTest extends ConnectivityCheckerTestBase {
     @MediumTest
     @Feature({"Feedback"})
     public void testCallbackTwoTimeouts() throws InterruptedException {
-        final int checkTimeoutMs = 100;
+        final int checkTimeoutMs = 1000;
         final Semaphore semaphore = new Semaphore(0);
         final AtomicReference<FeedbackData> feedbackRef = new AtomicReference<>();
         final ConnectivityTask.ConnectivityResult callback =
@@ -129,8 +128,7 @@ public class ConnectivityTaskTest extends ConnectivityCheckerTestBase {
             @Override
             public void run() {
                 // Intentionally make HTTPS connections slow which should result in TIMEOUT.
-                ConnectivityChecker.overrideUrlsForTest(GENERATE_204_URL,
-                        GENERATE_204_SLOW_URL);
+                ConnectivityChecker.overrideUrlsForTest(mGenerate204Url, mGenerateSlowUrl);
                 ConnectivityTask.create(Profile.getLastUsedProfile(), checkTimeoutMs, callback);
             }
         });
@@ -146,21 +144,21 @@ public class ConnectivityTaskTest extends ConnectivityCheckerTestBase {
 
     @MediumTest
     @Feature({"Feedback"})
-    public void testTwoTimeoutsShouldFillInTheRest() throws InterruptedException {
+    public void testTwoTimeoutsShouldFillInTheRest() {
         final ConnectivityTask task = ThreadUtils.runOnUiThreadBlockingNoException(
                 new Callable<ConnectivityTask>() {
                     @Override
                     public ConnectivityTask call() {
                         // Intentionally make HTTPS connections slow which should result in
                         // UNKNOWN.
-                        ConnectivityChecker.overrideUrlsForTest(GENERATE_204_URL,
-                                GENERATE_204_SLOW_URL);
+                        ConnectivityChecker.overrideUrlsForTest(mGenerate204Url,
+                                mGenerateSlowUrl);
                         return ConnectivityTask.create(Profile.getLastUsedProfile(), TIMEOUT_MS,
                                 null);
                     }
                 });
         try {
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(new Criteria() {
                 @Override
                 public boolean isSatisfied() {
                     return task.isDone();

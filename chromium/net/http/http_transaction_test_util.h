@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_HTTP_HTTP_TRANSACTION_UNITTEST_H_
-#define NET_HTTP_HTTP_TRANSACTION_UNITTEST_H_
+#ifndef NET_HTTP_HTTP_TRANSACTION_TEST_UTIL_H_
+#define NET_HTTP_HTTP_TRANSACTION_TEST_UTIL_H_
 
 #include "net/http/http_transaction.h"
 
@@ -26,7 +26,6 @@
 #include "net/http/http_request_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
-#include "net/log/net_log.h"
 #include "net/socket/connection_attempts.h"
 
 namespace net {
@@ -35,6 +34,7 @@ class HttpRequestHeaders;
 class IOBuffer;
 class SSLPrivateKey;
 class X509Certificate;
+class NetLogWithSource;
 struct HttpRequestInfo;
 
 //-----------------------------------------------------------------------------
@@ -54,10 +54,14 @@ enum {
   TEST_MODE_SLOW_READ = 1 << 5
 };
 
-typedef void (*MockTransactionHandler)(const HttpRequestInfo* request,
-                                       std::string* response_status,
-                                       std::string* response_headers,
-                                       std::string* response_data);
+using MockTransactionReadHandler = int (*)(int64_t content_length,
+                                           int64_t offset,
+                                           IOBuffer* buf,
+                                           int buf_len);
+using MockTransactionHandler = void (*)(const HttpRequestInfo* request,
+                                        std::string* response_status,
+                                        std::string* response_headers,
+                                        std::string* response_data);
 
 struct MockTransaction {
   const char* url;
@@ -73,6 +77,7 @@ struct MockTransaction {
   const char* data;
   int test_mode;
   MockTransactionHandler handler;
+  MockTransactionReadHandler read_handler;
   scoped_refptr<X509Certificate> cert;
   CertStatus cert_status;
   int ssl_connection_status;
@@ -125,7 +130,7 @@ class TestTransactionConsumer {
                           HttpTransactionFactory* factory);
   virtual ~TestTransactionConsumer();
 
-  void Start(const HttpRequestInfo* request, const BoundNetLog& net_log);
+  void Start(const HttpRequestInfo* request, const NetLogWithSource& net_log);
 
   bool is_done() const { return state_ == DONE; }
   int error() const { return error_; }
@@ -133,6 +138,7 @@ class TestTransactionConsumer {
   const HttpResponseInfo* response_info() const {
     return trans_->GetResponseInfo();
   }
+  const HttpTransaction* transaction() const { return trans_.get(); }
   const std::string& content() const { return content_; }
 
  private:
@@ -151,7 +157,7 @@ class TestTransactionConsumer {
   void OnIOComplete(int result);
 
   State state_;
-  scoped_ptr<HttpTransaction> trans_;
+  std::unique_ptr<HttpTransaction> trans_;
   std::string content_;
   scoped_refptr<IOBuffer> read_buf_;
   int error_;
@@ -179,7 +185,7 @@ class MockNetworkTransaction
 
   int Start(const HttpRequestInfo* request,
             const CompletionCallback& callback,
-            const BoundNetLog& net_log) override;
+            const NetLogWithSource& net_log) override;
 
   int RestartIgnoringLastError(const CompletionCallback& callback) override;
 
@@ -211,8 +217,6 @@ class MockNetworkTransaction
 
   LoadState GetLoadState() const override;
 
-  UploadProgress GetUploadProgress() const override;
-
   void SetQuicServerInfo(QuicServerInfo* quic_server_info) override;
 
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override;
@@ -227,8 +231,8 @@ class MockNetworkTransaction
   void SetBeforeNetworkStartCallback(
       const BeforeNetworkStartCallback& callback) override;
 
-  void SetBeforeProxyHeadersSentCallback(
-      const BeforeProxyHeadersSentCallback& callback) override;
+  void SetBeforeHeadersSentCallback(
+      const BeforeHeadersSentCallback& callback) override;
 
   int ResumeNetworkStart() override;
 
@@ -250,23 +254,27 @@ class MockNetworkTransaction
  private:
   int StartInternal(const HttpRequestInfo* request,
                     const CompletionCallback& callback,
-                    const BoundNetLog& net_log);
+                    const NetLogWithSource& net_log);
   void CallbackLater(const CompletionCallback& callback, int result);
   void RunCallback(const CompletionCallback& callback, int result);
 
   const HttpRequestInfo* request_;
   HttpResponseInfo response_;
   std::string data_;
-  int data_cursor_;
+  int64_t data_cursor_;
+  int64_t content_length_;
   int test_mode_;
   RequestPriority priority_;
+  MockTransactionReadHandler read_handler_;
   CreateHelper* websocket_handshake_stream_create_helper_;
+  BeforeNetworkStartCallback before_network_start_callback_;
   base::WeakPtr<MockNetworkLayer> transaction_factory_;
   int64_t received_bytes_;
   int64_t sent_bytes_;
 
   // NetLog ID of the fake / non-existent underlying socket used by the
-  // connection. Requires Start() be passed a BoundNetLog with a real NetLog to
+  // connection. Requires Start() be passed a NetLogWithSource with a real
+  // NetLog to
   // be initialized.
   unsigned int socket_log_id_;
 
@@ -287,6 +295,10 @@ class MockNetworkLayer : public HttpTransactionFactory,
   bool stop_caching_called() const { return stop_caching_called_; }
   void TransactionDoneReading();
   void TransactionStopCaching();
+
+  // Resets the transaction count. Can be called after test setup in order to
+  // make test expectations independent of how test setup is performed.
+  void ResetTransactionCount();
 
   // Returns the last priority passed to CreateTransaction, or
   // DEFAULT_PRIORITY if it hasn't been called yet.
@@ -311,7 +323,7 @@ class MockNetworkLayer : public HttpTransactionFactory,
 
   // HttpTransactionFactory:
   int CreateTransaction(RequestPriority priority,
-                        scoped_ptr<HttpTransaction>* trans) override;
+                        std::unique_ptr<HttpTransaction>* trans) override;
   HttpCache* GetCache() override;
   HttpNetworkSession* GetSession() override;
 
@@ -343,4 +355,4 @@ int ReadTransaction(HttpTransaction* trans, std::string* result);
 
 }  // namespace net
 
-#endif  // NET_HTTP_HTTP_TRANSACTION_UNITTEST_H_
+#endif  // NET_HTTP_HTTP_TRANSACTION_TEST_UTIL_H_

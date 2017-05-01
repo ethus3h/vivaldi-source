@@ -3,13 +3,10 @@
         "platform"
     ],
     "scripts": [
-        "WorkerRuntime.js",
-        "WebInspector.js",
+        "Worker.js",
         "TextDictionary.js",
         "Object.js",
-        "NotificationService.js",
         "Color.js",
-        "Geometry.js",
         "Console.js",
         "ContentProvider.js",
         "ParsedURL.js",
@@ -18,14 +15,15 @@
         "Settings.js",
         "StaticContentProvider.js",
         "OutputStream.js",
-        "TestBase.js",
+        "SegmentedRange.js",
+        "Text.js",
         "TextRange.js",
         "TextUtils.js",
         "Throttler.js",
+        "Trie.js",
         "UIString.js",
-        "ModuleExtensionInterfaces.js"
-    ],
-    "skip_compilation": [
-        "TestBase.js"
+        "ModuleExtensionInterfaces.js",
+        "FormatterWorkerPool.js",
+        "CharacterIdMap.js"
     ]
 }

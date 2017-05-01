@@ -16,16 +16,19 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.IBinder;
 import android.support.customtabs.CustomTabsIntent;
+import android.support.customtabs.CustomTabsSessionToken;
 import android.text.TextUtils;
 import android.util.Pair;
+import android.view.View;
+import android.widget.RemoteViews;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Log;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
+import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.util.IntentUtils;
 import org.chromium.chrome.browser.widget.TintedDrawable;
 
@@ -44,6 +47,42 @@ public class CustomTabIntentDataProvider {
      */
     public static final String EXTRA_KEEP_ALIVE = "android.support.customtabs.extra.KEEP_ALIVE";
 
+    /**
+     * Herb: Extra that indicates whether or not the Custom Tab is being launched by an Intent fired
+     * by Chrome itself.
+     */
+    public static final String EXTRA_IS_OPENED_BY_CHROME =
+            "org.chromium.chrome.browser.customtabs.IS_OPENED_BY_CHROME";
+
+    /** Indicates that the Custom Tab should style itself as a media viewer. */
+    public static final String EXTRA_IS_MEDIA_VIEWER =
+            "org.chromium.chrome.browser.customtabs.IS_MEDIA_VIEWER";
+
+    /** URL that should be loaded in place of the URL passed along in the data. */
+    public static final String EXTRA_MEDIA_VIEWER_URL =
+            "org.chromium.chrome.browser.customtabs.MEDIA_VIEWER_URL";
+
+    /** Indicates that the Custom Tab should style itself as an info page. */
+    public static final String EXTRA_IS_INFO_PAGE =
+            "org.chromium.chrome.browser.customtabs.IS_INFO_PAGE";
+
+    /** Extra that defines the initial background color (RGB color stored as an integer). */
+    public static final String EXTRA_INITIAL_BACKGROUND_COLOR =
+            "org.chromium.chrome.browser.customtabs.EXTRA_INITIAL_BACKGROUND_COLOR";
+
+    /** Extra that enables the client to disable the star button in menu. */
+    public static final String EXTRA_DISABLE_STAR_BUTTON =
+            "org.chromium.chrome.browser.customtabs.EXTRA_DISABLE_STAR_BUTTON";
+
+    /** Extra that enables the client to disable the download button in menu. */
+    public static final String EXTRA_DISABLE_DOWNLOAD_BUTTON =
+            "org.chromium.chrome.browser.customtabs.EXTRA_DISABLE_DOWNLOAD_BUTTON";
+
+    //TODO(yusufo): Move this to CustomTabsIntent.
+    /** Signals custom tabs to favor sending initial urls to external handler apps if possible. */
+    public static final String EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER =
+            "android.support.customtabs.extra.SEND_TO_EXTERNAL_HANDLER";
+
     private static final int MAX_CUSTOM_MENU_ITEMS = 5;
     private static final String ANIMATION_BUNDLE_PREFIX =
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? "android:activity." : "android:";
@@ -52,9 +91,18 @@ public class CustomTabIntentDataProvider {
             ANIMATION_BUNDLE_PREFIX + "animEnterRes";
     private static final String BUNDLE_EXIT_ANIMATION_RESOURCE =
             ANIMATION_BUNDLE_PREFIX + "animExitRes";
-    private final IBinder mSession;
+
+    private final CustomTabsSessionToken mSession;
+    private final boolean mIsTrustedIntent;
     private final Intent mKeepAliveServiceIntent;
     private final int mTitleVisibilityState;
+    private final boolean mIsMediaViewer;
+    private final String mMediaViewerUrl;
+    private final boolean mIsInfoPage;
+    private final int mInitialBackgroundColor;
+    private final boolean mDisableStar;
+    private final boolean mDisableDownload;
+
     private int mToolbarColor;
     private int mBottomBarColor;
     private boolean mEnableUrlBarHiding;
@@ -65,18 +113,28 @@ public class CustomTabIntentDataProvider {
     private boolean mShowShareItem;
     private CustomButtonParams mToolbarButton;
     private List<CustomButtonParams> mBottombarButtons = new ArrayList<>(2);
+    private RemoteViews mRemoteViews;
+    private int[] mClickableViewIds;
+    private PendingIntent mRemoteViewsPendingIntent;
     // OnFinished listener for PendingIntents. Used for testing only.
     private PendingIntent.OnFinished mOnFinished;
+
+    /** Herb: Whether this CustomTabActivity was explicitly started by another Chrome Activity. */
+    private boolean mIsOpenedByChrome;
 
     /**
      * Constructs a {@link CustomTabIntentDataProvider}.
      */
     public CustomTabIntentDataProvider(Intent intent, Context context) {
         if (intent == null) assert false;
-        mSession = IntentUtils.safeGetBinderExtra(intent, CustomTabsIntent.EXTRA_SESSION);
+        mSession = CustomTabsSessionToken.getSessionTokenFromIntent(intent);
+        mIsTrustedIntent = IntentHandler.isIntentChromeOrFirstParty(intent);
+
         retrieveCustomButtons(intent, context);
         retrieveToolbarColor(intent, context);
         retrieveBottomBarColor(intent);
+        mInitialBackgroundColor = retrieveInitialBackgroundColor(intent);
+
         mEnableUrlBarHiding = IntentUtils.safeGetBooleanExtra(
                 intent, CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, true);
         mKeepAliveServiceIntent = IntentUtils.safeGetParcelableExtra(intent, EXTRA_KEEP_ALIVE);
@@ -84,6 +142,7 @@ public class CustomTabIntentDataProvider {
         Bitmap bitmap = IntentUtils.safeGetParcelableExtra(intent,
                 CustomTabsIntent.EXTRA_CLOSE_BUTTON_ICON);
         if (bitmap != null && !checkCloseButtonSize(context, bitmap)) {
+            IntentUtils.safeRemoveExtra(intent, CustomTabsIntent.EXTRA_CLOSE_BUTTON_ICON);
             bitmap.recycle();
             bitmap = null;
         }
@@ -108,12 +167,29 @@ public class CustomTabIntentDataProvider {
             }
         }
 
+        mIsOpenedByChrome =
+                IntentUtils.safeGetBooleanExtra(intent, EXTRA_IS_OPENED_BY_CHROME, false);
         mAnimationBundle = IntentUtils.safeGetBundleExtra(
                 intent, CustomTabsIntent.EXTRA_EXIT_ANIMATION_BUNDLE);
         mTitleVisibilityState = IntentUtils.safeGetIntExtra(intent,
                 CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.NO_TITLE);
         mShowShareItem = IntentUtils.safeGetBooleanExtra(intent,
                 CustomTabsIntent.EXTRA_DEFAULT_SHARE_MENU_ITEM, false);
+        mRemoteViews = IntentUtils.safeGetParcelableExtra(intent,
+                CustomTabsIntent.EXTRA_REMOTEVIEWS);
+        mClickableViewIds = IntentUtils.safeGetIntArrayExtra(intent,
+                CustomTabsIntent.EXTRA_REMOTEVIEWS_VIEW_IDS);
+        mRemoteViewsPendingIntent = IntentUtils.safeGetParcelableExtra(intent,
+                CustomTabsIntent.EXTRA_REMOTEVIEWS_PENDINGINTENT);
+        mIsMediaViewer = mIsTrustedIntent
+                && IntentUtils.safeGetBooleanExtra(intent, EXTRA_IS_MEDIA_VIEWER, false);
+        mMediaViewerUrl = mIsMediaViewer
+                ? IntentUtils.safeGetStringExtra(intent, EXTRA_MEDIA_VIEWER_URL) : null;
+        mIsInfoPage = mIsTrustedIntent
+                && IntentUtils.safeGetBooleanExtra(intent, EXTRA_IS_INFO_PAGE, false);
+        mDisableStar = IntentUtils.safeGetBooleanExtra(intent, EXTRA_DISABLE_STAR_BUTTON, false);
+        mDisableDownload = IntentUtils.safeGetBooleanExtra(intent, EXTRA_DISABLE_DOWNLOAD_BUTTON,
+                false);
     }
 
     /**
@@ -141,7 +217,7 @@ public class CustomTabIntentDataProvider {
                 R.color.default_primary_color);
         int color = IntentUtils.safeGetIntExtra(intent, CustomTabsIntent.EXTRA_TOOLBAR_COLOR,
                 defaultColor);
-        mToolbarColor = removeTransparencyFromColor(color, defaultColor);
+        mToolbarColor = removeTransparencyFromColor(color);
     }
 
     /**
@@ -151,23 +227,31 @@ public class CustomTabIntentDataProvider {
         int defaultColor = mToolbarColor;
         int color = IntentUtils.safeGetIntExtra(intent,
                 CustomTabsIntent.EXTRA_SECONDARY_TOOLBAR_COLOR, defaultColor);
-        mBottomBarColor = removeTransparencyFromColor(color, defaultColor);
+        mBottomBarColor = removeTransparencyFromColor(color);
     }
 
     /**
-     * Removes the alpha channel of the given color and returns the processed value. If the result
-     * is blank, returns the fallback value.
+     * Returns the color to initialize the background of the Custom Tab with.
+     * If no valid color is set, Color.TRANSPARENT is returned.
      */
-    private int removeTransparencyFromColor(int color, int fallbackColor) {
-        color |= 0xFF000000;
-        if (color == Color.TRANSPARENT) color = fallbackColor;
-        return color;
+    private int retrieveInitialBackgroundColor(Intent intent) {
+        int defaultColor = Color.TRANSPARENT;
+        int color = IntentUtils.safeGetIntExtra(
+                intent, EXTRA_INITIAL_BACKGROUND_COLOR, defaultColor);
+        return color == Color.TRANSPARENT ? color : removeTransparencyFromColor(color);
+    }
+
+    /**
+     * Removes the alpha channel of the given color and returns the processed value.
+     */
+    private int removeTransparencyFromColor(int color) {
+        return color | 0xFF000000;
     }
 
     /**
      * @return The session specified in the intent, or null.
      */
-    public IBinder getSession() {
+    public CustomTabsSessionToken getSession() {
         return mSession;
     }
 
@@ -236,7 +320,7 @@ public class CustomTabIntentDataProvider {
      * @return Whether the bottom bar should be shown.
      */
     public boolean shouldShowBottomBar() {
-        return !mBottombarButtons.isEmpty();
+        return !mBottombarButtons.isEmpty() || mRemoteViews != null;
     }
 
     /**
@@ -244,6 +328,28 @@ public class CustomTabIntentDataProvider {
      */
     public int getBottomBarColor() {
         return mBottomBarColor;
+    }
+
+    /**
+     * @return The {@link RemoteViews} to show on the bottom bar, or null if the extra is not
+     *         specified.
+     */
+    public RemoteViews getBottomBarRemoteViews() {
+        return mRemoteViews;
+    }
+
+    /**
+     * @return A array of {@link View} ids, of which the onClick event is handled by the custom tab.
+     */
+    public int[] getClickableViewIDs() {
+        return mClickableViewIds.clone();
+    }
+
+    /**
+     * @return The {@link PendingIntent} that is sent when the user clicks on the remote view.
+     */
+    public PendingIntent getRemoteViewsPendingIntent() {
+        return mRemoteViewsPendingIntent;
     }
 
     /**
@@ -287,8 +393,11 @@ public class CustomTabIntentDataProvider {
         Intent addedIntent = new Intent();
         addedIntent.setData(Uri.parse(url));
         try {
+            // Media viewers pass in PendingIntents that contain CHOOSER Intents.  Setting the data
+            // in these cases prevents the Intent from firing correctly.
             PendingIntent pendingIntent = mMenuEntries.get(menuIndex).second;
-            pendingIntent.send(activity, 0, addedIntent, mOnFinished, null);
+            pendingIntent.send(
+                    activity, 0, isMediaViewer() ? null : addedIntent, mOnFinished, null);
         } catch (CanceledException e) {
             Log.e(TAG, "Custom tab in Chrome failed to send pending intent.");
         }
@@ -358,5 +467,63 @@ public class CustomTabIntentDataProvider {
     @VisibleForTesting
     void setPendingIntentOnFinishedForTesting(PendingIntent.OnFinished onFinished) {
         mOnFinished = onFinished;
+    }
+
+    /**
+     * @return See {@link #EXTRA_IS_OPENED_BY_CHROME}.
+     */
+    boolean isOpenedByChrome() {
+        return mIsOpenedByChrome;
+    }
+
+    /**
+     * Checks whether or not the Intent is from Chrome or other trusted first party.
+     */
+    boolean isTrustedIntent() {
+        return mIsTrustedIntent;
+    }
+
+    /**
+     * @return See {@link #EXTRA_IS_MEDIA_VIEWER}.
+     */
+    boolean isMediaViewer() {
+        return mIsMediaViewer;
+    }
+
+    /**
+     * @return See {@link #EXTRA_MEDIA_VIEWER_URL}.
+     */
+    String getMediaViewerUrl() {
+        return mMediaViewerUrl;
+    }
+
+    /**
+     * @return If the Custom Tab is an info page.
+     * See {@link #EXTRA_IS_INFO_PAGE}.
+     */
+    boolean isInfoPage() {
+        return mIsInfoPage;
+    }
+
+    /**
+     * See {@link #EXTRA_INITIAL_BACKGROUND_COLOR}.
+     * @return The color if it was specified in the Intent, Color.TRANSPARENT otherwise.
+     */
+    int getInitialBackgroundColor() {
+        return mInitialBackgroundColor;
+    }
+
+    /**
+     * @return Whether there should be a star button in the menu.
+     */
+    boolean shouldShowStarButton() {
+        return !mDisableStar;
+    }
+
+    /**
+     * @return Whether there should be a download button in the menu.
+     */
+    boolean shouldShowDownloadButton() {
+        return !mDisableDownload;
     }
 }

@@ -9,13 +9,16 @@
 #include <algorithm>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/i18n/case_conversion.h"
 #include "base/logging.h"
+#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_driver.h"
+#include "components/autofill/core/browser/autofill_experiments.h"
 #include "components/autofill/core/browser/popup_item_ids.h"
 #include "components/autofill/core/browser/suggestion.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -24,6 +27,7 @@
 #include "components/password_manager/core/browser/affiliation_utils.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
 #include "grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -31,18 +35,6 @@
 namespace password_manager {
 
 namespace {
-
-// Tests if |username| and |suggestion| are the same. This is different from the
-// usual string operator== in that an empty username will only match the
-// (non-empty) description of the empty username, used in the suggestions UI.
-bool CompareUsernameSuggestion(const base::string16& username,
-                               const base::string16& suggestion) {
-  if (username.empty()) {
-    return suggestion ==
-           l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_EMPTY_LOGIN);
-  }
-  return username == suggestion;
-}
 
 // Returns |username| unless it is empty. For an empty |username| returns a
 // localised string saying this username is empty. Use this for displaying the
@@ -64,6 +56,15 @@ base::string16 GetHumanReadableRealm(const std::string& signon_realm) {
   return base::UTF8ToUTF16(signon_realm);
 }
 
+// If |suggestion| was made for an empty username, then return the empty
+// string, otherwise return |suggestion|.
+base::string16 GetUsernameFromSuggestion(const base::string16& suggestion) {
+  return suggestion ==
+                 l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_EMPTY_LOGIN)
+             ? base::string16()
+             : suggestion;
+}
+
 // If |field_suggestion| matches |field_content|, creates a Suggestion out of it
 // and appends to |suggestions|.
 void AppendSuggestionIfMatching(
@@ -71,6 +72,7 @@ void AppendSuggestionIfMatching(
     const base::string16& field_contents,
     const std::string& signon_realm,
     bool show_all,
+    bool is_password_field,
     std::vector<autofill::Suggestion>* suggestions) {
   base::string16 lower_suggestion = base::i18n::ToLower(field_suggestion);
   base::string16 lower_contents = base::i18n::ToLower(field_contents);
@@ -82,7 +84,9 @@ void AppendSuggestionIfMatching(
           lower_suggestion, lower_contents, true)) {
     autofill::Suggestion suggestion(ReplaceEmptyUsername(field_suggestion));
     suggestion.label = GetHumanReadableRealm(signon_realm);
-    suggestion.frontend_id = autofill::POPUP_ITEM_ID_PASSWORD_ENTRY;
+    suggestion.frontend_id = is_password_field
+                                 ? autofill::POPUP_ITEM_ID_PASSWORD_ENTRY
+                                 : autofill::POPUP_ITEM_ID_USERNAME_ENTRY;
     suggestion.match = prefix_matched_suggestion
                            ? autofill::Suggestion::PREFIX_MATCH
                            : autofill::Suggestion::SUBSTRING_MATCH;
@@ -96,19 +100,23 @@ void AppendSuggestionIfMatching(
 void GetSuggestions(const autofill::PasswordFormFillData& fill_data,
                     const base::string16& current_username,
                     std::vector<autofill::Suggestion>* suggestions,
-                    bool show_all) {
+                    bool show_all,
+                    bool is_password_field) {
   AppendSuggestionIfMatching(fill_data.username_field.value, current_username,
-                             fill_data.preferred_realm, show_all, suggestions);
+                             fill_data.preferred_realm, show_all,
+                             is_password_field, suggestions);
 
   for (const auto& login : fill_data.additional_logins) {
     AppendSuggestionIfMatching(login.first, current_username,
-                               login.second.realm, show_all, suggestions);
+                               login.second.realm, show_all, is_password_field,
+                               suggestions);
   }
 
   for (const auto& usernames : fill_data.other_possible_usernames) {
     for (size_t i = 0; i < usernames.second.size(); ++i) {
       AppendSuggestionIfMatching(usernames.second[i], current_username,
-                                 usernames.first.realm, show_all, suggestions);
+                                 usernames.first.realm, show_all,
+                                 is_password_field, suggestions);
     }
   }
 
@@ -193,7 +201,8 @@ void PasswordAutofillManager::OnShowPasswordSuggestions(
     return;
   }
   GetSuggestions(fill_data_it->second, typed_username, &suggestions,
-                 options & autofill::SHOW_ALL);
+                 (options & autofill::SHOW_ALL) != 0,
+                 (options & autofill::IS_PASSWORD_FIELD) != 0);
 
   form_data_key_ = key;
 
@@ -208,14 +217,76 @@ void PasswordAutofillManager::OnShowPasswordSuggestions(
     password_field_suggestions.frontend_id = autofill::POPUP_ITEM_ID_TITLE;
     suggestions.insert(suggestions.begin(), password_field_suggestions);
   }
+
+  GURL origin = (fill_data_it->second).origin;
+  bool is_context_secure = autofill_client_->IsContextSecure() &&
+                           (!origin.is_valid() || !origin.SchemeIs("http"));
+  if (!is_context_secure && security_state::IsHttpWarningInFormEnabled()) {
+    std::string icon_str;
+
+    // Show http info icon for http sites.
+    if (origin.is_valid() && origin.SchemeIs("http")) {
+      icon_str = "httpWarning";
+    } else {
+      // Show https_invalid icon for broken https sites.
+      icon_str = "httpsInvalid";
+    }
+
+    autofill::Suggestion http_warning_suggestion(
+        l10n_util::GetStringUTF8(IDS_AUTOFILL_LOGIN_HTTP_WARNING_MESSAGE),
+        l10n_util::GetStringUTF8(IDS_AUTOFILL_HTTP_WARNING_LEARN_MORE),
+        icon_str, autofill::POPUP_ITEM_ID_HTTP_NOT_SECURE_WARNING_MESSAGE);
+#if !defined(OS_ANDROID)
+      suggestions.insert(suggestions.begin(), autofill::Suggestion());
+      suggestions.front().frontend_id = autofill::POPUP_ITEM_ID_SEPARATOR;
+#endif
+      suggestions.insert(suggestions.begin(), http_warning_suggestion);
+
+      if (!did_show_form_not_secure_warning_) {
+        did_show_form_not_secure_warning_ = true;
+        metrics_util::LogShowedFormNotSecureWarningOnCurrentNavigation();
+      }
+  }
+
   autofill_client_->ShowAutofillPopup(bounds,
                                       text_direction,
                                       suggestions,
                                       weak_ptr_factory_.GetWeakPtr());
 }
 
+void PasswordAutofillManager::OnShowNotSecureWarning(
+    base::i18n::TextDirection text_direction,
+    const gfx::RectF& bounds) {
+  DCHECK(security_state::IsHttpWarningInFormEnabled());
+  // TODO(estark): Other code paths in this file don't do null checks before
+  // using |autofill_client_|. It seems that these other code paths somehow
+  // short-circuit before dereferencing |autofill_client_| in cases where it's
+  // null; it would be good to understand why/how and make a firm decision about
+  // whether |autofill_client_| is allowed to be null. Ideally we would be able
+  // to get rid of such cases so that we can enable Form-Not-Secure warnings
+  // here in all cases. https://crbug.com/699217
+  if (!autofill_client_)
+    return;
+
+  std::vector<autofill::Suggestion> suggestions;
+  autofill::Suggestion http_warning_suggestion(
+      l10n_util::GetStringUTF8(IDS_AUTOFILL_LOGIN_HTTP_WARNING_MESSAGE),
+      l10n_util::GetStringUTF8(IDS_AUTOFILL_HTTP_WARNING_LEARN_MORE),
+      "httpWarning", autofill::POPUP_ITEM_ID_HTTP_NOT_SECURE_WARNING_MESSAGE);
+  suggestions.insert(suggestions.begin(), http_warning_suggestion);
+
+  autofill_client_->ShowAutofillPopup(bounds, text_direction, suggestions,
+                                      weak_ptr_factory_.GetWeakPtr());
+
+  if (did_show_form_not_secure_warning_)
+    return;
+  did_show_form_not_secure_warning_ = true;
+  metrics_util::LogShowedFormNotSecureWarningOnCurrentNavigation();
+}
+
 void PasswordAutofillManager::DidNavigateMainFrame() {
   login_to_password_info_.clear();
+  did_show_form_not_secure_warning_ = false;
 }
 
 bool PasswordAutofillManager::FillSuggestionForTest(
@@ -239,15 +310,24 @@ void PasswordAutofillManager::OnPopupHidden() {
 void PasswordAutofillManager::DidSelectSuggestion(const base::string16& value,
                                                   int identifier) {
   ClearPreviewedForm();
-  bool success = PreviewSuggestion(form_data_key_, value);
+  if (identifier == autofill::POPUP_ITEM_ID_HTTP_NOT_SECURE_WARNING_MESSAGE)
+    return;
+  bool success =
+      PreviewSuggestion(form_data_key_, GetUsernameFromSuggestion(value));
   DCHECK(success);
 }
 
 void PasswordAutofillManager::DidAcceptSuggestion(const base::string16& value,
                                                   int identifier,
                                                   int position) {
-  bool success = FillSuggestion(form_data_key_, value);
-  DCHECK(success);
+  if (identifier == autofill::POPUP_ITEM_ID_HTTP_NOT_SECURE_WARNING_MESSAGE) {
+    metrics_util::LogShowedHttpNotSecureExplanation();
+    autofill_client_->ShowHttpNotSecureExplanation();
+  } else {
+    bool success =
+        FillSuggestion(form_data_key_, GetUsernameFromSuggestion(value));
+    DCHECK(success);
+  }
   autofill_client_->HideAutofillPopup();
 }
 
@@ -270,6 +350,10 @@ void PasswordAutofillManager::ClearPreviewedForm() {
   password_manager_driver_->ClearPreviewedForm();
 }
 
+bool PasswordAutofillManager::IsCreditCardPopup() {
+  return false;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // PasswordAutofillManager, private:
 
@@ -282,8 +366,7 @@ bool PasswordAutofillManager::GetPasswordAndRealmForUsername(
   // fetch the actual password. See crbug.com/178358 for more context.
 
   // Look for any suitable matches to current field text.
-  if (CompareUsernameSuggestion(fill_data.username_field.value,
-                                current_username)) {
+  if (fill_data.username_field.value == current_username) {
     password_and_realm->password = fill_data.password_field.value;
     password_and_realm->realm = fill_data.preferred_realm;
     return true;
@@ -293,7 +376,7 @@ bool PasswordAutofillManager::GetPasswordAndRealmForUsername(
   for (autofill::PasswordFormFillData::LoginCollection::const_iterator iter =
            fill_data.additional_logins.begin();
        iter != fill_data.additional_logins.end(); ++iter) {
-    if (CompareUsernameSuggestion(iter->first, current_username)) {
+    if (iter->first == current_username) {
       *password_and_realm = iter->second;
       return true;
     }
@@ -304,8 +387,7 @@ bool PasswordAutofillManager::GetPasswordAndRealmForUsername(
        usernames_iter != fill_data.other_possible_usernames.end();
        ++usernames_iter) {
     for (size_t i = 0; i < usernames_iter->second.size(); ++i) {
-      if (CompareUsernameSuggestion(usernames_iter->second[i],
-                                    current_username)) {
+      if (usernames_iter->second[i] == current_username) {
         password_and_realm->password = usernames_iter->first.password;
         password_and_realm->realm = usernames_iter->first.realm;
         return true;

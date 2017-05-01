@@ -30,36 +30,35 @@
 
 #include "platform/network/HTTPHeaderMap.h"
 
+#include "wtf/PtrUtil.h"
+#include <memory>
+
 namespace blink {
 
-HTTPHeaderMap::HTTPHeaderMap()
-{
+HTTPHeaderMap::HTTPHeaderMap() {}
+
+HTTPHeaderMap::~HTTPHeaderMap() {}
+
+std::unique_ptr<CrossThreadHTTPHeaderMapData> HTTPHeaderMap::copyData() const {
+  std::unique_ptr<CrossThreadHTTPHeaderMapData> data =
+      WTF::makeUnique<CrossThreadHTTPHeaderMapData>();
+  data->reserveInitialCapacity(size());
+
+  HTTPHeaderMap::const_iterator endIt = end();
+  for (HTTPHeaderMap::const_iterator it = begin(); it != endIt; ++it)
+    data->uncheckedAppend(std::make_pair(it->key.getString().isolatedCopy(),
+                                         it->value.getString().isolatedCopy()));
+
+  return data;
 }
 
-HTTPHeaderMap::~HTTPHeaderMap()
-{
+void HTTPHeaderMap::adopt(std::unique_ptr<CrossThreadHTTPHeaderMapData> data) {
+  clear();
+  size_t dataSize = data->size();
+  for (size_t index = 0; index < dataSize; ++index) {
+    std::pair<String, String>& header = (*data)[index];
+    set(AtomicString(header.first), AtomicString(header.second));
+  }
 }
 
-PassOwnPtr<CrossThreadHTTPHeaderMapData> HTTPHeaderMap::copyData() const
-{
-    OwnPtr<CrossThreadHTTPHeaderMapData> data = adoptPtr(new CrossThreadHTTPHeaderMapData());
-    data->reserveInitialCapacity(size());
-
-    HTTPHeaderMap::const_iterator endIt = end();
-    for (HTTPHeaderMap::const_iterator it = begin(); it != endIt; ++it)
-        data->uncheckedAppend(std::make_pair(it->key.string().isolatedCopy(), it->value.string().isolatedCopy()));
-
-    return data.release();
-}
-
-void HTTPHeaderMap::adopt(PassOwnPtr<CrossThreadHTTPHeaderMapData> data)
-{
-    clear();
-    size_t dataSize = data->size();
-    for (size_t index = 0; index < dataSize; ++index) {
-        std::pair<String, String>& header = (*data)[index];
-        set(AtomicString(header.first), AtomicString(header.second));
-    }
-}
-
-} // namespace blink
+}  // namespace blink

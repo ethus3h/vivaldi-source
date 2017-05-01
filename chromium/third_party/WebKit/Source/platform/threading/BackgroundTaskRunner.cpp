@@ -4,22 +4,19 @@
 
 #include "platform/threading/BackgroundTaskRunner.h"
 
-#include "base/bind.h"
 #include "base/location.h"
 #include "base/threading/worker_pool.h"
 #include "public/platform/WebTraceLocation.h"
 
 namespace blink {
 
-static void RunBackgroundTask(PassOwnPtr<Closure> closure)
-{
-    (*closure)();
+void BackgroundTaskRunner::postOnBackgroundThread(
+    const WebTraceLocation& location,
+    std::unique_ptr<CrossThreadClosure> closure,
+    TaskSize taskSize) {
+  base::WorkerPool::PostTask(location,
+                             convertToBaseCallback(std::move(closure)),
+                             taskSize == TaskSizeLongRunningTask);
 }
 
-void BackgroundTaskRunner::postOnBackgroundThread(const WebTraceLocation& location, PassOwnPtr<Closure> closure, TaskSize taskSize)
-{
-    tracked_objects::Location baseLocation(location.functionName(), location.fileName(), 0, nullptr);
-    base::WorkerPool::PostTask(baseLocation, base::Bind(&RunBackgroundTask, closure), taskSize == TaskSizeLongRunningTask);
-}
-
-} // namespace blink
+}  // namespace blink

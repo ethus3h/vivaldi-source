@@ -5,14 +5,17 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_VIEW_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/pref_member.h"
 #include "chrome/browser/command_observer.h"
-#include "chrome/browser/ui/toolbar/app_menu_badge_controller.h"
+#include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "components/prefs/pref_member.h"
+#include "components/translate/core/browser/translate_step.h"
+#include "components/translate/core/common/translate_errors.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/controls/button/menu_button.h"
@@ -27,9 +30,13 @@ class HomeButton;
 class ReloadButton;
 class ToolbarButton;
 
-namespace extensions {
-class Command;
-class Extension;
+namespace autofill {
+class SaveCardBubbleController;
+class SaveCardBubbleView;
+}
+
+namespace bookmarks {
+class BookmarkBubbleObserver;
 }
 
 // The Browser Window's toolbar.
@@ -40,9 +47,7 @@ class ToolbarView : public views::AccessiblePaneView,
                     public content::NotificationObserver,
                     public CommandObserver,
                     public views::ButtonListener,
-                    public views::WidgetObserver,
-                    public views::ViewTargeterDelegate,
-                    public AppMenuBadgeController::Delegate {
+                    public AppMenuIconController::Delegate {
  public:
   // The view class name.
   static const char kViewClassName[];
@@ -72,18 +77,22 @@ class ToolbarView : public views::AccessiblePaneView,
 
   virtual bool GetAcceleratorInfo(int id, ui::Accelerator* accel);
 
-  // Returns the view to which the bookmark bubble should be anchored.
-  views::View* GetBookmarkBubbleAnchor();
+  // Shows a bookmark bubble and anchors it appropriately.
+  void ShowBookmarkBubble(const GURL& url,
+                          bool already_bookmarked,
+                          bookmarks::BookmarkBubbleObserver* observer);
 
-  // Returns the view to which the "Save credit card" bubble should be anchored.
-  views::View* GetSaveCreditCardBubbleAnchor();
+  // Shows a bubble offering to save a credit card and anchors it appropriately.
+  autofill::SaveCardBubbleView* ShowSaveCreditCardBubble(
+      content::WebContents* contents,
+      autofill::SaveCardBubbleController* controller,
+      bool is_user_gesture);
 
-  // Returns the view to which the Translate bubble should be anchored.
-  views::View* GetTranslateBubbleAnchor();
-
-  // Executes |command| registered by |extension|.
-  void ExecuteExtensionCommand(const extensions::Extension* extension,
-                               const extensions::Command& command);
+  // Shows the translate bubble and anchors it appropriately.
+  void ShowTranslateBubble(content::WebContents* web_contents,
+                           translate::TranslateStep step,
+                           translate::TranslateErrors::Type error_type,
+                           bool is_user_gesture);
 
   // Returns the maximum width the browser actions container can have.
   int GetMaxBrowserActionsWidth() const;
@@ -95,43 +104,35 @@ class ToolbarView : public views::AccessiblePaneView,
   LocationBarView* location_bar() const { return location_bar_; }
   AppMenuButton* app_menu_button() const { return app_menu_button_; }
   HomeButton* home_button() const { return home_; }
-  AppMenuBadgeController* app_menu_badge_controller() {
-    return &badge_controller_;
+  AppMenuIconController* app_menu_icon_controller() {
+    return &app_menu_icon_controller_;
   }
 
   // AccessiblePaneView:
   bool SetPaneFocus(View* initial_focus) override;
-  void GetAccessibleState(ui::AXViewState* state) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
   // views::MenuButtonListener:
-  void OnMenuButtonClicked(views::View* source,
-                           const gfx::Point& point) override;
+  void OnMenuButtonClicked(views::MenuButton* source,
+                           const gfx::Point& point,
+                           const ui::Event* event) override;
 
   // LocationBarView::Delegate:
   content::WebContents* GetWebContents() override;
   ToolbarModel* GetToolbarModel() override;
   const ToolbarModel* GetToolbarModel() const override;
-  views::Widget* CreateViewsBubble(
-      views::BubbleDelegateView* bubble_delegate) override;
   PageActionImageView* CreatePageActionImageView(
       LocationBarView* owner,
       ExtensionAction* action) override;
   ContentSettingBubbleModelDelegate* GetContentSettingBubbleModelDelegate()
       override;
-  void ShowWebsiteSettings(
-      content::WebContents* web_contents,
-      const GURL& url,
-      const security_state::SecurityStateModel::SecurityInfo& security_info)
-      override;
+  void ShowWebsiteSettings(content::WebContents* web_contents) override;
 
   // CommandObserver:
   void EnabledStateChangedForCommand(int id, bool enabled) override;
 
   // views::ButtonListener:
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
-
-  // views::WidgetObserver:
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   // content::NotificationObserver:
   void Observe(int type,
@@ -140,7 +141,7 @@ class ToolbarView : public views::AccessiblePaneView,
 
   // ui::AcceleratorProvider:
   bool GetAcceleratorForCommandId(int command_id,
-                                  ui::Accelerator* accelerator) override;
+                                  ui::Accelerator* accelerator) const override;
 
   // views::View:
   gfx::Size GetPreferredSize() const override;
@@ -163,17 +164,10 @@ class ToolbarView : public views::AccessiblePaneView,
                               // bar, used for popups.
   };
 
-  // views::ViewTargeterDelegate:
-  bool DoesIntersectRect(const views::View* target,
-                         const gfx::Rect& rect) const override;
-
-  // AppMenuBadgeController::Delegate:
-  void UpdateBadgeSeverity(AppMenuBadgeController::BadgeType type,
-                           AppMenuIconPainter::Severity severity,
-                           bool animate) override;
-
-  // Returns the number of pixels above the location bar in non-normal display.
-  int PopupTopSpacing() const;
+  // AppMenuIconController::Delegate:
+  void UpdateSeverity(AppMenuIconController::IconType type,
+                      AppMenuIconController::Severity severity,
+                      bool animate) override;
 
   // Used to avoid duplicating the near-identical logic of
   // ToolbarView::GetPreferredSize() and ToolbarView::GetMinimumSize(). These
@@ -200,9 +194,8 @@ class ToolbarView : public views::AccessiblePaneView,
 
   void OnShowHomeButtonChanged();
 
-  int content_shadow_height() const;
-
-  // Controls
+  // Controls. Most of these can be null, e.g. in popup windows. Only
+  // |location_bar_| is guaranteed to exist.
   BackButton* back_;
   ToolbarButton* forward_;
   ReloadButton* reload_;
@@ -210,15 +203,16 @@ class ToolbarView : public views::AccessiblePaneView,
   LocationBarView* location_bar_;
   BrowserActionsContainer* browser_actions_;
   AppMenuButton* app_menu_button_;
+
   Browser* browser_;
 
-  AppMenuBadgeController badge_controller_;
+  AppMenuIconController app_menu_icon_controller_;
 
   // Controls whether or not a home button should be shown on the toolbar.
   BooleanPrefMember show_home_button_;
 
   // The display mode used when laying out the toolbar.
-  DisplayMode display_mode_;
+  const DisplayMode display_mode_;
 
   content::NotificationRegistrar registrar_;
 

@@ -4,10 +4,12 @@
 
 #include "chrome/browser/chromeos/power/extension_event_observer.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/memory/ptr_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/gcm.h"
@@ -50,7 +52,8 @@ bool ExtensionEventObserver::TestApi::WillDelaySuspendForExtensionHost(
   if (!parent_)
     return false;
 
-  return parent_->keepalive_sources_.contains(host);
+  return parent_->keepalive_sources_.find(host) !=
+         parent_->keepalive_sources_.end();
 }
 
 struct ExtensionEventObserver::KeepaliveSources {
@@ -84,9 +87,9 @@ ExtensionEventObserver::~ExtensionEventObserver() {
   DBusThreadManager::Get()->GetPowerManagerClient()->RemoveObserver(this);
 }
 
-scoped_ptr<ExtensionEventObserver::TestApi>
+std::unique_ptr<ExtensionEventObserver::TestApi>
 ExtensionEventObserver::CreateTestApi() {
-  return make_scoped_ptr(
+  return base::WrapUnique(
       new ExtensionEventObserver::TestApi(weak_factory_.GetWeakPtr()));
 }
 
@@ -129,8 +132,8 @@ void ExtensionEventObserver::OnBackgroundHostCreated(
       !extensions::BackgroundInfo::HasLazyBackgroundPage(host->extension()))
     return;
 
-  auto result =
-      keepalive_sources_.add(host, make_scoped_ptr(new KeepaliveSources()));
+  auto result = keepalive_sources_.insert(
+      std::make_pair(host, base::MakeUnique<KeepaliveSources>()));
 
   if (result.second)
     host->AddObserver(this);
@@ -138,10 +141,11 @@ void ExtensionEventObserver::OnBackgroundHostCreated(
 
 void ExtensionEventObserver::OnExtensionHostDestroyed(
     const extensions::ExtensionHost* host) {
-  DCHECK(keepalive_sources_.contains(host));
+  auto it = keepalive_sources_.find(host);
+  DCHECK(it != keepalive_sources_.end());
 
-  scoped_ptr<KeepaliveSources> sources =
-      keepalive_sources_.take_and_erase(host);
+  std::unique_ptr<KeepaliveSources> sources = std::move(it->second);
+  keepalive_sources_.erase(it);
 
   suspend_keepalive_count_ -= sources->unacked_push_messages.size();
   suspend_keepalive_count_ -= sources->pending_network_requests.size();
@@ -152,21 +156,21 @@ void ExtensionEventObserver::OnBackgroundEventDispatched(
     const extensions::ExtensionHost* host,
     const std::string& event_name,
     int event_id) {
-  DCHECK(keepalive_sources_.contains(host));
+  DCHECK(keepalive_sources_.find(host) != keepalive_sources_.end());
 
   if (event_name != extensions::api::gcm::OnMessage::kEventName)
     return;
 
-  keepalive_sources_.get(host)->unacked_push_messages.insert(event_id);
+  keepalive_sources_[host]->unacked_push_messages.insert(event_id);
   ++suspend_keepalive_count_;
 }
 
 void ExtensionEventObserver::OnBackgroundEventAcked(
     const extensions::ExtensionHost* host,
     int event_id) {
-  DCHECK(keepalive_sources_.contains(host));
+  DCHECK(keepalive_sources_.find(host) != keepalive_sources_.end());
 
-  if (keepalive_sources_.get(host)->unacked_push_messages.erase(event_id) > 0) {
+  if (keepalive_sources_[host]->unacked_push_messages.erase(event_id) > 0) {
     --suspend_keepalive_count_;
     MaybeReportSuspendReadiness();
   }
@@ -175,9 +179,9 @@ void ExtensionEventObserver::OnBackgroundEventAcked(
 void ExtensionEventObserver::OnNetworkRequestStarted(
     const extensions::ExtensionHost* host,
     uint64_t request_id) {
-  DCHECK(keepalive_sources_.contains(host));
+  DCHECK(keepalive_sources_.find(host) != keepalive_sources_.end());
 
-  KeepaliveSources* sources = keepalive_sources_.get(host);
+  KeepaliveSources* sources = keepalive_sources_[host].get();
 
   // We only care about network requests that were started while a push message
   // is pending.  This is an indication that the network request is related to
@@ -192,9 +196,9 @@ void ExtensionEventObserver::OnNetworkRequestStarted(
 void ExtensionEventObserver::OnNetworkRequestDone(
     const extensions::ExtensionHost* host,
     uint64_t request_id) {
-  DCHECK(keepalive_sources_.contains(host));
+  DCHECK(keepalive_sources_.find(host) != keepalive_sources_.end());
 
-  if (keepalive_sources_.get(host)->pending_network_requests.erase(request_id) >
+  if (keepalive_sources_[host]->pending_network_requests.erase(request_id) >
       0) {
     --suspend_keepalive_count_;
     MaybeReportSuspendReadiness();

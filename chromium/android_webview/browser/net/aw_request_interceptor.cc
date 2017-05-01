@@ -10,6 +10,7 @@
 #include "android_webview/browser/input_stream.h"
 #include "android_webview/browser/net/android_stream_reader_url_request_job.h"
 #include "android_webview/browser/net/aw_web_resource_response.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/supports_user_data.h"
@@ -28,13 +29,13 @@ class StreamReaderJobDelegateImpl
     : public AndroidStreamReaderURLRequestJob::Delegate {
  public:
   StreamReaderJobDelegateImpl(
-      scoped_ptr<AwWebResourceResponse> aw_web_resource_response)
+      std::unique_ptr<AwWebResourceResponse> aw_web_resource_response)
       : aw_web_resource_response_(std::move(aw_web_resource_response)) {
     DCHECK(aw_web_resource_response_);
   }
 
-  scoped_ptr<InputStream> OpenInputStream(JNIEnv* env,
-                                          const GURL& url) override {
+  std::unique_ptr<InputStream> OpenInputStream(JNIEnv* env,
+                                               const GURL& url) override {
     return aw_web_resource_response_->GetInputStream(env);
   }
 
@@ -73,16 +74,16 @@ class StreamReaderJobDelegateImpl
   }
 
  private:
-  scoped_ptr<AwWebResourceResponse> aw_web_resource_response_;
+  std::unique_ptr<AwWebResourceResponse> aw_web_resource_response_;
 };
 
 class ShouldInterceptRequestAdaptor
     : public AndroidStreamReaderURLRequestJob::DelegateObtainer {
  public:
   explicit ShouldInterceptRequestAdaptor(
-      scoped_ptr<AwContentsIoThreadClient> io_thread_client)
+      std::unique_ptr<AwContentsIoThreadClient> io_thread_client)
       : io_thread_client_(std::move(io_thread_client)), weak_factory_(this) {}
-   ~ShouldInterceptRequestAdaptor() override {}
+  ~ShouldInterceptRequestAdaptor() override {}
 
   void ObtainDelegate(net::URLRequest* request,
                       const Callback& callback) override {
@@ -98,43 +99,34 @@ class ShouldInterceptRequestAdaptor
 
  private:
   void WebResourceResponseObtained(
-      scoped_ptr<AwWebResourceResponse> response) {
+      std::unique_ptr<AwWebResourceResponse> response) {
     if (response) {
-      callback_.Run(make_scoped_ptr(
-          new StreamReaderJobDelegateImpl(std::move(response))));
+      callback_.Run(
+          base::MakeUnique<StreamReaderJobDelegateImpl>(std::move(response)));
     } else {
       callback_.Run(nullptr);
     }
   }
 
-  scoped_ptr<AwContentsIoThreadClient> io_thread_client_;
+  std::unique_ptr<AwContentsIoThreadClient> io_thread_client_;
   Callback callback_;
   base::WeakPtrFactory<ShouldInterceptRequestAdaptor> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ShouldInterceptRequestAdaptor);
 };
 
-scoped_ptr<AwContentsIoThreadClient> GetCorrespondingIoThreadClient(
+std::unique_ptr<AwContentsIoThreadClient> GetCorrespondingIoThreadClient(
     net::URLRequest* request) {
+  if (content::ResourceRequestInfo::OriginatedFromServiceWorker(request))
+    return AwContentsIoThreadClient::GetServiceWorkerIoThreadClient();
+
   int render_process_id, render_frame_id;
   if (!content::ResourceRequestInfo::GetRenderFrameForRequest(
       request, &render_process_id, &render_frame_id)) {
-    // When there is no associated render frame, or the frame_id is
-    // invalid we assume the request come from a service worker.
-    // TODO: add a more explicit service worker check.
-    return AwContentsIoThreadClient::GetServiceWorkerIoThreadClient();
+    return nullptr;
   }
 
-  scoped_ptr<AwContentsIoThreadClient> io_thread_client =
-      AwContentsIoThreadClient::FromID(render_process_id, render_frame_id);
-
-  if (!io_thread_client) {
-    // This means the frame id is invalid/not set, this currently happens
-    // with e.g. fetch requests coming from service workers.
-    return AwContentsIoThreadClient::GetServiceWorkerIoThreadClient();
-  }
-
-  return io_thread_client;
+  return AwContentsIoThreadClient::FromID(render_process_id, render_frame_id);
 }
 
 }  // namespace
@@ -152,7 +144,7 @@ net::URLRequestJob* AwRequestInterceptor::MaybeInterceptRequest(
   if (request->GetUserData(kRequestAlreadyHasJobDataKey))
     return nullptr;
 
-  scoped_ptr<AwContentsIoThreadClient> io_thread_client =
+  std::unique_ptr<AwContentsIoThreadClient> io_thread_client =
       GetCorrespondingIoThreadClient(request);
 
   if (!io_thread_client)
@@ -168,8 +160,8 @@ net::URLRequestJob* AwRequestInterceptor::MaybeInterceptRequest(
                        new base::SupportsUserData::Data());
   return new AndroidStreamReaderURLRequestJob(
       request, network_delegate,
-      make_scoped_ptr(
-          new ShouldInterceptRequestAdaptor(std::move(io_thread_client))),
+      base::MakeUnique<ShouldInterceptRequestAdaptor>(
+          std::move(io_thread_client)),
       true);
 }
 

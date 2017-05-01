@@ -69,9 +69,17 @@ class CONTENT_EXPORT DownloadItemImplDelegate {
   // to OnDownloadedFileRemoved().
   virtual void CheckForFileRemoval(DownloadItemImpl* download_item);
 
+  // Return a GUID string used for identifying the application to the system AV
+  // function for scanning downloaded files. If no GUID is provided or if the
+  // provided GUID is invalid, then the appropriate quarantining will be
+  // performed manually without passing the download to the system AV function.
+  //
+  // This GUID is only used on Windows.
+  virtual std::string GetApplicationClientIdForFileScanning() const;
+
   // Called when an interrupted download is resumed.
   virtual void ResumeInterruptedDownload(
-      scoped_ptr<content::DownloadUrlParameters> params,
+      std::unique_ptr<content::DownloadUrlParameters> params,
       uint32_t id);
 
   // For contextual issues like language and prefs.

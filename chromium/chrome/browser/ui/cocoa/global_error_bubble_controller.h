@@ -7,15 +7,16 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "base/memory/weak_ptr.h"
 #import "chrome/browser/ui/cocoa/base_bubble_controller.h"
 
 class Browser;
+class GlobalErrorBubbleViewBase;
 class GlobalErrorWithStandardBubble;
 @class GTMUILocalizerAndLayoutTweaker;
 @class GTMWidthBasedTweaker;
-class Profile;
 
 namespace GlobalErrorBubbleControllerInternal {
 class Bridge;
@@ -26,7 +27,7 @@ class Bridge;
 @interface GlobalErrorBubbleController : BaseBubbleController {
  @private
   base::WeakPtr<GlobalErrorWithStandardBubble> error_;
-  scoped_ptr<GlobalErrorBubbleControllerInternal::Bridge> bridge_;
+  std::unique_ptr<GlobalErrorBubbleControllerInternal::Bridge> bridge_;
   Browser* browser_;
 
   IBOutlet NSImageView* iconView_;
@@ -44,5 +45,12 @@ class Bridge;
 - (void)close;
 
 @end
+
+// Helper to show a toolkit-views global error bubble. Implemented in a views-
+// specific file.
+GlobalErrorBubbleViewBase* ShowViewsGlobalErrorBubbleOnCocoaBrowser(
+    NSPoint anchor,
+    Browser* browser,
+    const base::WeakPtr<GlobalErrorWithStandardBubble>& error);
 
 #endif  // CHROME_BROWSER_UI_COCOA_GLOBAL_ERROR_BUBBLE_CONTROLLER_H_

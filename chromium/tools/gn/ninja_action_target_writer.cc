@@ -27,6 +27,8 @@ NinjaActionTargetWriter::~NinjaActionTargetWriter() {
 }
 
 void NinjaActionTargetWriter::Run() {
+  if (target_->is_disabled())
+    return;
   std::string custom_rule_name = WriteRuleDefinition();
 
   // Collect our deps to pass as "extra hard dependencies" for input deps. This
@@ -87,8 +89,11 @@ void NinjaActionTargetWriter::Run() {
   // runtime and should be compiled when the action is, but don't need to be
   // done before we run the action.
   std::vector<OutputFile> data_outs;
-  for (const auto& dep : target_->data_deps())
+  for (const auto& dep : target_->data_deps()) {
+    if (dep.ptr->is_disabled())
+      continue;
     data_outs.push_back(dep.ptr->dependency_output_file());
+  }
   WriteStampForTarget(output_files, data_outs);
 }
 
@@ -166,7 +171,7 @@ void NinjaActionTargetWriter::WriteSourceRules(
     path_output_.WriteFile(out_, sources[i]);
     if (!input_dep.value().empty()) {
       // Using "|" for the dependencies forces all implicit dependencies to be
-      // fully up-to-date before running the action, and will re-run this
+      // fully up to date before running the action, and will re-run this
       // action if any input dependencies change. This is important because
       // this action may consume the outputs of previous steps.
       out_ << " | ";
@@ -180,15 +185,15 @@ void NinjaActionTargetWriter::WriteSourceRules(
 
     // The required types is the union of the args and response file. This
     // might theoretically duplicate a definition if the same substitution is
-    // used in both the args and the reponse file. However, this should be
+    // used in both the args and the response file. However, this should be
     // very unusual (normally the substitutions will go in one place or the
     // other) and the redundant assignment won't bother Ninja.
     SubstitutionWriter::WriteNinjaVariablesForSource(
-        settings_, sources[i],
+        target_, settings_, sources[i],
         target_->action_values().args().required_types(),
         args_escape_options, out_);
     SubstitutionWriter::WriteNinjaVariablesForSource(
-        settings_, sources[i],
+        target_, settings_, sources[i],
         target_->action_values().rsp_file_contents().required_types(),
         args_escape_options, out_);
 
@@ -206,7 +211,8 @@ void NinjaActionTargetWriter::WriteOutputFilesForBuildLine(
   size_t first_output_index = output_files->size();
 
   SubstitutionWriter::ApplyListToSourceAsOutputFile(
-      settings_, target_->action_values().outputs(), source, output_files);
+      target_, settings_, target_->action_values().outputs(), source,
+      output_files);
 
   for (size_t i = first_output_index; i < output_files->size(); i++) {
     out_ << " ";
@@ -217,5 +223,5 @@ void NinjaActionTargetWriter::WriteOutputFilesForBuildLine(
 void NinjaActionTargetWriter::WriteDepfile(const SourceFile& source) {
   path_output_.WriteFile(out_,
       SubstitutionWriter::ApplyPatternToSourceAsOutputFile(
-          settings_, target_->action_values().depfile(), source));
+          target_, settings_, target_->action_values().depfile(), source));
 }

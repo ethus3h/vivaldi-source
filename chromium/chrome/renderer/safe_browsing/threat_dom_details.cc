@@ -5,8 +5,7 @@
 #include "chrome/renderer/safe_browsing/threat_dom_details.h"
 
 #include "base/compiler_specific.h"
-#include "chrome/common/chrome_constants.h"
-#include "chrome/common/safe_browsing/safebrowsing_messages.h"
+#include "components/safe_browsing/common/safebrowsing_messages.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
@@ -105,6 +104,10 @@ void ThreatDOMDetails::ExtractResources(
     }
   }
   resources->push_back(details_node);
+}
+
+void ThreatDOMDetails::OnDestruct() {
+  delete this;
 }
 
 }  // namespace safe_browsing

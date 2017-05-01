@@ -29,20 +29,19 @@
  */
 
 #include "wtf/CryptographicallyRandomNumber.h"
-#include "wtf/MainThread.h"
+#include "wtf/CurrentTime.h"
 #include "wtf/WTF.h"
+#include "wtf/allocator/Partitions.h"
 #include <base/test/test_suite.h>
 #include <string.h>
 
-static double CurrentTime()
-{
-    return 0.0;
+static double dummyCurrentTime() {
+  return 0.0;
 }
 
-int main(int argc, char** argv)
-{
-    WTF::setAlwaysZeroRandomSourceForTesting();
-    WTF::initialize(CurrentTime, nullptr, nullptr, nullptr);
-    WTF::initializeMainThread(0);
-    return base::RunUnitTestsUsingBaseTestSuite(argc, argv);
+int main(int argc, char** argv) {
+  WTF::Partitions::initialize(nullptr);
+  WTF::setTimeFunctionsForTesting(dummyCurrentTime);
+  WTF::initialize(nullptr);
+  return base::RunUnitTestsUsingBaseTestSuite(argc, argv);
 }

@@ -62,12 +62,12 @@ scoped_refptr<Extension> LoadExtension(const base::FilePath& extension_root,
 
 // Loads an extension manifest from the specified directory. Returns NULL
 // on failure, with a description of the error in |error|.
-scoped_ptr<base::DictionaryValue> LoadManifest(
+std::unique_ptr<base::DictionaryValue> LoadManifest(
     const base::FilePath& extension_root,
     std::string* error);
 
 // Convenience overload for specifying a manifest filename.
-scoped_ptr<base::DictionaryValue> LoadManifest(
+std::unique_ptr<base::DictionaryValue> LoadManifest(
     const base::FilePath& extension_root,
     const base::FilePath::CharType* manifest_filename,
     std::string* error);
@@ -114,11 +114,6 @@ void DeleteFile(const base::FilePath& path, bool recursive);
 
 // Get a relative file path from a chrome-extension:// URL.
 base::FilePath ExtensionURLToRelativeFilePath(const GURL& url);
-
-// Get a full file path from a chrome-extension-resource:// URL, If the URL
-// points a file outside of root, this function will return empty FilePath.
-base::FilePath ExtensionResourceURLToFilePath(const GURL& url,
-                                              const base::FilePath& root);
 
 // Returns true if the icons in the icon set exist. Oherwise, populates
 // |error| with the |error_message_id| for an invalid file.

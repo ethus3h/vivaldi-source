@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#ifdef __SSE__
+#include <xmmintrin.h>
+#endif
 
 #include "base/trace_event/trace_event_argument.h"
 #include "base/values.h"
@@ -61,38 +64,84 @@ static HomogeneousCoordinate MapHomogeneousPoint(
   return result;
 }
 
-static HomogeneousCoordinate ComputeClippedPointForEdge(
+static void homogenousLimitAtZero(SkMScalar a1,
+                                  SkMScalar w1,
+                                  SkMScalar a2,
+                                  SkMScalar w2,
+                                  float t,
+                                  float* limit) {
+  // This is the tolerance for detecting an eyepoint-aligned edge.
+  static const float kStationaryPointEplison = 0.00001f;
+  // This needs to be big enough to not be the limit of clipping, but not so
+  // big that using it as a size destroys the offset in a rect.
+  static const float kInfiniteCoordinate = 1000000.0f;
+
+  if (std::abs(a1 * w2 / w1 / a2 - 1.0f) > kStationaryPointEplison) {
+    // We are going to explode towards an infity, but we choose the one that
+    // corresponds to the one on the positive side of w.
+    if (((1.0f - t) * a1 + t * a2) > 0) {
+      *limit = kInfiniteCoordinate;
+    } else {
+      *limit = -kInfiniteCoordinate;
+    }
+  } else {
+    *limit = a1 / w1;  // (== a2 / w2) && == (1.0f - t) * a1 / w1 + t * a2 / w2
+  }
+}
+
+static gfx::PointF ComputeClippedCartesianPoint2dForEdge(
     const HomogeneousCoordinate& h1,
     const HomogeneousCoordinate& h2) {
   // Points h1 and h2 form a line in 4d, and any point on that line can be
   // represented as an interpolation between h1 and h2:
   //    p = (1-t) h1 + (t) h2
   //
-  // We want to compute point p such that p.w == epsilon, where epsilon is a
-  // small non-zero number. (but the smaller the number is, the higher the risk
-  // of overflow)
-  // To do this, we solve for t in the following equation:
-  //    p.w = epsilon = (1-t) * h1.w + (t) * h2.w
+  // We want to compute the limit in 2 space of
+  //    x = ((1-t) h1.x + (t) h2.x) / ((1-t) h1.w + (t) h2.w)
+  //    y = ((1-t) h1.y + (t) h2.y) / ((1-t) h1.w + (t) h2.w)
+  // as ((1-t) h1.w + (t) h2.w) -> 0+
+
+  // The only answers to this are h1.x/h1.w == h2.x/h2.w, +/- infinity
+  // i.e., either the coordinate is not moving, or is trending to one
+  // infinity or the other.
+
+  float t = h1.w() / (h1.w() - h2.w());
+  float x;
+  float y;
+
+  homogenousLimitAtZero(h1.x(), h1.w(), h2.x(), h2.w(), t, &x);
+  homogenousLimitAtZero(h1.y(), h1.w(), h2.y(), h2.w(), t, &y);
+
+  return gfx::PointF(x, y);
+}
+
+static gfx::Point3F ComputeClippedCartesianPoint3dForEdge(
+    const HomogeneousCoordinate& h1,
+    const HomogeneousCoordinate& h2) {
+  // Points h1 and h2 form a line in 4d, and any point on that line can be
+  // represented as an interpolation between h1 and h2:
+  //    p = (1-t) h1 + (t) h2
   //
-  // Once paramter t is known, the rest of p can be computed via
-  //    p = (1-t) h1 + (t) h2.
+  // We want to compute the limit in 3 space of
+  //    x = ((1-t) h1.x + (t) h2.x) / ((1-t) h1.w + (t) h2.w)
+  //    y = ((1-t) h1.y + (t) h2.y) / ((1-t) h1.w + (t) h2.w)
+  //    z = ((1-t) h1.z + (t) h2.z) / ((1-t) h1.w + (t) h2.w)
+  // as ((1-t) h1.w + (t) h2.w) -> 0+
 
-  // Technically this is a special case of the following assertion, but its a
-  // good idea to keep it an explicit sanity check here.
-  DCHECK_NE(h2.w(), h1.w());
-  // Exactly one of h1 or h2 (but not both) must be on the negative side of the
-  // w plane when this is called.
-  DCHECK(h1.ShouldBeClipped() ^ h2.ShouldBeClipped());
+  // The only answers to this are h1.x/h1.w == h2.x/h2.w, +/- infinity
+  // i.e., either the coordinate is not moving, or is trending to one
+  // infinity or the other.
 
-  // ...or any positive non-zero small epsilon
-  SkMScalar w = 0.00001f;
-  SkMScalar t = (w - h1.w()) / (h2.w() - h1.w());
+  float t = h1.w() / (h1.w() - h2.w());
+  float x;
+  float y;
+  float z;
 
-  SkMScalar x = (SK_MScalar1 - t) * h1.x() + t * h2.x();
-  SkMScalar y = (SK_MScalar1 - t) * h1.y() + t * h2.y();
-  SkMScalar z = (SK_MScalar1 - t) * h1.z() + t * h2.z();
+  homogenousLimitAtZero(h1.x(), h1.w(), h2.x(), h2.w(), t, &x);
+  homogenousLimitAtZero(h1.y(), h1.w(), h2.y(), h2.w(), t, &y);
+  homogenousLimitAtZero(h1.z(), h1.w(), h2.z(), h2.w(), t, &z);
 
-  return HomogeneousCoordinate(x, y, z, w);
+  return gfx::Point3F(x, y, z);
 }
 
 static inline void ExpandBoundsToIncludePoint(float* xmin,
@@ -106,16 +155,36 @@ static inline void ExpandBoundsToIncludePoint(float* xmin,
   *ymax = std::max(p.y(), *ymax);
 }
 
-static inline void AddVertexToClippedQuad(const gfx::PointF& new_vertex,
-                                          gfx::PointF clipped_quad[8],
-                                          int* num_vertices_in_clipped_quad) {
-  clipped_quad[*num_vertices_in_clipped_quad] = new_vertex;
-  (*num_vertices_in_clipped_quad)++;
+static inline bool IsNearlyTheSame(float f, float g) {
+  // The idea behind this is to use this fraction of the larger of the
+  // two numbers as the limit of the difference.  This breaks down near
+  // zero, so we reuse this as the minimum absolute size we will use
+  // for the base of the scale too.
+  static const float epsilon_scale = 0.00001f;
+  return std::abs(f - g) <
+         epsilon_scale *
+             std::max(std::max(std::abs(f), std::abs(g)), epsilon_scale);
+}
+
+static inline bool IsNearlyTheSame(const gfx::PointF& lhs,
+                                   const gfx::PointF& rhs) {
+  return IsNearlyTheSame(lhs.x(), rhs.x()) && IsNearlyTheSame(lhs.y(), rhs.y());
+}
+
+static inline bool IsNearlyTheSame(const gfx::Point3F& lhs,
+                                   const gfx::Point3F& rhs) {
+  return IsNearlyTheSame(lhs.x(), rhs.x()) &&
+         IsNearlyTheSame(lhs.y(), rhs.y()) && IsNearlyTheSame(lhs.z(), rhs.z());
 }
 
 static inline void AddVertexToClippedQuad3d(const gfx::Point3F& new_vertex,
-                                            gfx::Point3F clipped_quad[8],
+                                            gfx::Point3F clipped_quad[6],
                                             int* num_vertices_in_clipped_quad) {
+  if (*num_vertices_in_clipped_quad > 0 &&
+      IsNearlyTheSame(clipped_quad[*num_vertices_in_clipped_quad - 1],
+                      new_vertex))
+    return;
+
   clipped_quad[*num_vertices_in_clipped_quad] = new_vertex;
   (*num_vertices_in_clipped_quad)++;
 }
@@ -238,78 +307,9 @@ gfx::Rect MathUtil::MapEnclosedRectWith2dAxisAlignedTransform(
   return gfx::ToEnclosedRect(gfx::BoundingRect(top_left, bottom_right));
 }
 
-void MathUtil::MapClippedQuad(const gfx::Transform& transform,
-                              const gfx::QuadF& src_quad,
-                              gfx::PointF clipped_quad[8],
-                              int* num_vertices_in_clipped_quad) {
-  HomogeneousCoordinate h1 =
-      MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p1()));
-  HomogeneousCoordinate h2 =
-      MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p2()));
-  HomogeneousCoordinate h3 =
-      MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p3()));
-  HomogeneousCoordinate h4 =
-      MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p4()));
-
-  // The order of adding the vertices to the array is chosen so that
-  // clockwise / counter-clockwise orientation is retained.
-
-  *num_vertices_in_clipped_quad = 0;
-
-  if (!h1.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        h1.CartesianPoint2d(), clipped_quad, num_vertices_in_clipped_quad);
-  }
-
-  if (h1.ShouldBeClipped() ^ h2.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        ComputeClippedPointForEdge(h1, h2).CartesianPoint2d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
-  }
-
-  if (!h2.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        h2.CartesianPoint2d(), clipped_quad, num_vertices_in_clipped_quad);
-  }
-
-  if (h2.ShouldBeClipped() ^ h3.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        ComputeClippedPointForEdge(h2, h3).CartesianPoint2d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
-  }
-
-  if (!h3.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        h3.CartesianPoint2d(), clipped_quad, num_vertices_in_clipped_quad);
-  }
-
-  if (h3.ShouldBeClipped() ^ h4.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        ComputeClippedPointForEdge(h3, h4).CartesianPoint2d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
-  }
-
-  if (!h4.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        h4.CartesianPoint2d(), clipped_quad, num_vertices_in_clipped_quad);
-  }
-
-  if (h4.ShouldBeClipped() ^ h1.ShouldBeClipped()) {
-    AddVertexToClippedQuad(
-        ComputeClippedPointForEdge(h4, h1).CartesianPoint2d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
-  }
-
-  DCHECK_LE(*num_vertices_in_clipped_quad, 8);
-}
-
 bool MathUtil::MapClippedQuad3d(const gfx::Transform& transform,
                                 const gfx::QuadF& src_quad,
-                                gfx::Point3F clipped_quad[8],
+                                gfx::Point3F clipped_quad[6],
                                 int* num_vertices_in_clipped_quad) {
   HomogeneousCoordinate h1 =
       MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p1()));
@@ -331,10 +331,8 @@ bool MathUtil::MapClippedQuad3d(const gfx::Transform& transform,
   }
 
   if (h1.ShouldBeClipped() ^ h2.ShouldBeClipped()) {
-    AddVertexToClippedQuad3d(
-        ComputeClippedPointForEdge(h1, h2).CartesianPoint3d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
+    AddVertexToClippedQuad3d(ComputeClippedCartesianPoint3dForEdge(h1, h2),
+                             clipped_quad, num_vertices_in_clipped_quad);
   }
 
   if (!h2.ShouldBeClipped()) {
@@ -343,10 +341,8 @@ bool MathUtil::MapClippedQuad3d(const gfx::Transform& transform,
   }
 
   if (h2.ShouldBeClipped() ^ h3.ShouldBeClipped()) {
-    AddVertexToClippedQuad3d(
-        ComputeClippedPointForEdge(h2, h3).CartesianPoint3d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
+    AddVertexToClippedQuad3d(ComputeClippedCartesianPoint3dForEdge(h2, h3),
+                             clipped_quad, num_vertices_in_clipped_quad);
   }
 
   if (!h3.ShouldBeClipped()) {
@@ -355,10 +351,8 @@ bool MathUtil::MapClippedQuad3d(const gfx::Transform& transform,
   }
 
   if (h3.ShouldBeClipped() ^ h4.ShouldBeClipped()) {
-    AddVertexToClippedQuad3d(
-        ComputeClippedPointForEdge(h3, h4).CartesianPoint3d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
+    AddVertexToClippedQuad3d(ComputeClippedCartesianPoint3dForEdge(h3, h4),
+                             clipped_quad, num_vertices_in_clipped_quad);
   }
 
   if (!h4.ShouldBeClipped()) {
@@ -367,13 +361,16 @@ bool MathUtil::MapClippedQuad3d(const gfx::Transform& transform,
   }
 
   if (h4.ShouldBeClipped() ^ h1.ShouldBeClipped()) {
-    AddVertexToClippedQuad3d(
-        ComputeClippedPointForEdge(h4, h1).CartesianPoint3d(),
-        clipped_quad,
-        num_vertices_in_clipped_quad);
+    AddVertexToClippedQuad3d(ComputeClippedCartesianPoint3dForEdge(h4, h1),
+                             clipped_quad, num_vertices_in_clipped_quad);
   }
 
-  DCHECK_LE(*num_vertices_in_clipped_quad, 8);
+  if (*num_vertices_in_clipped_quad > 2 &&
+      IsNearlyTheSame(clipped_quad[0],
+                      clipped_quad[*num_vertices_in_clipped_quad - 1]))
+    *num_vertices_in_clipped_quad -= 1;
+
+  DCHECK_LE(*num_vertices_in_clipped_quad, 6);
   return (*num_vertices_in_clipped_quad >= 4);
 }
 
@@ -431,48 +428,32 @@ gfx::RectF MathUtil::ComputeEnclosingClippedRect(
                                h1.CartesianPoint2d());
 
   if (h1.ShouldBeClipped() ^ h2.ShouldBeClipped())
-    ExpandBoundsToIncludePoint(&xmin,
-                               &xmax,
-                               &ymin,
-                               &ymax,
-                               ComputeClippedPointForEdge(h1, h2)
-                                   .CartesianPoint2d());
+    ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
+                               ComputeClippedCartesianPoint2dForEdge(h1, h2));
 
   if (!h2.ShouldBeClipped())
     ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
                                h2.CartesianPoint2d());
 
   if (h2.ShouldBeClipped() ^ h3.ShouldBeClipped())
-    ExpandBoundsToIncludePoint(&xmin,
-                               &xmax,
-                               &ymin,
-                               &ymax,
-                               ComputeClippedPointForEdge(h2, h3)
-                                   .CartesianPoint2d());
+    ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
+                               ComputeClippedCartesianPoint2dForEdge(h2, h3));
 
   if (!h3.ShouldBeClipped())
     ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
                                h3.CartesianPoint2d());
 
   if (h3.ShouldBeClipped() ^ h4.ShouldBeClipped())
-    ExpandBoundsToIncludePoint(&xmin,
-                               &xmax,
-                               &ymin,
-                               &ymax,
-                               ComputeClippedPointForEdge(h3, h4)
-                                   .CartesianPoint2d());
+    ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
+                               ComputeClippedCartesianPoint2dForEdge(h3, h4));
 
   if (!h4.ShouldBeClipped())
     ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
                                h4.CartesianPoint2d());
 
   if (h4.ShouldBeClipped() ^ h1.ShouldBeClipped())
-    ExpandBoundsToIncludePoint(&xmin,
-                               &xmax,
-                               &ymin,
-                               &ymax,
-                               ComputeClippedPointForEdge(h4, h1)
-                                   .CartesianPoint2d());
+    ExpandBoundsToIncludePoint(&xmin, &xmax, &ymin, &ymax,
+                               ComputeClippedCartesianPoint2dForEdge(h4, h1));
 
   return gfx::RectF(gfx::PointF(xmin, ymin),
                     gfx::SizeF(xmax - xmin, ymax - ymin));
@@ -705,15 +686,15 @@ gfx::Vector2dF MathUtil::ProjectVector(const gfx::Vector2dF& source,
                         projected_length * destination.y());
 }
 
-scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Size& s) {
-  scoped_ptr<base::DictionaryValue> res(new base::DictionaryValue());
+std::unique_ptr<base::Value> MathUtil::AsValue(const gfx::Size& s) {
+  std::unique_ptr<base::DictionaryValue> res(new base::DictionaryValue());
   res->SetDouble("width", s.width());
   res->SetDouble("height", s.height());
   return std::move(res);
 }
 
-scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Rect& r) {
-  scoped_ptr<base::ListValue> res(new base::ListValue());
+std::unique_ptr<base::Value> MathUtil::AsValue(const gfx::Rect& r) {
+  std::unique_ptr<base::ListValue> res(new base::ListValue());
   res->AppendInteger(r.x());
   res->AppendInteger(r.y());
   res->AppendInteger(r.width());
@@ -742,8 +723,8 @@ bool MathUtil::FromValue(const base::Value* raw_value, gfx::Rect* out_rect) {
   return true;
 }
 
-scoped_ptr<base::Value> MathUtil::AsValue(const gfx::PointF& pt) {
-  scoped_ptr<base::ListValue> res(new base::ListValue());
+std::unique_ptr<base::Value> MathUtil::AsValue(const gfx::PointF& pt) {
+  std::unique_ptr<base::ListValue> res(new base::ListValue());
   res->AppendDouble(pt.x());
   res->AppendDouble(pt.y());
   return std::move(res);
@@ -902,6 +883,34 @@ gfx::Vector3dF MathUtil::GetYAxis(const gfx::Transform& transform) {
   return gfx::Vector3dF(transform.matrix().getFloat(0, 1),
                         transform.matrix().getFloat(1, 1),
                         transform.matrix().getFloat(2, 1));
+}
+
+ScopedSubnormalFloatDisabler::ScopedSubnormalFloatDisabler() {
+#ifdef __SSE__
+  // Turn on "subnormals are zero" and "flush to zero" CSR flags.
+  orig_state_ = _mm_getcsr();
+  _mm_setcsr(orig_state_ | 0x8040);
+#endif
+}
+
+ScopedSubnormalFloatDisabler::~ScopedSubnormalFloatDisabler() {
+#ifdef __SSE__
+  _mm_setcsr(orig_state_);
+#endif
+}
+
+bool MathUtil::IsNearlyTheSameForTesting(float left, float right) {
+  return IsNearlyTheSame(left, right);
+}
+
+bool MathUtil::IsNearlyTheSameForTesting(const gfx::PointF& left,
+                                         const gfx::PointF& right) {
+  return IsNearlyTheSame(left, right);
+}
+
+bool MathUtil::IsNearlyTheSameForTesting(const gfx::Point3F& left,
+                                         const gfx::Point3F& right) {
+  return IsNearlyTheSame(left, right);
 }
 
 }  // namespace cc

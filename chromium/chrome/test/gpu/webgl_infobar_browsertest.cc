@@ -18,7 +18,6 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_launcher_utils.h"
-#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
@@ -46,7 +45,7 @@ void SimulateGPUCrash(Browser* browser) {
       ui::PageTransitionFromInt(
           ui::PAGE_TRANSITION_TYPED |
           ui::PAGE_TRANSITION_FROM_ADDRESS_BAR));
-  params.disposition = NEW_BACKGROUND_TAB;
+  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
   chrome::Navigate(&params);
 }
 
@@ -65,13 +64,6 @@ class WebGLInfoBarTest : public InProcessBrowserTest {
 // This test is flaky. http://crbug.com/324555
 IN_PROC_BROWSER_TEST_F(WebGLInfoBarTest, DISABLED_ContextLossRaisesInfoBar) {
 #undef MAYBE_ContextLossRaisesInfoBard
-#if defined(OS_WIN) && defined(USE_ASH)
-  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kAshBrowserTests))
-    return;
-#endif
-
   if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))
     return;
 
@@ -94,57 +86,6 @@ IN_PROC_BROWSER_TEST_F(WebGLInfoBarTest, DISABLED_ContextLossRaisesInfoBar) {
             InfoBarService::FromWebContents(
                 browser()->tab_strip_model()->GetActiveWebContents())->
                     infobar_count());
-}
-
-// This test is flaky. http://crbug.com/324555
-IN_PROC_BROWSER_TEST_F(WebGLInfoBarTest, DISABLED_ContextLossInfoBarReload) {
-#if defined(OS_WIN) && defined(USE_ASH)
-  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kAshBrowserTests))
-    return;
-#endif
-
-  if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))
-    return;
-
-  content::DOMMessageQueue message_queue;
-
-  // Load page and wait for it to load.
-  content::WindowedNotificationObserver observer(
-      content::NOTIFICATION_LOAD_STOP,
-      content::NotificationService::AllSources());
-  ui_test_utils::NavigateToURL(
-      browser(),
-      content::GetFileUrlWithQuery(
-          gpu_test_dir_.AppendASCII("webgl.html"),
-          "query=kill_after_notification"));
-  observer.Wait();
-
-  std::string m;
-  ASSERT_TRUE(message_queue.WaitForMessage(&m));
-  EXPECT_EQ("\"LOADED\"", m);
-
-  message_queue.ClearQueue();
-
-  content::WindowedNotificationObserver infobar_added(
-        chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_ADDED,
-        content::NotificationService::AllSources());
-  SimulateGPUCrash(browser());
-  infobar_added.Wait();
-  InfoBarService* infobar_service = InfoBarService::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  ASSERT_EQ(1u, infobar_service->infobar_count());
-  infobars::InfoBarDelegate* delegate =
-      infobar_service->infobar_at(0)->delegate();
-  ASSERT_TRUE(delegate->AsThreeDAPIInfoBarDelegate());
-  delegate->AsConfirmInfoBarDelegate()->Cancel();
-
-  // The page should reload and another message sent to the
-  // DomAutomationController.
-  m.clear();
-  ASSERT_TRUE(message_queue.WaitForMessage(&m));
-  EXPECT_EQ("\"LOADED\"", m);
 }
 
 // There isn't any point in adding a test which calls Accept() on the

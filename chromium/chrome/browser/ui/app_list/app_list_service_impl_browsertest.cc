@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/app_list/app_list_service_impl.h"
 
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -16,6 +15,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/prefs/pref_service.h"
 #include "extensions/common/constants.h"
 #include "ui/app_list/app_list_item.h"
 #include "ui/app_list/app_list_model.h"
@@ -53,7 +53,7 @@ class AppListServiceImplBrowserTest : public InProcessBrowserTest {
 
  protected:
   AppListServiceImpl* service_;
-  scoped_ptr<test::AppListServiceImplTestApi> test_api_;
+  std::unique_ptr<test::AppListServiceImplTestApi> test_api_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppListServiceImplBrowserTest);
@@ -77,13 +77,9 @@ IN_PROC_BROWSER_TEST_F(AppListServiceImplBrowserTest,
   // Just requesting the profile path shouldn't set it.
   EXPECT_FALSE(local_state->HasPrefPath(prefs::kAppListProfile));
 
-  // Loading the Profile* should be lazy, except on ChromeOS where it is bound
-  // to ChromeLauncherController, which always has a profile.
-#if defined(OS_CHROMEOS)
+  // The app list service is bound to ChromeLauncherController, which should
+  // always have a profile.
   EXPECT_TRUE(service_->GetCurrentAppListProfile());
-#else
-  EXPECT_FALSE(service_->GetCurrentAppListProfile());
-#endif
 
   // Showing the app list for an unspecified profile, uses the loaded profile.
   service_->Show();
@@ -92,27 +88,9 @@ IN_PROC_BROWSER_TEST_F(AppListServiceImplBrowserTest,
   EXPECT_FALSE(test_api_->profile_loader()->IsAnyProfileLoading());
   EXPECT_EQ(service_->GetCurrentAppListProfile(), browser()->profile());
 
-#if defined(OS_CHROMEOS)
   // ChromeOS doesn't record the app list profile pref, and doesn't do profile
   // switching.
   EXPECT_FALSE(local_state->HasPrefPath(prefs::kAppListProfile));
-
-#else
-  // Preference should be updated automatically.
-  EXPECT_TRUE(local_state->HasPrefPath(prefs::kAppListProfile));
-  EXPECT_EQ(local_state->GetString(prefs::kAppListProfile),
-            browser()->profile()->GetPath().BaseName().MaybeAsASCII());
-
-  // Show for a second, pre-loaded profile without dismissing. Don't try this on
-  // ChromeOS because it does not support profile switching the app list.
-  Profile* profile2 = test::CreateSecondProfileAsync();
-  service_->ShowForProfile(profile2);
-
-  // Current profile and saved path should update synchronously.
-  EXPECT_FALSE(test_api_->profile_loader()->IsAnyProfileLoading());
-  EXPECT_EQ(profile2->GetPath(), service_->GetProfilePath(user_data_dir));
-  EXPECT_EQ(profile2, service_->GetCurrentAppListProfile());
-#endif
 }
 
 // Tests that the AppListViewDelegate is created lazily.
@@ -122,44 +100,12 @@ IN_PROC_BROWSER_TEST_F(AppListServiceImplBrowserTest, CreatedLazily) {
   EXPECT_TRUE(test_api_->view_delegate());
 }
 
-// Tests that deleting a profile properly clears the app list view delegate, but
-// doesn't destroy it. Not built on ChromeOS, since profiles can't be deleted
-// this way (the second profile isn't signed in, so the test fails when creating
-// UserCloudPolicyManagerChromeOS).
-#if !defined(OS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(AppListServiceImplBrowserTest,
-                       DeletingProfileUpdatesViewDelegate) {
-  Profile* second_profile = test::CreateSecondProfileAsync();
-  service_->ShowForProfile(second_profile);
-  AppListViewDelegate* view_delegate = test_api_->view_delegate();
-
-  EXPECT_TRUE(view_delegate);
-  EXPECT_EQ(view_delegate->profile(), second_profile);
-
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-
-  // Delete the profile being used by the app list.
-  profile_manager->ScheduleProfileForDeletion(second_profile->GetPath(),
-                                              ProfileManager::CreateCallback());
-
-  // View delegate doesn't change when changing profiles.
-  EXPECT_EQ(view_delegate, test_api_->view_delegate());
-
-  // But the profile gets cleared until shown again.
-  EXPECT_FALSE(view_delegate->profile());
-  service_->ShowForProfile(browser()->profile());
-
-  EXPECT_EQ(view_delegate, test_api_->view_delegate());
-  EXPECT_EQ(view_delegate->profile(), browser()->profile());
-}
-#endif  // !defined(OS_CHROMEOS)
-
 // Test that all the items in the context menu for a hosted app have valid
 // labels.
 IN_PROC_BROWSER_TEST_F(AppListServiceImplBrowserTest, ShowContextMenu) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnableNewBookmarkApps);
-  AppListService* service = test::GetAppListService();
+  AppListService* service = AppListService::Get();
   EXPECT_TRUE(service);
 
   // Show the app list to ensure it has loaded a profile.

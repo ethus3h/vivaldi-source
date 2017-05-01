@@ -11,12 +11,12 @@
 #ifndef COMPONENTS_NACL_RENDERER_PLUGIN_SERVICE_RUNTIME_H_
 #define COMPONENTS_NACL_RENDERER_PLUGIN_SERVICE_RUNTIME_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/process/process_handle.h"
-#include "components/nacl/renderer/plugin/utility.h"
+#include "components/nacl/renderer/ppb_nacl_private.h"
 #include "ipc/ipc_sync_channel.h"
-#include "native_client/src/shared/platform/nacl_sync.h"
 #include "ppapi/cpp/completion_callback.h"
 
 namespace plugin {
@@ -40,6 +40,8 @@ struct SelLdrStartParams {
 };
 
 //  ServiceRuntime abstracts a NativeClient sel_ldr instance.
+// TODO(dschuff): Merge this with NaClSubprocess, since, that now only contains
+// a ServiceRuntime.
 class ServiceRuntime {
  public:
   ServiceRuntime(Plugin* plugin,
@@ -58,13 +60,9 @@ class ServiceRuntime {
 
   bool main_service_runtime() const { return main_service_runtime_; }
 
-  scoped_ptr<IPC::SyncChannel> TakeTranslatorChannel() {
-    return scoped_ptr<IPC::SyncChannel>(translator_channel_.release());
+  std::unique_ptr<IPC::SyncChannel> TakeTranslatorChannel() {
+    return std::unique_ptr<IPC::SyncChannel>(translator_channel_.release());
   }
-
-  // Returns the PID of the subprocess.  This PID is needed for copying
-  // handles to the subprocess on Windows.
-  base::ProcessId get_process_id() { return process_id_; }
 
  private:
   Plugin* plugin_;
@@ -72,8 +70,7 @@ class ServiceRuntime {
   bool main_service_runtime_;
   bool uses_nonsfi_mode_;
 
-  scoped_ptr<IPC::SyncChannel> translator_channel_;
-  base::ProcessId process_id_;
+  std::unique_ptr<IPC::SyncChannel> translator_channel_;
 
   DISALLOW_COPY_AND_ASSIGN(ServiceRuntime);
 };

@@ -5,10 +5,10 @@
 #ifndef CHROME_BROWSER_UI_APP_LIST_EXTENSION_APP_ITEM_H_
 #define CHROME_BROWSER_UI_APP_LIST_EXTENSION_APP_ITEM_H_
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/app_list/app_context_menu_delegate.h"
 #include "chrome/browser/ui/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ui/app_list/chrome_app_list_item.h"
@@ -21,11 +21,10 @@ class ExtensionEnableFlow;
 class Profile;
 
 namespace app_list {
-class AppContextMenu;
+class ExtensionAppContextMenu;
 }
 
 namespace extensions {
-class ContextMenuMatcher;
 class Extension;
 }
 
@@ -81,6 +80,7 @@ class ExtensionAppItem : public ChromeAppListItem,
 
   // Overridden from extensions::IconImage::Observer:
   void OnExtensionIconImageChanged(extensions::IconImage* image) override;
+  void OnExtensionIconImageDestroyed(extensions::IconImage* image) override;
 
   // Overridden from ExtensionEnableFlowDelegate:
   void ExtensionEnableFlowFinished() override;
@@ -96,12 +96,9 @@ class ExtensionAppItem : public ChromeAppListItem,
   // Overridden from app_list::AppContextMenuDelegate:
   void ExecuteLaunchCommand(int event_flags) override;
 
-  // Set the position from the ordering.
-  void UpdatePositionFromOrdering();
-
-  scoped_ptr<extensions::IconImage> icon_;
-  scoped_ptr<app_list::AppContextMenu> context_menu_;
-  scoped_ptr<ExtensionEnableFlow> extension_enable_flow_;
+  std::unique_ptr<extensions::IconImage> icon_;
+  std::unique_ptr<app_list::ExtensionAppContextMenu> context_menu_;
+  std::unique_ptr<ExtensionEnableFlow> extension_enable_flow_;
   AppListControllerDelegate* extension_enable_flow_controller_;
 
   // Name to use for the extension if we can't access it.

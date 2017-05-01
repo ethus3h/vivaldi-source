@@ -48,7 +48,7 @@ class TestDnsProbeRunnerCallback {
 
 class DnsProbeRunnerTest : public testing::Test {
  protected:
-  void RunTest(MockDnsClientRule::Result query_result,
+  void RunTest(MockDnsClientRule::ResultType query_result,
                DnsProbeRunner::Result expected_probe_result);
 
   TestBrowserThreadBundle bundle_;
@@ -56,7 +56,7 @@ class DnsProbeRunnerTest : public testing::Test {
 };
 
 void DnsProbeRunnerTest::RunTest(
-    MockDnsClientRule::Result query_result,
+    MockDnsClientRule::ResultType query_result,
     DnsProbeRunner::Result expected_probe_result) {
   TestDnsProbeRunnerCallback callback;
 
@@ -92,7 +92,7 @@ TEST_F(DnsProbeRunnerTest, TwoProbes) {
 }
 
 TEST_F(DnsProbeRunnerTest, InvalidDnsConfig) {
-  scoped_ptr<DnsClient> dns_client(DnsClient::CreateClient(NULL));
+  std::unique_ptr<DnsClient> dns_client(DnsClient::CreateClient(NULL));
   DnsConfig empty_config;
   dns_client->SetConfig(empty_config);
   ASSERT_EQ(NULL, dns_client->GetTransactionFactory());

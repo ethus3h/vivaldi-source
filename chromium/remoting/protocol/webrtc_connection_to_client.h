@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "remoting/protocol/channel_dispatcher_base.h"
 #include "remoting/protocol/connection_to_client.h"
@@ -29,8 +30,10 @@ class WebrtcConnectionToClient : public ConnectionToClient,
                                  public ChannelDispatcherBase::EventHandler {
  public:
   WebrtcConnectionToClient(
-      scoped_ptr<Session> session,
-      scoped_refptr<protocol::TransportContext> transport_context);
+      std::unique_ptr<Session> session,
+      scoped_refptr<protocol::TransportContext> transport_context,
+      scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner,
+      scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner);
   ~WebrtcConnectionToClient() override;
 
   // ConnectionToClient interface.
@@ -38,10 +41,10 @@ class WebrtcConnectionToClient : public ConnectionToClient,
       ConnectionToClient::EventHandler* event_handler) override;
   Session* session() override;
   void Disconnect(ErrorCode error) override;
-  void OnInputEventReceived(int64_t timestamp) override;
-  scoped_ptr<VideoStream> StartVideoStream(
-      scoped_ptr<webrtc::DesktopCapturer> desktop_capturer) override;
-  AudioStub* audio_stub() override;
+  std::unique_ptr<VideoStream> StartVideoStream(
+      std::unique_ptr<webrtc::DesktopCapturer> desktop_capturer) override;
+  std::unique_ptr<AudioStream> StartAudioStream(
+      std::unique_ptr<AudioSource> audio_source) override;
   ClientStub* client_stub() override;
   void set_clipboard_stub(ClipboardStub* clipboard_stub) override;
   void set_host_stub(HostStub* host_stub) override;
@@ -54,11 +57,17 @@ class WebrtcConnectionToClient : public ConnectionToClient,
   void OnWebrtcTransportConnecting() override;
   void OnWebrtcTransportConnected() override;
   void OnWebrtcTransportError(ErrorCode error) override;
+  void OnWebrtcTransportIncomingDataChannel(
+      const std::string& name,
+      std::unique_ptr<MessagePipe> pipe) override;
+  void OnWebrtcTransportMediaStreamAdded(
+      scoped_refptr<webrtc::MediaStreamInterface> stream) override;
+  void OnWebrtcTransportMediaStreamRemoved(
+      scoped_refptr<webrtc::MediaStreamInterface> stream) override;
 
   // ChannelDispatcherBase::EventHandler interface.
   void OnChannelInitialized(ChannelDispatcherBase* channel_dispatcher) override;
-  void OnChannelError(ChannelDispatcherBase* channel_dispatcher,
-                      ErrorCode error) override;
+  void OnChannelClosed(ChannelDispatcherBase* channel_dispatcher) override;
 
  private:
   base::ThreadChecker thread_checker_;
@@ -66,12 +75,16 @@ class WebrtcConnectionToClient : public ConnectionToClient,
   // Event handler for handling events sent from this object.
   ConnectionToClient::EventHandler* event_handler_ = nullptr;
 
-  WebrtcTransport transport_;
+  std::unique_ptr<WebrtcTransport> transport_;
 
-  scoped_ptr<Session> session_;
+  std::unique_ptr<Session> session_;
 
-  scoped_ptr<HostControlDispatcher> control_dispatcher_;
-  scoped_ptr<HostEventDispatcher> event_dispatcher_;
+  scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner_;
+
+  std::unique_ptr<HostControlDispatcher> control_dispatcher_;
+  std::unique_ptr<HostEventDispatcher> event_dispatcher_;
+  base::WeakPtrFactory<WebrtcConnectionToClient> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(WebrtcConnectionToClient);
 };

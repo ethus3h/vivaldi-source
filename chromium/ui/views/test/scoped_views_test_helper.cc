@@ -6,8 +6,11 @@
 
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
+#include "ui/base/clipboard/clipboard.h"
 #include "ui/base/ime/input_method_initializer.h"
+#include "ui/base/test/test_clipboard.h"
 #include "ui/compositor/test/context_factories_for_test.h"
 #include "ui/views/test/platform_test_helper.h"
 #include "ui/views/test/test_views_delegate.h"
@@ -16,35 +19,45 @@
 namespace views {
 
 ScopedViewsTestHelper::ScopedViewsTestHelper()
-    : ScopedViewsTestHelper(make_scoped_ptr(new TestViewsDelegate)) {
-}
+    : ScopedViewsTestHelper(base::WrapUnique(new TestViewsDelegate)) {}
 
 ScopedViewsTestHelper::ScopedViewsTestHelper(
-    scoped_ptr<TestViewsDelegate> views_delegate)
+    std::unique_ptr<TestViewsDelegate> views_delegate)
     : views_delegate_(std::move(views_delegate)),
       platform_test_helper_(PlatformTestHelper::Create()) {
   // The ContextFactory must exist before any Compositors are created.
   bool enable_pixel_output = false;
-  ui::ContextFactory* context_factory =
-      ui::InitializeContextFactoryForTests(enable_pixel_output);
+  ui::ContextFactory* context_factory = nullptr;
+  ui::ContextFactoryPrivate* context_factory_private = nullptr;
+  ui::InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
+                                       &context_factory_private);
+
   views_delegate_->set_context_factory(context_factory);
+  views_delegate_->set_context_factory_private(context_factory_private);
 
   test_helper_.reset(ViewsTestHelper::Create(base::MessageLoopForUI::current(),
-                                             context_factory));
+                                             context_factory,
+                                             context_factory_private));
+  platform_test_helper_->OnTestHelperCreated(test_helper_.get());
   test_helper_->SetUp();
 
   ui::InitializeInputMethodForTesting();
+  ui::TestClipboard::CreateForCurrentThread();
 }
 
 ScopedViewsTestHelper::~ScopedViewsTestHelper() {
+  ui::Clipboard::DestroyClipboardForCurrentThread();
   ui::ShutdownInputMethodForTesting();
   test_helper_->TearDown();
   test_helper_.reset();
 
-  ui::TerminateContextFactoryForTests();
   views_delegate_.reset();
 
+  // The Mus PlatformTestHelper has state that is deleted by
+  // ui::TerminateContextFactoryForTests().
   platform_test_helper_.reset();
+
+  ui::TerminateContextFactoryForTests();
 }
 
 gfx::NativeWindow ScopedViewsTestHelper::GetContext() {

@@ -16,16 +16,17 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/md5.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "net/base/net_util.h"
+#include "net/base/network_interfaces.h"
 #include "remoting/host/host_config.h"
 #include "remoting/host/usage_stats_consent.h"
 
@@ -33,10 +34,22 @@ namespace remoting {
 
 namespace {
 
+#ifndef NDEBUG
+const char kDaemonDevScript[] = "remoting/chrome-remote-desktop";
+#endif  // NDEBUG
+
 const char kDaemonScript[] =
     "/opt/google/chrome-remote-desktop/chrome-remote-desktop";
 
+// The name of the command-line switch used to specify the host configuration
+// file to use.
+const char kHostConfigSwitchName[] = "host-config";
+
 base::FilePath GetConfigPath() {
+  base::CommandLine* current_process = base::CommandLine::ForCurrentProcess();
+  if (current_process->HasSwitch(kHostConfigSwitchName)) {
+    return current_process->GetSwitchValuePath(kHostConfigSwitchName);
+  }
   std::string filename =
       "host#" + base::MD5String(net::GetHostName()) + ".json";
   base::FilePath homedir;
@@ -45,6 +58,16 @@ base::FilePath GetConfigPath() {
 }
 
 bool GetScriptPath(base::FilePath* result) {
+#ifndef NDEBUG
+  base::FilePath out_dir;
+  PathService::Get(base::DIR_EXE, &out_dir);
+  base::FilePath dev_exe = out_dir.AppendASCII(kDaemonDevScript);
+  if (access(dev_exe.value().c_str(), X_OK) == 0) {
+    *result = dev_exe;
+    return true;
+  }
+#endif  // NDEBUG
+
   base::FilePath candidate_exe(kDaemonScript);
   if (access(candidate_exe.value().c_str(), X_OK) == 0) {
     *result = candidate_exe;
@@ -125,13 +148,14 @@ DaemonController::State DaemonControllerDelegateLinux::GetState() {
   }
 }
 
-scoped_ptr<base::DictionaryValue> DaemonControllerDelegateLinux::GetConfig() {
-  scoped_ptr<base::DictionaryValue> config(
+std::unique_ptr<base::DictionaryValue>
+DaemonControllerDelegateLinux::GetConfig() {
+  std::unique_ptr<base::DictionaryValue> config(
       HostConfigFromJsonFile(GetConfigPath()));
   if (!config)
     return nullptr;
 
-  scoped_ptr<base::DictionaryValue> result(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> result(new base::DictionaryValue());
   std::string value;
   if (config->GetString(kHostIdConfigPath, &value)) {
     result->SetString(kHostIdConfigPath, value);
@@ -143,13 +167,11 @@ scoped_ptr<base::DictionaryValue> DaemonControllerDelegateLinux::GetConfig() {
 }
 
 void DaemonControllerDelegateLinux::SetConfigAndStart(
-    scoped_ptr<base::DictionaryValue> config,
+    std::unique_ptr<base::DictionaryValue> config,
     bool consent,
     const DaemonController::CompletionCallback& done) {
   // Add the user to chrome-remote-desktop group first.
-  std::vector<std::string> args;
-  args.push_back("--add-user");
-  if (!RunHostScript(args)) {
+  if (!RunHostScript({"--add-user"})) {
     LOG(ERROR) << "Failed to add user to chrome-remote-desktop group.";
     done.Run(DaemonController::RESULT_FAILED);
     return;
@@ -175,8 +197,9 @@ void DaemonControllerDelegateLinux::SetConfigAndStart(
   }
 
   // Finally start the host.
-  args.clear();
-  args.push_back("--start");
+  std::vector<std::string> args = {"--start",
+                                   "--config=" + GetConfigPath().value()};
+
   DaemonController::AsyncResult result = DaemonController::RESULT_FAILED;
   if (RunHostScript(args))
     result = DaemonController::RESULT_OK;
@@ -185,9 +208,9 @@ void DaemonControllerDelegateLinux::SetConfigAndStart(
 }
 
 void DaemonControllerDelegateLinux::UpdateConfig(
-    scoped_ptr<base::DictionaryValue> config,
+    std::unique_ptr<base::DictionaryValue> config,
     const DaemonController::CompletionCallback& done) {
-  scoped_ptr<base::DictionaryValue> new_config(
+  std::unique_ptr<base::DictionaryValue> new_config(
       HostConfigFromJsonFile(GetConfigPath()));
   if (new_config)
     new_config->MergeDictionary(config.get());
@@ -230,7 +253,7 @@ DaemonControllerDelegateLinux::GetUsageStatsConsent() {
 
 scoped_refptr<DaemonController> DaemonController::Create() {
   return new DaemonController(
-      make_scoped_ptr(new DaemonControllerDelegateLinux()));
+      base::WrapUnique(new DaemonControllerDelegateLinux()));
 }
 
 }  // namespace remoting

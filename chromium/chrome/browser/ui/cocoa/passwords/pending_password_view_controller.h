@@ -14,16 +14,13 @@
 
 // Base class for the views that offer to save/update the user's password.
 @interface PendingPasswordViewController
-    : ManagePasswordsBubbleContentViewController<NSTextViewDelegate> {
+    : BasePasswordsContentViewController<NSTextViewDelegate> {
  @private
   base::scoped_nsobject<NSButton> closeButton_;
 }
 
 // Creates a controller for showing username/password and returns its view.
 - (NSView*)createPasswordView;
-
-// Returns whether GoogleSmartLock warm welcome should be shown.
-- (BOOL)shouldShowGoogleSmartLockWelcome;
 
 // Creates buttons that should be shown in the bubble and returns them.
 - (NSArray*)createButtonsAndAddThemToView:(NSView*)view;

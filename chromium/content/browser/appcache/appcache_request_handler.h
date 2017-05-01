@@ -7,20 +7,21 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "content/browser/appcache/appcache_entry.h"
 #include "content/browser/appcache/appcache_host.h"
+#include "content/browser/appcache/appcache_service_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/common/resource_type.h"
 
 namespace net {
 class NetworkDelegate;
 class URLRequest;
-class URLRequestJob;
 }  // namespace net
 
 namespace content {
@@ -35,7 +36,8 @@ class AppCacheURLRequestJob;
 class CONTENT_EXPORT AppCacheRequestHandler
     : public base::SupportsUserData::Data,
       public AppCacheHost::Observer,
-      public AppCacheStorage::Delegate  {
+      public AppCacheServiceImpl::Observer,
+      public AppCacheStorage::Delegate {
  public:
   ~AppCacheRequestHandler() override;
 
@@ -58,6 +60,12 @@ class CONTENT_EXPORT AppCacheRequestHandler
   void CompleteCrossSiteTransfer(int new_process_id, int new_host_id);
   void MaybeCompleteCrossSiteTransferInOldProcess(int old_process_id);
 
+  // Useful for detecting storage partition mismatches in the context
+  // of cross site transfer navigations.
+  bool SanityCheckIsSameService(AppCacheService* service) {
+    return !host_ || (host_->service() == service);
+  }
+
   static bool IsMainResourceType(ResourceType type) {
     return IsResourceTypeFrame(type) ||
            type == RESOURCE_TYPE_SHARED_WORKER;
@@ -73,11 +81,13 @@ class CONTENT_EXPORT AppCacheRequestHandler
   // AppCacheHost::Observer override
   void OnDestructionImminent(AppCacheHost* host) override;
 
+  // AppCacheServiceImpl::Observer override
+  void OnServiceDestructionImminent(AppCacheServiceImpl* service) override;
+
   // Helpers to instruct a waiting job with what response to
   // deliver for the request we're handling.
   void DeliverAppCachedResponse(const AppCacheEntry& entry,
                                 int64_t cache_id,
-                                int64_t group_id,
                                 const GURL& manifest_url,
                                 bool is_fallback,
                                 const GURL& namespace_entry_url);
@@ -90,7 +100,7 @@ class CONTENT_EXPORT AppCacheRequestHandler
 
   // Helper method to create an AppCacheURLRequestJob and populate job_.
   // Caller takes ownership of returned value.
-  scoped_ptr<AppCacheURLRequestJob> CreateJob(
+  std::unique_ptr<AppCacheURLRequestJob> CreateJob(
       net::URLRequest* request,
       net::NetworkDelegate* network_delegate);
 
@@ -104,7 +114,7 @@ class CONTENT_EXPORT AppCacheRequestHandler
   // Main-resource loading -------------------------------------
   // Frame and SharedWorker main resources are handled here.
 
-  scoped_ptr<AppCacheURLRequestJob> MaybeLoadMainResource(
+  std::unique_ptr<AppCacheURLRequestJob> MaybeLoadMainResource(
       net::URLRequest* request,
       net::NetworkDelegate* network_delegate);
 
@@ -120,7 +130,7 @@ class CONTENT_EXPORT AppCacheRequestHandler
   // Sub-resource loading -------------------------------------
   // Dedicated worker and all manner of sub-resources are handled here.
 
-  scoped_ptr<AppCacheURLRequestJob> MaybeLoadSubResource(
+  std::unique_ptr<AppCacheURLRequestJob> MaybeLoadSubResource(
       net::URLRequest* request,
       net::NetworkDelegate* network_delegate);
   void ContinueMaybeLoadSubResource();
@@ -174,7 +184,7 @@ class CONTENT_EXPORT AppCacheRequestHandler
 
   // During a cross site navigation, we transfer ownership the AppcacheHost
   // from the old processes structures over to the new structures.
-  scoped_ptr<AppCacheHost> host_for_cross_site_transfer_;
+  std::unique_ptr<AppCacheHost> host_for_cross_site_transfer_;
   int old_process_id_;
   int old_host_id_;
 
@@ -182,6 +192,9 @@ class CONTENT_EXPORT AppCacheRequestHandler
   // AppCache, if there is one.
   int cache_id_;
   GURL manifest_url_;
+
+  // Backptr to the central service object.
+  AppCacheServiceImpl* service_;
 
   friend class content::AppCacheRequestHandlerTest;
   DISALLOW_COPY_AND_ASSIGN(AppCacheRequestHandler);

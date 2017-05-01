@@ -22,31 +22,30 @@
 
 - (void)onSaveClicked:(id)sender {
   ManagePasswordsBubbleModel* model = self.model;
-  if (model)
+  if (model) {
     model->OnSaveClicked();
-  [delegate_ viewShouldDismiss];
+    if (model->ReplaceToShowPromotionIfNeeded()) {
+      [self.delegate refreshBubble];
+      return;
+    }
+  }
+  [self.delegate viewShouldDismiss];
 }
 
 - (void)onNeverForThisSiteClicked:(id)sender {
   ManagePasswordsBubbleModel* model = self.model;
   if (model)
     model->OnNeverForThisSiteClicked();
-  [delegate_ viewShouldDismiss];
+  [self.delegate viewShouldDismiss];
 }
 
 - (NSView*)createPasswordView {
   if (self.model->pending_password().username_value.empty())
     return nil;
-  std::vector<const autofill::PasswordForm*> password_forms;
-  password_forms.push_back(&self.model->pending_password());
   passwordItem_.reset([[PasswordsListViewController alloc]
-      initWithModel:self.model
-              forms:password_forms]);
+      initWithModelAndForm:self.model
+                      form:&self.model->pending_password()]);
   return [passwordItem_ view];
-}
-
-- (BOOL)shouldShowGoogleSmartLockWelcome {
-  return self.model->ShouldShowGoogleSmartLockWelcome();
 }
 
 - (NSArray*)createButtonsAndAddThemToView:(NSView*)view {

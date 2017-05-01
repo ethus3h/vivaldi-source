@@ -5,8 +5,9 @@
 #ifndef CONTENT_BROWSER_SPEECH_SPEECH_RECOGNIZER_IMPL_H_
 #define CONTENT_BROWSER_SPEECH_SPEECH_RECOGNIZER_IMPL_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/browser/speech/endpointer/endpointer.h"
 #include "content/browser/speech/speech_recognition_engine.h"
 #include "content/browser/speech/speech_recognizer.h"
@@ -31,7 +32,8 @@ class SpeechRecognitionEventListener;
 class CONTENT_EXPORT SpeechRecognizerImpl
     : public SpeechRecognizer,
       public media::AudioInputController::EventHandler,
-      public NON_EXPORTED_BASE(SpeechRecognitionEngineDelegate) {
+      public media::AudioInputController::SyncWriter,
+      public NON_EXPORTED_BASE(SpeechRecognitionEngine::Delegate) {
  public:
   static const int kAudioSampleRate;
   static const media::ChannelLayout kChannelLayout;
@@ -81,6 +83,7 @@ class CONTENT_EXPORT SpeechRecognizerImpl
 
   struct FSMEventArgs {
     explicit FSMEventArgs(FSMEvent event_value);
+    FSMEventArgs(const FSMEventArgs& other);
     ~FSMEventArgs();
 
     FSMEvent event;
@@ -130,13 +133,17 @@ class CONTENT_EXPORT SpeechRecognizerImpl
 
   // AudioInputController::EventHandler methods.
   void OnCreated(media::AudioInputController* controller) override {}
-  void OnRecording(media::AudioInputController* controller) override {}
   void OnError(media::AudioInputController* controller,
                media::AudioInputController::ErrorCode error_code) override;
-  void OnData(media::AudioInputController* controller,
-              const media::AudioBus* data) override;
   void OnLog(media::AudioInputController* controller,
              const std::string& message) override {}
+
+  // AudioInputController::SyncWriter methods.
+  void Write(const media::AudioBus* data,
+             double volume,
+             bool key_pressed,
+             uint32_t hardware_delay_bytes) override;
+  void Close() override;
 
   // SpeechRecognitionEngineDelegate methods.
   void OnSpeechRecognitionEngineResults(
@@ -147,10 +154,10 @@ class CONTENT_EXPORT SpeechRecognizerImpl
 
   static media::AudioManager* audio_manager_for_tests_;
 
-  scoped_ptr<SpeechRecognitionEngine> recognition_engine_;
+  std::unique_ptr<SpeechRecognitionEngine> recognition_engine_;
   Endpointer endpointer_;
   scoped_refptr<media::AudioInputController> audio_controller_;
-  scoped_ptr<media::AudioLog> audio_log_;
+  std::unique_ptr<media::AudioLog> audio_log_;
   int num_samples_recorded_;
   float audio_level_;
   bool is_dispatching_event_;
@@ -163,7 +170,7 @@ class CONTENT_EXPORT SpeechRecognizerImpl
 
   // Converts data between native input format and a WebSpeech specific
   // output format.
-  scoped_ptr<SpeechRecognizerImpl::OnDataConverter> audio_converter_;
+  std::unique_ptr<SpeechRecognizerImpl::OnDataConverter> audio_converter_;
 
   DISALLOW_COPY_AND_ASSIGN(SpeechRecognizerImpl);
 };

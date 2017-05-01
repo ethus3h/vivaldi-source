@@ -19,10 +19,6 @@ public abstract class ChromeSwitches {
     /** Whether fullscreen support is disabled (auto hiding controls, etc...). */
     public static final String DISABLE_FULLSCREEN = "disable-fullscreen";
 
-    /** Enable toolbar swipe to change tabs in document mode */
-    public static final String ENABLE_TOOLBAR_SWIPE_IN_DOCUMENT_MODE =
-            "enable-toolbar-swipe-in-document-mode";
-
     /** Whether instant is disabled. */
     public static final String DISABLE_INSTANT = "disable-instant";
 
@@ -35,6 +31,9 @@ public abstract class ChromeSwitches {
     /** Disable the First Run Experience. */
     public static final String DISABLE_FIRST_RUN_EXPERIENCE = "disable-fre";
 
+    /** Enable the Lightweight First Run Experience. */
+    public static final String ENABLE_LIGHTWEIGHT_FIRST_RUN_EXPERIENCE = "enable-lightweight-fre";
+
     /** Force the crash dump to be uploaded regardless of preferences. */
     public static final String FORCE_CRASH_DUMP_UPLOAD = "force-dump-upload";
 
@@ -45,12 +44,6 @@ public abstract class ChromeSwitches {
      */
     public static final String DISABLE_CRASH_DUMP_UPLOAD = "disable-dump-upload";
 
-    /** Enable debug logs for the video casting feature. */
-    public static final String ENABLE_CAST_DEBUG_LOGS = "enable-cast-debug";
-
-    /** Prevent automatic reconnection to current Cast video when Chrome restarts. */
-    public static final String DISABLE_CAST_RECONNECTION = "disable-cast-reconnection";
-
     /** Whether or not to enable the experimental tablet tab stack. */
     public static final String ENABLE_TABLET_TAB_STACK = "enable-tablet-tab-stack";
 
@@ -58,18 +51,15 @@ public abstract class ChromeSwitches {
     public static final String DISABLE_EXTERNAL_INTENT_REQUESTS =
             "disable-external-intent-requests";
 
-    /** Disable document mode. */
-    public static final String DISABLE_DOCUMENT_MODE = "disable-document-mode";
-
     /** Disable Contextual Search. */
     public static final String DISABLE_CONTEXTUAL_SEARCH = "disable-contextual-search";
 
     /** Enable Contextual Search. */
     public static final String ENABLE_CONTEXTUAL_SEARCH = "enable-contextual-search";
 
-    /** Enable Contextual Search for instrumentation testing. Not exposed to user. */
-    public static final String ENABLE_CONTEXTUAL_SEARCH_FOR_TESTING =
-            "enable-contextual-search-for-testing";
+    /** Contextual Search UI integration with Contextual Cards data.*/
+    public static final String CONTEXTUAL_SEARCH_CONTEXTUAL_CARDS_BAR_INTEGRATION =
+            "cs-contextual-cards-bar-integration";
 
     // How many thumbnails should we allow in the cache (per tab stack)?
     public static final String THUMBNAILS = "thumbnails";
@@ -89,16 +79,6 @@ public abstract class ChromeSwitches {
     public static final String DISABLE_LOFI_SNACKBAR = "disable-lo-fi-snackbar";
 
     /**
-     * Enable content snippets on the NTP
-     */
-    public static final String ENABLE_NTP_SNIPPETS = "enable-ntp-snippets";
-
-    /**
-     * Enable interests on the NTP
-     */
-    public static final String ENABLE_INTERESTS = "enable-interests";
-
-    /**
      * Forces the update menu item to show.
      */
     public static final String FORCE_SHOW_UPDATE_MENU_ITEM = "force-show-update-menu-item";
@@ -113,16 +93,17 @@ public abstract class ChromeSwitches {
      */
     public static final String MARKET_URL_FOR_TESTING = "market-url-for-testing";
 
+    /**
+     * Disable multiwindow tab merging for testing.
+     */
+    public static final String DISABLE_TAB_MERGING_FOR_TESTING = "disable-tab-merging";
+
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Native Switches
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     /** Enable the DOM Distiller. */
     public static final String ENABLE_DOM_DISTILLER = "enable-dom-distiller";
-
-    /** Enable experimental web-platform features, such as Push Messaging. */
-    public static final String EXPERIMENTAL_WEB_PLAFTORM_FEATURES =
-            "enable-experimental-web-platform-features";
 
     /**
      * Use sandbox Wallet environment for requestAutocomplete.
@@ -150,18 +131,6 @@ public abstract class ChromeSwitches {
     public static final String DISABLE_DOMAIN_RELIABILITY = "disable-domain-reliability";
 
     /**
-     * Enable use of Android's built-in spellchecker.
-     * Native switch - switches::kEnableAndroidSpellChecker
-     */
-    public static final String ENABLE_ANDROID_SPELLCHECKER = "enable-android-spellchecker";
-
-    /**
-     * Disable speculative TCP/IP preconnection.
-     * Native switch - switches::kDisablePreconnect
-     */
-    public static final String DISABLE_PRECONNECT = "disable-preconnect";
-
-    /**
      * Specifies Android phone page loading progress bar animation.
      * Native switch - switches::kProgressBarAnimation
      */
@@ -176,37 +145,18 @@ public abstract class ChromeSwitches {
     public static final String NTP_SWITCH_TO_EXISTING_TAB = "ntp-switch-to-existing-tab";
 
     /**
-     * Enables offline pages.
-     * Native switch - switches::kEnableOfflinePages
-     */
-    public static final String ENABLE_OFFLINE_PAGES = "enable-offline-pages";
-
-    /**
-     * Enables offline pages, showing 'bookmarks' name in UI strings.
-     * Native switch - switches::kEnableOfflinePagesAsBookmarks
-     */
-    public static final String ENABLE_OFFLINE_PAGES_AS_BOOKMARKS =
-            "enable-offline-pages-as-bookmarks";
-
-    /**
-     * Enables offline pages, showing 'saved pages' name in UI strings.
-     * Native switch - switches::kEnableOfflinePagesAsSavedPages
-     */
-    public static final String ENABLE_OFFLINE_PAGES_AS_SAVED_PAGES =
-            "enable-offline-pages-as-saved-pages";
-
-    /**
-     * Disables offline pages.
-     * Native switch - switches::kDisableOfflinePages
-     */
-    public static final String DISABLE_OFFLINE_PAGES = "disable-offline-pages";
-
-    /**
      * Enable keyboard accessory view that shows autofill suggestions on top of the keyboard.
      * Native switch - autofill::switches::kEnableAccessorySuggestionView
      */
     public static final String ENABLE_AUTOFILL_KEYBOARD_ACCESSORY =
             "enable-autofill-keyboard-accessory-view";
+
+    /**
+     * Enables overscroll of the on screen keyboard. With this flag on, the OSK will only resize the
+     * visual viewport.
+     * Native switch - switches::kEnableOSKOverscroll
+     */
+    public static final String ENABLE_OSK_OVERSCROLL = "enable-osk-overscroll";
 
     /**
      * Enables hung renderer InfoBar activation for unresponsive web content.
@@ -229,10 +179,42 @@ public abstract class ChromeSwitches {
             "disable-web-notification-custom-layouts";
 
     /**
-     * Enable tab switcher in document mode (merged tabs and apps option).
+     * Determines which of the Herb prototypes is being tested.
+     * See about:flags for descriptions.
      */
-    public static final String ENABLE_TAB_SWITCHER_IN_DOCUMENT_MODE =
-            "enable-tab-switcher-in-document-mode";
+    public static final String HERB_FLAVOR_DISABLED_SWITCH =
+            "tab-management-experiment-type-disabled";
+    public static final String HERB_FLAVOR_ELDERBERRY_SWITCH =
+            "tab-management-experiment-type-elderberry";
+
+    public static final String HERB_FLAVOR_DEFAULT = "Default";
+    public static final String HERB_FLAVOR_CONTROL = "Control";
+    public static final String HERB_FLAVOR_DISABLED = "Disabled";
+    public static final String HERB_FLAVOR_ELDERBERRY = "Elderberry";
+
+    public static final String DISABLE_APP_LINK = "disable-app-link";
+    public static final String ENABLE_APP_LINK = "enable-app-link";
+
+    /**
+     * Set the partner-defined homepage URL, for testing.
+     */
+    public static final String PARTNER_HOMEPAGE_FOR_TESTING = "partner-homepage-for-testing";
+
+    /**
+     * Forces the WebAPK runtime dex to be extracted each time that Chrome is started.
+     */
+    public static final String ALWAYS_EXTRACT_WEBAPK_RUNTIME_DEX_ON_STARTUP =
+            "always-extract-webapk-dex-on-startup";
+
+    /**
+     * Forces a check for whether the WebAPK's Web Manifest has changed each time that a WebAPK is
+     * launched.
+     */
+    public static final String CHECK_FOR_WEB_MANIFEST_UPDATE_ON_STARTUP =
+            "check-for-web-manifest-update-on-startup";
+
+    /** Enable Vr Shell development environment. */
+    public static final String ENABLE_VR_SHELL_DEV = "enable-vr-shell-dev";
 
     // Prevent instantiation.
     private ChromeSwitches() {}

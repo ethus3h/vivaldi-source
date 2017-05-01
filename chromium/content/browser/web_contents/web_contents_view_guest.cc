@@ -38,7 +38,7 @@ namespace content {
 WebContentsViewGuest::WebContentsViewGuest(
     WebContentsImpl* web_contents,
     BrowserPluginGuest* guest,
-    scoped_ptr<WebContentsView> platform_view,
+    std::unique_ptr<WebContentsView> platform_view,
     RenderViewHostDelegateView** delegate_view)
     : web_contents_(web_contents),
       guest_(guest),
@@ -68,6 +68,13 @@ gfx::NativeWindow WebContentsViewGuest::GetTopLevelNativeWindow() const {
   return guest_->embedder_web_contents()->GetTopLevelNativeWindow();
 }
 
+void WebContentsViewGuest::GetScreenInfo(ScreenInfo* screen_info) const {
+  if (guest_->embedder_web_contents())
+    guest_->embedder_web_contents()->GetView()->GetScreenInfo(screen_info);
+  else
+    WebContentsView::GetDefaultScreenInfo(screen_info);
+}
+
 void WebContentsViewGuest::OnGuestAttached(WebContentsView* parent_view) {
 #if defined(USE_AURA)
   // In aura, ScreenPositionClient doesn't work properly if we do
@@ -90,7 +97,8 @@ void WebContentsViewGuest::GetContainerBounds(gfx::Rect* out) const {
   if (guest_->embedder_web_contents()) {
     // We need embedder container's bounds to calculate our bounds.
     guest_->embedder_web_contents()->GetView()->GetContainerBounds(out);
-    gfx::Point guest_coordinates = guest_->GetScreenCoordinates(gfx::Point());
+    gfx::Point guest_coordinates =
+        guest_->GetCoordinatesInEmbedderWebContents(gfx::Point());
     out->Offset(guest_coordinates.x(), guest_coordinates.y());
   } else {
     out->set_origin(gfx::Point());
@@ -132,6 +140,26 @@ void WebContentsViewGuest::CreateView(const gfx::Size& initial_size,
 
 RenderWidgetHostViewBase* WebContentsViewGuest::CreateViewForWidget(
     RenderWidgetHost* render_widget_host, bool is_guest_view_hack) {
+  if (vivaldi::IsVivaldiRunning() && render_widget_host->GetView()) {
+    // NOTE(andre@vivaldi.com) : If running as Vivaldi and there is already a
+    // view (RenderWidgetHostViewGuest) present we need to destroy this and
+    // create a new one. This can happen when the user moves a tab between
+    // windows.
+
+    // Since the platform window keeps the surface id pointer, (it is lazily
+    // deleted after Destroy above), and this will be the same for the one
+    // created below we must inform the surface manager about this now otherwise
+    // the surface registration will fail.
+    RenderWidgetHostViewChildFrame* rwhv =
+        static_cast<RenderWidgetHostViewChildFrame*>(
+            render_widget_host->GetView());
+    if (rwhv) {
+      rwhv->InvalidateFrameSinkId();
+    }
+
+    static_cast<RenderWidgetHostViewBase*>(render_widget_host->GetView())
+        ->Destroy();
+  } else {
   if (render_widget_host->GetView()) {
     // During testing, the view will already be set up in most cases to the
     // test view, so we don't want to clobber it with a real one. To verify that
@@ -142,13 +170,13 @@ RenderWidgetHostViewBase* WebContentsViewGuest::CreateViewForWidget(
     return static_cast<RenderWidgetHostViewBase*>(
         render_widget_host->GetView());
   }
+  } // If Vivaldi is running and view exists.
 
   RenderWidgetHostViewBase* platform_widget =
       platform_view_->CreateViewForWidget(render_widget_host, true);
 
-  return new RenderWidgetHostViewGuest(render_widget_host,
-                                       guest_,
-                                       platform_widget->GetWeakPtr());
+  return RenderWidgetHostViewGuest::Create(render_widget_host, guest_,
+                                           platform_widget->GetWeakPtr());
 }
 
 RenderWidgetHostViewBase* WebContentsViewGuest::CreateViewForPopupWidget(
@@ -236,7 +264,8 @@ void WebContentsViewGuest::StartDragging(
     WebDragOperationsMask ops,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,
-    const DragEventSourceInfo& event_info) {
+    const DragEventSourceInfo& event_info,
+    RenderWidgetHostImpl* source_rwh) {
   WebContentsImpl* embedder_web_contents = guest_->embedder_web_contents();
   embedder_web_contents->GetBrowserPluginEmbedder()->StartDrag(guest_);
   RenderViewHostImpl* embedder_render_view_host =
@@ -247,9 +276,10 @@ void WebContentsViewGuest::StartDragging(
       embedder_render_view_host->GetDelegate()->GetDelegateView();
   if (view) {
     RecordAction(base::UserMetricsAction("BrowserPlugin.Guest.StartDrag"));
-    view->StartDragging(drop_data, ops, image, image_offset, event_info);
+    view->StartDragging(
+        drop_data, ops, image, image_offset, event_info, source_rwh);
   } else {
-    embedder_web_contents->SystemDragEnded();
+    embedder_web_contents->SystemDragEnded(source_rwh);
   }
 }
 

@@ -10,9 +10,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "gpu/command_buffer/client/gpu_control.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 #include "gpu/command_buffer/common/gpu_memory_allocation.h"
@@ -23,8 +24,6 @@
 
 namespace gpu {
 
-class CommandBufferHelper;
-
 class MockCommandBufferBase : public CommandBufferServiceBase {
  public:
   static const int32_t kTransferBufferBaseId = 0x123;
@@ -33,13 +32,12 @@ class MockCommandBufferBase : public CommandBufferServiceBase {
   MockCommandBufferBase();
   ~MockCommandBufferBase() override;
 
-  bool Initialize() override;
   State GetLastState() override;
-  int32_t GetLastToken() override;
-  void WaitForTokenInRange(int32_t start, int32_t end) override;
-  void WaitForGetOffsetInRange(int32_t start, int32_t end) override;
+  State WaitForTokenInRange(int32_t start, int32_t end) override;
+  State WaitForGetOffsetInRange(int32_t start, int32_t end) override;
   void SetGetBuffer(int transfer_buffer_id) override;
   void SetGetOffset(int32_t get_offset) override;
+  void SetReleaseCount(uint64_t release_count) override;
   scoped_refptr<gpu::Buffer> CreateTransferBuffer(size_t size,
                                                   int32_t* id) override;
   scoped_refptr<gpu::Buffer> GetTransferBuffer(int32_t id) override;
@@ -96,6 +94,7 @@ class MockClientGpuControl : public GpuControl {
   MockClientGpuControl();
   virtual ~MockClientGpuControl();
 
+  MOCK_METHOD1(SetGpuControlClient, void(GpuControlClient*));
   MOCK_METHOD0(GetCapabilities, Capabilities());
   MOCK_METHOD4(CreateImage,
                int32_t(ClientBuffer buffer,
@@ -108,24 +107,19 @@ class MockClientGpuControl : public GpuControl {
                        size_t height,
                        unsigned internalformat,
                        unsigned usage));
-  MOCK_METHOD0(InsertSyncPoint, uint32_t());
-  MOCK_METHOD0(InsertFutureSyncPoint, uint32_t());
-  MOCK_METHOD1(RetireSyncPoint, void(uint32_t id));
-  MOCK_METHOD2(SignalSyncPoint,
-               void(uint32_t id, const base::Closure& callback));
   MOCK_METHOD2(SignalQuery,
                void(uint32_t query, const base::Closure& callback));
   MOCK_METHOD1(CreateStreamTexture, uint32_t(uint32_t));
   MOCK_METHOD1(SetLock, void(base::Lock*));
-  MOCK_METHOD0(IsGpuChannelLost, bool());
   MOCK_METHOD0(EnsureWorkVisible, void());
   MOCK_CONST_METHOD0(GetNamespaceID, CommandBufferNamespace());
-  MOCK_CONST_METHOD0(GetCommandBufferID, uint64_t());
+  MOCK_CONST_METHOD0(GetCommandBufferID, CommandBufferId());
   MOCK_CONST_METHOD0(GetExtraCommandBufferData, int32_t());
   MOCK_METHOD0(GenerateFenceSyncRelease, uint64_t());
   MOCK_METHOD1(IsFenceSyncRelease, bool(uint64_t release));
   MOCK_METHOD1(IsFenceSyncFlushed, bool(uint64_t release));
   MOCK_METHOD1(IsFenceSyncFlushReceived, bool(uint64_t release));
+  MOCK_METHOD1(IsFenceSyncReleased, bool(uint64_t release));
   MOCK_METHOD2(SignalSyncToken, void(const SyncToken& sync_token,
                                      const base::Closure& callback));
   MOCK_METHOD1(CanWaitUnverifiedSyncToken, bool(const SyncToken*));

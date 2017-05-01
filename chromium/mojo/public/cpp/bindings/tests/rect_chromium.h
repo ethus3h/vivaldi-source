@@ -5,7 +5,7 @@
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_TESTS_RECT_CHROMIUM_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_TESTS_RECT_CHROMIUM_H_
 
-#include "mojo/public/interfaces/bindings/tests/rect.mojom.h"
+#include "base/logging.h"
 
 namespace mojo {
 namespace test {
@@ -55,6 +55,12 @@ class RectChromium {
 
   int GetArea() const { return width_ * height_; }
 
+  bool operator==(const RectChromium& other) const {
+    return (x() == other.x() && y() == other.y() && width() == other.width() &&
+            height() == other.height());
+  }
+  bool operator!=(const RectChromium& other) const { return !(*this == other); }
+
  private:
   int x_ = 0;
   int y_ = 0;
@@ -63,25 +69,19 @@ class RectChromium {
 };
 
 }  // namespace test
+}  // namespace mojo
+
+namespace std {
 
 template <>
-struct StructTraits<test::Rect, test::RectChromium> {
-  static int x(const test::RectChromium& r) { return r.x(); }
-  static int y(const test::RectChromium& r) { return r.y(); }
-  static int width(const test::RectChromium& r) { return r.width(); }
-  static int height(const test::RectChromium& r) { return r.height(); }
-
-  static bool Read(test::Rect::Reader r, test::RectChromium* out) {
-    if (r.width() < 0 || r.height() < 0)
-      return false;
-    out->set_x(r.x());
-    out->set_y(r.y());
-    out->set_width(r.width());
-    out->set_height(r.height());
-    return true;
+struct hash<mojo::test::RectChromium> {
+  size_t operator()(const mojo::test::RectChromium& value) {
+    // Terrible hash function:
+    return (std::hash<int>()(value.x()) ^ std::hash<int>()(value.y()) ^
+            std::hash<int>()(value.width()) ^ std::hash<int>()(value.height()));
   }
 };
 
-}  // namespace mojo
+}  // namespace std
 
 #endif  // MOJO_PUBLIC_CPP_BINDINGS_TESTS_RECT_CHROMIUM_H_

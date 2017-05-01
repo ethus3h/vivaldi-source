@@ -135,12 +135,12 @@ void HostService::RemoveWtsTerminalObserver(WtsTerminalObserver* observer) {
   }
 }
 
-HostService::HostService() :
-  run_routine_(&HostService::RunAsService),
-  service_status_handle_(0),
-  stopped_event_(true, false),
-  weak_factory_(this) {
-}
+HostService::HostService()
+    : run_routine_(&HostService::RunAsService),
+      service_status_handle_(0),
+      stopped_event_(base::WaitableEvent::ResetPolicy::MANUAL,
+                     base::WaitableEvent::InitialState::NOT_SIGNALED),
+      weak_factory_(this) {}
 
 HostService::~HostService() {
 }
@@ -434,7 +434,7 @@ VOID WINAPI HostService::ServiceMain(DWORD argc, WCHAR* argv[]) {
 int DaemonProcessMain() {
   HostService* service = HostService::GetInstance();
   if (!service->InitWithCommandLine(base::CommandLine::ForCurrentProcess())) {
-    return kUsageExitCode;
+    return kInvalidCommandLineExitCode;
   }
 
   return service->Run();

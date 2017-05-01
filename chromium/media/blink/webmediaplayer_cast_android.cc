@@ -5,7 +5,6 @@
 #include "media/blink/webmediaplayer_cast_android.h"
 
 #include "gpu/GLES2/gl2extchromium.h"
-#include "gpu/blink/webgraphicscontext3d_impl.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "media/base/android/media_common_android.h"
@@ -18,8 +17,6 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkTypeface.h"
-#include "third_party/skia/include/gpu/GrContext.h"
-#include "third_party/skia/include/gpu/SkGrPixelRef.h"
 
 using gpu::gles2::GLES2Interface;
 
@@ -67,7 +64,8 @@ scoped_refptr<VideoFrame> MakeTextFrameForCast(
   paint.setAntiAlias(true);
   paint.setFilterQuality(kHigh_SkFilterQuality);
   paint.setColor(SK_ColorWHITE);
-  paint.setTypeface(SkTypeface::CreateFromName("sans", SkTypeface::kBold));
+  paint.setTypeface(SkTypeface::MakeFromName(
+      "sans", SkFontStyle::FromOldStyle(SkTypeface::kBold)));
   paint.setTextSize(kTextSize);
 
   // Calculate the vertical margin from the top
@@ -137,13 +135,18 @@ scoped_refptr<VideoFrame> MakeTextFrameForCast(
   gpu::Mailbox texture_mailbox;
   gl->GenMailboxCHROMIUM(texture_mailbox.name);
   gl->ProduceTextureCHROMIUM(texture_target, texture_mailbox.name);
+  const GLuint64 fence_sync = gl->InsertFenceSyncCHROMIUM();
   gl->Flush();
-  gpu::SyncToken texture_mailbox_sync_token(gl->InsertSyncPointCHROMIUM());
 
-  return VideoFrame::WrapNativeTexture(
-      media::PIXEL_FORMAT_ARGB,
+  gpu::SyncToken texture_mailbox_sync_token;
+  gl->GenUnverifiedSyncTokenCHROMIUM(fence_sync,
+                                     texture_mailbox_sync_token.GetData());
+
+  gpu::MailboxHolder holders[media::VideoFrame::kMaxPlanes] = {
       gpu::MailboxHolder(texture_mailbox, texture_mailbox_sync_token,
-                         texture_target),
+                         texture_target)};
+  return VideoFrame::WrapNativeTextures(
+      media::PIXEL_FORMAT_ARGB, holders,
       media::BindToCurrentLoop(base::Bind(&OnReleaseTexture, context_3d_cb,
                                           remote_playback_texture_id)),
       canvas_size /* coded_size */, gfx::Rect(canvas_size) /* visible_rect */,
@@ -153,12 +156,8 @@ scoped_refptr<VideoFrame> MakeTextFrameForCast(
 WebMediaPlayerCast::WebMediaPlayerCast(
     WebMediaPlayerImpl* impl,
     blink::WebMediaPlayerClient* client,
-    const WebMediaPlayerParams::Context3DCB& context_3d_cb,
-    base::WeakPtr<WebMediaPlayerDelegate> delegate)
-    : webmediaplayer_(impl),
-      client_(client),
-      context_3d_cb_(context_3d_cb),
-      delegate_(delegate) {}
+    const WebMediaPlayerParams::Context3DCB& context_3d_cb)
+    : webmediaplayer_(impl), client_(client), context_3d_cb_(context_3d_cb) {}
 
 WebMediaPlayerCast::~WebMediaPlayerCast() {
   if (player_manager_) {
@@ -170,10 +169,11 @@ WebMediaPlayerCast::~WebMediaPlayerCast() {
 }
 
 void WebMediaPlayerCast::Initialize(const GURL& url,
-                                    blink::WebLocalFrame* frame) {
+                                    blink::WebLocalFrame* frame,
+                                    int delegate_id) {
   player_manager_->Initialize(MEDIA_PLAYER_TYPE_REMOTE_ONLY, player_id_, url,
-                              frame->document().firstPartyForCookies(), 0,
-                              frame->document().url(), true);
+                              frame->document().firstPartyForCookies(),
+                              frame->document().url(), true, delegate_id);
   is_player_initialized_ = true;
 }
 
@@ -193,60 +193,64 @@ void WebMediaPlayerCast::requestRemotePlaybackControl() {
   player_manager_->RequestRemotePlaybackControl(player_id_);
 }
 
+void WebMediaPlayerCast::requestRemotePlaybackStop() {
+  player_manager_->RequestRemotePlaybackStop(player_id_);
+}
+
 void WebMediaPlayerCast::OnMediaMetadataChanged(base::TimeDelta duration,
                                                 int width,
                                                 int height,
-                                                bool success) {}
+                                                bool success) {
+  duration_ = duration;
+}
 
 void WebMediaPlayerCast::OnPlaybackComplete() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   webmediaplayer_->OnRemotePlaybackEnded();
 }
 
 void WebMediaPlayerCast::OnBufferingUpdate(int percentage) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 }
 
 void WebMediaPlayerCast::OnSeekRequest(const base::TimeDelta& time_to_seek) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   client_->requestSeek(time_to_seek.InSecondsF());
 }
 
 void WebMediaPlayerCast::OnSeekComplete(const base::TimeDelta& current_time) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   remote_time_at_ = base::TimeTicks::Now();
   remote_time_ = current_time;
-  webmediaplayer_->OnPipelineSeeked(true, PIPELINE_OK);
+  webmediaplayer_->OnPipelineSeeked(true);
 }
 
 void WebMediaPlayerCast::OnMediaError(int error_type) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 }
 
 void WebMediaPlayerCast::OnVideoSizeChanged(int width, int height) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 }
 
 void WebMediaPlayerCast::OnTimeUpdate(base::TimeDelta current_timestamp,
                                       base::TimeTicks current_time_ticks) {
-  DVLOG(1) << __FUNCTION__ << " " << current_timestamp.InSecondsF();
+  DVLOG(1) << __func__ << " " << current_timestamp.InSecondsF();
   remote_time_at_ = current_time_ticks;
   remote_time_ = current_timestamp;
 }
 
 void WebMediaPlayerCast::OnPlayerReleased() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 }
 
 void WebMediaPlayerCast::OnConnectedToRemoteDevice(
     const std::string& remote_playback_message) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   remote_time_ = base::TimeDelta::FromSecondsD(webmediaplayer_->currentTime());
   is_remote_ = true;
   initializing_ = true;
   paused_ = false;
-  if (delegate_)
-    delegate_->DidPlay(webmediaplayer_);
   client_->playbackStateChanged();
 
   remote_playback_message_ = remote_playback_message;
@@ -269,8 +273,6 @@ void WebMediaPlayerCast::play() {
   player_manager_->Start(player_id_);
   remote_time_at_ = base::TimeTicks::Now();
   paused_ = false;
-  if (delegate_)
-    delegate_->DidPlay(webmediaplayer_);
 }
 
 void WebMediaPlayerCast::pause() {
@@ -283,11 +285,9 @@ void WebMediaPlayerCast::seek(base::TimeDelta t) {
 }
 
 void WebMediaPlayerCast::OnDisconnectedFromRemoteDevice() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   if (!paused_) {
     paused_ = true;
-    if (delegate_)
-      delegate_->DidPause(webmediaplayer_);
   }
   is_remote_ = false;
   double t = currentTime();
@@ -297,17 +297,24 @@ void WebMediaPlayerCast::OnDisconnectedFromRemoteDevice() {
   webmediaplayer_->OnDisconnectedFromRemoteDevice(t);
 }
 
+void WebMediaPlayerCast::OnCancelledRemotePlaybackRequest() {
+  DVLOG(1) << __func__;
+  client_->cancelledRemotePlaybackRequest();
+}
+
+void WebMediaPlayerCast::OnRemotePlaybackStarted() {
+  client_->remotePlaybackStarted();
+}
+
 void WebMediaPlayerCast::OnDidExitFullscreen() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 }
 
 void WebMediaPlayerCast::OnMediaPlayerPlay() {
-  DVLOG(1) << __FUNCTION__ << " is_remote_ = " << is_remote_;
+  DVLOG(1) << __func__ << " is_remote_ = " << is_remote_;
   initializing_ = false;
   if (is_remote_ && paused_) {
     paused_ = false;
-    if (paused_)
-      delegate_->DidPlay(webmediaplayer_);
     remote_time_at_ = base::TimeTicks::Now();
     client_->playbackStateChanged();
   }
@@ -317,48 +324,27 @@ void WebMediaPlayerCast::OnMediaPlayerPlay() {
 }
 
 void WebMediaPlayerCast::OnMediaPlayerPause() {
-  DVLOG(1) << __FUNCTION__ << " is_remote_ = " << is_remote_;
+  DVLOG(1) << __func__ << " is_remote_ = " << is_remote_;
   if (is_remote_ && !paused_) {
     paused_ = true;
-    if (delegate_)
-      delegate_->DidPause(webmediaplayer_);
     client_->playbackStateChanged();
   }
 }
 
 void WebMediaPlayerCast::OnRemoteRouteAvailabilityChanged(
-    bool routes_available) {
-  DVLOG(1) << __FUNCTION__;
-  client_->remoteRouteAvailabilityChanged(routes_available);
+    blink::WebRemotePlaybackAvailability availability) {
+  DVLOG(1) << __func__;
+  client_->remoteRouteAvailabilityChanged(availability);
 }
 
 void WebMediaPlayerCast::SuspendAndReleaseResources() {}
-void WebMediaPlayerCast::OnWaitingForDecryptionKey() {}
-
-bool WebMediaPlayerCast::hasVideo() const {
-  return true;
-}
-
-bool WebMediaPlayerCast::paused() const {
-  return paused_;
-}
-
-#if defined(VIDEO_HOLE)
-bool WebMediaPlayerCast::UpdateBoundaryRectangle() {
-  return false;
-}
-
-const gfx::RectF WebMediaPlayerCast::GetBoundaryRectangle() {
-  return gfx::RectF();
-}
-#endif  // defined(VIDEO_HOLE)
 
 void WebMediaPlayerCast::SetDeviceScaleFactor(float scale_factor) {
   device_scale_factor_ = scale_factor;
 }
 
 scoped_refptr<VideoFrame> WebMediaPlayerCast::GetCastingBanner() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 
   // TODO(johnme): Should redraw this frame if the layer bounds change; but
   // there seems no easy way to listen for the layer resizing (as opposed to
@@ -379,6 +365,10 @@ scoped_refptr<VideoFrame> WebMediaPlayerCast::GetCastingBanner() {
   return MakeTextFrameForCast(remote_playback_message_, canvas_size,
                               webmediaplayer_->naturalSize(),
                               base::Bind(&GLCBShim, context_3d_cb_));
+}
+
+void WebMediaPlayerCast::setPoster(const blink::WebURL& poster) {
+  player_manager_->SetPoster(player_id_, poster);
 }
 
 }  // namespace media

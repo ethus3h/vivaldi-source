@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_TOOLS_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_
-#define NET_QUIC_TOOLS_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_
+#ifndef NET_TOOLS_QUIC_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_
+#define NET_TOOLS_QUIC_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_
 
 #include <stddef.h>
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "net/quic/quic_connection.h"
-#include "net/quic/quic_packet_writer.h"
+#include "net/quic/core/quic_connection.h"
+#include "net/quic/core/quic_packet_writer.h"
 
 namespace net {
-namespace tools {
 
 class QuicSimpleServerPacketWriter;
 
@@ -36,12 +35,14 @@ class QuicSimplePerConnectionPacketWriter : public QuicPacketWriter {
   // to |shared_writer_|.
   WriteResult WritePacket(const char* buffer,
                           size_t buf_len,
-                          const IPAddressNumber& self_address,
-                          const IPEndPoint& peer_address) override;
+                          const QuicIpAddress& self_address,
+                          const QuicSocketAddress& peer_address,
+                          PerPacketOptions* options) override;
   bool IsWriteBlockedDataBuffered() const override;
   bool IsWriteBlocked() const override;
   void SetWritable() override;
-  QuicByteCount GetMaxPacketSize(const IPEndPoint& peer_address) const override;
+  QuicByteCount GetMaxPacketSize(
+      const QuicSocketAddress& peer_address) const override;
 
  private:
   void OnWriteComplete(WriteResult result);
@@ -54,7 +55,6 @@ class QuicSimplePerConnectionPacketWriter : public QuicPacketWriter {
   DISALLOW_COPY_AND_ASSIGN(QuicSimplePerConnectionPacketWriter);
 };
 
-}  // namespace tools
 }  // namespace net
 
-#endif  // NET_QUIC_TOOLS_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_
+#endif  // NET_TOOLS_QUIC_QUIC_SIMPLE_PER_CONNECTION_PACKET_WRITER_H_

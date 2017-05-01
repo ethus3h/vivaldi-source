@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 
 #include "base/containers/hash_tables.h"
 #include "base/macros.h"
@@ -15,10 +16,6 @@
 #include "base/single_thread_task_runner.h"
 #include "content/common/content_export.h"
 #include "ipc/message_filter.h"
-
-namespace blink {
-class WebTaskRunner;
-}
 
 namespace content {
 class ResourceDispatcher;
@@ -39,7 +36,8 @@ class CONTENT_EXPORT ResourceSchedulingFilter : public IPC::MessageFilter {
 
   // Sets the task runner associated with request messages with |id|.
   void SetRequestIdTaskRunner(
-      int id, scoped_ptr<blink::WebTaskRunner> web_task_runner);
+      int id,
+      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
 
   // Removes the task runner associated with |id|.
   void ClearRequestIdTaskRunner(int id);
@@ -50,14 +48,14 @@ class CONTENT_EXPORT ResourceSchedulingFilter : public IPC::MessageFilter {
   ~ResourceSchedulingFilter() override;
 
   using RequestIdToTaskRunnerMap =
-      std::map<int, scoped_ptr<blink::WebTaskRunner>>;
+      std::map<int, scoped_refptr<base::SingleThreadTaskRunner>>;
 
   // This lock guards |request_id_to_task_runner_map_|
   base::Lock request_id_to_task_runner_map_lock_;
   RequestIdToTaskRunnerMap request_id_to_task_runner_map_;
 
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
-  ResourceDispatcher* resource_dispatcher_;  // NOT OWNED
+  base::WeakPtr<ResourceDispatcher> resource_dispatcher_;
   base::WeakPtrFactory<ResourceSchedulingFilter> weak_ptr_factory_;
 
  private:

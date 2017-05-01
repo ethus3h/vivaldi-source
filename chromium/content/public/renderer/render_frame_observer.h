@@ -13,13 +13,13 @@
 #include "content/common/content_export.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
+#include "third_party/WebKit/public/platform/WebLoadingBehaviorFlag.h"
 #include "third_party/WebKit/public/platform/WebVector.h"
 #include "third_party/WebKit/public/web/WebMeaningfulLayout.h"
 #include "v8/include/v8.h"
 
 namespace blink {
 class WebFormElement;
-class WebFrame;
 class WebNode;
 class WebString;
 struct WebURLError;
@@ -36,9 +36,10 @@ class RenderFrameImpl;
 class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
                                            public IPC::Sender {
  public:
-  // By default, observers will be deleted when the RenderFrame goes away.  If
-  // they want to outlive it, they can override this function.
-  virtual void OnDestruct();
+  // A subclass can use this to delete itself. If it does not, the subclass must
+  // always null-check each call to render_frame() becase the RenderFrame can
+  // go away at any time.
+  virtual void OnDestruct() = 0;
 
   // Called when a Pepper plugin is created.
   virtual void DidCreatePepperPlugin(RendererPpapiHost* host) {}
@@ -56,6 +57,9 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   // These match the Blink API notifications
   virtual void DidCreateNewDocument() {}
   virtual void DidCreateDocumentElement() {}
+  // Called when a provisional load is about to commit in a frame. This is
+  // dispatched just before the Javascript unload event.
+  virtual void WillCommitProvisionalLoad() {}
   virtual void DidCommitProvisionalLoad(bool is_new_navigation,
                                         bool is_same_page_navigation) {}
   virtual void DidStartProvisionalLoad() {}
@@ -63,7 +67,6 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   virtual void DidFinishLoad() {}
   virtual void DidFinishDocumentLoad() {}
   virtual void DidCreateScriptContext(v8::Local<v8::Context> context,
-                                      int extension_group,
                                       int world_id) {}
   virtual void WillReleaseScriptContext(v8::Local<v8::Context> context,
                                         int world_id) {}
@@ -76,16 +79,10 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
       const blink::WebVector<blink::WebString>& newly_matching_selectors,
       const blink::WebVector<blink::WebString>& stopped_matching_selectors) {}
 
-  // Called before FrameWillClose, when this frame has been detached from the
-  // view, but has not been closed yet. This *will* be called when parent frames
-  // are closing. Since the frame is already detached from the DOM at this time
-  // it should not be inspected.
+  // Called when this frame has been detached from the view. This *will* be
+  // called for child frames when a parent frame is detached. Since the frame is
+  // already detached from the DOM at this time, it should not be inspected.
   virtual void FrameDetached() {}
-
-  // Called when the frame will soon be closed. This is the last opportunity to
-  // send messages to the host (e.g., for clean-up, shutdown, etc.). This is
-  // *not* called on child frames when parent frames are being closed.
-  virtual void FrameWillClose() {}
 
   // Called when we receive a console message from Blink for which we requested
   // extra details (like the stack trace). |message| is the error message,
@@ -96,7 +93,7 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   virtual void DetailedConsoleMessageAdded(const base::string16& message,
                                            const base::string16& source,
                                            const base::string16& stack_trace,
-                                           int32_t line_number,
+                                           uint32_t line_number,
                                            int32_t severity_level) {}
 
   // Called when an interesting (from document lifecycle perspective),
@@ -112,8 +109,19 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   // Notifications when |PerformanceTiming| data becomes available
   virtual void DidChangePerformanceTiming() {}
 
+  // Notification when the renderer uses a particular code path during a page
+  // load. This is used for metrics collection.
+  virtual void DidObserveLoadingBehavior(
+      blink::WebLoadingBehaviorFlag behavior) {}
+
   // Called when the focused node has changed to |node|.
   virtual void FocusedNodeChanged(const blink::WebNode& node) {}
+
+  // Called when accessibility is enabled or disabled.
+  virtual void AccessibilityModeChanged() {}
+
+  // Called when script in the page calls window.print().
+  virtual void ScriptedPrint(bool user_initiated) {}
 
   // IPC::Listener implementation.
   bool OnMessageReceived(const IPC::Message& message) override;

@@ -31,8 +31,8 @@ SystemMetrics SystemMetrics::Sample() {
   return system_metrics;
 }
 
-scoped_ptr<Value> SystemMetrics::ToValue() const {
-  scoped_ptr<DictionaryValue> res(new DictionaryValue());
+std::unique_ptr<Value> SystemMetrics::ToValue() const {
+  std::unique_ptr<DictionaryValue> res(new DictionaryValue());
 
   res->SetInteger("committed_memory", static_cast<int>(committed_memory_));
 #if defined(OS_LINUX) || defined(OS_ANDROID)
@@ -46,7 +46,7 @@ scoped_ptr<Value> SystemMetrics::ToValue() const {
   return std::move(res);
 }
 
-ProcessMetrics* ProcessMetrics::CreateCurrentProcessMetrics() {
+std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateCurrentProcessMetrics() {
 #if !defined(OS_MACOSX) || defined(OS_IOS)
   return CreateProcessMetrics(base::GetCurrentProcessHandle());
 #else

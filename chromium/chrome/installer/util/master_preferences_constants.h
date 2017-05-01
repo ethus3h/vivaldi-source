@@ -15,8 +15,6 @@ namespace master_preferences {
 // is specified in master preference as well as command line, the command line
 // value takes precedence.
 
-// Boolean. This is to be a Chrome install. (When using MultiInstall)
-extern const char kChrome[];
 // Boolean. This is a legacy preference and should no longer be used; it is
 // kept around so that old master_preferences which specify
 // "create_all_shortcuts":false still enforce the new
@@ -77,8 +75,6 @@ extern const char kMsi[];
 // String. The MSI Product ID under which the MSI stores its information.  This
 // is used to update the DisplayVersion to match Chrome's version number.
 extern const char kMsiProductId[];
-// Boolean. Support installing multiple products at once.
-extern const char kMultiInstall[];
 // Boolean. Show EULA dialog before install.
 extern const char kRequireEula[];
 // Boolean. Indicates that the first-run 'set-as-default' dialog should not be
@@ -92,6 +88,9 @@ extern const char kSystemLevel[];
 extern const char kVerboseLogging[];
 // Name of the block that contains the extensions on the master preferences.
 extern const char kExtensionsBlock[];
+// Boolean. Allow Chrome to be downgraded to a previous version if true.
+extern const char kAllowDowngrade[];
+
 }  // namespace master_preferences
 }  // namespace installer
 

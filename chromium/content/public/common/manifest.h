@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/strings/nullable_string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
 #include "third_party/WebKit/public/platform/WebDisplayMode.h"
 #include "third_party/WebKit/public/platform/modules/screen_orientation/WebScreenOrientationLockType.h"
@@ -26,28 +27,35 @@ struct CONTENT_EXPORT Manifest {
   // Structure representing an icon as per the Manifest specification, see:
   // http://w3c.github.io/manifest/#dfn-icon-object
   struct CONTENT_EXPORT Icon {
+    enum IconPurpose {
+      ANY = 0,
+      BADGE,
+    };
+
     Icon();
+    Icon(const Icon& other);
     ~Icon();
+
+    bool operator==(const Icon& other) const;
 
     // MUST be a valid url. If an icon doesn't have a valid URL, it will not be
     // successfully parsed, thus will not be represented in the Manifest.
     GURL src;
 
-    // Null if the parsing failed or the field was not present. The type can be
+    // Empty if the parsing failed or the field was not present. The type can be
     // any string and doesn't have to be a valid image MIME type at this point.
     // It is up to the consumer of the object to check if the type matches a
     // supported type.
-    base::NullableString16 type;
-
-    // Default value is 1.0 if the value is missing or invalid.
-    double density;
+    base::string16 type;
 
     // Empty if the parsing failed, the field was not present or empty.
     // The special value "any" is represented by gfx::Size(0, 0).
     std::vector<gfx::Size> sizes;
 
-    // Default density. Set to 1.0.
-    static const double kDefaultDensity;
+    // Empty if the field was not present or not of type "string". Defaults to
+    // a vector with a single value, IconPurpose::ANY, for all other parsing
+    // exceptions.
+    std::vector<IconPurpose> purpose;
   };
 
   // Structure representing a related application.
@@ -71,6 +79,7 @@ struct CONTENT_EXPORT Manifest {
   };
 
   Manifest();
+  Manifest(const Manifest& other);
   ~Manifest();
 
   // Returns whether this Manifest had no attribute set. A newly created
@@ -126,6 +135,9 @@ struct CONTENT_EXPORT Manifest {
   // is okay to use this entry.
   // Null if parsing failed or the field was not present.
   base::NullableString16 gcm_sender_id;
+
+  // Empty if the parsing failed or the field was not present.
+  GURL scope;
 
   // Maximum length for all the strings inside the Manifest when it is sent over
   // IPC. The renderer process should truncate the strings before sending the

@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_ANDROID_OMNIBOX_AUTOCOMPLETE_CONTROLLER_ANDROID_H_
 #define CHROME_BROWSER_ANDROID_OMNIBOX_AUTOCOMPLETE_CONTROLLER_ANDROID_H_
 
+#include <memory>
 #include <string>
 
 #include "base/android/jni_weak_ref.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -24,7 +24,6 @@ class AutocompleteController;
 struct AutocompleteMatch;
 class AutocompleteResult;
 class Profile;
-class Tab;
 
 // The native part of the Java AutocompleteController class.
 class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
@@ -52,7 +51,6 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
       const base::android::JavaParamRef<jobject>& obj,
       const base::android::JavaParamRef<jstring>& j_omnibox_text,
       const base::android::JavaParamRef<jstring>& j_current_url,
-      jboolean is_query_in_omnibox,
       jboolean focused_from_fakebox);
   void Stop(JNIEnv* env,
             const base::android::JavaParamRef<jobject>& obj,
@@ -64,9 +62,9 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
       const base::android::JavaParamRef<jobject>& obj,
       jint selected_index,
       const base::android::JavaParamRef<jstring>& j_current_url,
-      jboolean is_query_in_omnibox,
       jboolean focused_from_fakebox,
       jlong elapsed_time_since_first_modified,
+      jint completed_length,
       const base::android::JavaParamRef<jobject>& j_web_contents);
   void DeleteSuggestion(JNIEnv* env,
                         const base::android::JavaParamRef<jobject>& obj,
@@ -119,16 +117,10 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
   // Classifies the type of page we are on.
   metrics::OmniboxEventProto::PageClassification ClassifyPage(
       const GURL& gurl,
-      bool is_query_in_omnibox,
       bool focused_from_fakebox) const;
 
   base::android::ScopedJavaLocalRef<jobject> BuildOmniboxSuggestion(
       JNIEnv* env, const AutocompleteMatch& match);
-
-  // Converts destination_url (which is in its canonical form or punycode) to a
-  // user-friendly URL by looking up accept languages of the current profile.
-  // e.g. http://xn--6q8b.kr/ --> 한.kr
-  base::string16 FormatURLUsingAcceptLanguages(GURL url);
 
   // A helper method for fetching the top synchronous autocomplete result.
   // The |prevent_inline_autocomplete| flag is passed to the AutocompleteInput
@@ -139,7 +131,7 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
       const base::android::JavaRef<jstring>& j_text,
       bool prevent_inline_autocomplete);
 
-  scoped_ptr<AutocompleteController> autocomplete_controller_;
+  std::unique_ptr<AutocompleteController> autocomplete_controller_;
 
   // Last input we sent to the autocomplete controller.
   AutocompleteInput input_;

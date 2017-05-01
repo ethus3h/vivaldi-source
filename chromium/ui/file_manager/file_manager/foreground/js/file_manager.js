@@ -6,8 +6,7 @@
  * FileManager constructor.
  *
  * FileManager objects encapsulate the functionality of the file selector
- * dialogs, as well as the full screen file manager application (though the
- * latter is not yet implemented).
+ * dialogs, as well as the full screen file manager application.
  *
  * @constructor
  * @struct
@@ -59,6 +58,11 @@ function FileManager() {
   this.metadataModel_ = null;
 
   /**
+   * @private {!FileMetadataFormatter}
+   */
+  this.fileMetadataFormatter_ = new FileMetadataFormatter();
+
+  /**
    * @private {ThumbnailModel}
    */
   this.thumbnailModel_ = null;
@@ -98,6 +102,13 @@ function FileManager() {
    * @private
    */
   this.providersModel_ = null;
+
+  /**
+   * Model for quick view.
+   * @type {QuickViewModel}
+   * @private
+   */
+  this.quickViewModel_ = null;
 
   /**
    * Controller for actions for current selection.
@@ -253,6 +264,18 @@ function FileManager() {
 
   /** @private {ColumnVisibilityController} */
   this.columnVisibilityController_ = null;
+
+  /**
+   * @type {QuickViewUma}
+   * @private
+   */
+  this.quickViewUma_ = null;
+
+  /**
+   * @type {QuickViewController}
+   * @private
+   */
+  this.quickViewController_ = null;
 
   // --------------------------------------------------------------------------
   // DOM elements.
@@ -437,9 +460,13 @@ FileManager.prototype = /** @struct */ {
    * @private
    */
   FileManager.prototype.startInitSettings_ = function() {
+    metrics.startInterval('Load.InitSettings');
     this.appStateController_ = new AppStateController(this.dialogType);
     return new Promise(function(resolve) {
-      this.appStateController_.loadInitialViewOptions().then(resolve);
+      this.appStateController_.loadInitialViewOptions().then(function() {
+        metrics.recordInterval('Load.InitSettings');
+        resolve();
+      });
     }.bind(this));
   };
 
@@ -509,6 +536,20 @@ FileManager.prototype = /** @struct */ {
         assert(this.folderShortcutsModel_),
         this.backgroundPage_.background.driveSyncHandler,
         this.selectionHandler_, assert(this.ui_));
+
+    this.quickViewModel_ = new QuickViewModel();
+    var fileListSelectionModel = /** @type {!cr.ui.ListSelectionModel} */ (
+        this.directoryModel_.getFileListSelection());
+    this.quickViewUma_ =
+        new QuickViewUma(assert(this.volumeManager_), assert(this.dialogType));
+    var metadataBoxController = new MetadataBoxController(
+        this.metadataModel_, this.quickViewModel_, this.fileMetadataFormatter_);
+    this.quickViewController_ = new QuickViewController(
+        assert(this.metadataModel_), assert(this.selectionHandler_),
+        assert(this.ui_.listContainer), assert(this.quickViewModel_),
+        assert(this.taskController_), fileListSelectionModel,
+        assert(this.quickViewUma_), metadataBoxController, this.dialogType,
+        assert(this.volumeManager_));
 
     if (this.dialogType === DialogType.FULL_PAGE) {
       importer.importEnabled().then(
@@ -662,13 +703,20 @@ FileManager.prototype = /** @struct */ {
     this.dialogDom_ = dialogDom;
     this.document_ = this.dialogDom_.ownerDocument;
 
-    return this.initBackgroundPagePromise_.then(function() {
+    metrics.startInterval('Load.InitDocuments');
+    return Promise.all([
+      this.initBackgroundPagePromise_,
+      window.importElementsPromise
+    ]).then(function() {
+      metrics.recordInterval('Load.InitDocuments');
+      metrics.startInterval('Load.InitUI');
       this.initEssentialUI_();
       this.initAdditionalUI_();
       return this.initSettingsPromise_;
     }.bind(this)).then(function() {
       this.initFileSystemUI_();
       this.initUIFocus_();
+      metrics.recordInterval('Load.InitUI');
     }.bind(this));
   };
 
@@ -714,6 +762,7 @@ FileManager.prototype = /** @struct */ {
    */
   FileManager.prototype.startInitBackgroundPage_ = function() {
     return new Promise(function(resolve) {
+      metrics.startInterval('Load.InitBackgroundPage');
       chrome.runtime.getBackgroundPage(/** @type {function(Window=)} */ (
           function(opt_backgroundPage) {
             assert(opt_backgroundPage);
@@ -731,6 +780,7 @@ FileManager.prototype = /** @struct */ {
                   this.backgroundPage_.background.mediaScanner;
               this.historyLoader_ =
                   this.backgroundPage_.background.historyLoader;
+              metrics.recordInterval('Load.InitBackgroundPage');
               resolve();
             }.bind(this));
           }.bind(this)));
@@ -742,24 +792,34 @@ FileManager.prototype = /** @struct */ {
    * @private
    */
   FileManager.prototype.initVolumeManager_ = function() {
-    // Auto resolving to local path does not work for folders (e.g., dialog for
-    // loading unpacked extensions).
-    var noLocalPathResolution =
-        DialogType.isFolderDialog(this.launchParams_.type);
+    var allowedPaths = this.launchParams_.allowedPaths;
+    // Files.app native implementation create snapshot files for non-native
+    // files. But it does not work for folders (e.g., dialog for loading
+    // unpacked extensions).
+    if (allowedPaths === AllowedPaths.NATIVE_PATH &&
+        !DialogType.isFolderDialog(this.launchParams_.type)) {
+      if (this.launchParams_.type == DialogType.SELECT_SAVEAS_FILE) {
+        // Only drive can create snapshot files for saving.
+        allowedPaths = AllowedPaths.NATIVE_OR_DRIVE_PATH;
+      } else {
+        allowedPaths = AllowedPaths.ANY_PATH;
+      }
+    }
 
-    // If this condition is false, VolumeManagerWrapper hides all drive
-    // related event and data, even if Drive is enabled on preference.
+    var writableOnly =
+        this.launchParams_.type === DialogType.SELECT_SAVEAS_FILE;
+
+    // VolumeManagerWrapper hides virtual file system related event and data
+    // even depends on the value of |supportVirtualPath|. If it is
+    // VirtualPathSupport.NO_VIRTUAL_PATH, it hides Drive even if Drive is
+    // enabled on preference.
     // In other words, even if Drive is disabled on preference but Files.app
     // should show Drive when it is re-enabled, then the value should be set to
     // true.
     // Note that the Drive enabling preference change is listened by
     // DriveIntegrationService, so here we don't need to take care about it.
-    var nonNativeEnabled =
-        !noLocalPathResolution || !this.launchParams_.shouldReturnLocalPath;
     this.volumeManager_ = new VolumeManagerWrapper(
-        /** @type {VolumeManagerWrapper.NonNativeVolumeStatus} */
-        (nonNativeEnabled),
-        this.backgroundPage_);
+        allowedPaths, writableOnly, this.backgroundPage_);
   };
 
   /**
@@ -792,11 +852,6 @@ FileManager.prototype = /** @struct */ {
     assert(this.launchParams_);
     this.ui_ = new FileManagerUI(
         assert(this.providersModel_), this.dialogDom_, this.launchParams_);
-
-    // Show the window as soon as the UI pre-initialization is done.
-    if (this.dialogType == DialogType.FULL_PAGE && !util.runningInBrowser()) {
-      chrome.app.window.current().show();
-    }
   };
 
   /**
@@ -810,7 +865,6 @@ FileManager.prototype = /** @struct */ {
     assert(this.volumeManager_);
     assert(this.historyLoader_);
     assert(this.dialogDom_);
-    assert(this.metadataModel_);
 
     // Cache nodes we'll be manipulating.
     var dom = this.dialogDom_;
@@ -975,7 +1029,8 @@ FileManager.prototype = /** @struct */ {
     this.metadataUpdateController_ = new MetadataUpdateController(
         this.ui_.listContainer,
         this.directoryModel_,
-        this.metadataModel_);
+        this.metadataModel_,
+        this.fileMetadataFormatter_);
 
     // Create task controller.
     this.taskController_ = new TaskController(
@@ -1374,8 +1429,10 @@ FileManager.prototype = /** @struct */ {
         this.backgroundPage_.background.progressCenter.updateItem(item);
       }
     }
-    this.backgroundPage_.background.progressCenter.removePanel(
-        this.ui_.progressCenterPanel);
+    if (this.ui_ && this.ui_.progressCenterPanel) {
+      this.backgroundPage_.background.progressCenter.removePanel(
+          this.ui_.progressCenterPanel);
+    }
   };
 
   /**

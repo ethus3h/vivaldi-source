@@ -7,21 +7,26 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <memory>
 #include <utility>
 
 #include "base/macros.h"
 #include "base/memory/scoped_vector.h"
+#include "base/metrics/persistent_memory_allocator.h"
 #include "base/observer_list.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_factory.h"
-#include "content/public/common/service_registry.h"
 #include "ipc/ipc_test_sink.h"
+#include "media/media_features.h"
+#include "mojo/public/cpp/bindings/associated_interface_ptr.h"
+#include "services/service_manager/public/cpp/interface_provider.h"
 
 class StoragePartition;
 
 namespace content {
 
 class MockRenderProcessHostFactory;
+class RenderWidgetHost;
 
 // A mock render process host that has no corresponding renderer process.  All
 // IPC messages are sent into the message sink for inspection by tests.
@@ -41,14 +46,14 @@ class MockRenderProcessHost : public RenderProcessHost {
   void SimulateCrash();
 
   // RenderProcessHost implementation (public portion).
-  void EnableSendQueue() override;
   bool Init() override;
+  void EnableSendQueue() override;
   int GetNextRoutingID() override;
   void AddRoute(int32_t routing_id, IPC::Listener* listener) override;
   void RemoveRoute(int32_t routing_id) override;
   void AddObserver(RenderProcessHostObserver* observer) override;
   void RemoveObserver(RenderProcessHostObserver* observer) override;
-  void ShutdownForBadMessage() override;
+  void ShutdownForBadMessage(CrashReportMode crash_report_mode) override;
   void WidgetRestored() override;
   void WidgetHidden() override;
   int VisibleWidgetCount() const override;
@@ -76,36 +81,38 @@ class MockRenderProcessHost : public RenderProcessHost {
   void AddFilter(BrowserMessageFilter* filter) override;
   bool FastShutdownForPageCount(size_t count) override;
   base::TimeDelta GetChildProcessIdleTime() const override;
-  void ResumeRequestsForView(int route_id) override;
   void FilterURL(bool empty_allowed, GURL* url) override;
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   void EnableAudioDebugRecordings(const base::FilePath& file) override;
   void DisableAudioDebugRecordings() override;
-  void EnableEventLogRecordings(const base::FilePath& file) override;
-  void DisableEventLogRecordings() override;
+  bool StartWebRTCEventLog(const base::FilePath& file_path) override;
+  bool StopWebRTCEventLog() override;
   void SetWebRtcLogMessageCallback(
       base::Callback<void(const std::string&)> callback) override;
+  void ClearWebRtcLogMessageCallback() override;
   WebRtcStopRtpDumpCallback StartRtpDump(
       bool incoming,
       bool outgoing,
       const WebRtcRtpPacketCallback& packet_callback) override;
 #endif
   void ResumeDeferredNavigation(const GlobalRequestID& request_id) override;
-  void NotifyTimezoneChange(const std::string& zone_id) override;
-  ServiceRegistry* GetServiceRegistry() override;
+  service_manager::InterfaceProvider* GetRemoteInterfaces() override;
+  std::unique_ptr<base::SharedPersistentMemoryAllocator> TakeMetricsAllocator()
+      override;
   const base::TimeTicks& GetInitTimeForNavigationMetrics() const override;
-  bool SubscribeUniformEnabled() const override;
-  void OnAddSubscription(unsigned int target) override;
-  void OnRemoveSubscription(unsigned int target) override;
-  void SendUpdateValueState(
-      unsigned int target, const gpu::ValueState& state) override;
-#if defined(ENABLE_BROWSER_CDMS)
-  scoped_refptr<media::MediaKeys> GetCdm(int render_frame_id,
-                                         int cdm_id) const override;
-#endif
   bool IsProcessBackgrounded() const override;
-  void IncrementWorkerRefCount() override;
-  void DecrementWorkerRefCount() override;
+  size_t GetWorkerRefCount() const override;
+  void IncrementServiceWorkerRefCount() override;
+  void DecrementServiceWorkerRefCount() override;
+  void IncrementSharedWorkerRefCount() override;
+  void DecrementSharedWorkerRefCount() override;
+  void ForceReleaseWorkerRefCounts() override;
+  bool IsWorkerRefCountDisabled() override;
+  void PurgeAndSuspend() override;
+  void Resume() override;
+  mojom::Renderer* GetRendererInterface() override;
+  void SetIsNeverSuitableForReuse() override;
+  bool MayReuseHost() override;
 
   // IPC::Sender via RenderProcessHost.
   bool Send(IPC::Message* msg) override;
@@ -128,17 +135,16 @@ class MockRenderProcessHost : public RenderProcessHost {
     is_process_backgrounded_ = is_process_backgrounded;
   }
 
-  void SetProcessHandle(scoped_ptr<base::ProcessHandle> new_handle) {
+  void SetProcessHandle(std::unique_ptr<base::ProcessHandle> new_handle) {
     process_handle = std::move(new_handle);
   }
 
   void GetAudioOutputControllers(
       const GetAudioOutputControllersCallback& callback) const override {}
 
-  int worker_ref_count() const { return worker_ref_count_; }
-
-  void SetServiceRegistry(scoped_ptr<ServiceRegistry> service_registry) {
-    service_registry_ = std::move(service_registry);
+  void SetRemoteInterfaces(
+      std::unique_ptr<service_manager::InterfaceProvider> remote_interfaces) {
+    remote_interfaces_ = std::move(remote_interfaces);
   }
 
  private:
@@ -151,16 +157,18 @@ class MockRenderProcessHost : public RenderProcessHost {
   BrowserContext* browser_context_;
   base::ObserverList<RenderProcessHostObserver> observers_;
 
-  IDMap<RenderWidgetHost> render_widget_hosts_;
+  IDMap<RenderWidgetHost*> render_widget_hosts_;
   int prev_routing_id_;
-  IDMap<IPC::Listener> listeners_;
+  IDMap<IPC::Listener*> listeners_;
   bool fast_shutdown_started_;
   bool deletion_callback_called_;
   bool is_for_guests_only_;
   bool is_process_backgrounded_;
-  scoped_ptr<base::ProcessHandle> process_handle;
+  std::unique_ptr<base::ProcessHandle> process_handle;
   int worker_ref_count_;
-  scoped_ptr<ServiceRegistry> service_registry_;
+  std::unique_ptr<service_manager::InterfaceProvider> remote_interfaces_;
+  std::unique_ptr<mojo::AssociatedInterfacePtr<mojom::Renderer>>
+      renderer_interface_;
 
   DISALLOW_COPY_AND_ASSIGN(MockRenderProcessHost);
 };

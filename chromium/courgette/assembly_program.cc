@@ -4,19 +4,8 @@
 
 #include "courgette/assembly_program.h"
 
-#include <memory.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <algorithm>
-#include <map>
-#include <set>
-#include <sstream>
-#include <vector>
-
+#include "base/callback.h"
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-
 #include "courgette/courgette.h"
 #include "courgette/encoded_program.h"
 
@@ -108,16 +97,97 @@ class InstructionWithLabelARM : public InstructionWithLabel {
   uint16_t op_size_;
 };
 
+/******** InstructionCountReceptor ********/
+
+// An InstructionReceptor that counts space occupied by emitted instructions.
+class InstructionCountReceptor : public InstructionReceptor {
+ public:
+  InstructionCountReceptor() = default;
+
+  size_t size() const { return size_; }
+
+  // InstructionReceptor:
+  // TODO(huangs): 2016/11: Populate these with size_ += ...
+  CheckBool EmitPeRelocs() override { return true; }
+  CheckBool EmitElfRelocation() override { return true; }
+  CheckBool EmitElfARMRelocation() override { return true; }
+  CheckBool EmitOrigin(RVA rva) override { return true; }
+  CheckBool EmitSingleByte(uint8_t byte) override { return true; }
+  CheckBool EmitMultipleBytes(const uint8_t* bytes, size_t len) override {
+    return true;
+  }
+  CheckBool EmitRel32(Label* label) override { return true; }
+  CheckBool EmitRel32ARM(uint16_t op,
+                         Label* label,
+                         const uint8_t* arm_op,
+                         uint16_t op_size) override {
+    return true;
+  }
+  CheckBool EmitAbs32(Label* label) override { return true; }
+  CheckBool EmitAbs64(Label* label) override { return true; }
+
+ private:
+  size_t size_ = 0;
+
+  DISALLOW_COPY_AND_ASSIGN(InstructionCountReceptor);
+};
+
+/******** InstructionStoreReceptor ********/
+
+// An InstructionReceptor that stores emitted instructions.
+class InstructionStoreReceptor : public InstructionReceptor {
+ public:
+  explicit InstructionStoreReceptor(AssemblyProgram* program)
+      : program_(program) {
+    CHECK(program_);
+  }
+
+  // TODO(huangs): 2016/11: Add Reserve().
+
+  // InstructionReceptor:
+  // TODO(huangs): 2016/11: Replace stub with implementation.
+  CheckBool EmitPeRelocs() override { return program_->EmitPeRelocs(); }
+  CheckBool EmitElfRelocation() override {
+    return program_->EmitElfRelocation();
+  }
+  CheckBool EmitElfARMRelocation() override {
+    return program_->EmitElfARMRelocation();
+  }
+  CheckBool EmitOrigin(RVA rva) override { return program_->EmitOrigin(rva); }
+  CheckBool EmitSingleByte(uint8_t byte) override {
+    return program_->EmitSingleByte(byte);
+  }
+  CheckBool EmitMultipleBytes(const uint8_t* bytes, size_t len) override {
+    return program_->EmitMultipleBytes(bytes, len);
+  }
+  CheckBool EmitRel32(Label* label) override {
+    return program_->EmitRel32(label);
+  }
+  CheckBool EmitRel32ARM(uint16_t op,
+                         Label* label,
+                         const uint8_t* arm_op,
+                         uint16_t op_size) override {
+    return program_->EmitRel32ARM(op, label, arm_op, op_size);
+  }
+  CheckBool EmitAbs32(Label* label) override {
+    return program_->EmitAbs32(label);
+  }
+  CheckBool EmitAbs64(Label* label) override {
+    return program_->EmitAbs64(label);
+  }
+
+ private:
+  AssemblyProgram* program_;
+
+  DISALLOW_COPY_AND_ASSIGN(InstructionStoreReceptor);
+};
+
 }  // namespace
 
-AssemblyProgram::AssemblyProgram(ExecutableType kind)
-  : kind_(kind), image_base_(0) {
-}
+/******** AssemblyProgram ********/
 
-static void DeleteContainedLabels(const RVAToLabel& labels) {
-  for (RVAToLabel::const_iterator p = labels.begin();  p != labels.end();  ++p)
-    UncheckedDelete(p->second);
-}
+AssemblyProgram::AssemblyProgram(ExecutableType kind, uint64_t image_base)
+    : kind_(kind), image_base_(image_base) {}
 
 AssemblyProgram::~AssemblyProgram() {
   for (size_t i = 0;  i < instructions_.size();  ++i) {
@@ -129,33 +199,30 @@ AssemblyProgram::~AssemblyProgram() {
     for (size_t i = 0;  i < 256;  ++i)
       UncheckedDelete(byte_instruction_cache_[i]);
   }
-  DeleteContainedLabels(rel32_labels_);
-  DeleteContainedLabels(abs32_labels_);
 }
 
-CheckBool AssemblyProgram::EmitPeRelocsInstruction() {
+CheckBool AssemblyProgram::EmitPeRelocs() {
   return Emit(ScopedInstruction(UncheckedNew<PeRelocsInstruction>()));
 }
 
-CheckBool AssemblyProgram::EmitElfRelocationInstruction() {
+CheckBool AssemblyProgram::EmitElfRelocation() {
   return Emit(ScopedInstruction(UncheckedNew<ElfRelocsInstruction>()));
 }
 
-CheckBool AssemblyProgram::EmitElfARMRelocationInstruction() {
+CheckBool AssemblyProgram::EmitElfARMRelocation() {
   return Emit(ScopedInstruction(UncheckedNew<ElfARMRelocsInstruction>()));
 }
 
-CheckBool AssemblyProgram::EmitOriginInstruction(RVA rva) {
+CheckBool AssemblyProgram::EmitOrigin(RVA rva) {
   return Emit(ScopedInstruction(UncheckedNew<OriginInstruction>(rva)));
 }
 
-CheckBool AssemblyProgram::EmitByteInstruction(uint8_t byte) {
+CheckBool AssemblyProgram::EmitSingleByte(uint8_t byte) {
   return EmitShared(GetByteInstruction(byte));
 }
 
-CheckBool AssemblyProgram::EmitBytesInstruction(const uint8_t* values,
-                                                size_t len) {
-  return Emit(ScopedInstruction(UncheckedNew<BytesInstruction>(values, len)));
+CheckBool AssemblyProgram::EmitMultipleBytes(const uint8_t* bytes, size_t len) {
+  return Emit(ScopedInstruction(UncheckedNew<BytesInstruction>(bytes, len)));
 }
 
 CheckBool AssemblyProgram::EmitRel32(Label* label) {
@@ -181,51 +248,75 @@ CheckBool AssemblyProgram::EmitAbs64(Label* label) {
       ScopedInstruction(UncheckedNew<InstructionWithLabel>(ABS64, label)));
 }
 
-Label* AssemblyProgram::FindOrMakeAbs32Label(RVA rva) {
-  return FindLabel(rva, &abs32_labels_);
+void AssemblyProgram::PrecomputeLabels(RvaVisitor* abs32_visitor,
+                                       RvaVisitor* rel32_visitor) {
+  abs32_label_manager_.Read(abs32_visitor);
+  rel32_label_manager_.Read(rel32_visitor);
+  TrimLabels();
 }
 
-Label* AssemblyProgram::FindOrMakeRel32Label(RVA rva) {
-  return FindLabel(rva, &rel32_labels_);
-}
+// Chosen empirically to give the best reduction in payload size for
+// an update from daisy_3701.98.0 to daisy_4206.0.0.
+const int AssemblyProgram::kLabelLowerLimit = 5;
 
-void AssemblyProgram::DefaultAssignIndexes() {
-  DefaultAssignIndexes(&abs32_labels_);
-  DefaultAssignIndexes(&rel32_labels_);
+void AssemblyProgram::TrimLabels() {
+  // For now only trim for ARM binaries.
+  if (kind() != EXE_ELF_32_ARM)
+    return;
+
+  int lower_limit = kLabelLowerLimit;
+
+  VLOG(1) << "TrimLabels: threshold " << lower_limit;
+
+  rel32_label_manager_.RemoveUnderusedLabels(lower_limit);
 }
 
 void AssemblyProgram::UnassignIndexes() {
-  UnassignIndexes(&abs32_labels_);
-  UnassignIndexes(&rel32_labels_);
+  abs32_label_manager_.UnassignIndexes();
+  rel32_label_manager_.UnassignIndexes();
+}
+
+void AssemblyProgram::DefaultAssignIndexes() {
+  abs32_label_manager_.DefaultAssignIndexes();
+  rel32_label_manager_.DefaultAssignIndexes();
 }
 
 void AssemblyProgram::AssignRemainingIndexes() {
-  AssignRemainingIndexes(&abs32_labels_);
-  AssignRemainingIndexes(&rel32_labels_);
+  abs32_label_manager_.AssignRemainingIndexes();
+  rel32_label_manager_.AssignRemainingIndexes();
 }
 
-Label* AssemblyProgram::InstructionAbs32Label(
-    const Instruction* instruction) const {
-  if (instruction->op() == ABS32)
-    return static_cast<const InstructionWithLabel*>(instruction)->label();
-  return NULL;
+Label* AssemblyProgram::FindAbs32Label(RVA rva) {
+  return abs32_label_manager_.Find(rva);
 }
 
-Label* AssemblyProgram::InstructionAbs64Label(
-    const Instruction* instruction) const {
-  if (instruction->op() == ABS64)
-    return static_cast<const InstructionWithLabel*>(instruction)->label();
-  return NULL;
+Label* AssemblyProgram::FindRel32Label(RVA rva) {
+  return rel32_label_manager_.Find(rva);
 }
 
-Label* AssemblyProgram::InstructionRel32Label(
-    const Instruction* instruction) const {
-  if (instruction->op() == REL32 || instruction->op() == REL32ARM) {
-    Label* label =
-        static_cast<const InstructionWithLabel*>(instruction)->label();
-    return label;
+void AssemblyProgram::HandleInstructionLabels(
+    const AssemblyProgram::LabelHandlerMap& handler_map) const {
+  for (const Instruction* instruction : instructions_) {
+    LabelHandlerMap::const_iterator it = handler_map.find(instruction->op());
+    if (it != handler_map.end()) {
+      it->second.Run(
+          static_cast<const InstructionWithLabel*>(instruction)->label());
+    }
   }
-  return NULL;
+}
+
+CheckBool AssemblyProgram::GenerateInstructions(
+    const InstructionGenerator& gen) {
+  // Pass 1: Count the space needed to store instructions.
+  InstructionCountReceptor count_receptor;
+  if (!gen.Run(this, &count_receptor))
+    return false;
+
+  // Pass 2: Emit all instructions to preallocated buffer (uses Phase 1 count).
+  InstructionStoreReceptor store_receptor(this);
+  // TODO(huangs): 2016/11: Pass |count_receptor_->size()| to |store_receptor_|
+  // to reserve space for raw data.
+  return gen.Run(this, &store_receptor);
 }
 
 CheckBool AssemblyProgram::Emit(ScopedInstruction instruction) {
@@ -241,161 +332,13 @@ CheckBool AssemblyProgram::EmitShared(Instruction* instruction) {
   return instruction && instructions_.push_back(instruction);
 }
 
-Label* AssemblyProgram::FindLabel(RVA rva, RVAToLabel* labels) {
-  Label*& slot = (*labels)[rva];
-  if (slot == NULL) {
-    slot = UncheckedNew<Label>(rva);
-    if (slot == NULL)
-      return NULL;
-  }
-  slot->count_++;
-  return slot;
-}
-
-void AssemblyProgram::UnassignIndexes(RVAToLabel* labels) {
-  for (RVAToLabel::iterator p = labels->begin();  p != labels->end();  ++p) {
-    Label* current = p->second;
-    current->index_ = Label::kNoIndex;
-  }
-}
-
-// DefaultAssignIndexes takes a set of labels and assigns indexes in increasing
-// address order.
-//
-void AssemblyProgram::DefaultAssignIndexes(RVAToLabel* labels) {
-  int index = 0;
-  for (RVAToLabel::iterator p = labels->begin();  p != labels->end();  ++p) {
-    Label* current = p->second;
-    if (current->index_ != Label::kNoIndex)
-      NOTREACHED();
-    current->index_ = index;
-    ++index;
-  }
-}
-
-// AssignRemainingIndexes assigns indexes to any addresses (labels) that are not
-// yet assigned an index.
-//
-void AssemblyProgram::AssignRemainingIndexes(RVAToLabel* labels) {
-  // An address table compresses best when each index is associated with an
-  // address that is slight larger than the previous index.
-
-  // First see which indexes have not been used.  The 'available' vector could
-  // grow even bigger, but the number of addresses is a better starting size
-  // than empty.
-  std::vector<bool> available(labels->size(), true);
-  int used = 0;
-
-  for (RVAToLabel::iterator p = labels->begin();  p != labels->end();  ++p) {
-    int index = p->second->index_;
-    if (index != Label::kNoIndex) {
-      while (static_cast<size_t>(index) >= available.size())
-        available.push_back(true);
-      available.at(index) = false;
-      ++used;
-    }
-  }
-
-  VLOG(1) << used << " of " << labels->size() << " labels pre-assigned";
-
-  // Are there any unused labels that happen to be adjacent following a used
-  // label?
-  //
-  int fill_forward_count = 0;
-  Label* prev = 0;
-  for (RVAToLabel::iterator p = labels->begin();  p != labels->end();  ++p) {
-    Label* current = p->second;
-    if (current->index_ == Label::kNoIndex) {
-      int index = 0;
-      if (prev  &&  prev->index_ != Label::kNoIndex)
-        index = prev->index_ + 1;
-      if (index < static_cast<int>(available.size()) && available.at(index)) {
-        current->index_ = index;
-        available.at(index) = false;
-        ++fill_forward_count;
-      }
-    }
-    prev = current;
-  }
-
-  // Are there any unused labels that happen to be adjacent preceeding a used
-  // label?
-  //
-  int fill_backward_count = 0;
-  prev = 0;
-  for (RVAToLabel::reverse_iterator p = labels->rbegin();
-       p != labels->rend();
-       ++p) {
-    Label* current = p->second;
-    if (current->index_ == Label::kNoIndex) {
-      int prev_index;
-      if (prev)
-        prev_index = prev->index_;
-      else
-        prev_index = static_cast<uint32_t>(available.size());
-      if (prev_index != 0  &&
-          prev_index != Label::kNoIndex  &&
-          available.at(prev_index - 1)) {
-        current->index_ = prev_index - 1;
-        available.at(current->index_) = false;
-        ++fill_backward_count;
-      }
-    }
-    prev = current;
-  }
-
-  // Fill in any remaining indexes
-  int fill_infill_count = 0;
-  int index = 0;
-  for (RVAToLabel::iterator p = labels->begin();  p != labels->end();  ++p) {
-    Label* current = p->second;
-    if (current->index_ == Label::kNoIndex) {
-      while (!available.at(index)) {
-        ++index;
-      }
-      current->index_ = index;
-      available.at(index) = false;
-      ++index;
-      ++fill_infill_count;
-    }
-  }
-
-  VLOG(1) << "  fill forward " << fill_forward_count
-          << "  backward " << fill_backward_count
-          << "  infill " << fill_infill_count;
-}
-
-typedef CheckBool (EncodedProgram::*DefineLabelMethod)(int index, RVA value);
-
-#if defined(OS_WIN)
-__declspec(noinline)
-#endif
-static CheckBool DefineLabels(const RVAToLabel& labels,
-                              EncodedProgram* encoded_format,
-                              DefineLabelMethod define_label) {
-  bool ok = true;
-  for (RVAToLabel::const_iterator p = labels.begin();
-       ok && p != labels.end();
-       ++p) {
-    Label* label = p->second;
-    ok = (encoded_format->*define_label)(label->index_, label->rva_);
-  }
-  return ok;
-}
-
-EncodedProgram* AssemblyProgram::Encode() const {
-  scoped_ptr<EncodedProgram> encoded(new EncodedProgram());
+std::unique_ptr<EncodedProgram> AssemblyProgram::Encode() const {
+  std::unique_ptr<EncodedProgram> encoded(new EncodedProgram());
 
   encoded->set_image_base(image_base_);
 
-  if (!DefineLabels(abs32_labels_, encoded.get(),
-                    &EncodedProgram::DefineAbs32Label) ||
-      !DefineLabels(rel32_labels_, encoded.get(),
-                    &EncodedProgram::DefineRel32Label)) {
-    return NULL;
-  }
-
-  encoded->EndLabels();
+  if (!encoded->ImportLabels(abs32_label_manager_, rel32_label_manager_))
+    return nullptr;
 
   for (size_t i = 0;  i < instructions_.size();  ++i) {
     Instruction* instruction = instructions_[i];
@@ -404,13 +347,13 @@ EncodedProgram* AssemblyProgram::Encode() const {
       case ORIGIN: {
         OriginInstruction* org = static_cast<OriginInstruction*>(instruction);
         if (!encoded->AddOrigin(org->origin_rva()))
-          return NULL;
+          return nullptr;
         break;
       }
       case DEFBYTE: {
         uint8_t b = static_cast<ByteInstruction*>(instruction)->byte_value();
         if (!encoded->AddCopy(1, &b))
-          return NULL;
+          return nullptr;
         break;
       }
       case DEFBYTES: {
@@ -419,13 +362,13 @@ EncodedProgram* AssemblyProgram::Encode() const {
         size_t len = static_cast<BytesInstruction*>(instruction)->len();
 
         if (!encoded->AddCopy(len, byte_values))
-          return NULL;
+          return nullptr;
         break;
       }
       case REL32: {
         Label* label = static_cast<InstructionWithLabel*>(instruction)->label();
         if (!encoded->AddRel32(label->index_))
-          return NULL;
+          return nullptr;
         break;
       }
       case REL32ARM: {
@@ -434,34 +377,34 @@ EncodedProgram* AssemblyProgram::Encode() const {
         uint16_t compressed_op =
             static_cast<InstructionWithLabelARM*>(instruction)->compressed_op();
         if (!encoded->AddRel32ARM(compressed_op, label->index_))
-          return NULL;
+          return nullptr;
         break;
       }
       case ABS32: {
         Label* label = static_cast<InstructionWithLabel*>(instruction)->label();
         if (!encoded->AddAbs32(label->index_))
-          return NULL;
+          return nullptr;
         break;
       }
       case ABS64: {
         Label* label = static_cast<InstructionWithLabel*>(instruction)->label();
         if (!encoded->AddAbs64(label->index_))
-          return NULL;
+          return nullptr;
         break;
       }
       case MAKEPERELOCS: {
         if (!encoded->AddPeMakeRelocs(kind_))
-          return NULL;
+          return nullptr;
         break;
       }
       case MAKEELFRELOCS: {
         if (!encoded->AddElfMakeRelocs())
-          return NULL;
+          return nullptr;
         break;
       }
       case MAKEELFARMRELOCS: {
         if (!encoded->AddElfARMMakeRelocs())
-          return NULL;
+          return nullptr;
         break;
       }
       default: {
@@ -470,7 +413,7 @@ EncodedProgram* AssemblyProgram::Encode() const {
     }
   }
 
-  return encoded.release();
+  return encoded;
 }
 
 Instruction* AssemblyProgram::GetByteInstruction(uint8_t byte) {
@@ -497,82 +440,15 @@ Instruction* AssemblyProgram::GetByteInstruction(uint8_t byte) {
   return byte_instruction_cache_[byte];
 }
 
-// Chosen empirically to give the best reduction in payload size for
-// an update from daisy_3701.98.0 to daisy_4206.0.0.
-const int AssemblyProgram::kLabelLowerLimit = 5;
-
-CheckBool AssemblyProgram::TrimLabels() {
-  // For now only trim for ARM binaries
-  if (kind() != EXE_ELF_32_ARM)
-    return true;
-
-  int lower_limit = kLabelLowerLimit;
-
-  VLOG(1) << "TrimLabels: threshold " << lower_limit;
-
-  // Remove underused labels from the list of labels
-  RVAToLabel::iterator it = rel32_labels_.begin();
-  while (it != rel32_labels_.end()) {
-    if (it->second->count_ <= lower_limit) {
-      // Note: it appears to me (grt) that this leaks the Label instances. I
-      // *think* the right thing would be to add it->second to a collection for
-      // which all elements are freed via UncheckedDelete after the instruction
-      // fixup loop below.
-      rel32_labels_.erase(it++);
-    } else {
-      ++it;
-    }
-  }
-
-  // Walk through the list of instructions, replacing trimmed labels
-  // with the original machine instruction
-  for (size_t i = 0; i < instructions_.size(); ++i) {
-    Instruction* instruction = instructions_[i];
-    switch (instruction->op()) {
-      case REL32ARM: {
-        Label* label =
-            static_cast<InstructionWithLabelARM*>(instruction)->label();
-        if (label->count_ <= lower_limit) {
-          const uint8_t* arm_op =
-              static_cast<InstructionWithLabelARM*>(instruction)->arm_op();
-          uint16_t op_size =
-              static_cast<InstructionWithLabelARM*>(instruction)->op_size();
-
-          if (op_size < 1)
-            return false;
-          UncheckedDelete(instruction);
-          instructions_[i] = UncheckedNew<BytesInstruction>(arm_op, op_size);
-          if (!instructions_[i])
-            return false;
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  return true;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
-Status TrimLabels(AssemblyProgram* program) {
-  if (program->TrimLabels())
-    return C_OK;
-  else
-    return C_TRIM_FAILED;
-}
+Status Encode(const AssemblyProgram& program,
+              std::unique_ptr<EncodedProgram>* output) {
+  // Explicitly release any memory associated with the output before encoding.
+  output->reset();
 
-Status Encode(AssemblyProgram* program, EncodedProgram** output) {
-  *output = NULL;
-  EncodedProgram *encoded = program->Encode();
-  if (encoded) {
-    *output = encoded;
-    return C_OK;
-  } else {
-    return C_GENERAL_ERROR;
-  }
+  *output = program.Encode();
+  return (*output) ? C_OK : C_GENERAL_ERROR;
 }
 
 }  // namespace courgette

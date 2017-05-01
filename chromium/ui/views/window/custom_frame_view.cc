@@ -31,6 +31,10 @@
 #include "ui/views/window/window_resources.h"
 #include "ui/views/window/window_shape.h"
 
+#if defined(OS_WIN)
+#include "ui/display/win/screen_win.h"
+#endif
+
 namespace views {
 
 namespace {
@@ -52,11 +56,6 @@ const int kIconLeftSpacing = 2;
 const int kTitleIconOffsetX = 4;
 // The space between the title text and the caption buttons.
 const int kTitleCaptionSpacing = 5;
-
-#if !defined(OS_WIN)
-// The icon never shrinks below 16 px on a side.
-const int kIconMinimumSize = 16;
-#endif
 
 #if defined(OS_CHROMEOS)
 // Chrome OS uses a dark gray.
@@ -208,6 +207,13 @@ void CustomFrameView::SizeConstraintsChanged() {
   LayoutWindowControls();
 }
 
+void CustomFrameView::ActivationChanged(bool active) {
+  if (active_ == active)
+    return;
+  active_ = active;
+  SchedulePaint();
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // CustomFrameView, View overrides:
 
@@ -304,8 +310,10 @@ int CustomFrameView::IconSize() const {
 #if defined(OS_WIN)
   // This metric scales up if either the titlebar height or the titlebar font
   // size are increased.
-  return GetSystemMetrics(SM_CYSMICON);
+  return display::win::ScreenWin::GetSystemMetricsInDIP(SM_CYSMICON);
 #else
+  // The icon never shrinks below 16 px on a side.
+  const int kIconMinimumSize = 16;
   return std::max(GetTitleFontList().GetHeight(), kIconMinimumSize);
 #endif
 }
@@ -352,9 +360,9 @@ bool CustomFrameView::ShouldShowClientEdge() const {
 
 void CustomFrameView::PaintRestoredFrameBorder(gfx::Canvas* canvas) {
   frame_background_->set_frame_color(GetFrameColor());
-  const gfx::ImageSkia* frame_image = GetFrameImage();
+  const gfx::ImageSkia frame_image = GetFrameImage();
   frame_background_->set_theme_image(frame_image);
-  frame_background_->set_top_area_height(frame_image->height());
+  frame_background_->set_top_area_height(frame_image.height());
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
@@ -373,9 +381,9 @@ void CustomFrameView::PaintRestoredFrameBorder(gfx::Canvas* canvas) {
 }
 
 void CustomFrameView::PaintMaximizedFrameBorder(gfx::Canvas* canvas) {
-  const gfx::ImageSkia* frame_image = GetFrameImage();
+  const gfx::ImageSkia frame_image = GetFrameImage();
   frame_background_->set_theme_image(frame_image);
-  frame_background_->set_top_area_height(frame_image->height());
+  frame_background_->set_top_area_height(frame_image.height());
   frame_background_->PaintMaximized(canvas, this);
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
@@ -475,9 +483,11 @@ SkColor CustomFrameView::GetFrameColor() const {
   return frame_->IsActive() ? kDefaultColorFrame : kDefaultColorFrameInactive;
 }
 
-const gfx::ImageSkia* CustomFrameView::GetFrameImage() const {
-  return ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-      frame_->IsActive() ? IDR_FRAME : IDR_FRAME_INACTIVE).ToImageSkia();
+gfx::ImageSkia CustomFrameView::GetFrameImage() const {
+  return *ui::ResourceBundle::GetSharedInstance()
+              .GetImageNamed(frame_->IsActive() ? IDR_FRAME
+                                                : IDR_FRAME_INACTIVE)
+              .ToImageSkia();
 }
 
 void CustomFrameView::LayoutWindowControls() {

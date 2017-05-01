@@ -11,7 +11,10 @@
 #include <msi.h>
 #include <shellapi.h>
 
+#include <utility>
+
 #include "base/files/file_path.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -24,7 +27,6 @@
 #include "chrome/installer/util/channel_info.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/google_update_settings.h"
-#include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/installer_util_strings.h"
 #include "chrome/installer/util/l10n_string_util.h"
@@ -94,18 +96,15 @@ void NavigateToUrlWithIExplore(const base::string16& url) {
 }  // namespace
 
 GoogleChromeDistribution::GoogleChromeDistribution()
-    : BrowserDistribution(CHROME_BROWSER,
-                          scoped_ptr<AppRegistrationData>(
-                              new UpdatingAppRegistrationData(kChromeGuid))) {
-}
+    : BrowserDistribution(
+          base::MakeUnique<UpdatingAppRegistrationData>(kChromeGuid)) {}
 
 GoogleChromeDistribution::GoogleChromeDistribution(
-    scoped_ptr<AppRegistrationData> app_reg_data)
-    : BrowserDistribution(CHROME_BROWSER, app_reg_data.Pass()) {
-}
+    std::unique_ptr<AppRegistrationData> app_reg_data)
+    : BrowserDistribution(std::move(app_reg_data)) {}
 
 void GoogleChromeDistribution::DoPostUninstallOperations(
-    const Version& version,
+    const base::Version& version,
     const base::FilePath& local_data_path,
     const base::string16& distribution_data) {
   // Send the Chrome version and OS version as params to the form.
@@ -158,24 +157,11 @@ base::string16 GoogleChromeDistribution::GetBaseAppName() {
   return L"Google Chrome";
 }
 
-base::string16 GoogleChromeDistribution::GetShortcutName(
-    ShortcutType shortcut_type) {
-  int string_id = IDS_PRODUCT_NAME_BASE;
-  switch (shortcut_type) {
-    case SHORTCUT_APP_LAUNCHER:
-      string_id = IDS_APP_LIST_SHORTCUT_NAME_BASE;
-      break;
-    default:
-      DCHECK_EQ(SHORTCUT_CHROME, shortcut_type);
-      break;
-  }
-  return installer::GetLocalizedString(string_id);
+base::string16 GoogleChromeDistribution::GetShortcutName() {
+  return installer::GetLocalizedString(IDS_PRODUCT_NAME_BASE);
 }
 
-int GoogleChromeDistribution::GetIconIndex(ShortcutType shortcut_type) {
-  if (shortcut_type == SHORTCUT_APP_LAUNCHER)
-    return icon_resources::kAppLauncherIndex;
-  DCHECK_EQ(SHORTCUT_CHROME, shortcut_type);
+int GoogleChromeDistribution::GetIconIndex() {
   return icon_resources::kApplicationIndex;
 }
 
@@ -249,10 +235,19 @@ base::string16 GoogleChromeDistribution::GetDistributionData(HKEY root_key) {
   result.append(ap_value);
 
   // Crash client id.
+  // While it would be convenient to use the path service to get
+  // chrome::DIR_CRASH_DUMPS, that points to the dump location for the installer
+  // rather than for the browser. For per-user installs they are the same, yet
+  // for system-level installs the installer uses the system temp directory (see
+  // setup/installer_crash_reporting.cc's ConfigureCrashReporting).
+  // TODO(grt): use install_static::GetDefaultCrashDumpLocation (with an option
+  // to suppress creating the directory) once setup.exe uses
+  // install_static::InstallDetails.
   base::FilePath crash_dir;
-  if (chrome::GetDefaultCrashDumpLocation(&crash_dir)) {
+  if (chrome::GetDefaultUserDataDirectory(&crash_dir)) {
+    crash_dir = crash_dir.Append(FILE_PATH_LITERAL("Crashpad"));
     crashpad::UUID client_id;
-    scoped_ptr<crashpad::CrashReportDatabase> database(
+    std::unique_ptr<crashpad::CrashReportDatabase> database(
         crashpad::CrashReportDatabase::InitializeWithoutCreating(crash_dir));
     if (database && database->GetSettings()->GetClientID(&client_id))
       result.append(L"&crash_client_id=").append(client_id.ToString16());

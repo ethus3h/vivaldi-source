@@ -11,12 +11,9 @@
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_registry_simple.h"
 
 namespace base {
-class DictionaryValue;
-class FilePath;
-class ListValue;
 class Value;
 }
 

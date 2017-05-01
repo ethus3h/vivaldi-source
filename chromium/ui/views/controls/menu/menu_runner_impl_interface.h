@@ -7,11 +7,10 @@
 
 #include <stdint.h>
 
+#include "base/callback_forward.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 namespace views {
-
-class MenuItemView;
 
 namespace internal {
 
@@ -23,8 +22,10 @@ class MenuRunnerImplInterface {
  public:
   // Creates a concrete instance for running |menu_model|.
   // |run_types| is a bitmask of MenuRunner::RunTypes.
-  static MenuRunnerImplInterface* Create(ui::MenuModel* menu_model,
-                                         int32_t run_types);
+  static MenuRunnerImplInterface* Create(
+      ui::MenuModel* menu_model,
+      int32_t run_types,
+      const base::Closure& on_menu_closed_callback);
 
   // Returns true if we're in a nested message loop running the menu.
   virtual bool IsRunning() const = 0;
@@ -44,7 +45,7 @@ class MenuRunnerImplInterface {
   virtual void Cancel() = 0;
 
   // Returns the time from the event which closed the menu - or 0.
-  virtual base::TimeDelta GetClosingEventTime() const = 0;
+  virtual base::TimeTicks GetClosingEventTime() const = 0;
 
  protected:
   // Call Release() to delete.

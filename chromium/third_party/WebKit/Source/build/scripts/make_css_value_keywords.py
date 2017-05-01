@@ -5,9 +5,9 @@ import re
 import subprocess
 import sys
 
-from in_file import InFile
+from name_utilities import enum_for_css_keyword
 from name_utilities import upper_first_letter
-import in_generator
+import json5_generator
 import license
 
 
@@ -105,32 +105,26 @@ bool isValueAllowedInMode(unsigned short id, CSSParserMode mode)
 """
 
 
-class CSSValueKeywordsWriter(in_generator.Writer):
+class CSSValueKeywordsWriter(json5_generator.Writer):
     class_name = "CSSValueKeywords"
-    defaults = {
-        'mode': None,
-    }
 
     def __init__(self, file_paths):
-        in_generator.Writer.__init__(self, file_paths)
+        json5_generator.Writer.__init__(self, file_paths)
         self._outputs = {(self.class_name + ".h"): self.generate_header,
                          (self.class_name + ".cpp"): self.generate_implementation,
                         }
 
-        self._value_keywords = self.in_file.name_dictionaries
+        self._value_keywords = self.json5_file.name_dictionaries
         first_keyword_id = 1
         for offset, keyword in enumerate(self._value_keywords):
             keyword['lower_name'] = keyword['name'].lower()
-            keyword['enum_name'] = self._enum_name_from_value_keyword(keyword['name'])
+            keyword['enum_name'] = enum_for_css_keyword(keyword['name'])
             keyword['enum_value'] = first_keyword_id + offset
             if keyword['name'].startswith('-internal-'):
                 assert keyword['mode'] is None, 'Can\'t specify mode for value keywords with the prefix "-internal-".'
                 keyword['mode'] = 'UASheet'
             else:
                 assert keyword['mode'] != 'UASheet', 'UASheet mode only value keywords should have the prefix "-internal-".'
-
-    def _enum_name_from_value_keyword(self, value_keyword):
-        return "CSSValue" + "".join(upper_first_letter(w) for w in value_keyword.split("-"))
 
     def _enum_declaration(self, keyword):
         return "    %(enum_name)s = %(enum_value)s," % keyword
@@ -176,4 +170,4 @@ class CSSValueKeywordsWriter(in_generator.Writer):
 
 
 if __name__ == "__main__":
-    in_generator.Maker(CSSValueKeywordsWriter).main(sys.argv)
+    json5_generator.Maker(CSSValueKeywordsWriter).main()

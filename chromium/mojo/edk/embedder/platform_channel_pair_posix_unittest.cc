@@ -21,12 +21,12 @@
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
+#include "base/macros.h"
 #include "mojo/edk/embedder/platform_channel_utils_posix.h"
 #include "mojo/edk/embedder/platform_handle.h"
 #include "mojo/edk/embedder/platform_handle_vector.h"
 #include "mojo/edk/embedder/scoped_platform_handle.h"
 #include "mojo/edk/test/test_utils.h"
-#include "mojo/public/cpp/system/macros.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -60,7 +60,7 @@ class PlatformChannelPairPosixTest : public testing::Test {
  private:
   struct sigaction old_action_;
 
-  MOJO_DISALLOW_COPY_AND_ASSIGN(PlatformChannelPairPosixTest);
+  DISALLOW_COPY_AND_ASSIGN(PlatformChannelPairPosixTest);
 };
 
 TEST_F(PlatformChannelPairPosixTest, NoSigPipe) {
@@ -153,7 +153,7 @@ TEST_F(PlatformChannelPairPosixTest, SendReceiveFDs) {
     for (size_t j = 1; j <= i; j++) {
       base::FilePath unused;
       base::ScopedFILE fp(
-          base::CreateAndOpenTemporaryFileInDir(temp_dir.path(), &unused));
+          base::CreateAndOpenTemporaryFileInDir(temp_dir.GetPath(), &unused));
       ASSERT_TRUE(fp);
       ASSERT_EQ(j, fwrite(std::string(j, c).data(), 1, j, fp.get()));
       platform_handles->push_back(
@@ -209,7 +209,7 @@ TEST_F(PlatformChannelPairPosixTest, AppendReceivedFDs) {
   {
     base::FilePath unused;
     base::ScopedFILE fp(
-        base::CreateAndOpenTemporaryFileInDir(temp_dir.path(), &unused));
+        base::CreateAndOpenTemporaryFileInDir(temp_dir.GetPath(), &unused));
     ASSERT_TRUE(fp);
     ASSERT_EQ(file_contents.size(),
               fwrite(file_contents.data(), 1, file_contents.size(), fp.get()));

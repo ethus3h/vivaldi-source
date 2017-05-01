@@ -8,6 +8,7 @@
 #include "content/browser/loader/global_routing_id.h"
 #include "content/browser/loader/resource_message_filter.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/net/url_request_service_worker_data.h"
 #include "content/common/net/url_request_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_request_id.h"
@@ -51,7 +52,7 @@ void ResourceRequestInfo::AllocateForTesting(net::URLRequest* request,
                                              bool parent_is_main_frame,
                                              bool allow_download,
                                              bool is_async,
-                                             bool is_using_lofi) {
+                                             PreviewsState previews_state) {
   // Make sure both |is_main_frame| and |parent_is_main_frame| aren't set at the
   // same time.
   DCHECK(!(is_main_frame && parent_is_main_frame));
@@ -60,35 +61,35 @@ void ResourceRequestInfo::AllocateForTesting(net::URLRequest* request,
   // the main frame.
   DCHECK(resource_type != RESOURCE_TYPE_MAIN_FRAME || is_main_frame);
 
-  ResourceRequestInfoImpl* info =
-      new ResourceRequestInfoImpl(
-          PROCESS_TYPE_RENDERER,             // process_type
-          render_process_id,                 // child_id
-          render_view_id,                    // route_id
-          -1,                                // frame_tree_node_id
-          0,                                 // origin_pid
-          0,                                 // request_id
-          render_frame_id,                   // render_frame_id
-          is_main_frame,                     // is_main_frame
-          parent_is_main_frame,              // parent_is_main_frame
-          resource_type,                     // resource_type
-          ui::PAGE_TRANSITION_LINK,          // transition_type
-          false,                             // should_replace_current_entry
-          false,                             // is_download
-          false,                             // is_stream
-          allow_download,                    // allow_download
-          false,                             // has_user_gesture
-          false,                             // enable load timing
-          request->has_upload(),             // enable upload progress
-          false,                             // do_not_prompt_for_login
-          blink::WebReferrerPolicyDefault,   // referrer_policy
-          blink::WebPageVisibilityStateVisible,  // visibility_state
-          context,                           // context
-          base::WeakPtr<ResourceMessageFilter>(),  // filter
-          false,                             // report_raw_headers
-          is_async,                          // is_async
-          is_using_lofi,                     // is_using_lofi
-          std::string());                    // original_headers
+  ResourceRequestInfoImpl* info = new ResourceRequestInfoImpl(
+      ResourceRequesterInfo::CreateForRendererTesting(
+          render_process_id),                // resource_requester_info
+      render_view_id,                        // route_id
+      -1,                                    // frame_tree_node_id
+      0,                                     // origin_pid
+      0,                                     // request_id
+      render_frame_id,                       // render_frame_id
+      is_main_frame,                         // is_main_frame
+      parent_is_main_frame,                  // parent_is_main_frame
+      resource_type,                         // resource_type
+      ui::PAGE_TRANSITION_LINK,              // transition_type
+      false,                                 // should_replace_current_entry
+      false,                                 // is_download
+      false,                                 // is_stream
+      allow_download,                        // allow_download
+      false,                                 // has_user_gesture
+      false,                                 // enable load timing
+      request->has_upload(),                 // enable upload progress
+      false,                                 // do_not_prompt_for_login
+      blink::WebReferrerPolicyDefault,       // referrer_policy
+      blink::WebPageVisibilityStateVisible,  // visibility_state
+      context,                               // context
+      false,                                 // report_raw_headers
+      is_async,                              // is_async
+      previews_state,                        // previews_state
+      std::string(),                         // original_headers
+      nullptr,                               // body
+      false);                                // initiated_in_secure_context
   info->AssociateWithRequest(request);
 }
 
@@ -104,6 +105,13 @@ bool ResourceRequestInfo::GetRenderFrameForRequest(
   *render_process_id = user_data->render_process_id();
   *render_frame_id = user_data->render_frame_id();
   return true;
+}
+
+// static
+bool ResourceRequestInfo::OriginatedFromServiceWorker(
+    const net::URLRequest* request) {
+  return !!request->GetUserData(
+      content::URLRequestServiceWorkerData::kUserDataKey);
 }
 
 // ----------------------------------------------------------------------------
@@ -122,8 +130,7 @@ const ResourceRequestInfoImpl* ResourceRequestInfoImpl::ForRequest(
 }
 
 ResourceRequestInfoImpl::ResourceRequestInfoImpl(
-    int process_type,
-    int child_id,
+    scoped_refptr<ResourceRequesterInfo> requester_info,
     int route_id,
     int frame_tree_node_id,
     int origin_pid,
@@ -144,15 +151,14 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
     blink::WebReferrerPolicy referrer_policy,
     blink::WebPageVisibilityState visibility_state,
     ResourceContext* context,
-    base::WeakPtr<ResourceMessageFilter> filter,
     bool report_raw_headers,
     bool is_async,
-    bool is_using_lofi,
-    const std::string& original_headers)
-    : cross_site_handler_(NULL),
-      detachable_handler_(NULL),
-      process_type_(process_type),
-      child_id_(child_id),
+    PreviewsState previews_state,
+    const std::string& original_headers,
+    const scoped_refptr<ResourceRequestBodyImpl> body,
+    bool initiated_in_secure_context)
+    : detachable_handler_(NULL),
+      requester_info_(std::move(requester_info)),
       route_id_(route_id),
       frame_tree_node_id_(frame_tree_node_id),
       origin_pid_(origin_pid),
@@ -176,12 +182,12 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
       referrer_policy_(referrer_policy),
       visibility_state_(visibility_state),
       context_(context),
-      filter_(filter),
       report_raw_headers_(report_raw_headers),
       is_async_(is_async),
-      is_using_lofi_(is_using_lofi),
-      original_headers_(original_headers) {
-}
+      previews_state_(previews_state),
+      original_headers_(original_headers),
+      body_(body),
+      initiated_in_secure_context_(initiated_in_secure_context) {}
 
 ResourceRequestInfoImpl::~ResourceRequestInfoImpl() {
 }
@@ -214,11 +220,15 @@ ResourceContext* ResourceRequestInfoImpl::GetContext() const {
 }
 
 int ResourceRequestInfoImpl::GetChildID() const {
-  return child_id_;
+  return requester_info_->child_id();
 }
 
 int ResourceRequestInfoImpl::GetRouteID() const {
   return route_id_;
+}
+
+GlobalRequestID ResourceRequestInfoImpl::GetGlobalRequestID() const {
+  return GlobalRequestID(GetChildID(), request_id_);
 }
 
 int ResourceRequestInfoImpl::GetOriginPID() const {
@@ -227,6 +237,10 @@ int ResourceRequestInfoImpl::GetOriginPID() const {
 
 int ResourceRequestInfoImpl::GetRenderFrameID() const {
   return render_frame_id_;
+}
+
+int ResourceRequestInfoImpl::GetFrameTreeNodeId() const {
+  return frame_tree_node_id_;
 }
 
 bool ResourceRequestInfoImpl::IsMainFrame() const {
@@ -242,7 +256,8 @@ ResourceType ResourceRequestInfoImpl::GetResourceType() const {
 }
 
 int ResourceRequestInfoImpl::GetProcessType() const {
-  return process_type_;
+  return requester_info_->IsBrowserSideNavigation() ? PROCESS_TYPE_BROWSER
+                                                    : PROCESS_TYPE_RENDERER;
 }
 
 blink::WebReferrerPolicy ResourceRequestInfoImpl::GetReferrerPolicy() const {
@@ -269,13 +284,8 @@ bool ResourceRequestInfoImpl::WasIgnoredByHandler() const {
 bool ResourceRequestInfoImpl::GetAssociatedRenderFrame(
     int* render_process_id,
     int* render_frame_id) const {
-  if (process_type_ == PROCESS_TYPE_PLUGIN) {
-    *render_process_id = origin_pid_;
-    *render_frame_id = render_frame_id_;
-  } else {
-    *render_process_id = child_id_;
-    *render_frame_id = render_frame_id_;
-  }
+  *render_process_id = GetChildID();
+  *render_frame_id = render_frame_id_;
   return true;
 }
 
@@ -287,12 +297,16 @@ bool ResourceRequestInfoImpl::IsDownload() const {
   return is_download_;
 }
 
-bool ResourceRequestInfoImpl::IsUsingLoFi() const {
-  return is_using_lofi_;
+PreviewsState ResourceRequestInfoImpl::GetPreviewsState() const {
+  return previews_state_;
 }
 
 bool ResourceRequestInfoImpl::ShouldReportRawHeaders() const {
   return report_raw_headers_;
+}
+
+NavigationUIData* ResourceRequestInfoImpl::GetNavigationUIData() const {
+  return navigation_ui_data_.get();
 }
 
 void ResourceRequestInfoImpl::AssociateWithRequest(net::URLRequest* request) {
@@ -310,27 +324,33 @@ int ResourceRequestInfoImpl::GetRequestID() const {
   return request_id_;
 }
 
-GlobalRequestID ResourceRequestInfoImpl::GetGlobalRequestID() const {
-  return GlobalRequestID(child_id_, request_id_);
-}
-
 GlobalRoutingID ResourceRequestInfoImpl::GetGlobalRoutingID() const {
-  return GlobalRoutingID(child_id_, route_id_);
+  return GlobalRoutingID(GetChildID(), route_id_);
 }
 
 void ResourceRequestInfoImpl::UpdateForTransfer(
-    int child_id,
     int route_id,
     int render_frame_id,
     int origin_pid,
     int request_id,
-    base::WeakPtr<ResourceMessageFilter> filter) {
-  child_id_ = child_id;
+    ResourceRequesterInfo* requester_info,
+    mojom::URLLoaderAssociatedRequest url_loader_request,
+    mojom::URLLoaderClientAssociatedPtr url_loader_client) {
   route_id_ = route_id;
   render_frame_id_ = render_frame_id;
   origin_pid_ = origin_pid;
   request_id_ = request_id;
-  filter_ = filter;
+  requester_info_ = requester_info;
+
+  // on_transfer_ is non-null only when MojoAsyncResourceHandler is used.
+  if (on_transfer_) {
+    on_transfer_.Run(std::move(url_loader_request),
+                     std::move(url_loader_client));
+  }
+}
+
+void ResourceRequestInfoImpl::ResetBody() {
+  body_ = nullptr;
 }
 
 }  // namespace content

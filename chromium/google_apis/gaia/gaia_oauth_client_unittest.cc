@@ -9,6 +9,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/macros.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "google_apis/gaia/gaia_oauth_client.h"
@@ -89,7 +90,7 @@ class MockOAuthFetcherFactory : public net::URLFetcherFactory,
         complete_immediately_(true) {
   }
   ~MockOAuthFetcherFactory() override {}
-  scoped_ptr<net::URLFetcher> CreateURLFetcher(
+  std::unique_ptr<net::URLFetcher> CreateURLFetcher(
       int id,
       const GURL& url,
       net::URLFetcher::RequestType request_type,
@@ -102,7 +103,7 @@ class MockOAuthFetcherFactory : public net::URLFetcherFactory,
         results_,
         request_type,
         d);
-    return scoped_ptr<net::URLFetcher>(url_fetcher_);
+    return std::unique_ptr<net::URLFetcher>(url_fetcher_);
   }
   void set_response_code(int response_code) {
     response_code_ = response_code;
@@ -221,21 +222,21 @@ class MockGaiaOAuthClientDelegate : public gaia::GaiaOAuthClient::Delegate {
   MOCK_METHOD1(OnGetUserInfoResponsePtr,
                void(const base::DictionaryValue* user_info));
   void OnGetUserInfoResponse(
-      scoped_ptr<base::DictionaryValue> user_info) override {
+      std::unique_ptr<base::DictionaryValue> user_info) override {
     user_info_.reset(user_info.release());
     OnGetUserInfoResponsePtr(user_info_.get());
   }
   MOCK_METHOD1(OnGetTokenInfoResponsePtr,
                void(const base::DictionaryValue* token_info));
   void OnGetTokenInfoResponse(
-      scoped_ptr<base::DictionaryValue> token_info) override {
+      std::unique_ptr<base::DictionaryValue> token_info) override {
     token_info_.reset(token_info.release());
     OnGetTokenInfoResponsePtr(token_info_.get());
   }
 
  private:
-  scoped_ptr<base::DictionaryValue> user_info_;
-  scoped_ptr<base::DictionaryValue> token_info_;
+  std::unique_ptr<base::DictionaryValue> user_info_;
+  std::unique_ptr<base::DictionaryValue> token_info_;
   DISALLOW_COPY_AND_ASSIGN(MockGaiaOAuthClientDelegate);
 };
 
@@ -296,6 +297,26 @@ TEST_F(GaiaOAuthClientTest, GetTokensSuccess) {
 
   GaiaOAuthClient auth(GetRequestContext());
   auth.GetTokensFromAuthCode(client_info_, "auth_code", -1, &delegate);
+}
+
+TEST_F(GaiaOAuthClientTest, GetTokensAfterNetworkFailure) {
+  int response_code = net::HTTP_INTERNAL_SERVER_ERROR;
+
+  MockGaiaOAuthClientDelegate failure_delegate;
+  EXPECT_CALL(failure_delegate, OnNetworkError(response_code)).Times(1);
+
+  MockGaiaOAuthClientDelegate success_delegate;
+  EXPECT_CALL(success_delegate, OnGetTokensResponse(kTestRefreshToken,
+      kTestAccessToken, kTestExpiresIn)).Times(1);
+
+  MockOAuthFetcherFactory factory;
+  factory.set_response_code(response_code);
+  factory.set_max_failure_count(4);
+  factory.set_results(kDummyGetTokensResult);
+
+  GaiaOAuthClient auth(GetRequestContext());
+  auth.GetTokensFromAuthCode(client_info_, "auth_code", 2, &failure_delegate);
+  auth.GetTokensFromAuthCode(client_info_, "auth_code", -1, &success_delegate);
 }
 
 TEST_F(GaiaOAuthClientTest, RefreshTokenSuccess) {
@@ -368,10 +389,10 @@ TEST_F(GaiaOAuthClientTest, GetUserInfo) {
   GaiaOAuthClient auth(GetRequestContext());
   auth.GetUserInfo("access_token", 1, &delegate);
 
-  scoped_ptr<base::Value> value =
+  std::unique_ptr<base::Value> value =
       base::JSONReader::Read(kDummyFullUserInfoResult);
   DCHECK(value);
-  ASSERT_TRUE(value->IsType(base::Value::TYPE_DICTIONARY));
+  ASSERT_TRUE(value->IsType(base::Value::Type::DICTIONARY));
   base::DictionaryValue* expected_result;
   value->GetAsDictionary(&expected_result);
 

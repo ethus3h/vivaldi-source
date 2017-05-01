@@ -8,11 +8,13 @@
 
 #include "base/logging.h"
 
+#include "content/browser/loader/resource_request_info_impl.h"
+
 namespace content {
 
 LayeredResourceHandler::LayeredResourceHandler(
     net::URLRequest* request,
-    scoped_ptr<ResourceHandler> next_handler)
+    std::unique_ptr<ResourceHandler> next_handler)
     : ResourceHandler(request), next_handler_(std::move(next_handler)) {}
 
 LayeredResourceHandler::~LayeredResourceHandler() {
@@ -39,30 +41,31 @@ bool LayeredResourceHandler::OnRequestRedirected(
 
 bool LayeredResourceHandler::OnResponseStarted(ResourceResponse* response,
                                                bool* defer) {
-  return OnResponseStarted(response,defer, false, false);
+  // Vivaldi specific save info override.
+  ResourceRequestInfoImpl* info = GetRequestInfo();
+  return OnResponseStarted(response, defer,
+                           info != nullptr && info->open_when_downloaded(),
+                           info != nullptr && info->ask_for_save_target());
 }
 
 bool LayeredResourceHandler::OnResponseStarted(ResourceResponse* response,
                                                bool* defer,
                                                bool open_when_done,
                                                bool ask_for_target) {
+  /*
   DCHECK(next_handler_.get());
   return next_handler_->OnResponseStarted(response,
                                           defer,
                                           open_when_done,
                                           ask_for_target);
+                                          */
+  return OnResponseStarted(response, defer);
 }
 
 bool LayeredResourceHandler::OnWillStart(const GURL& url,
                                          bool* defer) {
   DCHECK(next_handler_.get());
   return next_handler_->OnWillStart(url, defer);
-}
-
-bool LayeredResourceHandler::OnBeforeNetworkStart(const GURL& url,
-                                                  bool* defer) {
-  DCHECK(next_handler_.get());
-  return next_handler_->OnBeforeNetworkStart(url, defer);
 }
 
 bool LayeredResourceHandler::OnWillRead(scoped_refptr<net::IOBuffer>* buf,
@@ -79,10 +82,9 @@ bool LayeredResourceHandler::OnReadCompleted(int bytes_read, bool* defer) {
 
 void LayeredResourceHandler::OnResponseCompleted(
     const net::URLRequestStatus& status,
-    const std::string& security_info,
     bool* defer) {
   DCHECK(next_handler_.get());
-  next_handler_->OnResponseCompleted(status, security_info, defer);
+  next_handler_->OnResponseCompleted(status, defer);
 }
 
 void LayeredResourceHandler::OnDataDownloaded(int bytes_downloaded) {

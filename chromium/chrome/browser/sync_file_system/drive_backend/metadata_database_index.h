@@ -11,12 +11,12 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "base/containers/hash_tables.h"
-#include "base/containers/scoped_ptr_hash_map.h"
+#include "base/hash.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database_index_interface.h"
 #include "chrome/browser/sync_file_system/drive_backend/tracker_id_set.h"
 
@@ -48,8 +48,8 @@ namespace drive_backend {
 struct DatabaseContents {
   DatabaseContents();
   ~DatabaseContents();
-  ScopedVector<FileMetadata> file_metadata;
-  ScopedVector<FileTracker> file_trackers;
+  std::vector<std::unique_ptr<FileMetadata>> file_metadata;
+  std::vector<std::unique_ptr<FileTracker>> file_trackers;
 };
 
 // Maintains indexes of MetadataDatabase on memory.
@@ -57,17 +57,18 @@ class MetadataDatabaseIndex : public MetadataDatabaseIndexInterface {
  public:
   ~MetadataDatabaseIndex() override;
 
-  static scoped_ptr<MetadataDatabaseIndex> Create(LevelDBWrapper* db);
-  static scoped_ptr<MetadataDatabaseIndex> CreateForTesting(
-      DatabaseContents* contents, LevelDBWrapper* db);
+  static std::unique_ptr<MetadataDatabaseIndex> Create(LevelDBWrapper* db);
+  static std::unique_ptr<MetadataDatabaseIndex> CreateForTesting(
+      DatabaseContents* contents,
+      LevelDBWrapper* db);
 
   // MetadataDatabaseIndexInterface overrides.
   void RemoveUnreachableItems() override;
   bool GetFileMetadata(const std::string& file_id,
                        FileMetadata* metadata) const override;
   bool GetFileTracker(int64_t tracker_id, FileTracker* tracker) const override;
-  void StoreFileMetadata(scoped_ptr<FileMetadata> metadata) override;
-  void StoreFileTracker(scoped_ptr<FileTracker> tracker) override;
+  void StoreFileMetadata(std::unique_ptr<FileMetadata> metadata) override;
+  void StoreFileTracker(std::unique_ptr<FileTracker> tracker) override;
   void RemoveFileMetadata(const std::string& file_id) override;
   void RemoveFileTracker(int64_t tracker_id) override;
   TrackerIDSet GetFileTrackerIDsByFileID(
@@ -102,9 +103,9 @@ class MetadataDatabaseIndex : public MetadataDatabaseIndexInterface {
   std::vector<std::string> GetAllMetadataIDs() const override;
 
  private:
-  typedef base::ScopedPtrHashMap<std::string, scoped_ptr<FileMetadata>>
+  typedef std::unordered_map<std::string, std::unique_ptr<FileMetadata>>
       MetadataByID;
-  typedef base::ScopedPtrHashMap<int64_t, scoped_ptr<FileTracker>> TrackerByID;
+  typedef std::unordered_map<int64_t, std::unique_ptr<FileTracker>> TrackerByID;
   typedef base::hash_map<std::string, TrackerIDSet> TrackerIDsByFileID;
   typedef base::hash_map<std::string, TrackerIDSet> TrackerIDsByTitle;
   typedef std::map<int64_t, TrackerIDsByTitle> TrackerIDsByParentAndTitle;
@@ -116,7 +117,7 @@ class MetadataDatabaseIndex : public MetadataDatabaseIndexInterface {
   friend class MetadataDatabaseTest;
 
   explicit MetadataDatabaseIndex(LevelDBWrapper* db);
-  void Initialize(scoped_ptr<ServiceMetadata> service_metadata,
+  void Initialize(std::unique_ptr<ServiceMetadata> service_metadata,
                   DatabaseContents* contents);
 
   // Maintains |app_root_by_app_id_|.
@@ -143,7 +144,7 @@ class MetadataDatabaseIndex : public MetadataDatabaseIndexInterface {
                                    const FileTracker& new_tracker);
   void RemoveFromDirtyTrackerIndexes(const FileTracker& tracker);
 
-  scoped_ptr<ServiceMetadata> service_metadata_;
+  std::unique_ptr<ServiceMetadata> service_metadata_;
   LevelDBWrapper* db_;  // Not owned
 
   MetadataByID metadata_by_id_;

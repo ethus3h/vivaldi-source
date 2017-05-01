@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/sessions/core/base_session_service_delegate.h"
 #include "components/sessions/core/session_backend.h"
 
@@ -24,7 +24,7 @@ namespace {
 void RunIfNotCanceled(
     const base::CancelableTaskTracker::IsCanceledCallback& is_canceled,
     const BaseSessionService::GetCommandsCallback& callback,
-    ScopedVector<SessionCommand> commands) {
+    std::vector<std::unique_ptr<SessionCommand>> commands) {
   if (is_canceled.Run())
     return;
   callback.Run(std::move(commands));
@@ -33,7 +33,7 @@ void RunIfNotCanceled(
 void PostOrRunInternalGetCommandsCallback(
     base::TaskRunner* task_runner,
     const BaseSessionService::GetCommandsCallback& callback,
-    ScopedVector<SessionCommand> commands) {
+    std::vector<std::unique_ptr<SessionCommand>> commands) {
   if (task_runner->RunsTasksOnCurrentThread()) {
     callback.Run(std::move(commands));
   } else {
@@ -76,37 +76,40 @@ void BaseSessionService::DeleteLastSession() {
       base::Bind(&SessionBackend::DeleteLastSession, backend_));
 }
 
-void BaseSessionService::ScheduleCommand(scoped_ptr<SessionCommand> command) {
+void BaseSessionService::ScheduleCommand(
+    std::unique_ptr<SessionCommand> command) {
   DCHECK(command);
   commands_since_reset_++;
-  pending_commands_.push_back(command.release());
+  pending_commands_.push_back(std::move(command));
   StartSaveTimer();
 }
 
 void BaseSessionService::AppendRebuildCommand(
-    scoped_ptr<SessionCommand> command) {
+    std::unique_ptr<SessionCommand> command) {
   DCHECK(command);
-  pending_commands_.push_back(command.release());
+  pending_commands_.push_back(std::move(command));
 }
 
 void BaseSessionService::EraseCommand(SessionCommand* old_command) {
-  ScopedVector<SessionCommand>::iterator it =
-      std::find(pending_commands_.begin(),
-                pending_commands_.end(),
-                old_command);
+  auto it = std::find_if(
+      pending_commands_.begin(), pending_commands_.end(),
+      [old_command](const std::unique_ptr<SessionCommand>& command_ptr) {
+        return command_ptr.get() == old_command;
+      });
   CHECK(it != pending_commands_.end());
   pending_commands_.erase(it);
 }
 
-void BaseSessionService::SwapCommand(SessionCommand* old_command,
-                                     scoped_ptr<SessionCommand> new_command) {
-  ScopedVector<SessionCommand>::iterator it =
-      std::find(pending_commands_.begin(),
-                pending_commands_.end(),
-                old_command);
+void BaseSessionService::SwapCommand(
+    SessionCommand* old_command,
+    std::unique_ptr<SessionCommand> new_command) {
+  auto it = std::find_if(
+      pending_commands_.begin(), pending_commands_.end(),
+      [old_command](const std::unique_ptr<SessionCommand>& command_ptr) {
+        return command_ptr.get() == old_command;
+      });
   CHECK(it != pending_commands_.end());
-  *it = new_command.release();
-  delete old_command;
+  *it = std::move(new_command);
 }
 
 void BaseSessionService::ClearPendingCommands() {
@@ -115,8 +118,8 @@ void BaseSessionService::ClearPendingCommands() {
 
 void BaseSessionService::StartSaveTimer() {
   // Don't start a timer when testing.
-  if (delegate_->ShouldUseDelayedSave() && base::MessageLoop::current() &&
-      !weak_factory_.HasWeakPtrs()) {
+  if (delegate_->ShouldUseDelayedSave() &&
+      base::ThreadTaskRunnerHandle::IsSet() && !weak_factory_.HasWeakPtrs()) {
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&BaseSessionService::Save, weak_factory_.GetWeakPtr()),
@@ -132,7 +135,7 @@ void BaseSessionService::Save() {
   if (pending_commands_.empty())
     return;
 
-  // We create a new ScopedVector which will receive all elements from the
+  // We create a new vector which will receive all elements from the
   // current commands. This will also clear the current list.
   RunTaskOnBackendThread(
       FROM_HERE,
@@ -161,7 +164,8 @@ BaseSessionService::ScheduleGetLastSessionCommands(
 
   GetCommandsCallback callback_runner =
       base::Bind(&PostOrRunInternalGetCommandsCallback,
-                 base::ThreadTaskRunnerHandle::Get(), run_if_not_canceled);
+                 base::RetainedRef(base::ThreadTaskRunnerHandle::Get()),
+                 run_if_not_canceled);
 
   RunTaskOnBackendThread(
       FROM_HERE,

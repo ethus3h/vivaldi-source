@@ -67,7 +67,7 @@ InfoBar* IncognitoConnectabilityInfoBarDelegate::Create(
     const base::string16& message,
     const IncognitoConnectabilityInfoBarDelegate::InfoBarCallback& callback) {
   return infobar_manager->AddInfoBar(infobar_manager->CreateConfirmInfoBar(
-      scoped_ptr<ConfirmInfoBarDelegate>(
+      std::unique_ptr<ConfirmInfoBarDelegate>(
           new IncognitoConnectabilityInfoBarDelegate(message, callback))));
 }
 
@@ -218,6 +218,9 @@ void IncognitoConnectability::Query(
 IncognitoConnectability::TabContext::TabContext() : infobar(nullptr) {
 }
 
+IncognitoConnectability::TabContext::TabContext(const TabContext& other) =
+    default;
+
 IncognitoConnectability::TabContext::~TabContext() {
 }
 
@@ -239,10 +242,10 @@ void IncognitoConnectability::OnInteractiveResponse(
       break;
   }
 
-  DCHECK(ContainsKey(pending_origins_, make_pair(extension_id, origin)));
+  DCHECK(base::ContainsKey(pending_origins_, make_pair(extension_id, origin)));
   PendingOrigin& pending_origin =
       pending_origins_[make_pair(extension_id, origin)];
-  DCHECK(ContainsKey(pending_origin, infobar_manager));
+  DCHECK(base::ContainsKey(pending_origin, infobar_manager));
 
   std::vector<base::Callback<void(bool)>> callbacks;
   if (response == ScopedAlertTracker::INTERACTIVE) {

@@ -10,6 +10,7 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "chrome/common/features.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_utils.h"
 
@@ -22,7 +23,7 @@ class ThemeProperties {
   // The int values of OverwritableByUserThemeProperties, Alignment, and Tiling
   // are used as a key to store the property in the browser theme pack. If you
   // modify any of these enums, increment the version number in
-  // browser_theme_pack.h
+  // browser_theme_pack.cc.
 
   enum OverwritableByUserThemeProperty {
     COLOR_FRAME,
@@ -95,8 +96,20 @@ class ThemeProperties {
 
     // The color of the line separating the top of the toolbar from the region
     // above. For a tabbed browser window, this is the line along the bottom
-    // edge of the tabstrip.
+    // edge of the tabstrip, the stroke around the tabs, and the new tab button
+    // stroke/shadow color.
     COLOR_TOOLBAR_TOP_SEPARATOR,
+    COLOR_TOOLBAR_TOP_SEPARATOR_INACTIVE,
+
+    // Colors of vertical separators, such as on the bookmark bar or on the DL
+    // shelf.
+    COLOR_TOOLBAR_VERTICAL_SEPARATOR,
+
+    // The color of a background tab, as well as the new tab button.
+    COLOR_BACKGROUND_TAB,
+
+    // The color of the "instructions text" in an empty bookmarks bar.
+    COLOR_BOOKMARK_BAR_INSTRUCTIONS_TEXT,
 
     // Colors used for the detached (NTP) bookmark bar.
     COLOR_DETACHED_BOOKMARK_BAR_BACKGROUND,
@@ -116,23 +129,24 @@ class ThemeProperties {
     COLOR_NTP_SECTION_HEADER_RULE,
     COLOR_NTP_SECTION_HEADER_RULE_LIGHT,
     COLOR_NTP_TEXT_LIGHT,
-#if defined(ENABLE_SUPERVISED_USERS)
+#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
     COLOR_SUPERVISED_USER_LABEL,
     COLOR_SUPERVISED_USER_LABEL_BACKGROUND,
     COLOR_SUPERVISED_USER_LABEL_BORDER,
 #endif
 
-    COLOR_STATUS_BAR_TEXT,
-
 #if defined(OS_MACOSX)
+    COLOR_FRAME_VIBRANCY_OVERLAY,
+    COLOR_TOOLBAR_INACTIVE,
+    COLOR_BACKGROUND_TAB_INACTIVE,
     COLOR_TOOLBAR_BEZEL,
     COLOR_TOOLBAR_STROKE,
     COLOR_TOOLBAR_STROKE_INACTIVE,
+    COLOR_TOOLBAR_STROKE_THEME,
+    COLOR_TOOLBAR_STROKE_THEME_INACTIVE,
     // The color of a toolbar button's border.
     COLOR_TOOLBAR_BUTTON_STROKE,
     COLOR_TOOLBAR_BUTTON_STROKE_INACTIVE,
-    GRADIENT_FRAME_INCOGNITO,
-    GRADIENT_FRAME_INCOGNITO_INACTIVE,
     GRADIENT_TOOLBAR,
     GRADIENT_TOOLBAR_INACTIVE,
     GRADIENT_TOOLBAR_BUTTON,
@@ -140,6 +154,11 @@ class ThemeProperties {
     GRADIENT_TOOLBAR_BUTTON_PRESSED,
     GRADIENT_TOOLBAR_BUTTON_PRESSED_INACTIVE,
 #endif  // OS_MACOSX
+
+#if defined(OS_WIN)
+    // The color of the 1px border around the window on Windows 10.
+    COLOR_ACCENT_BORDER,
+#endif  // OS_WIN
   };
 
   // Used by the browser theme pack to parse alignments from something like
@@ -157,10 +176,6 @@ class ThemeProperties {
   // Converts a Tiling into a string like "no-repeat". The result is used to
   // generate a CSS value.
   static std::string TilingToString(int tiling);
-
-  // Returns the set of IDR_* resources that should be tinted.
-  // This method is not thread safe.
-  static const std::set<int>& GetTintableToolbarButtons();
 
   // Returns the default tint for the given tint |id| TINT_* enum value.
   // Returns an HSL value of {-1, -1, -1} if |id| is invalid.

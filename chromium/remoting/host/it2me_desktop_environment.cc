@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "remoting/host/client_session_control.h"
@@ -27,24 +28,24 @@ It2MeDesktopEnvironment::~It2MeDesktopEnvironment() {
 
 It2MeDesktopEnvironment::It2MeDesktopEnvironment(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
     base::WeakPtr<ClientSessionControl> client_session_control,
-    bool supports_touch_events)
+    const DesktopEnvironmentOptions& options)
     : BasicDesktopEnvironment(caller_task_runner,
+                              video_capture_task_runner,
                               input_task_runner,
                               ui_task_runner,
-                              supports_touch_events) {
+                              options) {
   DCHECK(caller_task_runner->BelongsToCurrentThread());
 
   // Create the local input monitor.
-  local_input_monitor_ = LocalInputMonitor::Create(caller_task_runner,
-                                                   input_task_runner,
-                                                   ui_task_runner,
-                                                   client_session_control);
-
+  local_input_monitor_ = LocalInputMonitor::Create(
+      caller_task_runner, input_task_runner, ui_task_runner,
+      client_session_control);
+  bool enable_user_interface = options.enable_user_interface();
   // The host UI should be created on the UI thread.
-  bool want_user_interface = true;
 #if defined(OS_MACOSX)
   // Don't try to display any UI on top of the system's login screen as this
   // is rejected by the Window Server on OS X 10.7.4, and prevents the
@@ -53,11 +54,11 @@ It2MeDesktopEnvironment::It2MeDesktopEnvironment(
   // TODO(lambroslambrou): Use a better technique of detecting whether we're
   // running in the LoginWindow context, and refactor this into a separate
   // function to be used here and in CurtainMode::ActivateCurtain().
-  want_user_interface = getuid() != 0;
+  enable_user_interface = getuid() != 0;
 #endif  // defined(OS_MACOSX)
 
   // Create the continue and disconnect windows.
-  if (want_user_interface) {
+  if (enable_user_interface) {
     continue_window_ = HostWindow::CreateContinueWindow();
     continue_window_.reset(new HostWindowProxy(
         caller_task_runner, ui_task_runner, std::move(continue_window_)));
@@ -72,25 +73,24 @@ It2MeDesktopEnvironment::It2MeDesktopEnvironment(
 
 It2MeDesktopEnvironmentFactory::It2MeDesktopEnvironmentFactory(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner)
     : BasicDesktopEnvironmentFactory(caller_task_runner,
+                                     video_capture_task_runner,
                                      input_task_runner,
-                                     ui_task_runner) {
-}
+                                     ui_task_runner) {}
 
-It2MeDesktopEnvironmentFactory::~It2MeDesktopEnvironmentFactory() {
-}
+It2MeDesktopEnvironmentFactory::~It2MeDesktopEnvironmentFactory() {}
 
-scoped_ptr<DesktopEnvironment> It2MeDesktopEnvironmentFactory::Create(
-    base::WeakPtr<ClientSessionControl> client_session_control) {
+std::unique_ptr<DesktopEnvironment> It2MeDesktopEnvironmentFactory::Create(
+    base::WeakPtr<ClientSessionControl> client_session_control,
+    const DesktopEnvironmentOptions& options) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  return make_scoped_ptr(new It2MeDesktopEnvironment(caller_task_runner(),
-                                                     input_task_runner(),
-                                                     ui_task_runner(),
-                                                     client_session_control,
-                                                     supports_touch_events()));
+  return base::WrapUnique(new It2MeDesktopEnvironment(
+      caller_task_runner(), video_capture_task_runner(), input_task_runner(),
+      ui_task_runner(), client_session_control, options));
 }
 
 }  // namespace remoting

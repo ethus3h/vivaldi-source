@@ -10,6 +10,7 @@
 #include "base/android/library_loader/library_prefetcher.h"
 #include "base/at_exit.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "jni/LibraryLoader_jni.h"
 
 namespace base {
@@ -20,6 +21,7 @@ namespace {
 base::AtExitManager* g_at_exit_manager = NULL;
 const char* g_library_version_number = "";
 LibraryLoadedHook* g_registration_callback = NULL;
+NativeInitializationHook* g_native_initialization_hook = NULL;
 
 enum RendererHistogramCode {
   // Renderer load at fixed address success, fail, or not attempted.
@@ -48,10 +50,39 @@ enum BrowserHistogramCode {
 
 RendererHistogramCode g_renderer_histogram_code = NO_PENDING_HISTOGRAM_CODE;
 
+// Indicate whether g_library_preloader_renderer_histogram_code is valid
+bool g_library_preloader_renderer_histogram_code_registered = false;
+
+// The return value of NativeLibraryPreloader.loadLibrary() in child processes,
+// it is initialized to the invalid value which shouldn't showup in UMA report.
+int g_library_preloader_renderer_histogram_code = -1;
+
 // The amount of time, in milliseconds, that it took to load the shared
 // libraries in the renderer. Set in
 // RegisterChromiumAndroidLinkerRendererHistogram.
 long g_renderer_library_load_time_ms = 0;
+
+void RecordChromiumAndroidLinkerRendererHistogram() {
+  if (g_renderer_histogram_code == NO_PENDING_HISTOGRAM_CODE)
+    return;
+  // Record and release the pending histogram value.
+  UMA_HISTOGRAM_ENUMERATION("ChromiumAndroidLinker.RendererStates",
+                            g_renderer_histogram_code,
+                            MAX_RENDERER_HISTOGRAM_CODE);
+  g_renderer_histogram_code = NO_PENDING_HISTOGRAM_CODE;
+
+  // Record how long it took to load the shared libraries.
+  UMA_HISTOGRAM_TIMES("ChromiumAndroidLinker.RendererLoadTime",
+      base::TimeDelta::FromMilliseconds(g_renderer_library_load_time_ms));
+}
+
+void RecordLibraryPreloaderRendereHistogram() {
+  if (g_library_preloader_renderer_histogram_code_registered) {
+    UMA_HISTOGRAM_SPARSE_SLOWLY(
+        "Android.NativeLibraryPreloader.Result.Renderer",
+        g_library_preloader_renderer_histogram_code);
+  }
+}
 
 } // namespace
 
@@ -70,20 +101,6 @@ static void RegisterChromiumAndroidLinkerRendererHistogram(
   }
 
   g_renderer_library_load_time_ms = library_load_time_ms;
-}
-
-void RecordChromiumAndroidLinkerRendererHistogram() {
-  if (g_renderer_histogram_code == NO_PENDING_HISTOGRAM_CODE)
-    return;
-  // Record and release the pending histogram value.
-  UMA_HISTOGRAM_ENUMERATION("ChromiumAndroidLinker.RendererStates",
-                            g_renderer_histogram_code,
-                            MAX_RENDERER_HISTOGRAM_CODE);
-  g_renderer_histogram_code = NO_PENDING_HISTOGRAM_CODE;
-
-  // Record how long it took to load the shared libraries.
-  UMA_HISTOGRAM_TIMES("ChromiumAndroidLinker.RendererLoadTime",
-      base::TimeDelta::FromMilliseconds(g_renderer_library_load_time_ms));
 }
 
 static void RecordChromiumAndroidLinkerBrowserHistogram(
@@ -116,6 +133,33 @@ static void RecordChromiumAndroidLinkerBrowserHistogram(
                       base::TimeDelta::FromMilliseconds(library_load_time_ms));
 }
 
+static void RecordLibraryPreloaderBrowserHistogram(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& jcaller,
+    jint status) {
+  UMA_HISTOGRAM_SPARSE_SLOWLY(
+      "Android.NativeLibraryPreloader.Result.Browser",
+      status);
+}
+
+static void RegisterLibraryPreloaderRendererHistogram(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& jcaller,
+    jint status) {
+  g_library_preloader_renderer_histogram_code = status;
+  g_library_preloader_renderer_histogram_code_registered = true;
+}
+
+void SetNativeInitializationHook(
+    NativeInitializationHook native_initialization_hook) {
+  g_native_initialization_hook = native_initialization_hook;
+}
+
+void RecordLibraryLoaderRendererHistograms() {
+  RecordChromiumAndroidLinkerRendererHistogram();
+  RecordLibraryPreloaderRendereHistogram();
+}
+
 void SetLibraryLoadedHook(LibraryLoadedHook* func) {
   g_registration_callback = func;
 }
@@ -129,6 +173,9 @@ static void InitCommandLine(
 
 static jboolean LibraryLoaded(JNIEnv* env,
                               const JavaParamRef<jobject>& jcaller) {
+  if (g_native_initialization_hook && !g_native_initialization_hook()) {
+    return false;
+  }
   if (g_registration_callback == NULL) {
     return true;
   }

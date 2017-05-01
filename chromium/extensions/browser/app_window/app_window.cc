@@ -12,18 +12,13 @@
 #include <vector>
 
 #include "base/callback_helpers.h"
-#include "base/command_line.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "browser/vivaldi_download_status.h"
-#include "chrome/browser/ui/tabs/tab_utils.h"
-#include "components/guest_view/browser/guest_view_base.h"
-#include "components/guest_view/browser/guest_view_event.h"
-#include "components/ui/zoom/zoom_controller.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/invalidate_type.h"
@@ -33,7 +28,6 @@
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/browser_side_navigation_policy.h"
-#include "content/public/common/content_switches.h"
 #include "content/public/common/media_stream_request.h"
 #include "extensions/browser/app_window/app_delegate.h"
 #include "extensions/browser/app_window/app_web_contents_helper.h"
@@ -55,23 +49,36 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/switches.h"
 #include "extensions/grit/extensions_browser_resources.h"
 #include "extensions/helper/vivaldi_app_helper.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/screen.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/image/image_skia_operations.h"
 
 #if !defined(OS_MACOSX)
-#include "base/prefs/pref_service.h"
+#include "components/prefs/pref_service.h"
 #include "extensions/browser/pref_names.h"
 #endif
+
+#include "browser/vivaldi_download_status.h"
+#include "chrome/browser/ui/tabs/tab_utils.h"
+#include "components/guest_view/browser/guest_view_base.h"
+#include "components/guest_view/browser/guest_view_event.h"
+#include "components/zoom/zoom_controller.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
 #endif
 
 #include "app/vivaldi_apptools.h"
+#if defined(OS_WIN)
+#include "ui/display/win/screen_win.h"
+#endif
+#include "ui/vivaldi_ui_utils.h"
+#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 
 using content::BrowserContext;
 using content::ConsoleMessageLevel;
@@ -100,7 +107,7 @@ void SetBoundsProperties(const gfx::Rect& bounds,
                          const gfx::Size& max_size,
                          const std::string& bounds_name,
                          base::DictionaryValue* window_properties) {
-  scoped_ptr<base::DictionaryValue> bounds_properties(
+  std::unique_ptr<base::DictionaryValue> bounds_properties(
       new base::DictionaryValue());
 
   bounds_properties->SetInteger("left", bounds.x());
@@ -184,8 +191,9 @@ AppWindow::CreateParams::CreateParams()
       focused(true),
       always_on_top(false),
       visible_on_all_workspaces(false),
-      thumbnail_window(false) {
-}
+      show_in_shelf(false) {}
+
+AppWindow::CreateParams::CreateParams(const CreateParams& other) = default;
 
 AppWindow::CreateParams::~CreateParams() {}
 
@@ -255,35 +263,26 @@ AppWindow::AppWindow(BrowserContext* context,
       window_type_(WINDOW_TYPE_DEFAULT),
       app_delegate_(app_delegate),
       fullscreen_types_(FULLSCREEN_TYPE_NONE),
-      show_on_first_paint_(false),
-      first_paint_complete_(false),
       has_been_shown_(false),
-      can_send_events_(false),
       is_hidden_(false),
       initial_state_(ui::SHOW_STATE_NORMAL),
-      delayed_show_type_(SHOW_ACTIVE),
       cached_always_on_top_(false),
-      dialoghost_guestwebview_(NULL),
       requested_alpha_enabled_(false),
       is_ime_window_(false),
+      show_in_shelf_(false),
       image_loader_ptr_factory_(this) {
   ExtensionsBrowserClient* client = ExtensionsBrowserClient::Get();
   CHECK(!client->IsGuestSession(context) || context->IsOffTheRecord())
       << "Only off the record window may be opened in the guest mode.";
-
-#if defined(OS_WIN) && defined(VIVALDI_BUILD)
-  if (vivaldi::IsVivaldiApp(extension_id())) {
-    vivaldi::current_vivaldi_window_ = this;
-  }
-#endif //VIVALDI_BUILD
 }
 
 void AppWindow::Init(const GURL& url,
                      AppWindowContents* app_window_contents,
+                     content::RenderFrameHost* creator_frame,
                      const CreateParams& params) {
   // Initialize the render interface and web contents
   app_window_contents_.reset(app_window_contents);
-  app_window_contents_->Initialize(browser_context(), url);
+  app_window_contents_->Initialize(browser_context(), creator_frame, url);
 
   initial_url_ = url;
 
@@ -301,7 +300,7 @@ void AppWindow::Init(const GURL& url,
       ->SetDelegate(this);
   if (vivaldi::IsVivaldiRunning()) {
     extensions::VivaldiAppHelper::CreateForWebContents(web_contents());
-    ui_zoom::ZoomController::CreateForWebContents(web_contents());
+    zoom::ZoomController::CreateForWebContents(web_contents());
   }
 
   // Initialize the window
@@ -318,6 +317,21 @@ void AppWindow::Init(const GURL& url,
       new_params.state == ui::SHOW_STATE_FULLSCREEN)
     new_params.state = ui::SHOW_STATE_DEFAULT;
 #endif
+  if (vivaldi::IsVivaldiRunning() && new_params.avoid_cached_positions) {
+    // NOTE(pettern@vivaldi.com): If we are using un-cached bounds, we need to
+    // force the window within the screen.
+    display::Screen* screen = display::Screen::GetScreen();
+    display::Display display =
+        screen->GetDisplayMatching(params.window_spec.bounds);
+    gfx::Rect current_screen_bounds = display.work_area();
+    SizeConstraints constraints(new_params.GetWindowMinimumSize(gfx::Insets()),
+                                new_params.GetWindowMaximumSize(gfx::Insets()));
+    AdjustBoundsToBeVisibleOnScreen(new_params.window_spec.bounds,
+                                    gfx::Rect(),
+                                    current_screen_bounds,
+                                    constraints.GetMinimumSize(),
+                                    &new_params.window_spec.bounds);
+  }
 
   // Windows cannot be always-on-top in fullscreen mode for security reasons.
   cached_always_on_top_ = new_params.always_on_top;
@@ -325,8 +339,9 @@ void AppWindow::Init(const GURL& url,
     new_params.always_on_top = false;
 
   requested_alpha_enabled_ = new_params.alpha_enabled;
-
   is_ime_window_ = params.is_ime_window;
+  show_in_shelf_ = params.show_in_shelf;
+  window_icon_url_ = params.window_icon_url;
 
   AppWindowClient* app_window_client = AppWindowClient::Get();
   native_app_window_.reset(
@@ -336,12 +351,16 @@ void AppWindow::Init(const GURL& url,
       browser_context_, extension_id_, web_contents(), app_delegate_.get()));
 
   UpdateExtensionAppIcon();
+  // Download showInShelf=true window icon.
+  if (window_icon_url_.is_valid())
+    SetAppIconUrl(window_icon_url_);
+
   AppWindowRegistry::Get(browser_context_)->AddAppWindow(this);
 
   if (new_params.thumbnail_window) {
     // Mute sound on thumbnail capture windows.
     chrome::SetTabAudioMuted(web_contents(), true,
-                             TAB_MUTED_REASON_MEDIA_CAPTURE,
+                             TabMutedReason::MEDIA_CAPTURE,
                              extension_id_);
   }
 
@@ -386,26 +405,9 @@ void AppWindow::Init(const GURL& url,
                  base::Unretained(native_app_window_.get())));
 
   app_window_contents_->LoadContents(new_params.creator_process_id);
-
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          extensions::switches::kEnableAppsShowOnFirstPaint)) {
-    // We want to show the window only when the content has been painted. For
-    // that to happen, we need to define a size for the content, otherwise the
-    // layout will happen in a 0x0 area.
-    gfx::Insets frame_insets = native_app_window_->GetFrameInsets();
-    gfx::Rect initial_bounds = new_params.GetInitialWindowBounds(frame_insets);
-    initial_bounds.Inset(frame_insets);
-    app_delegate_->ResizeWebContents(web_contents(), initial_bounds.size());
-  }
 }
 
 AppWindow::~AppWindow() {
-#if defined(OS_WIN) && defined(VIVALDI_BUILD)
-  if (vivaldi::IsVivaldiApp(extension_id())) {
-    vivaldi::current_vivaldi_window_ = NULL;
-  }
-#endif //VIVALDI_BUILD
-
   ExtensionRegistry::Get(browser_context_)->RemoveObserver(this);
 }
 
@@ -479,6 +481,7 @@ void AppWindow::HandleKeyboardEvent(
   // fullscreen.  If this code is being called for ESC, that means that the
   // KeyEvent's default behavior was not prevented by the content.
   if (event.windowsKeyCode == ui::VKEY_ESCAPE && IsFullscreen() &&
+      !vivaldi::IsVivaldiRunning() &&
       !IsForcedFullscreen()) {
     Restore();
     return;
@@ -499,17 +502,32 @@ bool AppWindow::PreHandleGestureEvent(WebContents* source,
   return AppWebContentsHelper::ShouldSuppressGestureEvent(event);
 }
 
-void AppWindow::RenderViewCreated(content::RenderViewHost* render_view_host) {
-  app_delegate_->RenderViewCreated(render_view_host);
+std::unique_ptr<content::BluetoothChooser> AppWindow::RunBluetoothChooser(
+    content::RenderFrameHost* frame,
+    const content::BluetoothChooser::EventHandler& event_handler) {
+  return ExtensionsBrowserClient::Get()->CreateBluetoothChooser(frame,
+                                                                event_handler);
 }
 
-void AppWindow::DidFirstVisuallyNonEmptyPaint() {
-  first_paint_complete_ = true;
-  if (show_on_first_paint_) {
-    DCHECK(delayed_show_type_ == SHOW_ACTIVE ||
-           delayed_show_type_ == SHOW_INACTIVE);
-    Show(delayed_show_type_);
+void AppWindow::ContentsMouseEvent(WebContents* source,
+                                   const gfx::Point& location,
+                                   bool motion,
+                                   bool exited) {
+  extensions::WebViewGuest* guest =
+      vivaldi::ui_tools::GetActiveWebViewGuest(GetBaseWindow());
+  if (guest) {
+    if (exited) {
+      guest->OnMouseLeave();
+      mouse_has_entered_ = false;
+    } else if (!mouse_has_entered_) {
+      guest->OnMouseEnter();
+      mouse_has_entered_ = true;
+    }
   }
+}
+
+void AppWindow::RenderViewCreated(content::RenderViewHost* render_view_host) {
+  app_delegate_->RenderViewCreated(render_view_host);
 }
 
 void AppWindow::SetOnFirstCommitCallback(const base::Closure& callback) {
@@ -518,8 +536,14 @@ void AppWindow::SetOnFirstCommitCallback(const base::Closure& callback) {
 }
 
 void AppWindow::OnReadyToCommitFirstNavigation() {
-  CHECK(content::IsBrowserSideNavigationEnabled());
-  WindowEventsReady();
+  if (!content::IsBrowserSideNavigationEnabled())
+    return;
+
+  // PlzNavigate: execute renderer-side setup now that there is a renderer
+  // process assigned to the navigation. With renderer-side navigation, this
+  // would happen before the navigation starts, but PlzNavigate must wait until
+  // this point in time in the navigation.
+
   if (on_first_commit_callback_.is_null())
     return;
   // It is important that the callback executes after the calls to
@@ -584,7 +608,9 @@ void AppWindow::OnNativeWindowActivated() {
 }
 
 content::WebContents* AppWindow::web_contents() const {
-  return app_window_contents_->GetWebContents();
+  if (app_window_contents_)
+    return app_window_contents_->GetWebContents();
+  return nullptr;
 }
 
 const Extension* AppWindow::GetExtension() const {
@@ -630,9 +656,13 @@ void AppWindow::SetAppIconUrl(const GURL& url) {
   image_loader_ptr_factory_.InvalidateWeakPtrs();
 
   // Reset |app_icon_image_| to abort pending image load (if any).
-  app_icon_image_.reset();
+  if (!show_in_shelf_) {
+    app_icon_image_.reset();
+    app_icon_url_ = url;
+  } else {
+    window_icon_url_ = url;
+  }
 
-  app_icon_url_ = url;
   web_contents()->DownloadImage(
       url,
       true,   // is a favicon
@@ -642,7 +672,7 @@ void AppWindow::SetAppIconUrl(const GURL& url) {
                  image_loader_ptr_factory_.GetWeakPtr()));
 }
 
-void AppWindow::UpdateShape(scoped_ptr<SkRegion> region) {
+void AppWindow::UpdateShape(std::unique_ptr<SkRegion> region) {
   native_app_window_->UpdateShape(std::move(region));
 }
 
@@ -652,9 +682,35 @@ void AppWindow::UpdateDraggableRegions(
 }
 
 void AppWindow::UpdateAppIcon(const gfx::Image& image) {
-  if (image.IsEmpty())
-    return;
-  app_icon_ = image;
+  // Set the showInShelf=true window icon and add the app_icon_image_
+  // as a badge. If the image is empty, set the default app icon placeholder
+  // as the base image.
+  if (window_icon_url_.is_valid() && !app_icon_image_->image().IsEmpty()) {
+    gfx::Image base_image =
+        !image.IsEmpty()
+            ? image
+            : gfx::Image(*ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+                  IDR_APP_DEFAULT_ICON));
+    // Scale the icon to EXTENSION_ICON_LARGE.
+    const int large_icon_size = extension_misc::EXTENSION_ICON_LARGE;
+    if (base_image.Width() != large_icon_size ||
+        base_image.Height() != large_icon_size) {
+      gfx::ImageSkia resized_image =
+          gfx::ImageSkiaOperations::CreateResizedImage(
+              base_image.AsImageSkia(), skia::ImageOperations::RESIZE_BEST,
+              gfx::Size(large_icon_size, large_icon_size));
+      app_icon_ = gfx::Image(gfx::ImageSkiaOperations::CreateIconWithBadge(
+          resized_image, app_icon_image_->image_skia()));
+    } else {
+      app_icon_ = gfx::Image(gfx::ImageSkiaOperations::CreateIconWithBadge(
+          base_image.AsImageSkia(), app_icon_image_->image_skia()));
+    }
+  } else {
+    if (image.IsEmpty())
+      return;
+
+    app_icon_ = image;
+  }
   native_app_window_->UpdateWindowIcon();
   AppWindowRegistry::Get(browser_context_)->AppWindowIconChanged(this);
 }
@@ -740,16 +796,6 @@ void AppWindow::Show(ShowType show_type) {
   bool was_hidden = is_hidden_ || !has_been_shown_;
   is_hidden_ = false;
 
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableAppsShowOnFirstPaint)) {
-    show_on_first_paint_ = true;
-
-    if (!first_paint_complete_) {
-      delayed_show_type_ = show_type;
-      return;
-    }
-  }
-
   if (initial_state_ == ui::SHOW_STATE_FULLSCREEN)
     Fullscreen();
   else if (initial_state_ == ui::SHOW_STATE_MAXIMIZED)
@@ -766,20 +812,13 @@ void AppWindow::Show(ShowType show_type) {
       break;
   }
   AppWindowRegistry::Get(browser_context_)->AppWindowShown(this, was_hidden);
-
   has_been_shown_ = true;
-  SendOnWindowShownIfShown();
 
   OnNativeWindowChanged();
 }
 
 void AppWindow::Hide() {
-  // This is there to prevent race conditions with Hide() being called before
-  // there was a non-empty paint. It should have no effect in a non-racy
-  // scenario where the application is hiding then showing a window: the second
-  // show will not be delayed.
   is_hidden_ = true;
-  show_on_first_paint_ = false;
   GetBaseWindow()->Hide();
   AppWindowRegistry::Get(browser_context_)->AppWindowHidden(this);
   app_delegate_->OnHide();
@@ -805,11 +844,6 @@ bool AppWindow::IsAlwaysOnTop() const { return cached_always_on_top_; }
 void AppWindow::RestoreAlwaysOnTop() {
   if (cached_always_on_top_)
     UpdateNativeAlwaysOnTop();
-}
-
-void AppWindow::WindowEventsReady() {
-  can_send_events_ = true;
-  SendOnWindowShownIfShown();
 }
 
 void AppWindow::NotifyRenderViewReady() {
@@ -872,8 +906,10 @@ void AppWindow::DidDownloadFavicon(
     const GURL& image_url,
     const std::vector<SkBitmap>& bitmaps,
     const std::vector<gfx::Size>& original_bitmap_sizes) {
-  if (image_url != app_icon_url_ || bitmaps.empty())
+  if (((image_url != app_icon_url_) && (image_url != window_icon_url_)) ||
+      bitmaps.empty()) {
     return;
+  }
 
   // Bitmaps are ordered largest to smallest. Choose the smallest bitmap
   // whose height >= the preferred size.
@@ -890,7 +926,9 @@ void AppWindow::DidDownloadFavicon(
 void AppWindow::OnExtensionIconImageChanged(IconImage* image) {
   DCHECK_EQ(app_icon_image_.get(), image);
 
-  UpdateAppIcon(gfx::Image(app_icon_image_->image_skia()));
+  // Update app_icon if no valid window icon url is set.
+  if (!window_icon_url_.is_valid())
+    UpdateAppIcon(gfx::Image(app_icon_image_->image_skia()));
 }
 
 void AppWindow::UpdateExtensionAppIcon() {
@@ -925,13 +963,12 @@ void AppWindow::SetNativeWindowFullscreen() {
 
 bool AppWindow::IntersectsWithTaskbar() const {
 #if defined(OS_WIN)
-  gfx::Screen* screen = gfx::Screen::GetNativeScreen();
+  display::Screen* screen = display::Screen::GetScreen();
   gfx::Rect window_bounds = native_app_window_->GetRestoredBounds();
-  std::vector<gfx::Display> displays = screen->GetAllDisplays();
+  std::vector<display::Display> displays = screen->GetAllDisplays();
 
-  for (std::vector<gfx::Display>::const_iterator it = displays.begin();
-       it != displays.end();
-       ++it) {
+  for (std::vector<display::Display>::const_iterator it = displays.begin();
+       it != displays.end(); ++it) {
     gfx::Rect taskbar_bounds = it->bounds();
     taskbar_bounds.Subtract(it->work_area());
     if (taskbar_bounds.IsEmpty())
@@ -962,16 +999,6 @@ void AppWindow::UpdateNativeAlwaysOnTop() {
   }
 }
 
-void AppWindow::SendOnWindowShownIfShown() {
-  if (!can_send_events_ || !has_been_shown_)
-    return;
-
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          ::switches::kTestType)) {
-    app_window_contents_->DispatchWindowShownForTests();
-  }
-}
-
 void AppWindow::CloseContents(WebContents* contents) {
   native_app_window_->Close();
 }
@@ -987,7 +1014,7 @@ content::ColorChooser* AppWindow::OpenColorChooser(
   return app_delegate_->ShowColorChooser(web_contents, initial_color);
 }
 
-void AppWindow::RunFileChooser(WebContents* tab,
+void AppWindow::RunFileChooser(content::RenderFrameHost* render_frame_host,
                                const content::FileChooserParams& params) {
   if (window_type_is_panel()) {
     // Panels can't host a file dialog, abort. TODO(stevenjb): allow file
@@ -997,7 +1024,7 @@ void AppWindow::RunFileChooser(WebContents* tab,
     return;
   }
 
-  app_delegate_->RunFileChooser(tab, params);
+  app_delegate_->RunFileChooser(render_frame_host, params);
 }
 
 bool AppWindow::IsPopupOrPanel(const WebContents* source) const { return true; }
@@ -1069,14 +1096,7 @@ void AppWindow::SetWebContentsBlocked(content::WebContents* web_contents,
 }
 
 bool AppWindow::IsWebContentsVisible(content::WebContents* web_contents) {
-  //if a vivaldiview shown, ask this for visible state.
-  if (dialoghost_guestwebview_) {
-    return false;//return dialoghost_guestwebview_->IsWebContentsVisible(web_contents);
-  }
-  else
-  {
   return app_delegate_->IsWebContentsVisible(web_contents);
-  }
 }
 
 WebContentsModalDialogHost* AppWindow::GetWebContentsModalDialogHost() {
@@ -1093,7 +1113,7 @@ void AppWindow::SaveWindowPosition() {
 
   gfx::Rect bounds = native_app_window_->GetRestoredBounds();
   gfx::Rect screen_bounds =
-      gfx::Screen::GetNativeScreen()->GetDisplayMatching(bounds).work_area();
+      display::Screen::GetScreen()->GetDisplayMatching(bounds).work_area();
   ui::WindowShowState window_state = native_app_window_->GetRestoredState();
   cache->SaveGeometry(
       extension_id(), window_key_, bounds, screen_bounds, window_state);
@@ -1140,6 +1160,10 @@ AppWindow::CreateParams AppWindow::LoadDefaults(CreateParams params)
       params.window_spec.bounds.height() == 0) {
     params.content_spec.bounds.set_height(kDefaultHeight);
   }
+  // NOTE(pettern@vivaldi.com): We will not use the cached positions
+  // for this window.
+  if (params.avoid_cached_positions)
+    return params;
 
   // If left and top are left undefined, the native app window will center
   // the window on the main screen in a platform-defined manner.
@@ -1159,8 +1183,8 @@ AppWindow::CreateParams AppWindow::LoadDefaults(CreateParams params)
                            &cached_state)) {
       // App window has cached screen bounds, make sure it fits on screen in
       // case the screen resolution changed.
-      gfx::Screen* screen = gfx::Screen::GetNativeScreen();
-      gfx::Display display = screen->GetDisplayMatching(cached_bounds);
+      display::Screen* screen = display::Screen::GetScreen();
+      display::Display display = screen->GetDisplayMatching(cached_bounds);
       gfx::Rect current_screen_bounds = display.work_area();
       SizeConstraints constraints(params.GetWindowMinimumSize(gfx::Insets()),
                                   params.GetWindowMaximumSize(gfx::Insets()));

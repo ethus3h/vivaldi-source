@@ -2,11 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "base/message_loop/message_loop.h"
-#include "base/prefs/pref_service.h"
-#include "base/prefs/scoped_user_pref_update.h"
-#include "base/prefs/testing_pref_service.h"
 #include "chrome/browser/content_settings/content_settings_mock_observer.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
@@ -15,6 +13,9 @@
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
 #include "components/content_settings/core/test/content_settings_test_utils.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -68,7 +69,7 @@ TEST_F(DefaultProviderTest, DefaultValues) {
                                          CONTENT_SETTINGS_TYPE_GEOLOCATION,
                                          std::string(), false));
 
-  scoped_ptr<base::Value> value(TestUtils::GetContentSettingValue(
+  std::unique_ptr<base::Value> value(TestUtils::GetContentSettingValue(
       &provider_, GURL("http://example.com/"), GURL("http://example.com/"),
       CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE, std::string(), false));
   EXPECT_FALSE(value.get());
@@ -82,7 +83,7 @@ TEST_F(DefaultProviderTest, IgnoreNonDefaultSettings) {
             TestUtils::GetContentSetting(&provider_, primary_url, secondary_url,
                                          CONTENT_SETTINGS_TYPE_COOKIES,
                                          std::string(), false));
-  scoped_ptr<base::Value> value(
+  std::unique_ptr<base::Value> value(
       new base::FundamentalValue(CONTENT_SETTING_BLOCK));
   bool owned = provider_.SetWebsiteSetting(
       ContentSettingsPattern::FromURL(primary_url),
@@ -101,12 +102,12 @@ TEST_F(DefaultProviderTest, Observer) {
   MockObserver mock_observer;
   EXPECT_CALL(mock_observer,
               OnContentSettingChanged(
-                  _, _, CONTENT_SETTINGS_TYPE_IMAGES, ""));
+                  _, _, CONTENT_SETTINGS_TYPE_COOKIES, ""));
   provider_.AddObserver(&mock_observer);
   provider_.SetWebsiteSetting(
       ContentSettingsPattern::Wildcard(),
       ContentSettingsPattern::Wildcard(),
-      CONTENT_SETTINGS_TYPE_IMAGES,
+      CONTENT_SETTINGS_TYPE_COOKIES,
       std::string(),
       new base::FundamentalValue(CONTENT_SETTING_BLOCK));
 
@@ -151,6 +152,38 @@ TEST_F(DefaultProviderTest, ObservePref) {
                                          std::string(), false));
 }
 
+// Tests that fullscreen and mouselock content settings are cleared.
+TEST_F(DefaultProviderTest, DiscardObsoletePreferences) {
+  static const char kFullscreenPrefPath[] =
+      "profile.default_content_setting_values.fullscreen";
+#if !defined(OS_ANDROID)
+  static const char kMouselockPrefPath[] =
+      "profile.default_content_setting_values.mouselock";
+#endif
+  static const char kGeolocationPrefPath[] =
+      "profile.default_content_setting_values.geolocation";
+
+  PrefService* prefs = profile_.GetPrefs();
+  // Set some pref data.
+  prefs->SetInteger(kFullscreenPrefPath, CONTENT_SETTING_BLOCK);
+#if !defined(OS_ANDROID)
+  prefs->SetInteger(kMouselockPrefPath, CONTENT_SETTING_ALLOW);
+#endif
+  prefs->SetInteger(kGeolocationPrefPath, CONTENT_SETTING_BLOCK);
+
+  // Instantiate a new DefaultProvider; can't use |provider_| because we want to
+  // test the constructor's behavior after setting the above.
+  DefaultProvider provider(prefs, false);
+
+  // Check that fullscreen and mouselock have been deleted.
+  EXPECT_FALSE(prefs->HasPrefPath(kFullscreenPrefPath));
+#if !defined(OS_ANDROID)
+  EXPECT_FALSE(prefs->HasPrefPath(kMouselockPrefPath));
+#endif
+  EXPECT_TRUE(prefs->HasPrefPath(kGeolocationPrefPath));
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, prefs->GetInteger(kGeolocationPrefPath));
+}
+
 TEST_F(DefaultProviderTest, OffTheRecord) {
   DefaultProvider otr_provider(profile_.GetPrefs(), true /* incognito */);
 
@@ -182,15 +215,15 @@ TEST_F(DefaultProviderTest, OffTheRecord) {
                 std::string(), true /* include_incognito */));
 
   // Changing content settings on the incognito provider should be ignored.
-  scoped_ptr<base::Value> value(
+  std::unique_ptr<base::Value> value(
       new base::FundamentalValue(CONTENT_SETTING_ALLOW));
   bool owned = otr_provider.SetWebsiteSetting(
       ContentSettingsPattern::Wildcard(),
       ContentSettingsPattern::Wildcard(),
       CONTENT_SETTINGS_TYPE_COOKIES,
       std::string(),
-      value.get());
-  EXPECT_FALSE(owned);
+      value.release());
+  EXPECT_TRUE(owned);
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             TestUtils::GetContentSetting(
                 &provider_, GURL(), GURL(), CONTENT_SETTINGS_TYPE_COOKIES,

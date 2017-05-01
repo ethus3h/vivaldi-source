@@ -7,14 +7,17 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <vector>
 
 #include "base/android/build_info.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/logging.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "jni/MediaCodecUtil_jni.h"
+#include "media/base/android/media_codec_bridge.h"
 #include "url/gurl.h"
 
 using base::android::AttachCurrentThread;
@@ -22,119 +25,141 @@ using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaIntArrayToIntVector;
 using base::android::ScopedJavaLocalRef;
+using base::android::SDK_VERSION_JELLY_BEAN_MR2;
+using base::android::SDK_VERSION_KITKAT;
+using base::android::SDK_VERSION_LOLLIPOP_MR1;
 
 namespace media {
 
-// static
-const std::string CodecTypeToAndroidMimeType(const std::string& codec) {
+namespace {
+
+const char kMp4aMimeType[] = "audio/mp4a-latm";
+const char kOpusMimeType[] = "audio/opus";
+const char kVorbisMimeType[] = "audio/vorbis";
+const char kAc3MimeType[] = "audio/ac3";
+const char kEac3MimeType[] = "audio/eac3";
+const char kAvcMimeType[] = "video/avc";
+const char kHevcMimeType[] = "video/hevc";
+const char kVp8MimeType[] = "video/x-vnd.on2.vp8";
+const char kVp9MimeType[] = "video/x-vnd.on2.vp9";
+
+}  // namespace
+
+static std::string CodecTypeToAndroidMimeType(const std::string& codec) {
   // TODO(xhwang): Shall we handle more detailed strings like "mp4a.40.2"?
   if (codec == "avc1")
-    return "video/avc";
+    return kAvcMimeType;
   if (codec == "hvc1")
-    return "video/hevc";
+    return kHevcMimeType;
   if (codec == "mp4a")
-    return "audio/mp4a-latm";
+    return kMp4aMimeType;
   if (codec == "vp8" || codec == "vp8.0")
-    return "video/x-vnd.on2.vp8";
+    return kVp8MimeType;
   if (codec == "vp9" || codec == "vp9.0")
-    return "video/x-vnd.on2.vp9";
+    return kVp9MimeType;
   if (codec == "vorbis")
-    return "audio/vorbis";
+    return kVorbisMimeType;
   if (codec == "opus")
-    return "audio/opus";
+    return kOpusMimeType;
+  if (codec == "ac3")
+    return kAc3MimeType;
+  if (codec == "eac3")
+    return kEac3MimeType;
+
+  DLOG(WARNING) << "Cannot convert codec to Android MIME type: " << codec;
   return std::string();
 }
 
-// TODO(qinmin): using a map to help all the conversions in this class.
-const std::string AndroidMimeTypeToCodecType(const std::string& mime) {
-  if (mime == "video/mp4v-es")
-    return "mp4v";
-  if (mime == "video/avc")
-    return "avc1";
-  if (mime == "video/hevc")
-    return "hvc1";
-  if (mime == "video/x-vnd.on2.vp8")
-    return "vp8";
-  if (mime == "video/x-vnd.on2.vp9")
-    return "vp9";
-  if (mime == "audio/mp4a-latm")
-    return "mp4a";
-  if (mime == "audio/mpeg")
-    return "mp3";
-  if (mime == "audio/vorbis")
-    return "vorbis";
-  if (mime == "audio/opus")
-    return "opus";
-  return std::string();
+static bool IsSupportedAndroidMimeType(const std::string& mime_type) {
+  std::vector<std::string> supported{
+      kMp4aMimeType, kOpusMimeType, kVorbisMimeType, kAvcMimeType,
+      kHevcMimeType, kVp8MimeType,  kVp9MimeType};
+  return std::find(supported.begin(), supported.end(), mime_type) !=
+         supported.end();
 }
 
-std::string GetDefaultCodecName(const std::string& mime_type,
-                                MediaCodecDirection direction) {
-  if (!MediaCodecUtil::IsMediaCodecAvailable())
-    return std::string();
-
+static std::string GetDefaultCodecName(const std::string& mime_type,
+                                       MediaCodecDirection direction,
+                                       bool require_software_codec) {
+  DCHECK(MediaCodecUtil::IsMediaCodecAvailable());
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jstring> j_mime = ConvertUTF8ToJavaString(env, mime_type);
   ScopedJavaLocalRef<jstring> j_codec_name =
-      Java_MediaCodecUtil_getDefaultCodecName(env, j_mime.obj(), direction);
+      Java_MediaCodecUtil_getDefaultCodecName(env, j_mime, direction,
+                                              require_software_codec);
   return ConvertJavaStringToUTF8(env, j_codec_name.obj());
 }
 
-bool SupportsGetName() {
-  // MediaCodec.getName() is only available on JB MR2 and greater.
-  return base::android::BuildInfo::GetInstance()->sdk_int() >= 18;
+static bool IsDecoderSupportedByDevice(const std::string& android_mime_type) {
+  DCHECK(MediaCodecUtil::IsMediaCodecAvailable());
+  DCHECK(IsSupportedAndroidMimeType(android_mime_type));
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jstring> j_mime =
+      ConvertUTF8ToJavaString(env, android_mime_type);
+  return Java_MediaCodecUtil_isDecoderSupportedForDevice(env, j_mime);
 }
 
-// Represents supported codecs on android.
-// TODO(qinmin): Currently the codecs string only contains one codec. Do we
-// need to support codecs separated by comma. (e.g. "vp8" -> "vp8, vp8.0")?
-struct CodecsInfo {
-  std::string codecs;  // E.g. "vp8" or "avc1".
-  std::string name;    // E.g. "OMX.google.vp8.decoder".
-  MediaCodecDirection direction;
-};
-
-// Get a list of supported codecs.
-std::vector<CodecsInfo> GetCodecsInfo() {
-  std::vector<CodecsInfo> codecs_info;
-  if (!MediaCodecUtil::IsMediaCodecAvailable())
-    return codecs_info;
-
+static bool IsEncoderSupportedByDevice(const std::string& android_mime_type) {
+  DCHECK(MediaCodecUtil::IsMediaCodecAvailable());
   JNIEnv* env = AttachCurrentThread();
-  std::string mime_type;
-  ScopedJavaLocalRef<jobjectArray> j_codec_info_array =
-      Java_MediaCodecUtil_getCodecsInfo(env);
-  jsize len = env->GetArrayLength(j_codec_info_array.obj());
-  for (jsize i = 0; i < len; ++i) {
-    ScopedJavaLocalRef<jobject> j_info(
-        env, env->GetObjectArrayElement(j_codec_info_array.obj(), i));
-    ScopedJavaLocalRef<jstring> j_codec_type =
-        Java_CodecInfo_codecType(env, j_info.obj());
-    ConvertJavaStringToUTF8(env, j_codec_type.obj(), &mime_type);
-    ScopedJavaLocalRef<jstring> j_codec_name =
-        Java_CodecInfo_codecName(env, j_info.obj());
-    CodecsInfo info;
-    info.codecs = AndroidMimeTypeToCodecType(mime_type);
-    ConvertJavaStringToUTF8(env, j_codec_name.obj(), &info.name);
-    info.direction = static_cast<MediaCodecDirection>(
-        Java_CodecInfo_direction(env, j_info.obj()));
-    codecs_info.push_back(info);
-  }
-  return codecs_info;
+  ScopedJavaLocalRef<jstring> j_mime =
+      ConvertUTF8ToJavaString(env, android_mime_type);
+  return Java_MediaCodecUtil_isEncoderSupportedByDevice(env, j_mime);
 }
 
 // static
 bool MediaCodecUtil::IsMediaCodecAvailable() {
-  // MediaCodec is only available on JB and greater.
-  if (base::android::BuildInfo::GetInstance()->sdk_int() < 16)
-    return false;
-  // Blacklist some devices on Jellybean as for MediaCodec support is buggy.
-  // http://crbug.com/365494.
-  if (base::android::BuildInfo::GetInstance()->sdk_int() == 16) {
-    std::string model(base::android::BuildInfo::GetInstance()->model());
-    return model != "GT-I9100" && model != "GT-I9300" && model != "GT-N7000";
-  }
-  return true;
+  return IsMediaCodecAvailableFor(
+      base::android::BuildInfo::GetInstance()->sdk_int(),
+      base::android::BuildInfo::GetInstance()->model());
+}
+
+// static
+bool MediaCodecUtil::IsMediaCodecAvailableFor(int sdk, const char* model) {
+  // We will blacklist the model on any sdk that is as old or older than
+  // |last_bad_sdk| for the given model.
+  struct BlacklistEntry {
+    BlacklistEntry(const char* m, int s) : model(m), last_bad_sdk(s) {}
+    base::StringPiece model;
+    int last_bad_sdk;
+    bool operator==(const BlacklistEntry& other) const {
+      // Search on name only.  Ignore |last_bad_sdk|.
+      return model == other.model;
+    }
+  };
+  static const std::vector<BlacklistEntry> blacklist = {
+      // crbug.com/653905
+      {"LGMS330", SDK_VERSION_LOLLIPOP_MR1},
+
+      // crbug.com/615872
+      {"GT-I9100", SDK_VERSION_KITKAT},
+      {"GT-I9300", SDK_VERSION_KITKAT},
+      {"GT-N7000", SDK_VERSION_KITKAT},
+      {"GT-N7100", SDK_VERSION_KITKAT},
+
+      // crbug.com/628509
+      {"A6600", SDK_VERSION_KITKAT},
+      {"A6800", SDK_VERSION_KITKAT},
+
+      // crbug.com/634920
+      {"GT-S7262", SDK_VERSION_KITKAT},
+      {"GT-S5282", SDK_VERSION_KITKAT},
+      {"GT-I8552", SDK_VERSION_KITKAT},
+
+      // crbug.com/365494, crbug.com/615872
+      {"GT-P3113", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-P5110", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-P5100", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-P5113", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-P3110", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-N5110", SDK_VERSION_JELLY_BEAN_MR2},
+      {"e-tab4", SDK_VERSION_JELLY_BEAN_MR2},
+      {"GT-I8200Q", SDK_VERSION_JELLY_BEAN_MR2},
+  };
+
+  const auto iter =
+      std::find(blacklist.begin(), blacklist.end(), BlacklistEntry(model, 0));
+  return iter == blacklist.end() || sdk > iter->last_bad_sdk;
 }
 
 // static
@@ -153,7 +178,7 @@ std::set<int> MediaCodecUtil::GetEncoderColorFormats(
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jstring> j_mime = ConvertUTF8ToJavaString(env, mime_type);
   ScopedJavaLocalRef<jintArray> j_color_format_array =
-      Java_MediaCodecUtil_getEncoderColorFormatsForMime(env, j_mime.obj());
+      Java_MediaCodecUtil_getEncoderColorFormatsForMime(env, j_mime);
 
   if (j_color_format_array.obj()) {
     std::vector<int> formats;
@@ -174,75 +199,125 @@ bool MediaCodecUtil::CanDecode(const std::string& codec, bool is_secure) {
   if (mime.empty())
     return false;
   ScopedJavaLocalRef<jstring> j_mime = ConvertUTF8ToJavaString(env, mime);
-  return Java_MediaCodecUtil_canDecode(env, j_mime.obj(), is_secure);
+  return Java_MediaCodecUtil_canDecode(env, j_mime, is_secure);
 }
 
 // static
-bool MediaCodecUtil::IsKnownUnaccelerated(const std::string& mime_type,
+bool MediaCodecUtil::IsKnownUnaccelerated(const std::string& android_mime_type,
                                           MediaCodecDirection direction) {
+  DCHECK(IsSupportedAndroidMimeType(android_mime_type));
   if (!IsMediaCodecAvailable())
     return true;
 
-  std::string codec_name;
-  if (SupportsGetName()) {
-    codec_name = GetDefaultCodecName(mime_type, direction);
-  } else {
-    std::string codec_type = AndroidMimeTypeToCodecType(mime_type);
-    std::vector<CodecsInfo> codecs_info = GetCodecsInfo();
-    for (size_t i = 0; i < codecs_info.size(); ++i) {
-      if (codecs_info[i].codecs == codec_type &&
-          codecs_info[i].direction == direction) {
-        codec_name = codecs_info[i].name;
-        break;
-      }
-    }
+  std::string codec_name =
+      GetDefaultCodecName(android_mime_type, direction, false);
+  DVLOG(1) << __func__ << "Default codec for " << android_mime_type << " : "
+           << codec_name << ", direction: " << direction;
+  if (codec_name.empty())
+    return true;
+
+  // MediaTek hardware vp8 is known slower than the software implementation.
+  // MediaTek hardware vp9 is known crashy, see http://crbug.com/446974 and
+  // http://crbug.com/597836.
+  if (base::StartsWith(codec_name, "OMX.MTK.", base::CompareCase::SENSITIVE)) {
+    if (android_mime_type == kVp8MimeType)
+      return true;
+
+    if (android_mime_type == kVp9MimeType)
+      return base::android::BuildInfo::GetInstance()->sdk_int() < 21;
+
+    return false;
   }
-  DVLOG(1) << __PRETTY_FUNCTION__ << "Default codec for " << mime_type << " : "
-           << codec_name;
+
   // It would be nice if MediaCodecInfo externalized some notion of
   // HW-acceleration but it doesn't. Android Media guidance is that the
   // "OMX.google" prefix is always used for SW decoders, so that's what we
   // use. "OMX.SEC.*" codec is Samsung software implementation - report it
-  // as unaccelerated as well. Also temporary blacklist Exynos and MediaTek
-  // devices while HW decoder video freezes and distortions are
-  // investigated - http://crbug.com/446974.
-  if (codec_name.length() > 0) {
-    return (base::StartsWith(codec_name, "OMX.google.",
-                             base::CompareCase::SENSITIVE) ||
-            base::StartsWith(codec_name, "OMX.SEC.",
-                             base::CompareCase::SENSITIVE) ||
-            base::StartsWith(codec_name, "OMX.MTK.",
-                             base::CompareCase::SENSITIVE) ||
-            base::StartsWith(codec_name, "OMX.Exynos.",
-                             base::CompareCase::SENSITIVE));
-  }
-  return true;
+  // as unaccelerated as well.
+  return base::StartsWith(codec_name, "OMX.google.",
+                          base::CompareCase::SENSITIVE) ||
+         base::StartsWith(codec_name, "OMX.SEC.", base::CompareCase::SENSITIVE);
 }
 
 // static
 bool MediaCodecUtil::IsHLSPath(const GURL& url) {
-  if (!url.SchemeIsHTTPOrHTTPS() && !url.SchemeIsFile())
-    return false;
-
-  std::string path = url.path();
-  return base::EndsWith(path, ".m3u8", base::CompareCase::INSENSITIVE_ASCII);
+  return (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile()) &&
+         base::EndsWith(url.path(), ".m3u8",
+                        base::CompareCase::INSENSITIVE_ASCII);
 }
 
 // static
 bool MediaCodecUtil::IsHLSURL(const GURL& url) {
-  if (!url.SchemeIsHTTPOrHTTPS() && !url.SchemeIsFile())
-    return false;
-
-  std::string spec = url.spec();
-  if (base::EndsWith(spec, ".m3u8", base::CompareCase::INSENSITIVE_ASCII))
-    return true;
-
-  return (spec.find("m3u8") != std::string::npos);
+  return (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile()) &&
+         url.spec().find("m3u8") != std::string::npos;
 }
 
 // static
-bool MediaCodecUtil::RegisterMediaCodecUtil(JNIEnv* env) {
-  return RegisterNativesImpl(env);
+bool MediaCodecUtil::IsVp8DecoderAvailable() {
+  return IsMediaCodecAvailable() && IsDecoderSupportedByDevice(kVp8MimeType);
+}
+
+// static
+bool MediaCodecUtil::IsVp8EncoderAvailable() {
+  // Currently the vp8 encoder and decoder blacklists cover the same devices,
+  // but we have a second method for clarity in future issues.
+  return IsVp8DecoderAvailable();
+}
+
+// static
+bool MediaCodecUtil::IsVp9DecoderAvailable() {
+  return IsMediaCodecAvailable() && IsDecoderSupportedByDevice(kVp9MimeType);
+}
+
+// static
+bool MediaCodecUtil::IsH264EncoderAvailable() {
+  return IsMediaCodecAvailable() && IsEncoderSupportedByDevice(kAvcMimeType);
+}
+
+// static
+bool MediaCodecUtil::IsSurfaceViewOutputSupported() {
+  // Disable SurfaceView output for the Samsung Galaxy S3; it does not work
+  // well enough for even 360p24 H264 playback.  http://crbug.com/602870.
+  //
+  // Notably this is codec agnostic at present, so any devices added to
+  // the blacklist will avoid trying to play any codecs on SurfaceView.  If
+  // needed in the future this can be expanded to be codec specific.
+  const char* model_prefixes[] = {// Exynos 4 (Mali-400)
+                                  "GT-I9300", "GT-I9305", "SHV-E210",
+                                  // Snapdragon S4 (Adreno-225)
+                                  "SCH-I535", "SCH-J201", "SCH-R530",
+                                  "SCH-I960", "SCH-S968", "SGH-T999",
+                                  "SGH-I747", "SGH-N064", 0};
+
+  std::string model(base::android::BuildInfo::GetInstance()->model());
+  for (int i = 0; model_prefixes[i]; ++i) {
+    if (base::StartsWith(model, model_prefixes[i],
+                         base::CompareCase::INSENSITIVE_ASCII)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// static
+bool MediaCodecUtil::IsSetOutputSurfaceSupported() {
+  JNIEnv* env = AttachCurrentThread();
+  return Java_MediaCodecUtil_isSetOutputSurfaceSupported(env);
+}
+
+// static
+bool MediaCodecUtil::CodecNeedsFlushWorkaround(MediaCodecBridge* codec) {
+  int sdk_int = base::android::BuildInfo::GetInstance()->sdk_int();
+  std::string codec_name = codec->GetName();
+  return sdk_int < 18 ||
+         (sdk_int == 18 && ("OMX.SEC.avc.dec" == codec_name ||
+                            "OMX.SEC.avc.dec.secure" == codec_name)) ||
+         (sdk_int == 19 &&
+          base::StartsWith(base::android::BuildInfo::GetInstance()->model(),
+                           "SM-G800", base::CompareCase::INSENSITIVE_ASCII) &&
+          ("OMX.Exynos.avc.dec" == codec_name ||
+           "OMX.Exynos.avc.dec.secure" == codec_name));
 }
 
 }  // namespace media

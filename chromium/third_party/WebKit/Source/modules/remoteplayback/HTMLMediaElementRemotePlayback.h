@@ -5,19 +5,41 @@
 #ifndef HTMLMediaElementRemotePlayback_h
 #define HTMLMediaElementRemotePlayback_h
 
+#include "core/html/HTMLMediaElement.h"
+#include "modules/ModulesExport.h"
+#include "platform/Supplementable.h"
+#include "platform/heap/Handle.h"
+
 namespace blink {
 
 class HTMLMediaElement;
 class QualifiedName;
+class RemotePlayback;
 
-// Class used to implement the Remote Playback API. It will be a supplement to
-// HTMLMediaElement later.
-class HTMLMediaElementRemotePlayback final {
-public:
-    static bool fastHasAttribute(const QualifiedName&, const HTMLMediaElement&);
-    static void setBooleanAttribute(const QualifiedName&, HTMLMediaElement&, bool);
+// Class used to implement the Remote Playback API. It is a supplement to
+// HTMLMediaElement.
+class MODULES_EXPORT HTMLMediaElementRemotePlayback final
+    : public GarbageCollected<HTMLMediaElementRemotePlayback>,
+      public Supplement<HTMLMediaElement> {
+  USING_GARBAGE_COLLECTED_MIXIN(HTMLMediaElementRemotePlayback);
+
+ public:
+  static bool fastHasAttribute(const QualifiedName&, const HTMLMediaElement&);
+  static void setBooleanAttribute(const QualifiedName&,
+                                  HTMLMediaElement&,
+                                  bool);
+
+  static HTMLMediaElementRemotePlayback& from(HTMLMediaElement&);
+  static RemotePlayback* remote(HTMLMediaElement&);
+
+  DECLARE_VIRTUAL_TRACE();
+
+ private:
+  static const char* supplementName();
+
+  Member<RemotePlayback> m_remote;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // HTMLMediaElementRemotePlayback_h
+#endif  // HTMLMediaElementRemotePlayback_h

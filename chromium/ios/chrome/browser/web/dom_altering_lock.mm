@@ -7,6 +7,10 @@
 #include "base/logging.h"
 #include "ios/web/public/web_thread.h"
 
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
+
 DEFINE_WEB_STATE_USER_DATA_KEY(DOMAlteringLock);
 
 DOMAlteringLock::DOMAlteringLock(web::WebState* web_state) {
@@ -17,7 +21,7 @@ DOMAlteringLock::~DOMAlteringLock() {
 
 void DOMAlteringLock::Acquire(id<DOMAltering> feature,
                               ProceduralBlockWithBool lockAction) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+  DCHECK_CURRENTLY_ON(web::WebThread::UI);
   if (current_dom_altering_feature_.get() == feature) {
     lockAction(YES);
     return;
@@ -28,7 +32,7 @@ void DOMAlteringLock::Acquire(id<DOMAltering> feature,
       return;
     }
     [current_dom_altering_feature_ releaseDOMLockWithCompletionHandler:^() {
-      DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+      DCHECK_CURRENTLY_ON(web::WebThread::UI);
       DCHECK(current_dom_altering_feature_.get() == nil)
           << "The lock must be released before calling the completion handler.";
       current_dom_altering_feature_.reset(feature);
@@ -42,7 +46,7 @@ void DOMAlteringLock::Acquire(id<DOMAltering> feature,
 
 // Release the lock on the DOM tree.
 void DOMAlteringLock::Release(id<DOMAltering> feature) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+  DCHECK_CURRENTLY_ON(web::WebThread::UI);
   if (current_dom_altering_feature_.get() == feature)
     current_dom_altering_feature_.reset();
 }

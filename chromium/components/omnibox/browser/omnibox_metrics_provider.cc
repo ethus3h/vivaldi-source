@@ -64,16 +64,16 @@ OmniboxEventProto::Suggestion::ResultType AsOmniboxEventResultType(
       return OmniboxEventProto::Suggestion::NAVSUGGEST_PERSONALIZED;
     case AutocompleteMatchType::CLIPBOARD:
       return OmniboxEventProto::Suggestion::CLIPBOARD;
+    case AutocompleteMatchType::PHYSICAL_WEB:
+      return OmniboxEventProto::Suggestion::PHYSICAL_WEB;
+    case AutocompleteMatchType::PHYSICAL_WEB_OVERFLOW:
+      return OmniboxEventProto::Suggestion::PHYSICAL_WEB_OVERFLOW;
     case AutocompleteMatchType::VOICE_SUGGEST:
       // VOICE_SUGGEST matches are only used in Java and are not logged,
       // so we should never reach this case.
     case AutocompleteMatchType::CONTACT_DEPRECATED:
     case AutocompleteMatchType::NUM_TYPES:
       break;
-    case AutocompleteMatchType::BOOKMARK_NICK:
-      return OmniboxEventProto::Suggestion::BOOKMARK_NICK;
-    case AutocompleteMatchType::BOOKMARK_DESCRIPTION:
-      return OmniboxEventProto::Suggestion::BOOKMARK_DESCRIPTION;
   }
   NOTREACHED();
   return OmniboxEventProto::Suggestion::UNKNOWN_RESULT_TYPE;

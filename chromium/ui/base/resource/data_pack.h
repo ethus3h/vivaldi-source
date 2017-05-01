@@ -13,15 +13,15 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/strings/string_piece.h"
+#include "ui/base/resource/data_pack_export.h"
 #include "ui/base/resource/resource_handle.h"
-#include "ui/base/ui_base_export.h"
 
 namespace base {
 class FilePath;
@@ -31,14 +31,10 @@ class RefCountedStaticMemory;
 namespace ui {
 enum ScaleFactor : int;
 
-class UI_BASE_EXPORT DataPack : public ResourceHandle {
+class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
  public:
   explicit DataPack(ui::ScaleFactor scale_factor);
   ~DataPack() override;
-
-  void set_has_only_material_design_assets(bool has_only_material_assets) {
-    has_only_material_design_assets_ = has_only_material_assets;
-  }
 
   // Load a pack file from |path|, returning false on error.
   bool LoadFromPath(const base::FilePath& path);
@@ -66,7 +62,6 @@ class UI_BASE_EXPORT DataPack : public ResourceHandle {
       uint16_t resource_id) const override;
   TextEncodingType GetTextEncodingType() const override;
   ui::ScaleFactor GetScaleFactor() const override;
-  bool HasOnlyMaterialDesignAssets() const override;
 
 #if DCHECK_IS_ON()
   // Checks to see if any resource in this DataPack already exists in the list
@@ -79,7 +74,7 @@ class UI_BASE_EXPORT DataPack : public ResourceHandle {
   bool LoadImpl();
 
   // The memory-mapped data.
-  scoped_ptr<base::MemoryMappedFile> mmap_;
+  std::unique_ptr<base::MemoryMappedFile> mmap_;
 
   // Number of resources in the data.
   size_t resource_count_;
@@ -90,10 +85,6 @@ class UI_BASE_EXPORT DataPack : public ResourceHandle {
   // The scale of the image in this resource pack relative to images in the 1x
   // resource pak.
   ui::ScaleFactor scale_factor_;
-
-  // Set to true if the only resources contained within this DataPack are
-  // material design image assets.
-  bool has_only_material_design_assets_;
 
   DISALLOW_COPY_AND_ASSIGN(DataPack);
 };

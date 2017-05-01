@@ -5,19 +5,19 @@
 #ifndef REMOTING_HOST_CHROMOTING_HOST_H_
 #define REMOTING_HOST_CHROMOTING_HOST_H_
 
-#include <list>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/threading/thread.h"
 #include "net/base/backoff_entry.h"
 #include "remoting/host/client_session.h"
+#include "remoting/host/desktop_environment_options.h"
 #include "remoting/host/host_extension.h"
 #include "remoting/host/host_status_monitor.h"
 #include "remoting/host/host_status_observer.h"
@@ -66,17 +66,16 @@ class ChromotingHost : public base::NonThreadSafe,
                        public ClientSession::EventHandler,
                        public HostStatusMonitor {
  public:
+  typedef std::vector<std::unique_ptr<ClientSession>> ClientSessions;
+
   // |desktop_environment_factory| must outlive this object.
   ChromotingHost(
       DesktopEnvironmentFactory* desktop_environment_factory,
-      scoped_ptr<protocol::SessionManager> session_manager,
+      std::unique_ptr<protocol::SessionManager> session_manager,
       scoped_refptr<protocol::TransportContext> transport_context,
       scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> network_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+      const DesktopEnvironmentOptions& options);
   ~ChromotingHost() override;
 
   // Asynchronously starts the host.
@@ -92,7 +91,7 @@ class ChromotingHost : public base::NonThreadSafe,
   void RemoveStatusObserver(HostStatusObserver* observer) override;
 
   // Registers a host extension.
-  void AddExtension(scoped_ptr<HostExtension> extension);
+  void AddExtension(std::unique_ptr<HostExtension> extension);
 
   // Sets the authenticator factory to use for incoming
   // connections. Incoming connections are rejected until
@@ -101,11 +100,7 @@ class ChromotingHost : public base::NonThreadSafe,
   // once per host instance because it may not be safe to delete
   // factory before all authenticators it created are deleted.
   void SetAuthenticatorFactory(
-      scoped_ptr<protocol::AuthenticatorFactory> authenticator_factory);
-
-  // Enables/disables curtaining when one or more clients are connected.
-  // Takes immediate effect if clients are already connected.
-  void SetEnableCurtaining(bool enable);
+      std::unique_ptr<protocol::AuthenticatorFactory> authenticator_factory);
 
   // Sets the maximum duration of any session. By default, a session has no
   // maximum duration.
@@ -137,6 +132,8 @@ class ChromotingHost : public base::NonThreadSafe,
     pairing_registry_ = pairing_registry;
   }
 
+  const ClientSessions& client_sessions_for_tests() { return clients_; }
+
   base::WeakPtr<ChromotingHost> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
@@ -144,33 +141,21 @@ class ChromotingHost : public base::NonThreadSafe,
  private:
   friend class ChromotingHostTest;
 
-  typedef std::list<ClientSession*> ClientList;
-  typedef ScopedVector<HostExtension> HostExtensionList;
-
-  // Immediately disconnects all active clients. Host-internal components may
-  // shutdown asynchronously, but the caller is guaranteed not to receive
-  // callbacks for disconnected clients after this call returns.
-  void DisconnectAllClients();
-
   // Unless specified otherwise all members of this class must be
   // used on the network thread only.
 
   // Parameters specified when the host was created.
   DesktopEnvironmentFactory* desktop_environment_factory_;
-  scoped_ptr<protocol::SessionManager> session_manager_;
+  std::unique_ptr<protocol::SessionManager> session_manager_;
   scoped_refptr<protocol::TransportContext> transport_context_;
   scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> input_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
   // Must be used on the network thread only.
   base::ObserverList<HostStatusObserver> status_observers_;
 
   // The connections to remote clients.
-  ClientList clients_;
+  ClientSessions clients_;
 
   // True if the host has been started.
   bool started_;
@@ -178,8 +163,8 @@ class ChromotingHost : public base::NonThreadSafe,
   // Login backoff state.
   net::BackoffEntry login_backoff_;
 
-  // True if the curtain mode is enabled.
-  bool enable_curtaining_;
+  // Options to initialize a DesktopEnvironment.
+  const DesktopEnvironmentOptions desktop_environment_options_;
 
   // The maximum duration of any session.
   base::TimeDelta max_session_duration_;
@@ -188,7 +173,7 @@ class ChromotingHost : public base::NonThreadSafe,
   scoped_refptr<protocol::PairingRegistry> pairing_registry_;
 
   // List of host extensions.
-  HostExtensionList extensions_;
+  std::vector<std::unique_ptr<HostExtension>> extensions_;
 
   base::WeakPtrFactory<ChromotingHost> weak_factory_;
 

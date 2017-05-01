@@ -7,13 +7,29 @@
 namespace base {
 namespace trace_event {
 
-MemoryDumpSessionState::MemoryDumpSessionState(
-    const scoped_refptr<StackFrameDeduplicator>& stack_frame_deduplicator,
-    const scoped_refptr<TypeNameDeduplicator>& type_name_deduplicator)
-    : stack_frame_deduplicator_(stack_frame_deduplicator),
-      type_name_deduplicator_(type_name_deduplicator) {}
+MemoryDumpSessionState::MemoryDumpSessionState() : is_polling_enabled_(false) {}
 
-MemoryDumpSessionState::~MemoryDumpSessionState() {
+MemoryDumpSessionState::~MemoryDumpSessionState() {}
+
+void MemoryDumpSessionState::SetStackFrameDeduplicator(
+    std::unique_ptr<StackFrameDeduplicator> stack_frame_deduplicator) {
+  DCHECK(!stack_frame_deduplicator_);
+  stack_frame_deduplicator_ = std::move(stack_frame_deduplicator);
+}
+
+void MemoryDumpSessionState::SetTypeNameDeduplicator(
+    std::unique_ptr<TypeNameDeduplicator> type_name_deduplicator) {
+  DCHECK(!type_name_deduplicator_);
+  type_name_deduplicator_ = std::move(type_name_deduplicator);
+}
+
+void MemoryDumpSessionState::SetMemoryDumpConfig(
+    const TraceConfig::MemoryDumpConfig& config) {
+  memory_dump_config_ = config;
+  for (const auto& trigger : config.triggers) {
+    if (trigger.trigger_type == MemoryDumpType::PEAK_MEMORY_USAGE)
+      is_polling_enabled_ = true;
+  }
 }
 
 }  // namespace trace_event

@@ -35,8 +35,7 @@
 #include "content/common/p2p_socket_type.h"
 #include "content/renderer/p2p/network_list_manager.h"
 #include "ipc/message_filter.h"
-#include "net/base/ip_address_number.h"
-#include "net/base/ip_endpoint.h"
+#include "net/base/ip_address.h"
 #include "net/base/network_interfaces.h"
 
 namespace base {
@@ -52,7 +51,6 @@ namespace content {
 class NetworkListObserver;
 class P2PAsyncAddressResolver;
 class P2PSocketClientImpl;
-class RenderViewImpl;
 
 class CONTENT_EXPORT P2PSocketDispatcher : public IPC::MessageFilter,
                                            public NetworkListManager {
@@ -79,7 +77,7 @@ class CONTENT_EXPORT P2PSocketDispatcher : public IPC::MessageFilter,
 
   // IPC::MessageFilter override. Called on IO thread.
   bool OnMessageReceived(const IPC::Message& message) override;
-  void OnFilterAdded(IPC::Sender* sender) override;
+  void OnFilterAdded(IPC::Channel* channel) override;
   void OnFilterRemoved() override;
   void OnChannelClosing() override;
   void OnChannelConnected(int32_t peer_pid) override;
@@ -96,10 +94,9 @@ class CONTENT_EXPORT P2PSocketDispatcher : public IPC::MessageFilter,
   void UnregisterHostAddressRequest(int id);
 
   // Incoming message handlers.
-  void OnNetworkListChanged(
-      const net::NetworkInterfaceList& networks,
-      const net::IPAddressNumber& default_ipv4_local_address,
-      const net::IPAddressNumber& default_ipv6_local_address);
+  void OnNetworkListChanged(const net::NetworkInterfaceList& networks,
+                            const net::IPAddress& default_ipv4_local_address,
+                            const net::IPAddress& default_ipv6_local_address);
   void OnGetHostAddressResult(int32_t request_id,
                               const net::IPAddressList& addresses);
   void OnSocketCreated(int socket_id,
@@ -115,9 +112,9 @@ class CONTENT_EXPORT P2PSocketDispatcher : public IPC::MessageFilter,
   P2PSocketClientImpl* GetClient(int socket_id);
 
   scoped_refptr<base::SingleThreadTaskRunner> ipc_task_runner_;
-  IDMap<P2PSocketClientImpl> clients_;
+  IDMap<P2PSocketClientImpl*> clients_;
 
-  IDMap<P2PAsyncAddressResolver> host_address_requests_;
+  IDMap<P2PAsyncAddressResolver*> host_address_requests_;
 
   bool network_notifications_started_;
   scoped_refptr<base::ObserverListThreadSafe<NetworkListObserver>>

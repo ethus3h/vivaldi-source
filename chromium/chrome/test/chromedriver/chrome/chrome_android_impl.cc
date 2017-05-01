@@ -14,15 +14,17 @@
 #include "chrome/test/chromedriver/net/port_server.h"
 
 ChromeAndroidImpl::ChromeAndroidImpl(
-    scoped_ptr<DevToolsHttpClient> http_client,
-    scoped_ptr<DevToolsClient> websocket_client,
+    std::unique_ptr<DevToolsHttpClient> http_client,
+    std::unique_ptr<DevToolsClient> websocket_client,
     ScopedVector<DevToolsEventListener>& devtools_event_listeners,
-    scoped_ptr<PortReservation> port_reservation,
-    scoped_ptr<Device> device)
+    std::unique_ptr<PortReservation> port_reservation,
+    std::string page_load_strategy,
+    std::unique_ptr<Device> device)
     : ChromeImpl(std::move(http_client),
                  std::move(websocket_client),
                  devtools_event_listeners,
-                 std::move(port_reservation)),
+                 std::move(port_reservation),
+                 page_load_strategy),
       device_(std::move(device)) {}
 
 ChromeAndroidImpl::~ChromeAndroidImpl() {}

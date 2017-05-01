@@ -7,16 +7,18 @@
 #include <stddef.h>
 
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/app_context_menu.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
+#include "chrome/browser/ui/app_list/extension_app_context_menu.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
+#include "chrome/grit/theme_resources.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync/model/string_ordinal.h"
 #include "content/public/browser/user_metrics.h"
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_prefs.h"
@@ -25,12 +27,15 @@
 #include "extensions/common/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/manifest_url_handlers.h"
-#include "grit/theme_resources.h"
-#include "sync/api/string_ordinal.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/events/event_constants.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/canvas_image_source.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/extensions/gfx_utils.h"
+#endif
 
 using extensions::Extension;
 
@@ -78,7 +83,7 @@ class RoundedCornersImageSource : public gfx::CanvasImageSource {
 
     canvas->DrawImageInt(icon_, 0, 0);
 
-    scoped_ptr<gfx::Canvas> masking_canvas(
+    std::unique_ptr<gfx::Canvas> masking_canvas(
         new gfx::Canvas(gfx::Size(icon_.width(), icon_.height()), 1.0f, false));
     DCHECK(masking_canvas);
 
@@ -90,7 +95,7 @@ class RoundedCornersImageSource : public gfx::CanvasImageSource {
         kRoundingRadius, opaque_paint);
 
     SkPaint masking_paint;
-    masking_paint.setXfermodeMode(SkXfermode::kDstIn_Mode);
+    masking_paint.setBlendMode(SkBlendMode::kDstIn);
     canvas->DrawImageInt(
         gfx::ImageSkia(masking_canvas->ExtractImageRep()), 0, 0, masking_paint);
   }
@@ -116,13 +121,10 @@ ExtensionAppItem::ExtensionAppItem(
       is_platform_app_(is_platform_app),
       has_overlay_(false) {
   Reload();
-  if (sync_item && sync_item->item_ordinal.IsValid()) {
+  if (sync_item && sync_item->item_ordinal.IsValid())
     UpdateFromSync(sync_item);
-  } else {
-    GetAppSorting()->EnsureValidOrdinals(extension_id,
-                                         syncer::StringOrdinal());
-    UpdatePositionFromOrdering();
-  }
+  else
+    SetDefaultPositionIfApplicable();
 }
 
 ExtensionAppItem::~ExtensionAppItem() {
@@ -168,6 +170,10 @@ void ExtensionAppItem::UpdateIcon() {
     icon = icon_->image_skia();
     const bool enabled = extensions::util::IsAppLaunchable(extension_id(),
                                                            profile());
+#if defined(OS_CHROMEOS)
+    extensions::util::MaybeApplyChromeBadge(profile(), id(), &icon);
+#endif
+
     if (!enabled)
       icon = CreateDisabledIcon(icon);
 
@@ -180,36 +186,6 @@ void ExtensionAppItem::UpdateIcon() {
     icon = gfx::ImageSkia(new ShortcutOverlayImageSource(icon), icon.size());
 
   SetIcon(icon);
-}
-
-void ExtensionAppItem::Move(const ExtensionAppItem* prev,
-                            const ExtensionAppItem* next) {
-  if (!prev && !next)
-    return;  // No reordering necessary
-
-  extensions::ExtensionPrefs* prefs =
-      extensions::ExtensionPrefs::Get(profile());
-  extensions::AppSorting* sorting = GetAppSorting();
-
-  syncer::StringOrdinal page;
-  std::string prev_id, next_id;
-  if (!prev) {
-    next_id = next->extension_id();
-    page = sorting->GetPageOrdinal(next_id);
-  } else if (!next) {
-    prev_id = prev->extension_id();
-    page = sorting->GetPageOrdinal(prev_id);
-  } else {
-    prev_id = prev->extension_id();
-    page = sorting->GetPageOrdinal(prev_id);
-    // Only set |next_id| if on the same page, otherwise just insert after prev.
-    if (page.Equals(sorting->GetPageOrdinal(next->extension_id())))
-      next_id = next->extension_id();
-  }
-  prefs->SetAppDraggedByUser(extension_id());
-  sorting->SetPageOrdinal(extension_id(), page);
-  sorting->OnExtensionMoved(extension_id(), prev_id, next_id);
-  UpdatePositionFromOrdering();
 }
 
 const Extension* ExtensionAppItem::GetExtension() const {
@@ -273,6 +249,11 @@ void ExtensionAppItem::OnExtensionIconImageChanged(
   UpdateIcon();
 }
 
+void ExtensionAppItem::OnExtensionIconImageDestroyed(
+    extensions::IconImage* image) {
+  SetIcon(gfx::ImageSkia());
+}
+
 void ExtensionAppItem::ExtensionEnableFlowFinished() {
   extension_enable_flow_.reset();
   extension_enable_flow_controller_->OnCloseChildDialog();
@@ -310,11 +291,11 @@ void ExtensionAppItem::Activate(int event_flags) {
 }
 
 ui::MenuModel* ExtensionAppItem::GetContextMenuModel() {
-  context_menu_.reset(new app_list::AppContextMenu(
-      this, profile(), extension_id(), GetController()));
+  context_menu_.reset(new app_list::ExtensionAppContextMenu(this,
+                                                            profile(),
+                                                            extension_id(),
+                                                            GetController()));
   context_menu_->set_is_platform_app(is_platform_app_);
-  if (IsInFolder())
-    context_menu_->set_is_in_folder(true);
   return context_menu_->GetMenuModel();
 }
 
@@ -332,13 +313,4 @@ const char* ExtensionAppItem::GetItemType() const {
 
 void ExtensionAppItem::ExecuteLaunchCommand(int event_flags) {
   Launch(event_flags);
-}
-
-void ExtensionAppItem::UpdatePositionFromOrdering() {
-  const syncer::StringOrdinal& page =
-      GetAppSorting()->GetPageOrdinal(extension_id());
-  const syncer::StringOrdinal& launch =
-     GetAppSorting()->GetAppLaunchOrdinal(extension_id());
-  set_position(syncer::StringOrdinal(
-      page.ToInternalValue() + launch.ToInternalValue()));
 }

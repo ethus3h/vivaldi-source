@@ -20,6 +20,8 @@
 #include "sql/init_status.h"
 #include "sql/meta_table.h"
 
+#include "db/vivaldi_history_database.h"
+
 #if defined(OS_ANDROID)
 #include "components/history/core/browser/android/android_cache_database.h"
 #include "components/history/core/browser/android/android_urls_database.h"
@@ -29,7 +31,6 @@ namespace base {
 class FilePath;
 }
 
-class HistoryQuickProviderTest;
 class InMemoryURLIndexTest;
 
 namespace history {
@@ -48,7 +49,8 @@ class HistoryDatabase : public DownloadDatabase,
 #endif
                         public URLDatabase,
                         public VisitDatabase,
-                        public VisitSegmentDatabase {
+                        public VisitSegmentDatabase,
+                        public VivaldiHistoryDatabase {
  public:
   // A simple class for scoping a history database transaction. This does not
   // support rollback since the history database doesn't, either.
@@ -75,7 +77,7 @@ class HistoryDatabase : public DownloadDatabase,
   // underlying database connection.
   void set_error_callback(
       const sql::Connection::ErrorCallback& error_callback) {
-    error_callback_ = error_callback;
+    db_.set_error_callback(error_callback);
   }
 
   // Must call this function to complete initialization. Will return
@@ -145,6 +147,8 @@ class HistoryDatabase : public DownloadDatabase,
   // Razes the database. Returns true if successful.
   bool Raze();
 
+  std::string GetDiagnosticInfo(int extended_error, sql::Statement* statement);
+
   // Visit table functions ----------------------------------------------------
 
   // Update the segment id of a visit. Return true on success.
@@ -166,7 +170,6 @@ class HistoryDatabase : public DownloadDatabase,
   friend class AndroidProviderBackend;
   FRIEND_TEST_ALL_PREFIXES(AndroidURLsMigrationTest, MigrateToVersion22);
 #endif
-  friend class ::HistoryQuickProviderTest;
   friend class ::InMemoryURLIndexTest;
 
   // Overridden from URLDatabase:
@@ -174,9 +177,9 @@ class HistoryDatabase : public DownloadDatabase,
 
   // Migration -----------------------------------------------------------------
 
-  // Makes sure the version is up-to-date, updating if necessary. If the
+  // Makes sure the version is up to date, updating if necessary. If the
   // database is too old to migrate, the user will be notified. Returns
-  // sql::INIT_OK iff  the DB is up-to-date and ready for use.
+  // sql::INIT_OK iff  the DB is up to date and ready for use.
   //
   // This assumes it is called from the init function inside a transaction. It
   // may commit the transaction and start a new one if migration requires it.
@@ -190,7 +193,6 @@ class HistoryDatabase : public DownloadDatabase,
 
   // ---------------------------------------------------------------------------
 
-  sql::Connection::ErrorCallback error_callback_;
   sql::Connection db_;
   sql::MetaTable meta_table_;
 

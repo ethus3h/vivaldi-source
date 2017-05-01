@@ -25,32 +25,29 @@
 #include "platform/geometry/IntRect.h"
 #include "platform/graphics/filters/FilterEffect.h"
 
-class SkPicture;
-
 namespace blink {
 
 class PLATFORM_EXPORT SourceGraphic final : public FilterEffect {
-public:
-    static PassRefPtrWillBeRawPtr<SourceGraphic> create(Filter*);
-    ~SourceGraphic() override;
+ public:
+  static SourceGraphic* create(Filter*);
+  ~SourceGraphic() override;
 
-    FloatRect determineAbsolutePaintRect(const FloatRect& requestedRect) override;
+  TextStream& externalRepresentation(TextStream&, int indention) const override;
 
-    FilterEffectType filterEffectType() const override { return FilterEffectTypeSourceInput; }
+  void setSourceRect(const IntRect&);
 
-    TextStream& externalRepresentation(TextStream&, int indention) const override;
-    PassRefPtr<SkImageFilter> createImageFilter(SkiaImageFilterBuilder&) override;
+ private:
+  explicit SourceGraphic(Filter*);
 
-    void setPicture(PassRefPtr<const SkPicture>);
-    void setSourceRect(const IntRect&);
+  FilterEffectType getFilterEffectType() const override {
+    return FilterEffectTypeSourceInput;
+  }
 
-private:
-    explicit SourceGraphic(Filter*);
+  FloatRect mapInputs(const FloatRect&) const override;
 
-    RefPtr<const SkPicture> m_picture;
-    IntRect m_sourceRect;
+  IntRect m_sourceRect;
 };
 
-} //namespace blink
+}  // namespace blink
 
-#endif // SourceGraphic_h
+#endif  // SourceGraphic_h

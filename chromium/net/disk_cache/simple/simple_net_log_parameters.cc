@@ -14,23 +14,24 @@
 #include "base/values.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/simple/simple_entry_impl.h"
+#include "net/log/net_log_capture_mode.h"
 
 namespace {
 
-scoped_ptr<base::Value> NetLogSimpleEntryConstructionCallback(
+std::unique_ptr<base::Value> NetLogSimpleEntryConstructionCallback(
     const disk_cache::SimpleEntryImpl* entry,
     net::NetLogCaptureMode capture_mode) {
-  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetString("entry_hash",
                   base::StringPrintf("%#016" PRIx64, entry->entry_hash()));
   return std::move(dict);
 }
 
-scoped_ptr<base::Value> NetLogSimpleEntryCreationCallback(
+std::unique_ptr<base::Value> NetLogSimpleEntryCreationCallback(
     const disk_cache::SimpleEntryImpl* entry,
     int net_error,
     net::NetLogCaptureMode /* capture_mode */) {
-  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetInteger("net_error", net_error);
   if (net_error == net::OK)
     dict->SetString("key", entry->key());
@@ -41,13 +42,13 @@ scoped_ptr<base::Value> NetLogSimpleEntryCreationCallback(
 
 namespace disk_cache {
 
-net::NetLog::ParametersCallback CreateNetLogSimpleEntryConstructionCallback(
+net::NetLogParametersCallback CreateNetLogSimpleEntryConstructionCallback(
     const SimpleEntryImpl* entry) {
   DCHECK(entry);
   return base::Bind(&NetLogSimpleEntryConstructionCallback, entry);
 }
 
-net::NetLog::ParametersCallback CreateNetLogSimpleEntryCreationCallback(
+net::NetLogParametersCallback CreateNetLogSimpleEntryCreationCallback(
     const SimpleEntryImpl* entry,
     int net_error) {
   DCHECK(entry);

@@ -14,8 +14,6 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_user_data.h"
 
-class OverlayUserPrefStore;
-class PrefService;
 class Profile;
 
 namespace content {
@@ -55,12 +53,14 @@ class PrefsTabHelper : public content::NotificationObserver,
   void OnFontFamilyPrefChanged(const std::string& pref_name);
   void OnWebPrefChanged(const std::string& pref_name);
 
+  void NotifyWebkitPreferencesChanged(const std::string& pref_name);
+
   content::WebContents* web_contents_;
   Profile* profile_;
   content::NotificationRegistrar registrar_;
-  scoped_ptr<base::CallbackList<void(void)>::Subscription>
+  std::unique_ptr<base::CallbackList<void(void)>::Subscription>
       style_sheet_subscription_;
-  scoped_ptr<ChromeZoomLevelPrefs::DefaultZoomLevelSubscription>
+  std::unique_ptr<ChromeZoomLevelPrefs::DefaultZoomLevelSubscription>
       default_zoom_level_subscription_;
   base::WeakPtrFactory<PrefsTabHelper> weak_ptr_factory_;
 

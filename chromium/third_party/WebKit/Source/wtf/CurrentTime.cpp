@@ -30,29 +30,33 @@
 
 #include "wtf/CurrentTime.h"
 
+#include "base/time/time.h"
+
 namespace WTF {
 
-static TimeFunction currentTimeFunction;
-static TimeFunction monotonicallyIncreasingTimeFunction;
+static TimeFunction mockTimeFunctionForTesting = nullptr;
 
-void setCurrentTimeFunction(TimeFunction func)
-{
-    currentTimeFunction = func;
+double currentTime() {
+  if (mockTimeFunctionForTesting)
+    return mockTimeFunctionForTesting();
+  return base::Time::Now().ToDoubleT();
 }
 
-void setMonotonicallyIncreasingTimeFunction(TimeFunction func)
-{
-    monotonicallyIncreasingTimeFunction = func;
+double monotonicallyIncreasingTime() {
+  if (mockTimeFunctionForTesting)
+    return mockTimeFunctionForTesting();
+  return base::TimeTicks::Now().ToInternalValue() /
+         static_cast<double>(base::Time::kMicrosecondsPerSecond);
 }
 
-double currentTime()
-{
-    return (*currentTimeFunction)();
+TimeFunction setTimeFunctionsForTesting(TimeFunction newFunction) {
+  TimeFunction oldFunction = mockTimeFunctionForTesting;
+  mockTimeFunctionForTesting = newFunction;
+  return oldFunction;
 }
 
-double monotonicallyIncreasingTime()
-{
-    return (*monotonicallyIncreasingTimeFunction)();
+TimeFunction getTimeFunctionForTesting() {
+  return mockTimeFunctionForTesting;
 }
 
-} // namespace WTF
+}  // namespace WTF

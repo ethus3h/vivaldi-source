@@ -5,6 +5,8 @@
 #include "chrome/browser/ui/views/hung_renderer_view.h"
 
 #include "base/i18n/rtl.h"
+#include "base/memory/ptr_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/platform_util.h"
@@ -13,8 +15,10 @@
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/crash_keys.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
@@ -23,11 +27,10 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/result_codes.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
-#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/grid_layout.h"
@@ -38,7 +41,7 @@
 #if defined(OS_WIN)
 #include "chrome/browser/hang_monitor/hang_crash_dump_win.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/shell_integration.h"
+#include "chrome/browser/shell_integration_win.h"
 #include "ui/base/win/shell.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
@@ -48,6 +51,7 @@
 #endif
 
 using content::WebContents;
+using content::WebContentsUnresponsiveState;
 
 HungRendererDialogView* HungRendererDialogView::g_instance_ = NULL;
 
@@ -77,13 +81,14 @@ void HungPagesTableModel::InitForWebContents(WebContents* hung_contents) {
   if (hung_contents) {
     // Force hung_contents to be first.
     if (hung_contents) {
-      tab_observers_.push_back(new WebContentsObserverImpl(this,
-                                                           hung_contents));
+      tab_observers_.push_back(
+          base::MakeUnique<WebContentsObserverImpl>(this, hung_contents));
     }
     for (TabContentsIterator it; !it.done(); it.Next()) {
       if (*it != hung_contents &&
           it->GetRenderProcessHost() == hung_contents->GetRenderProcessHost())
-        tab_observers_.push_back(new WebContentsObserverImpl(this, *it));
+        tab_observers_.push_back(
+            base::MakeUnique<WebContentsObserverImpl>(this, *it));
     }
   }
   // The world is different.
@@ -131,13 +136,15 @@ void HungPagesTableModel::GetGroupRange(int model_index,
 
 void HungPagesTableModel::TabDestroyed(WebContentsObserverImpl* tab) {
   // Clean up tab_observers_ and notify our observer.
-  TabObservers::iterator i = std::find(
-      tab_observers_.begin(), tab_observers_.end(), tab);
-  DCHECK(i != tab_observers_.end());
-  int index = static_cast<int>(i - tab_observers_.begin());
-  tab_observers_.erase(i);
+  size_t index = 0;
+  for (; index < tab_observers_.size(); ++index) {
+    if (tab_observers_[index].get() == tab)
+      break;
+  }
+  DCHECK(index < tab_observers_.size());
+  tab_observers_.erase(tab_observers_.begin() + index);
   if (observer_)
-    observer_->OnItemsRemoved(index, 1);
+    observer_->OnItemsRemoved(static_cast<int>(index), 1);
 
   // Notify the delegate.
   delegate_->TabDestroyed();
@@ -193,7 +200,9 @@ HungRendererDialogView* HungRendererDialogView::GetInstance() {
 }
 
 // static
-void HungRendererDialogView::Show(WebContents* contents) {
+void HungRendererDialogView::Show(
+    WebContents* contents,
+    const WebContentsUnresponsiveState& unresponsive_state) {
   if (logging::DialogsAreSuppressed())
     return;
 
@@ -207,7 +216,7 @@ void HungRendererDialogView::Show(WebContents* contents) {
     return;
 #endif
   HungRendererDialogView* view = HungRendererDialogView::Create(window);
-  view->ShowForWebContents(contents);
+  view->ShowForWebContents(contents, unresponsive_state);
 }
 
 // static
@@ -223,23 +232,12 @@ bool HungRendererDialogView::IsFrameActive(WebContents* contents) {
   return platform_util::IsWindowActive(window);
 }
 
-// static
-void HungRendererDialogView::KillRendererProcess(
-    content::RenderProcessHost* rph) {
-#if defined(OS_WIN)
-  // Try to generate a crash report for the hung process.
-  CrashDumpAndTerminateHungChildProcess(rph->GetHandle());
-#else
-  rph->Shutdown(content::RESULT_CODE_HUNG, false);
-#endif
-}
-
-
 HungRendererDialogView::HungRendererDialogView()
     : info_label_(nullptr),
       hung_pages_table_(nullptr),
       kill_button_(nullptr),
-      initialized_(false) {
+      initialized_(false),
+      kill_button_clicked_(false) {
   InitClass();
 }
 
@@ -247,7 +245,9 @@ HungRendererDialogView::~HungRendererDialogView() {
   hung_pages_table_->SetModel(NULL);
 }
 
-void HungRendererDialogView::ShowForWebContents(WebContents* contents) {
+void HungRendererDialogView::ShowForWebContents(
+    WebContents* contents,
+    const content::WebContentsUnresponsiveState& unresponsive_state) {
   DCHECK(contents && GetWidget());
 
   // Don't show the warning unless the foreground window is the frame, or this
@@ -278,7 +278,8 @@ void HungRendererDialogView::ShowForWebContents(WebContents* contents) {
     Profile* profile =
         Profile::FromBrowserContext(contents->GetBrowserContext());
     ui::win::SetAppIdForWindow(
-        ShellIntegration::GetChromiumModelIdForProfile(profile->GetPath()),
+        shell_integration::win::GetChromiumModelIdForProfile(
+            profile->GetPath()),
         views::HWNDForWidget(GetWidget()));
 #endif
 
@@ -295,6 +296,7 @@ void HungRendererDialogView::ShowForWebContents(WebContents* contents) {
                                          hung_pages_table_model_->RowCount()));
     Layout();
 
+    unresponsive_state_ = unresponsive_state;
     // Make Widget ask for the window title again.
     GetWidget()->UpdateWindowTitle();
 
@@ -332,53 +334,40 @@ void HungRendererDialogView::WindowClosing() {
 }
 
 int HungRendererDialogView::GetDialogButtons() const {
-  // We specifically don't want a CANCEL button here because that code path is
-  // also called when the window is closed by the user clicking the X button in
-  // the window's titlebar, and also if we call Window::Close. Rather, we want
-  // the OK button to wait for responsiveness (and close the dialog) and our
-  // additional button (which we create) to kill the process (which will result
-  // in the dialog being destroyed).
-  return ui::DIALOG_BUTTON_OK;
+  return ui::DIALOG_BUTTON_CANCEL;
 }
 
 base::string16 HungRendererDialogView::GetDialogButtonLabel(
     ui::DialogButton button) const {
-  if (button == ui::DIALOG_BUTTON_OK)
-    return l10n_util::GetStringUTF16(IDS_BROWSER_HANGMONITOR_RENDERER_WAIT);
-  return views::DialogDelegateView::GetDialogButtonLabel(button);
+  DCHECK_EQ(ui::DIALOG_BUTTON_CANCEL, button);
+  return l10n_util::GetStringUTF16(IDS_BROWSER_HANGMONITOR_RENDERER_WAIT);
 }
 
 views::View* HungRendererDialogView::CreateExtraView() {
   DCHECK(!kill_button_);
-  kill_button_ = new views::LabelButton(this,
+  kill_button_ = views::MdTextButton::CreateSecondaryUiButton(this,
       l10n_util::GetStringUTF16(IDS_BROWSER_HANGMONITOR_RENDERER_END));
-  kill_button_->SetStyle(views::Button::STYLE_BUTTON);
   return kill_button_;
 }
 
-bool HungRendererDialogView::Accept(bool window_closing) {
-  // Don't do anything if we're being called only because the dialog is being
-  // destroyed and we don't supply a Cancel function...
-  if (window_closing)
-    return true;
-
+bool HungRendererDialogView::Cancel() {
   // Start waiting again for responsiveness.
-  if (hung_pages_table_model_->GetRenderViewHost()) {
+  if (!kill_button_clicked_ &&
+      hung_pages_table_model_->GetRenderViewHost()) {
     hung_pages_table_model_->GetRenderViewHost()
         ->GetWidget()
-        ->RestartHangMonitorTimeout();
+        ->RestartHangMonitorTimeoutIfNecessary();
   }
   return true;
 }
 
-
-bool HungRendererDialogView::UseNewStyleForThisDialog() const {
+bool HungRendererDialogView::ShouldUseCustomFrame() const {
 #if defined(OS_WIN)
   // Use the old dialog style without Aero glass, otherwise the dialog will be
   // visually constrained to browser window bounds. See http://crbug.com/323278
   return ui::win::IsAeroGlassEnabled();
 #else
-  return views::DialogDelegateView::UseNewStyleForThisDialog();
+  return views::DialogDelegateView::ShouldUseCustomFrame();
 #endif
 }
 
@@ -387,10 +376,33 @@ bool HungRendererDialogView::UseNewStyleForThisDialog() const {
 
 void HungRendererDialogView::ButtonPressed(
     views::Button* sender, const ui::Event& event) {
-  if (sender == kill_button_ &&
-      hung_pages_table_model_->GetRenderProcessHost()) {
-    KillRendererProcess(hung_pages_table_model_->GetRenderProcessHost());
-  }
+  DCHECK_EQ(kill_button_, sender);
+  kill_button_clicked_ = true;
+  content::RenderProcessHost* rph =
+      hung_pages_table_model_->GetRenderProcessHost();
+  if (!rph)
+    return;
+#if defined(OS_WIN)
+  base::StringPairs crash_keys;
+
+  crash_keys.push_back(std::make_pair(
+      crash_keys::kHungRendererOutstandingAckCount,
+      base::IntToString(unresponsive_state_.outstanding_ack_count)));
+  crash_keys.push_back(std::make_pair(
+      crash_keys::kHungRendererOutstandingEventType,
+      base::IntToString(unresponsive_state_.outstanding_event_type)));
+  crash_keys.push_back(
+      std::make_pair(crash_keys::kHungRendererLastEventType,
+                     base::IntToString(unresponsive_state_.last_event_type)));
+  crash_keys.push_back(
+      std::make_pair(crash_keys::kHungRendererReason,
+                     base::IntToString(unresponsive_state_.reason)));
+
+  // Try to generate a crash report for the hung process.
+  CrashDumpAndTerminateHungChildProcess(rph->GetHandle(), crash_keys);
+#else
+  rph->Shutdown(content::RESULT_CODE_HUNG, false);
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////

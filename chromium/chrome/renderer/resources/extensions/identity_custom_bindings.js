@@ -8,7 +8,6 @@ var binding = require('binding').Binding.create('identity');
 
 binding.registerCustomHook(function(binding, id, contextType) {
   var apiFunctions = binding.apiFunctions;
-  var identity = binding.compiledApi;
 
   apiFunctions.setHandleRequest('getRedirectURL', function(path) {
     if (path === null || path === undefined)
@@ -21,4 +20,4 @@ binding.registerCustomHook(function(binding, id, contextType) {
   });
 });
 
-exports.binding = binding.generate();
+exports.$set('binding', binding.generate());

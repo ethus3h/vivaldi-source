@@ -8,6 +8,9 @@
 
 #include <string>
 
+#include "content/common/service_worker/embedded_worker_settings.h"
+#include "content/common/service_worker/embedded_worker_start_params.h"
+#include "content/public/common/console_message_level.h"
 #include "content/public/common/web_preferences.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_macros.h"
@@ -19,16 +22,23 @@
 
 #define IPC_MESSAGE_START EmbeddedWorkerMsgStart
 
+IPC_STRUCT_TRAITS_BEGIN(content::EmbeddedWorkerSettings)
+  IPC_STRUCT_TRAITS_MEMBER(v8_cache_options)
+  IPC_STRUCT_TRAITS_MEMBER(data_saver_enabled)
+IPC_STRUCT_TRAITS_END()
+
 // Parameters structure for EmbeddedWorkerMsg_StartWorker.
-IPC_STRUCT_BEGIN(EmbeddedWorkerMsg_StartWorker_Params)
-  IPC_STRUCT_MEMBER(int, embedded_worker_id)
-  IPC_STRUCT_MEMBER(int64_t, service_worker_version_id)
-  IPC_STRUCT_MEMBER(GURL, scope)
-  IPC_STRUCT_MEMBER(GURL, script_url)
-  IPC_STRUCT_MEMBER(int, worker_devtools_agent_route_id)
-  IPC_STRUCT_MEMBER(bool, wait_for_debugger)
-  IPC_STRUCT_MEMBER(content::V8CacheOptions, v8_cache_options)
-IPC_STRUCT_END()
+IPC_STRUCT_TRAITS_BEGIN(content::EmbeddedWorkerStartParams)
+  IPC_STRUCT_TRAITS_MEMBER(embedded_worker_id)
+  IPC_STRUCT_TRAITS_MEMBER(service_worker_version_id)
+  IPC_STRUCT_TRAITS_MEMBER(scope)
+  IPC_STRUCT_TRAITS_MEMBER(script_url)
+  IPC_STRUCT_TRAITS_MEMBER(worker_devtools_agent_route_id)
+  IPC_STRUCT_TRAITS_MEMBER(pause_after_download)
+  IPC_STRUCT_TRAITS_MEMBER(wait_for_debugger)
+  IPC_STRUCT_TRAITS_MEMBER(is_installed)
+  IPC_STRUCT_TRAITS_MEMBER(settings)
+IPC_STRUCT_TRAITS_END()
 
 // Parameters structure for EmbeddedWorkerHostMsg_ReportConsoleMessage.
 // The data members directly correspond to parameters of
@@ -40,10 +50,6 @@ IPC_STRUCT_BEGIN(EmbeddedWorkerHostMsg_ReportConsoleMessage_Params)
   IPC_STRUCT_MEMBER(int, line_number)
   IPC_STRUCT_MEMBER(GURL, source_url)
 IPC_STRUCT_END()
-
-// Browser -> Renderer message to create a new embedded worker context.
-IPC_MESSAGE_CONTROL1(EmbeddedWorkerMsg_StartWorker,
-                     EmbeddedWorkerMsg_StartWorker_Params /* params */)
 
 // Browser -> Renderer message to stop (terminate) the embedded worker.
 IPC_MESSAGE_CONTROL1(EmbeddedWorkerMsg_StopWorker,

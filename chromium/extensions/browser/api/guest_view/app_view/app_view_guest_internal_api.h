@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef EXTENSIONS_BROWSER_API_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_
-#define EXTENSIONS_BROWSER_API_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_
+#ifndef EXTENSIONS_BROWSER_API_GUEST_VIEW_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_
+#define EXTENSIONS_BROWSER_API_GUEST_VIEW_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_
 
 #include "base/macros.h"
 #include "extensions/browser/extension_function.h"
 
 namespace extensions {
 
-class AppViewGuestInternalAttachFrameFunction : public AsyncExtensionFunction {
+class AppViewGuestInternalAttachFrameFunction
+    : public UIThreadExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("appViewGuestInternal.attachFrame",
                              APPVIEWINTERNAL_ATTACHFRAME);
@@ -18,13 +19,14 @@ class AppViewGuestInternalAttachFrameFunction : public AsyncExtensionFunction {
 
  protected:
   ~AppViewGuestInternalAttachFrameFunction() override {}
-  bool RunAsync() final;
+  ResponseAction Run() final;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppViewGuestInternalAttachFrameFunction);
 };
 
-class AppViewGuestInternalDenyRequestFunction : public AsyncExtensionFunction {
+class AppViewGuestInternalDenyRequestFunction
+    : public UIThreadExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("appViewGuestInternal.denyRequest",
                              APPVIEWINTERNAL_DENYREQUEST);
@@ -32,7 +34,7 @@ class AppViewGuestInternalDenyRequestFunction : public AsyncExtensionFunction {
 
  protected:
   ~AppViewGuestInternalDenyRequestFunction() override {}
-  bool RunAsync() final;
+  ResponseAction Run() final;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppViewGuestInternalDenyRequestFunction);
@@ -40,4 +42,4 @@ class AppViewGuestInternalDenyRequestFunction : public AsyncExtensionFunction {
 
 }  // namespace extensions
 
-#endif  // EXTENSIONS_BROWSER_API_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_
+#endif  // EXTENSIONS_BROWSER_API_GUEST_VIEW_APP_VIEW_APP_VIEW_GUEST_INTERNAL_API_H_

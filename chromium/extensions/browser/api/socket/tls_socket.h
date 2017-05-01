@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_EXTENSIONS_API_SOCKET_TLS_SOCKET_H_
-#define CHROME_BROWSER_EXTENSIONS_API_SOCKET_TLS_SOCKET_H_
+#ifndef EXTENSIONS_BROWSER_API_SOCKET_TLS_SOCKET_H_
+#define EXTENSIONS_BROWSER_API_SOCKET_TLS_SOCKET_H_
 
 #include <stdint.h>
 
@@ -17,6 +17,8 @@
 namespace net {
 class Socket;
 class CertVerifier;
+class CTPolicyEnforcer;
+class CTVerifier;
 class TransportSecurityState;
 }
 
@@ -36,9 +38,9 @@ class TLSSocket;
 // touch any socket state.
 class TLSSocket : public ResumableTCPSocket {
  public:
-  typedef base::Callback<void(scoped_ptr<TLSSocket>, int)> SecureCallback;
+  typedef base::Callback<void(std::unique_ptr<TLSSocket>, int)> SecureCallback;
 
-  TLSSocket(scoped_ptr<net::StreamSocket> tls_socket,
+  TLSSocket(std::unique_ptr<net::StreamSocket> tls_socket,
             const std::string& owner_extension_id);
 
   ~TLSSocket() override;
@@ -50,7 +52,7 @@ class TLSSocket : public ResumableTCPSocket {
   void Connect(const net::AddressList& address,
                const CompletionCallback& callback) override;
   // Forwards.
-  void Disconnect() override;
+  void Disconnect(bool socket_destroying) override;
 
   // Attempts to read |count| bytes of decrypted data from the TLS socket,
   // invoking |callback| with the actual number of bytes read, or a network
@@ -98,6 +100,8 @@ class TLSSocket : public ResumableTCPSocket {
       scoped_refptr<net::SSLConfigService> config_service,
       net::CertVerifier* cert_verifier,
       net::TransportSecurityState* transport_security_state,
+      net::CTVerifier* ct_verifier,
+      net::CTPolicyEnforcer* ct_policy_enforcer,
       const std::string& extension_id,
       api::socket::SecureOptions* options,
       const SecureCallback& callback);
@@ -110,11 +114,11 @@ class TLSSocket : public ResumableTCPSocket {
   void OnReadComplete(const scoped_refptr<net::IOBuffer>& io_buffer,
                       int result);
 
-  scoped_ptr<net::StreamSocket> tls_socket_;
+  std::unique_ptr<net::StreamSocket> tls_socket_;
   ReadCompletionCallback read_callback_;
 };
 
 }  // namespace extensions
 
-#endif  // CHROME_BROWSER_EXTENSIONS_API_SOCKET_TLS_SOCKET_H_
+#endif  // EXTENSIONS_BROWSER_API_SOCKET_TLS_SOCKET_H_
 

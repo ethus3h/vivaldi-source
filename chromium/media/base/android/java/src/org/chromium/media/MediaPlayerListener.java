@@ -25,13 +25,14 @@ class MediaPlayerListener implements MediaPlayer.OnPreparedListener,
     private static final int MEDIA_ERROR_DECODE = 1;
     private static final int MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK = 2;
     private static final int MEDIA_ERROR_INVALID_CODE = 3;
+    private static final int MEDIA_ERROR_SERVER_DIED = 4;
 
     // These values are copied from android media player.
     public static final int MEDIA_ERROR_MALFORMED = -1007;
     public static final int MEDIA_ERROR_TIMED_OUT = -110;
 
     // Used to determine the class instance to dispatch the native call to.
-    private long mNativeMediaPlayerListener = 0;
+    private long mNativeMediaPlayerListener;
     private final Context mContext;
 
     private MediaPlayerListener(long nativeMediaPlayerListener, Context context) {
@@ -58,6 +59,9 @@ class MediaPlayerListener implements MediaPlayer.OnPreparedListener,
                 break;
             case MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK:
                 errorType = MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK;
+                break;
+            case MediaPlayer.MEDIA_ERROR_SERVER_DIED:
+                errorType = MEDIA_ERROR_SERVER_DIED;
                 break;
             default:
                 // There are some undocumented error codes for android media player.

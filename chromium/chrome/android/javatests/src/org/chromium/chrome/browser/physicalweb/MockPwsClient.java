@@ -17,7 +17,7 @@ import java.util.List;
  * This class sends requests to the Physical Web Service.
  */
 class MockPwsClient implements PwsClient {
-    private List<Collection<String>> mResolveCalls;
+    private List<Collection<UrlInfo>> mResolveCalls;
     private List<String> mFetchIconCalls;
     private List<List<PwsResult>> mPwsResults;
     private List<Bitmap> mIconBitmaps;
@@ -29,7 +29,7 @@ class MockPwsClient implements PwsClient {
         mIconBitmaps = new ArrayList<>();
     }
 
-    public List<Collection<String>> getResolveCalls() {
+    public List<Collection<UrlInfo>> getResolveCalls() {
         return mResolveCalls;
     }
 
@@ -39,6 +39,20 @@ class MockPwsClient implements PwsClient {
 
     public void addPwsResults(List<PwsResult> pwsResults) {
         mPwsResults.add(pwsResults);
+    }
+
+    public void addPwsResult(PwsResult pwsResult) {
+        List<PwsResult> pwsResults = new ArrayList<>();
+        pwsResults.add(pwsResult);
+        addPwsResults(pwsResults);
+    }
+
+    public void addCombinedPwsResults() {
+        List<PwsResult> pwsResults = new ArrayList<>();
+        for (List<PwsResult> subList : mPwsResults) {
+            pwsResults.addAll(subList);
+        }
+        addPwsResults(pwsResults);
     }
 
     public void addIconBitmap(Bitmap iconBitmap) {
@@ -51,7 +65,7 @@ class MockPwsClient implements PwsClient {
      * @param resolveScanCallback The callback to be run when the response is received.
      */
     @Override
-    public void resolve(final Collection<String> broadcastUrls,
+    public void resolve(final Collection<UrlInfo> broadcastUrls,
             final ResolveScanCallback resolveScanCallback) {
         mResolveCalls.add(broadcastUrls);
         resolveScanCallback.onPwsResults(mPwsResults.remove(0));

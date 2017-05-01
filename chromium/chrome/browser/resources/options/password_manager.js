@@ -66,6 +66,14 @@ cr.define('options', function() {
         PageManager.closeOverlay();
       };
 
+      $('password-manager-import').onclick = function() {
+        chrome.send('importPassword');
+      };
+
+      $('password-manager-export').onclick = function() {
+        chrome.send('exportPassword');
+      };
+
       $('password-search-box').addEventListener('search',
           this.handleSearchQueryChange_.bind(this));
 
@@ -101,7 +109,6 @@ cr.define('options', function() {
       options.passwordManager.PasswordsList.decorate(savedPasswordsList);
       this.savedPasswordsList_ = assertInstanceof(savedPasswordsList,
           options.DeletableItemList);
-      this.savedPasswordsList_.autoExpands = true;
     },
 
     /**
@@ -114,7 +121,6 @@ cr.define('options', function() {
           passwordExceptionsList);
       this.passwordExceptionsList_ = assertInstanceof(passwordExceptionsList,
           options.DeletableItemList);
-      this.passwordExceptionsList_.autoExpands = true;
     },
 
     /**
@@ -154,14 +160,24 @@ cr.define('options', function() {
     },
 
     /**
-     * Updates the visibility of the list and empty list placeholder.
+     * Updates the list with the given entries and updates the visibility of the
+     * list and empty list placeholder.
      * @param {!cr.ui.List} list The list to toggle visilibility for.
+     * @param {!Array} entries The list of entries.
      */
-    updateListVisibility_: function(list) {
-      var empty = list.dataModel.length == 0;
+    updateListAndVisibility_: function(list, entries) {
+      // Setting the dataModel results in a redraw of the viewport, which is why
+      // the visibility needs to be updated first. Otherwise, redraw will not
+      // render the updated entries when transitioning from a previously empty
+      // list to a non-empty one. The attribute list.hidden would be true in
+      // this case, resulting in |redraw()| not adding the new elements to the
+      // viewport and thus showing a empty list to the user
+      // (http://crbug.com/672869).
+      var empty = entries.length == 0;
       var listPlaceHolderID = list.id + '-empty-placeholder';
       list.hidden = empty;
       $(listPlaceHolderID).hidden = !empty;
+      list.dataModel = new ArrayDataModel(entries);
     },
 
     /**
@@ -176,9 +192,9 @@ cr.define('options', function() {
         var query = this.lastQuery_;
         var filter = function(entry, index, list) {
           // Search both shown URL and username.
-          var shownUrl = entry[options.passwordManager.SHOWN_URL_FIELD];
+          var shownOrigin = entry[options.passwordManager.SHOWN_ORIGIN_FIELD];
           var username = entry[options.passwordManager.USERNAME_FIELD];
-          if (shownUrl.toLowerCase().indexOf(query.toLowerCase()) >= 0 ||
+          if (shownOrigin.toLowerCase().indexOf(query.toLowerCase()) >= 0 ||
               username.toLowerCase().indexOf(query.toLowerCase()) >= 0) {
             // Keep the original index so we can delete correctly. See also
             // deleteItemAtIndex() in password_manager_list.js that uses this.
@@ -189,8 +205,7 @@ cr.define('options', function() {
         };
         entries = entries.filter(filter);
       }
-      this.savedPasswordsList_.dataModel = new ArrayDataModel(entries);
-      this.updateListVisibility_(this.savedPasswordsList_);
+      this.updateListAndVisibility_(assert(this.savedPasswordsList_), entries);
     },
 
     /**
@@ -199,8 +214,8 @@ cr.define('options', function() {
      * @param {!Array} entries The list of password exception data.
      */
     setPasswordExceptionsList_: function(entries) {
-      this.passwordExceptionsList_.dataModel = new ArrayDataModel(entries);
-      this.updateListVisibility_(this.passwordExceptionsList_);
+      this.updateListAndVisibility_(
+          assert(this.passwordExceptionsList_), entries);
     },
 
     /**
@@ -228,6 +243,11 @@ cr.define('options', function() {
       var item = this.savedPasswordsList_.getListItemByIndex(index);
       item.showPassword(password);
     },
+
+    /** @private */
+    showImportExportButton_: function() {
+      $('password-manager-import-export').hidden = false;
+    },
   };
 
   /**
@@ -235,9 +255,9 @@ cr.define('options', function() {
    * @param {number} rowIndex indicating the row to remove.
    */
   PasswordManager.removeSavedPassword = function(rowIndex) {
-      chrome.send('removeSavedPassword', [String(rowIndex)]);
-      chrome.send('coreOptionsUserMetricsAction',
-                  ['Options_PasswordManagerDeletePassword']);
+    chrome.send('removeSavedPassword', [String(rowIndex)]);
+    chrome.send('coreOptionsUserMetricsAction',
+                ['Options_PasswordManagerDeletePassword']);
   };
 
   /**
@@ -245,7 +265,7 @@ cr.define('options', function() {
    * @param {number} rowIndex indicating the row to remove.
    */
   PasswordManager.removePasswordException = function(rowIndex) {
-      chrome.send('removePasswordException', [String(rowIndex)]);
+    chrome.send('removePasswordException', [String(rowIndex)]);
   };
 
   PasswordManager.requestShowPassword = function(index) {
@@ -256,7 +276,8 @@ cr.define('options', function() {
   cr.makePublic(PasswordManager, [
     'setSavedPasswordsList',
     'setPasswordExceptionsList',
-    'showPassword'
+    'showImportExportButton',
+    'showPassword',
   ]);
 
   // Export

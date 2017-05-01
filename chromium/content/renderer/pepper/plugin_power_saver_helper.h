@@ -15,11 +15,6 @@
 #include "content/public/renderer/render_frame_observer.h"
 #include "url/origin.h"
 
-namespace blink {
-struct WebPluginParams;
-struct WebRect;
-}
-
 namespace gfx {
 class Size;
 }
@@ -37,6 +32,7 @@ class CONTENT_EXPORT PluginPowerSaverHelper : public RenderFrameObserver {
   struct PeripheralPlugin {
     PeripheralPlugin(const url::Origin& content_origin,
                      const base::Closure& unthrottle_callback);
+    PeripheralPlugin(const PeripheralPlugin& other);
     ~PeripheralPlugin();
 
     url::Origin content_origin;
@@ -49,13 +45,15 @@ class CONTENT_EXPORT PluginPowerSaverHelper : public RenderFrameObserver {
   RenderFrame::PeripheralContentStatus GetPeripheralContentStatus(
       const url::Origin& main_frame_origin,
       const url::Origin& content_origin,
-      const gfx::Size& unobscured_size) const;
+      const gfx::Size& unobscured_size,
+      RenderFrame::RecordPeripheralDecision record_decision) const;
   void WhitelistContentOrigin(const url::Origin& content_origin);
 
   // RenderFrameObserver implementation.
   void DidCommitProvisionalLoad(bool is_new_navigation,
                                 bool is_same_page_navigation) override;
   bool OnMessageReceived(const IPC::Message& message) override;
+  void OnDestruct() override;
 
   void OnUpdatePluginContentOriginWhitelist(
       const std::set<url::Origin>& origin_whitelist);

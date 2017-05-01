@@ -18,7 +18,6 @@
 class GURL;
 
 namespace base {
-class MessageLoop;
 class WaitableEvent;
 }
 
@@ -38,9 +37,8 @@ class Extension;
 
 namespace content {
 
-class RenderProcessObserver;
+class RenderThreadObserver;
 class ResourceDispatcherDelegate;
-class ServiceRegistry;
 
 class CONTENT_EXPORT RenderThread : virtual public ChildThread {
  public:
@@ -54,8 +52,7 @@ class CONTENT_EXPORT RenderThread : virtual public ChildThread {
   virtual IPC::SyncChannel* GetChannel() = 0;
   virtual std::string GetLocale() = 0;
   virtual IPC::SyncMessageFilter* GetSyncMessageFilter() = 0;
-  virtual scoped_refptr<base::SingleThreadTaskRunner>
-  GetIOMessageLoopProxy() = 0;
+  virtual scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() = 0;
 
   // Called to add or remove a listener for a particular message routing ID.
   // These methods normally get delegated to a MessageRouter.
@@ -68,39 +65,16 @@ class CONTENT_EXPORT RenderThread : virtual public ChildThread {
   virtual void RemoveFilter(IPC::MessageFilter* filter) = 0;
 
   // Add/remove observers for the process.
-  virtual void AddObserver(RenderProcessObserver* observer) = 0;
-  virtual void RemoveObserver(RenderProcessObserver* observer) = 0;
+  virtual void AddObserver(RenderThreadObserver* observer) = 0;
+  virtual void RemoveObserver(RenderThreadObserver* observer) = 0;
 
   // Set the ResourceDispatcher delegate object for this process.
   virtual void SetResourceDispatcherDelegate(
       ResourceDispatcherDelegate* delegate) = 0;
 
-  // We initialize WebKit as late as possible. Call this to force
-  // initialization.
-  virtual void EnsureWebKitInitialized() = 0;
-
-  // Sends over a base::UserMetricsAction to be recorded by user metrics as
-  // an action. Once a new user metric is added, run
-  //   tools/metrics/actions/extract_actions.py
-  // to add the metric to actions.xml, then update the <owner>s and
-  // <description> sections. Make sure to include the actions.xml file when you
-  // upload your code for review!
-  //
-  // WARNING: When using base::UserMetricsAction, base::UserMetricsAction
-  // and a string literal parameter must be on the same line, e.g.
-  //   RenderThread::Get()->RecordAction(
-  //       base::UserMetricsAction("my extremely long action name"));
-  // because otherwise our processing scripts won't pick up on new actions.
-  virtual void RecordAction(const base::UserMetricsAction& action) = 0;
-
-  // Sends over a string to be recorded by user metrics as a computed action.
-  // When you use this you need to also update the rules for extracting known
-  // actions in chrome/tools/extract_actions.py.
-  virtual void RecordComputedAction(const std::string& action) = 0;
-
   // Asks the host to create a block of shared memory for the renderer.
   // The shared memory allocated by the host is returned back.
-  virtual scoped_ptr<base::SharedMemory> HostAllocateSharedMemoryBuffer(
+  virtual std::unique_ptr<base::SharedMemory> HostAllocateSharedMemoryBuffer(
       size_t buffer_size) = 0;
 
   virtual cc::SharedBitmapManager* GetSharedBitmapManager() = 0;
@@ -119,8 +93,6 @@ class CONTENT_EXPORT RenderThread : virtual public ChildThread {
   virtual void SetIdleNotificationDelayInMs(
       int64_t idle_notification_delay_in_ms) = 0;
 
-  virtual void UpdateHistograms(int sequence_number) = 0;
-
   // Post task to all worker threads. Returns number of workers.
   virtual int PostTaskToAllWebWorkers(const base::Closure& closure) = 0;
 
@@ -132,8 +104,13 @@ class CONTENT_EXPORT RenderThread : virtual public ChildThread {
   // Gets the shutdown event for the process.
   virtual base::WaitableEvent* GetShutdownEvent() = 0;
 
-  // Returns the ServiceRegistry for this thread.
-  virtual ServiceRegistry* GetServiceRegistry() = 0;
+  // Retrieve the process ID of the browser process.
+  virtual int32_t GetClientId() = 0;
+
+  // Handles for posting tasks to appropriate renderer scheduler task queues.
+  virtual scoped_refptr<base::SingleThreadTaskRunner> GetTimerTaskRunner() = 0;
+  virtual scoped_refptr<base::SingleThreadTaskRunner>
+  GetLoadingTaskRunner() = 0;
 };
 
 }  // namespace content

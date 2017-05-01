@@ -8,8 +8,6 @@
 #include "base/macros.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 
-struct ViewHostMsg_AccessibilityNotification_Params;
-
 namespace content {
 class BrowserAccessibilityAuraLinux;
 
@@ -28,8 +26,10 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAuraLinux
   static ui::AXTreeUpdate GetEmptyDocument();
 
   // Implementation BrowserAccessibilityManager methods
-  void NotifyAccessibilityEvent(ui::AXEvent event_type,
-                                BrowserAccessibility* node) override;
+  void NotifyAccessibilityEvent(
+      BrowserAccessibilityEvent::Source source,
+      ui::AXEvent event_type,
+      BrowserAccessibility* node) override;
 
   AtkObject* parent_object() { return parent_object_; }
 

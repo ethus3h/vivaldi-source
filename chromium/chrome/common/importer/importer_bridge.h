@@ -19,6 +19,7 @@
 class GURL;
 struct ImportedBookmarkEntry;
 struct ImportedNotesEntry;
+struct ImportedSpeedDialEntry;
 struct ImporterAutofillFormDataEntry;
 
 namespace autofill {
@@ -29,7 +30,6 @@ namespace importer {
 #if defined(OS_WIN)
 struct ImporterIE7PasswordInfo;
 #endif
-struct ImporterURlRow;
 struct SearchEngineInfo;
 }
 
@@ -43,7 +43,10 @@ class ImporterBridge : public base::RefCountedThreadSafe<ImporterBridge> {
 
   virtual void AddNotes(
       const std::vector<ImportedNotesEntry>& bookmarks,
-      const base::string16& first_folder_name) = 0;
+      const base::string16& first_folder_name) {}
+
+  virtual void AddSpeedDial(
+      const std::vector<ImportedSpeedDialEntry>& speeddials) {}
 
   virtual void AddHomePage(const GURL& home_page) = 0;
 
@@ -82,6 +85,9 @@ class ImporterBridge : public base::RefCountedThreadSafe<ImporterBridge> {
   // Notifies the coordinator that the collection of data for the specified
   // item has completed.
   virtual void NotifyItemEnded(importer::ImportItem item) = 0;
+
+  virtual void NotifyItemFailed(importer::ImportItem item,
+                                const std::string& error) {};
 
   // Notifies the coordinator that the entire import operation has completed.
   virtual void NotifyEnded() = 0;

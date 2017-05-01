@@ -12,7 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
 #include "base/sys_byteorder.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/dns/address_sorter.h"
@@ -57,6 +57,13 @@ class MockTransaction : public DnsTransaction,
           (hostname.compare(0, prefix.size(), prefix) == 0)) {
         result_ = rules[i].result;
         delayed_ = rules[i].delay;
+
+        // Fill in an IP address for the result if one was not specified.
+        if (result_.ip.empty() && result_.type == MockDnsClientRule::OK) {
+          result_.ip = qtype_ == dns_protocol::kTypeA
+                           ? IPAddress::IPv4Localhost()
+                           : IPAddress::IPv6Localhost();
+        }
         break;
       }
     }
@@ -86,7 +93,7 @@ class MockTransaction : public DnsTransaction,
 
  private:
   void Finish() {
-    switch (result_) {
+    switch (result_.type) {
       case MockDnsClientRule::EMPTY:
       case MockDnsClientRule::OK: {
         std::string qname;
@@ -101,21 +108,21 @@ class MockTransaction : public DnsTransaction,
             reinterpret_cast<dns_protocol::Header*>(buffer);
         header->flags |= dns_protocol::kFlagResponse;
 
-        if (MockDnsClientRule::OK == result_) {
+        if (MockDnsClientRule::OK == result_.type) {
           const uint16_t kPointerToQueryName =
               static_cast<uint16_t>(0xc000 | sizeof(*header));
 
           const uint32_t kTTL = 86400;  // One day.
 
           // Size of RDATA which is a IPv4 or IPv6 address.
-          size_t rdata_size = qtype_ == dns_protocol::kTypeA ? kIPv4AddressSize
-                                                             : kIPv6AddressSize;
+          EXPECT_TRUE(result_.ip.IsValid());
+          size_t rdata_size = result_.ip.size();
 
           // 12 is the sum of sizes of the compressed name reference, TYPE,
           // CLASS, TTL and RDLENGTH.
           size_t answer_size = 12 + rdata_size;
 
-          // Write answer with loopback IP address.
+          // Write the answer using the expected IP address.
           header->ancount = base::HostToNet16(1);
           base::BigEndianWriter writer(buffer + nbytes, answer_size);
           writer.WriteU16(kPointerToQueryName);
@@ -123,14 +130,7 @@ class MockTransaction : public DnsTransaction,
           writer.WriteU16(dns_protocol::kClassIN);
           writer.WriteU32(kTTL);
           writer.WriteU16(static_cast<uint16_t>(rdata_size));
-          if (qtype_ == dns_protocol::kTypeA) {
-            char kIPv4Loopback[] = { 0x7f, 0, 0, 1 };
-            writer.WriteBytes(kIPv4Loopback, sizeof(kIPv4Loopback));
-          } else {
-            char kIPv6Loopback[] = { 0, 0, 0, 0, 0, 0, 0, 0,
-                                     0, 0, 0, 0, 0, 0, 0, 1 };
-            writer.WriteBytes(kIPv6Loopback, sizeof(kIPv6Loopback));
-          }
+          writer.WriteBytes(result_.ip.bytes().data(), rdata_size);
           nbytes += answer_size;
         }
         EXPECT_TRUE(response.InitParse(nbytes, query));
@@ -166,16 +166,16 @@ class MockTransactionFactory : public DnsTransactionFactory {
 
   ~MockTransactionFactory() override {}
 
-  scoped_ptr<DnsTransaction> CreateTransaction(
+  std::unique_ptr<DnsTransaction> CreateTransaction(
       const std::string& hostname,
       uint16_t qtype,
       const DnsTransactionFactory::CallbackType& callback,
-      const BoundNetLog&) override {
+      const NetLogWithSource&) override {
     MockTransaction* transaction =
         new MockTransaction(rules_, hostname, qtype, callback);
     if (transaction->delayed())
       delayed_transactions_.push_back(transaction->AsWeakPtr());
-    return scoped_ptr<DnsTransaction>(transaction);
+    return std::unique_ptr<DnsTransaction>(transaction);
   }
 
   void CompleteDelayedTransactions() {
@@ -218,6 +218,12 @@ DnsTransactionFactory* MockDnsClient::GetTransactionFactory() {
 
 AddressSorter* MockDnsClient::GetAddressSorter() {
   return address_sorter_.get();
+}
+
+void MockDnsClient::ApplyPersistentData(const base::Value& data) {}
+
+std::unique_ptr<const base::Value> MockDnsClient::GetPersistentData() const {
+  return std::unique_ptr<const base::Value>();
 }
 
 void MockDnsClient::CompleteDelayedTransactions() {

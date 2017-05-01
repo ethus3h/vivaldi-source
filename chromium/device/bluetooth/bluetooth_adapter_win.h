@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -15,18 +16,15 @@
 #include "base/containers/hash_tables.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "device/bluetooth/bluetooth_adapter.h"
-#include "device/bluetooth/bluetooth_audio_sink.h"
 #include "device/bluetooth/bluetooth_discovery_session.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/bluetooth_task_manager_win.h"
 
 namespace base {
 class SequencedTaskRunner;
-class Thread;
 }  // namespace base
 
 namespace device {
@@ -59,6 +57,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
                        const base::Closure& callback,
                        const ErrorCallback& error_callback) override;
   bool IsDiscovering() const override;
+  UUIDList GetUUIDs() const override;
   void CreateRfcommService(
       const BluetoothUUID& uuid,
       const ServiceOptions& options,
@@ -69,28 +68,31 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
       const ServiceOptions& options,
       const CreateServiceCallback& callback,
       const CreateServiceErrorCallback& error_callback) override;
-  void RegisterAudioSink(
-      const BluetoothAudioSink::Options& options,
-      const AcquiredCallback& callback,
-      const BluetoothAudioSink::ErrorCallback& error_callback) override;
   void RegisterAdvertisement(
-      scoped_ptr<BluetoothAdvertisement::Data> advertisement_data,
+      std::unique_ptr<BluetoothAdvertisement::Data> advertisement_data,
       const CreateAdvertisementCallback& callback,
-      const CreateAdvertisementErrorCallback& error_callback) override;
+      const AdvertisementErrorCallback& error_callback) override;
+  BluetoothLocalGattService* GetGattService(
+      const std::string& identifier) const override;
 
   // BluetoothTaskManagerWin::Observer override
   void AdapterStateChanged(
       const BluetoothTaskManagerWin::AdapterState& state) override;
   void DiscoveryStarted(bool success) override;
   void DiscoveryStopped() override;
-  void DevicesPolled(const ScopedVector<BluetoothTaskManagerWin::DeviceState>&
-                         devices) override;
+  void DevicesPolled(
+      const std::vector<std::unique_ptr<BluetoothTaskManagerWin::DeviceState>>&
+          devices) override;
 
   const scoped_refptr<base::SequencedTaskRunner>& ui_task_runner() const {
     return ui_task_runner_;
   }
   const scoped_refptr<BluetoothSocketThread>& socket_thread() const {
     return socket_thread_;
+  }
+
+  scoped_refptr<BluetoothTaskManagerWin> GetWinBluetoothTaskManager() {
+    return task_manager_;
   }
 
  protected:
@@ -100,6 +102,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
 
  private:
   friend class BluetoothAdapterWinTest;
+  friend class BluetoothTestWin;
 
   enum DiscoveryStatus {
     NOT_DISCOVERING,
@@ -121,7 +124,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
       const base::Closure& callback,
       const DiscoverySessionErrorCallback& error_callback) override;
   void SetDiscoveryFilter(
-      scoped_ptr<BluetoothDiscoveryFilter> discovery_filter,
+      std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
       const base::Closure& callback,
       const DiscoverySessionErrorCallback& error_callback) override;
 
@@ -151,6 +154,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
   scoped_refptr<BluetoothTaskManagerWin> task_manager_;
 
   base::ThreadChecker thread_checker_;
+
+  // Flag indicating a device update must be forced in DevicesPolled.
+  bool force_update_device_for_test_;
 
   // NOTE: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

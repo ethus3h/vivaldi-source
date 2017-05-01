@@ -5,7 +5,8 @@
 // ATL headers have to go first.
 #include <atlbase.h>
 #include <atlhost.h>
-#include <stdint.h>
+
+#include <cstdint>
 #include <string>
 
 #include "base/bind.h"
@@ -14,8 +15,10 @@
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/win/scoped_com_initializer.h"
 #include "remoting/base/auto_thread_task_runner.h"
+#include "remoting/host/screen_resolution.h"
 #include "remoting/host/win/rdp_client.h"
 #include "remoting/host/win/wts_terminal_monitor.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -31,9 +34,12 @@ namespace remoting {
 
 namespace {
 
-// Default width and hight of the RDP client window.
+// Default width, height, and dpi of the RDP client window.
 const long kDefaultWidth = 1024;
 const long kDefaultHeight = 768;
+const long kDefaultDpi = 96;
+
+const DWORD kDefaultRdpPort = 3389;
 
 class MockRdpClientEventHandler : public RdpClient::EventHandler {
  public:
@@ -93,7 +99,7 @@ class RdpClientTest : public testing::Test {
 
  protected:
   // The ATL module instance required by the ATL code.
-  scoped_ptr<RdpClientModule> module_;
+  std::unique_ptr<RdpClientModule> module_;
 
   // The UI message loop used by RdpClient. The loop is stopped once there is no
   // more references to |task_runner_|.
@@ -105,7 +111,7 @@ class RdpClientTest : public testing::Test {
   MockRdpClientEventHandler event_handler_;
 
   // Points to the object being tested.
-  scoped_ptr<RdpClient> rdp_client_;
+  std::unique_ptr<RdpClient> rdp_client_;
 
   // Unique terminal identifier passed to RdpClient.
   std::string terminal_id_;
@@ -138,8 +144,9 @@ void RdpClientTest::OnRdpConnected() {
   EXPECT_TRUE(WtsTerminalMonitor::LookupTerminalId(session_id, &id));
   EXPECT_EQ(id, terminal_id_);
 
-  message_loop_.PostTask(FROM_HERE, base::Bind(&RdpClientTest::CloseRdpClient,
-                                               base::Unretained(this)));
+  message_loop_.task_runner()->PostTask(
+      FROM_HERE,
+      base::Bind(&RdpClientTest::CloseRdpClient, base::Unretained(this)));
 }
 
 void RdpClientTest::CloseRdpClient() {
@@ -164,8 +171,9 @@ TEST_F(RdpClientTest, Basic) {
 
   rdp_client_.reset(new RdpClient(
       task_runner_, task_runner_,
-      webrtc::DesktopSize(kDefaultWidth, kDefaultHeight),
-      terminal_id_, &event_handler_));
+      ScreenResolution(webrtc::DesktopSize(kDefaultWidth, kDefaultHeight),
+                       webrtc::DesktopVector(kDefaultDpi, kDefaultDpi)),
+      terminal_id_, kDefaultRdpPort, &event_handler_));
   task_runner_ = nullptr;
 
   run_loop_.Run();

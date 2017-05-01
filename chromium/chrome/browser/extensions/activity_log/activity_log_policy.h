@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -16,7 +17,6 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/activity_log/activity_actions.h"
 #include "chrome/browser/extensions/activity_log/activity_database.h"
@@ -28,12 +28,12 @@ class Profile;
 class GURL;
 
 namespace base {
+class Clock;
 class FilePath;
 }
 
 namespace extensions {
 
-class Extension;
 
 // An abstract class for processing and summarizing activity log data.
 // Subclasses will generally store data in an SQLite database (the
@@ -80,7 +80,7 @@ class ActivityLogPolicy {
   virtual void ProcessAction(scoped_refptr<Action> action) = 0;
 
   // For unit testing only.
-  void SetClockForTesting(scoped_ptr<base::Clock> clock);
+  void SetClockForTesting(std::unique_ptr<base::Clock> clock);
 
   // A collection of methods that are useful for implementing policies.  These
   // are all static methods; the ActivityLogPolicy::Util class cannot be
@@ -120,12 +120,6 @@ class ActivityLogPolicy {
                                           int64_t* early_bound,
                                           int64_t* late_bound);
 
-    // Deletes obsolete database tables from an activity log database.  This
-    // can be used in InitDatabase() methods of ActivityLogDatabasePolicy
-    // subclasses to clean up data from old versions of the activity logging
-    // code.  Returns true on success, false on database error.
-    static bool DropObsoleteTables(sql::Connection* db);
-
    private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(Util);
   };
@@ -144,7 +138,7 @@ class ActivityLogPolicy {
   // Support for a mock clock for testing purposes.  This is used by ReadData
   // to determine the date for "today" when when interpreting date ranges to
   // fetch.  This has no effect on batching of writes to the database.
-  scoped_ptr<base::Clock> testing_clock_;
+  std::unique_ptr<base::Clock> testing_clock_;
 
   DISALLOW_COPY_AND_ASSIGN(ActivityLogPolicy);
 };
@@ -177,8 +171,8 @@ class ActivityLogDatabasePolicy : public ActivityLogPolicy,
       const std::string& page_url,
       const std::string& arg_url,
       const int days_ago,
-      const base::Callback
-         <void(scoped_ptr<Action::ActionVector>)>& callback) = 0;
+      const base::Callback<void(std::unique_ptr<Action::ActionVector>)>&
+          callback) = 0;
 
   // Remove actions (rows) which IDs are in the action_ids array.
   virtual void RemoveActions(const std::vector<int64_t>& action_ids) = 0;

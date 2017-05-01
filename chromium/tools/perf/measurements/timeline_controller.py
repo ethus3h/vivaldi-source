@@ -2,8 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from telemetry.page import action_runner
-from telemetry.page import page_test
+from telemetry.page import legacy_page_test
 from telemetry.timeline.model import TimelineModel
 from telemetry.timeline import tracing_config
 from telemetry.value import trace
@@ -15,6 +14,7 @@ RUN_SMOOTH_ACTIONS = 'RunSmoothAllActions'
 
 
 class TimelineController(object):
+
   def __init__(self, enable_auto_issuing_record=True):
     super(TimelineController, self).__init__()
     self.trace_categories = None
@@ -34,17 +34,18 @@ class TimelineController(object):
     if not tab.browser.platform.tracing_controller.IsChromeTracingSupported():
       raise Exception('Not supported')
     config = tracing_config.TracingConfig()
-    config.tracing_category_filter.AddFilterString(self.trace_categories)
+    config.chrome_trace_config.category_filter.AddFilterString(
+        self.trace_categories)
     for delay in page.GetSyntheticDelayCategories():
-      config.tracing_category_filter.AddSyntheticDelay(delay)
+      config.chrome_trace_config.category_filter.AddSyntheticDelay(
+          delay)
     config.enable_chrome_trace = True
     tab.browser.platform.tracing_controller.StartTracing(config)
 
   def Start(self, tab):
     # Start the smooth marker for all actions.
-    runner = action_runner.ActionRunner(tab)
     if self._enable_auto_issuing_record:
-      self._interaction = runner.CreateInteraction(
+      self._interaction = tab.action_runner.CreateInteraction(
           RUN_SMOOTH_ACTIONS)
       self._interaction.Begin()
 
@@ -68,13 +69,13 @@ class TimelineController(object):
       r = tir_module.TimelineInteractionRecord.FromAsyncEvent(event)
       if r.label == RUN_SMOOTH_ACTIONS:
         assert run_smooth_actions_record is None, (
-          'TimelineController cannot issue more than 1 %s record' %
-          RUN_SMOOTH_ACTIONS)
+            'TimelineController cannot issue more than 1 %s record' %
+            RUN_SMOOTH_ACTIONS)
         run_smooth_actions_record = r
       else:
         self._smooth_records.append(
-          smooth_gesture_util.GetAdjustedInteractionIfContainGesture(
-            self.model, r))
+            smooth_gesture_util.GetAdjustedInteractionIfContainGesture(
+                self.model, r))
 
     # If there is no other smooth records, we make measurements on time range
     # marked by timeline_controller itself.
@@ -84,8 +85,7 @@ class TimelineController(object):
       self._smooth_records = [run_smooth_actions_record]
 
     if len(self._smooth_records) == 0:
-      raise page_test.Failure('No interaction record was created.')
-
+      raise legacy_page_test.Failure('No interaction record was created.')
 
   def CleanUp(self, platform):
     if platform.tracing_controller.is_tracing_running:

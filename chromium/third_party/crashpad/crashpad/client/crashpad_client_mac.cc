@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
@@ -120,6 +121,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
   static base::mac::ScopedMachSendRight InitialStart(
       const base::FilePath& handler,
       const base::FilePath& database,
+      const base::FilePath& metrics_dir,
       const std::string& url,
       const std::map<std::string, std::string>& annotations,
       const std::vector<std::string>& arguments,
@@ -146,7 +148,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
     DCHECK_EQ(right_type,
               implicit_cast<mach_msg_type_name_t>(MACH_MSG_TYPE_PORT_SEND));
 
-    scoped_ptr<HandlerStarter> handler_restarter;
+    std::unique_ptr<HandlerStarter> handler_restarter;
     if (restartable) {
       handler_restarter.reset(new HandlerStarter());
       if (!handler_restarter->notify_port_.is_valid()) {
@@ -158,6 +160,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
 
     if (!CommonStart(handler,
                      database,
+                     metrics_dir,
                      url,
                      annotations,
                      arguments,
@@ -169,7 +172,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
 
     if (handler_restarter &&
         handler_restarter->StartRestartThread(
-            handler, database, url, annotations, arguments)) {
+            handler, database, metrics_dir, url, annotations, arguments)) {
       // The thread owns the object now.
       ignore_result(handler_restarter.release());
     }
@@ -200,6 +203,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
     // be called again for another try.
     CommonStart(handler_,
                 database_,
+                metrics_dir_,
                 url_,
                 annotations_,
                 arguments_,
@@ -215,6 +219,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
       : NotifyServer::DefaultInterface(),
         handler_(),
         database_(),
+        metrics_dir_(),
         url_(),
         annotations_(),
         arguments_(),
@@ -243,6 +248,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
   //!     rendezvous with it via ChildPortHandshake.
   static bool CommonStart(const base::FilePath& handler,
                           const base::FilePath& database,
+                          const base::FilePath& metrics_dir,
                           const std::string& url,
                           const std::map<std::string, std::string>& annotations,
                           const std::vector<std::string>& arguments,
@@ -318,6 +324,9 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
     }
     if (!database.value().empty()) {
       argv.push_back(FormatArgumentString("database", database.value()));
+    }
+    if (!metrics_dir.value().empty()) {
+      argv.push_back(FormatArgumentString("metrics-dir", metrics_dir.value()));
     }
     if (!url.empty()) {
       argv.push_back(FormatArgumentString("url", url));
@@ -444,11 +453,13 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
 
   bool StartRestartThread(const base::FilePath& handler,
                           const base::FilePath& database,
+                          const base::FilePath& metrics_dir,
                           const std::string& url,
                           const std::map<std::string, std::string>& annotations,
                           const std::vector<std::string>& arguments) {
     handler_ = handler;
     database_ = database;
+    metrics_dir_ = metrics_dir;
     url_ = url;
     annotations_ = annotations;
     arguments_ = arguments;
@@ -500,6 +511,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
 
   base::FilePath handler_;
   base::FilePath database_;
+  base::FilePath metrics_dir_;
   std::string url_;
   std::map<std::string, std::string> annotations_;
   std::vector<std::string> arguments_;
@@ -511,8 +523,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
 
 }  // namespace
 
-CrashpadClient::CrashpadClient()
-    : exception_port_() {
+CrashpadClient::CrashpadClient() {
 }
 
 CrashpadClient::~CrashpadClient() {
@@ -521,18 +532,19 @@ CrashpadClient::~CrashpadClient() {
 bool CrashpadClient::StartHandler(
     const base::FilePath& handler,
     const base::FilePath& database,
+    const base::FilePath& metrics_dir,
     const std::string& url,
     const std::map<std::string, std::string>& annotations,
     const std::vector<std::string>& arguments,
-    bool restartable) {
-  DCHECK(!exception_port_.is_valid());
-
+    bool restartable,
+    bool asynchronous_start) {
   // The “restartable” behavior can only be selected on OS X 10.10 and later. In
   // previous OS versions, if the initial client were to crash while attempting
   // to restart the handler, it would become an unkillable process.
   base::mac::ScopedMachSendRight exception_port(
       HandlerStarter::InitialStart(handler,
                                    database,
+                                   metrics_dir,
                                    url,
                                    annotations,
                                    arguments,
@@ -555,16 +567,10 @@ bool CrashpadClient::SetHandlerMachService(const std::string& service_name) {
   return true;
 }
 
-void CrashpadClient::SetHandlerMachPort(
+bool CrashpadClient::SetHandlerMachPort(
     base::mac::ScopedMachSendRight exception_port) {
   DCHECK(exception_port.is_valid());
-  exception_port_ = std::move(exception_port);
-}
-
-bool CrashpadClient::UseHandler() {
-  DCHECK(exception_port_.is_valid());
-
-  return SetCrashExceptionPorts(exception_port_.get());
+  return SetCrashExceptionPorts(exception_port.get());
 }
 
 // static

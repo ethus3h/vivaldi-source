@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_PRINTING_PWG_RASTER_CONVERTER_H_
 #define CHROME_BROWSER_PRINTING_PWG_RASTER_CONVERTER_H_
 
+#include <memory>
+
 #include "base/callback.h"
 #include "base/memory/ref_counted_memory.h"
 
@@ -22,7 +24,7 @@ class Size;
 
 namespace printing {
 
-class PdfRenderSettings;
+struct PdfRenderSettings;
 struct PwgRasterSettings;
 
 class PWGRasterConverter {
@@ -31,12 +33,13 @@ class PWGRasterConverter {
   // |success| denotes whether the conversion succeeded.
   // |temp_file| is the path to the temp file (owned by the converter) that
   //     contains the PWG raster data.
-  typedef base::Callback<void(bool /*success*/,
-                              const base::FilePath& /*temp_file*/)>
-          ResultCallback;
+  using ResultCallback =
+      base::Callback<void(bool /*success*/,
+                          const base::FilePath& /*temp_file*/)>;
+
   virtual ~PWGRasterConverter() {}
 
-  static scoped_ptr<PWGRasterConverter> CreateDefault();
+  static std::unique_ptr<PWGRasterConverter> CreateDefault();
 
   // Generates conversion settings to be used with converter from printer
   // capabilities and page size.

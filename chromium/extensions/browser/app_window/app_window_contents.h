@@ -7,8 +7,9 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "url/gurl.h"
@@ -32,11 +33,12 @@ class AppWindowContentsImpl : public AppWindowContents,
   ~AppWindowContentsImpl() override;
 
   // AppWindowContents
-  void Initialize(content::BrowserContext* context, const GURL& url) override;
+  void Initialize(content::BrowserContext* context,
+                  content::RenderFrameHost* creator_frame,
+                  const GURL& url) override;
   void LoadContents(int32_t creator_process_id) override;
   void NativeWindowChanged(NativeAppWindow* native_app_window) override;
   void NativeWindowClosed() override;
-  void DispatchWindowShownForTests() const override;
   void OnWindowReady() override;
   content::WebContents* GetWebContents() const override;
   WindowController* GetWindowController() const override;
@@ -51,7 +53,7 @@ class AppWindowContentsImpl : public AppWindowContents,
 
   AppWindow* host_;  // This class is owned by |host_|
   GURL url_;
-  scoped_ptr<content::WebContents> web_contents_;
+  std::unique_ptr<content::WebContents> web_contents_;
   bool is_blocking_requests_;
   bool is_window_ready_;
 

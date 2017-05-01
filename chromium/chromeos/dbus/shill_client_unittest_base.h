@@ -7,10 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
 #include "chromeos/dbus/shill_client_helper.h"
@@ -53,7 +53,7 @@ class ValueMatcher : public MatcherInterface<const base::Value&> {
   void DescribeNegationTo(::std::ostream* os) const override;
 
  private:
-  scoped_ptr<base::Value> expected_value_;
+  std::unique_ptr<base::Value> expected_value_;
 };
 
 inline Matcher<const base::Value&> ValueEq(const base::Value& expected_value) {
@@ -63,33 +63,6 @@ inline Matcher<const base::Value&> ValueEq(const base::Value& expected_value) {
 // A class to provide functionalities needed for testing Shill D-Bus clients.
 class ShillClientUnittestBase : public testing::Test {
  public:
-  // A mock Closure.
-  class MockClosure {
-   public:
-    MockClosure();
-    ~MockClosure();
-    MOCK_METHOD0(Run, void());
-    base::Closure GetCallback();
-  };
-
-  class MockListValueCallback {
-   public:
-    MockListValueCallback();
-    ~MockListValueCallback();
-    MOCK_METHOD1(Run, void(const base::ListValue& list));
-    ShillClientHelper::ListValueCallback GetCallback();
-  };
-
-  // A mock ErrorCallback.
-  class MockErrorCallback {
-   public:
-    MockErrorCallback();
-    ~MockErrorCallback();
-    MOCK_METHOD2(Run, void(const std::string& error_name,
-                           const std::string& error_message));
-    ShillClientHelper::ErrorCallback GetCallback();
-  };
-
   // A mock PropertyChangedObserver that can be used to check expected values.
   class MockPropertyChangeObserver
       : public ShillPropertyChangedObserver {

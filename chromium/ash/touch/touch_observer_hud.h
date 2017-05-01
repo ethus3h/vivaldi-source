@@ -10,13 +10,10 @@
 #include "ash/ash_export.h"
 #include "ash/display/window_tree_host_manager.h"
 #include "base/macros.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/manager/chromeos/display_configurator.h"
 #include "ui/events/event_handler.h"
-#include "ui/gfx/display_observer.h"
 #include "ui/views/widget/widget_observer.h"
-
-#if defined(OS_CHROMEOS)
-#include "ui/display/chromeos/display_configurator.h"
-#endif  // defined(OS_CHROMEOS)
 
 namespace views {
 class Widget;
@@ -26,13 +23,12 @@ namespace ash {
 
 // An event filter which handles system level gesture events. Objects of this
 // class manage their own lifetime.
-class ASH_EXPORT TouchObserverHUD : public ui::EventHandler,
-                                    public views::WidgetObserver,
-                                    public gfx::DisplayObserver,
-#if defined(OS_CHROMEOS)
-                                    public ui::DisplayConfigurator::Observer,
-#endif  // defined(OS_CHROMEOS)
-                                    public WindowTreeHostManager::Observer {
+class ASH_EXPORT TouchObserverHUD
+    : public ui::EventHandler,
+      public views::WidgetObserver,
+      public display::DisplayObserver,
+      public display::DisplayConfigurator::Observer,
+      public WindowTreeHostManager::Observer {
  public:
   // Called to clear touch points and traces from the screen. Default
   // implementation does nothing. Sub-classes should implement appropriately.
@@ -61,17 +57,15 @@ class ASH_EXPORT TouchObserverHUD : public ui::EventHandler,
   // Overridden from views::WidgetObserver.
   void OnWidgetDestroying(views::Widget* widget) override;
 
-  // Overridden from gfx::DisplayObserver.
-  void OnDisplayAdded(const gfx::Display& new_display) override;
-  void OnDisplayRemoved(const gfx::Display& old_display) override;
-  void OnDisplayMetricsChanged(const gfx::Display& display,
+  // Overridden from display::DisplayObserver.
+  void OnDisplayAdded(const display::Display& new_display) override;
+  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t metrics) override;
 
-#if defined(OS_CHROMEOS)
-  // Overriden from ui::DisplayConfigurator::Observer.
+  // Overriden from display::DisplayConfigurator::Observer.
   void OnDisplayModeChanged(
-      const ui::DisplayConfigurator::DisplayStateList& outputs) override;
-#endif  // defined(OS_CHROMEOS)
+      const display::DisplayConfigurator::DisplayStateList& outputs) override;
 
   // Overriden form WindowTreeHostManager::Observer.
   void OnDisplaysInitialized() override;

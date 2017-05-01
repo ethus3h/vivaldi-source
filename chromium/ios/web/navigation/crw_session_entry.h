@@ -8,7 +8,8 @@
 #import <Foundation/Foundation.h>
 #include <stdint.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "ui/base/page_transition_types.h"
@@ -17,7 +18,6 @@
 namespace web {
 class NavigationItem;
 class NavigationItemImpl;
-struct Referrer;
 
 // Keys used to serialize web::PageScrollState properties.
 extern NSString* const kSessionEntryPageScrollStateKey;
@@ -58,7 +58,9 @@ extern NSString* const kSessionEntryUseDesktopUserAgentKey;
 // It maintains the information needed to save/restore a single entry in session
 // history (i.e., one site) for a tab. A tab may have multiple of these objects
 // comprising its entire session history.
-// TODO(rohitrao): Fold CRWSessionEntry's logic into NavigationItem.
+// DEPRECATED, do not use this class and do not add any methods to it.
+// Use web::NavigationItem instead.
+// TODO(crbug.com/454984): Remove this class.
 @interface CRWSessionEntry : NSObject<NSCoding, NSCopying>
 
 @property(nonatomic, readonly) const GURL& originalUrl;
@@ -71,7 +73,8 @@ extern NSString* const kSessionEntryUseDesktopUserAgentKey;
 @property(nonatomic, readonly) web::NavigationItemImpl* navigationItemImpl;
 
 // Initialize the session entry with the given NavigationItem.
-- (instancetype)initWithNavigationItem:(scoped_ptr<web::NavigationItem>)item;
+- (instancetype)initWithNavigationItem:
+    (std::unique_ptr<web::NavigationItem>)item;
 
 @end
 

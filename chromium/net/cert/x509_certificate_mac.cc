@@ -16,7 +16,6 @@
 #include "base/mac/scoped_cftyperef.h"
 #include "base/memory/singleton.h"
 #include "base/pickle.h"
-#include "base/sha1.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/synchronization/lock.h"
@@ -28,6 +27,11 @@ using base::ScopedCFTypeRef;
 using base::Time;
 
 namespace net {
+
+// CSSM functions are deprecated as of OSX 10.7, but have no replacement.
+// https://bugs.chromium.org/p/chromium/issues/detail?id=590914#c1
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 namespace {
 
@@ -211,9 +215,6 @@ void X509Certificate::Initialize() {
                       &valid_expiry_);
     serial_number_ = GetCertSerialNumber(cached_cert);
   }
-
-  fingerprint_ = CalculateFingerprint(cert_handle_);
-  ca_fingerprint_ = CalculateCAFingerprint(intermediate_ca_certs_);
 }
 
 bool X509Certificate::IsIssuedByEncoded(
@@ -358,25 +359,6 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
 }
 
 // static
-SHA1HashValue X509Certificate::CalculateFingerprint(
-    OSCertHandle cert) {
-  SHA1HashValue sha1;
-  memset(sha1.data, 0, sizeof(sha1.data));
-
-  CSSM_DATA cert_data;
-  OSStatus status = SecCertificateGetData(cert, &cert_data);
-  if (status)
-    return sha1;
-
-  DCHECK(cert_data.Data);
-  DCHECK_NE(cert_data.Length, 0U);
-
-  CC_SHA1(cert_data.Data, cert_data.Length, sha1.data);
-
-  return sha1;
-}
-
-// static
 SHA256HashValue X509Certificate::CalculateFingerprint256(OSCertHandle cert) {
   SHA256HashValue sha256;
   memset(sha256.data, 0, sizeof(sha256.data));
@@ -395,25 +377,25 @@ SHA256HashValue X509Certificate::CalculateFingerprint256(OSCertHandle cert) {
 }
 
 // static
-SHA1HashValue X509Certificate::CalculateCAFingerprint(
+SHA256HashValue X509Certificate::CalculateCAFingerprint256(
     const OSCertHandles& intermediates) {
-  SHA1HashValue sha1;
-  memset(sha1.data, 0, sizeof(sha1.data));
+  SHA256HashValue sha256;
+  memset(sha256.data, 0, sizeof(sha256.data));
 
-  // The CC_SHA(3cc) man page says all CC_SHA1_xxx routines return 1, so
+  // The CC_SHA(3cc) man page says all CC_SHA256_xxx routines return 1, so
   // we don't check their return values.
-  CC_SHA1_CTX sha1_ctx;
-  CC_SHA1_Init(&sha1_ctx);
+  CC_SHA256_CTX sha256_ctx;
+  CC_SHA256_Init(&sha256_ctx);
   CSSM_DATA cert_data;
   for (size_t i = 0; i < intermediates.size(); ++i) {
     OSStatus status = SecCertificateGetData(intermediates[i], &cert_data);
     if (status)
-      return sha1;
-    CC_SHA1_Update(&sha1_ctx, cert_data.Data, cert_data.Length);
+      return sha256;
+    CC_SHA256_Update(&sha256_ctx, cert_data.Data, cert_data.Length);
   }
-  CC_SHA1_Final(sha1.data, &sha1_ctx);
+  CC_SHA256_Final(sha256.data, &sha256_ctx);
 
-  return sha1;
+  return sha256;
 }
 
 bool X509Certificate::SupportsSSLClientAuth() const {
@@ -536,6 +518,43 @@ void X509Certificate::GetPublicKeyInfo(OSCertHandle cert_handle,
   }
 }
 
+X509Certificate::SignatureHashAlgorithm
+X509Certificate::GetSignatureHashAlgorithm(OSCertHandle cert_handle) {
+  x509_util::CSSMCachedCertificate cached_cert;
+  OSStatus status = cached_cert.Init(cert_handle);
+  if (status)
+    return kSignatureHashAlgorithmOther;
+
+  x509_util::CSSMFieldValue signature_field;
+  status =
+      cached_cert.GetField(&CSSMOID_X509V1SignatureAlgorithm, &signature_field);
+  if (status || !signature_field.field())
+    return kSignatureHashAlgorithmOther;
+
+  const CSSM_X509_ALGORITHM_IDENTIFIER* sig_algorithm =
+      signature_field.GetAs<CSSM_X509_ALGORITHM_IDENTIFIER>();
+  if (!sig_algorithm)
+    return kSignatureHashAlgorithmOther;
+
+  const CSSM_OID* alg_oid = &sig_algorithm->algorithm;
+  if (CSSMOIDEqual(alg_oid, &CSSMOID_MD2WithRSA))
+    return kSignatureHashAlgorithmMd2;
+  if (CSSMOIDEqual(alg_oid, &CSSMOID_MD4WithRSA))
+    return kSignatureHashAlgorithmMd4;
+  if (CSSMOIDEqual(alg_oid, &CSSMOID_MD5WithRSA))
+    return kSignatureHashAlgorithmMd5;
+  if (CSSMOIDEqual(alg_oid, &CSSMOID_SHA1WithRSA) ||
+      CSSMOIDEqual(alg_oid, &CSSMOID_SHA1WithRSA_OIW) ||
+      CSSMOIDEqual(alg_oid, &CSSMOID_SHA1WithDSA) ||
+      CSSMOIDEqual(alg_oid, &CSSMOID_SHA1WithDSA_CMS) ||
+      CSSMOIDEqual(alg_oid, &CSSMOID_SHA1WithDSA_JDK) ||
+      CSSMOIDEqual(alg_oid, &CSSMOID_ECDSA_WithSHA1)) {
+    return kSignatureHashAlgorithmSha1;
+  }
+
+  return kSignatureHashAlgorithmOther;
+}
+
 // static
 bool X509Certificate::IsSelfSigned(OSCertHandle cert_handle) {
   x509_util::CSSMCachedCertificate cached_cert;
@@ -572,5 +591,7 @@ bool X509Certificate::IsSelfSigned(OSCertHandle cert_handle) {
     return false;
   return true;
 }
+
+#pragma clang diagnostic pop  // "-Wdeprecated-declarations"
 
 }  // namespace net

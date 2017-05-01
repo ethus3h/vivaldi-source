@@ -7,10 +7,11 @@
 
 #include <stddef.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "content/browser/renderer_host/input/input_router_client.h"
-#include "content/common/input/did_overscroll_params.h"
 #include "content/common/input/input_event.h"
+#include "ui/events/blink/did_overscroll_params.h"
 
 namespace content {
 
@@ -25,16 +26,20 @@ class MockInputRouterClient : public InputRouterClient {
   InputEventAckState FilterInputEvent(
       const blink::WebInputEvent& input_event,
       const ui::LatencyInfo& latency_info) override;
-  void IncrementInFlightEventCount() override;
-  void DecrementInFlightEventCount() override;
+  void IncrementInFlightEventCount(
+      blink::WebInputEvent::Type event_type) override;
+  void DecrementInFlightEventCount(InputEventAckSource ack_source) override;
   void OnHasTouchEventHandlers(bool has_handlers) override;
   void DidFlush() override;
-  void DidOverscroll(const DidOverscrollParams& params) override;
+  void DidOverscroll(const ui::DidOverscrollParams& params) override;
   void DidStopFlinging() override;
+  void ForwardGestureEventWithLatencyInfo(
+      const blink::WebGestureEvent& gesture_event,
+      const ui::LatencyInfo& latency_info) override;
 
   bool GetAndResetFilterEventCalled();
   size_t GetAndResetDidFlushCount();
-  DidOverscrollParams GetAndResetOverscroll();
+  ui::DidOverscrollParams GetAndResetOverscroll();
 
   void set_input_router(InputRouter* input_router) {
     input_router_ = input_router;
@@ -62,11 +67,11 @@ class MockInputRouterClient : public InputRouterClient {
   InputEventAckState filter_state_;
 
   bool filter_input_event_called_;
-  scoped_ptr<InputEvent> last_filter_event_;
+  std::unique_ptr<InputEvent> last_filter_event_;
 
   size_t did_flush_called_count_;
 
-  DidOverscrollParams overscroll_;
+  ui::DidOverscrollParams overscroll_;
 };
 
 }  // namespace content

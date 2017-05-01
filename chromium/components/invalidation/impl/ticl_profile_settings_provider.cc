@@ -7,11 +7,13 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/prefs/pref_service.h"
 #include "components/gcm_driver/gcm_channel_status_syncer.h"
 #include "components/invalidation/impl/invalidation_prefs.h"
 #include "components/invalidation/impl/invalidation_switches.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
+
+#include "app/vivaldi_apptools.h"
 
 namespace invalidation {
 
@@ -31,6 +33,11 @@ TiclProfileSettingsProvider::TiclProfileSettingsProvider(PrefService* prefs)
 TiclProfileSettingsProvider::~TiclProfileSettingsProvider() {}
 
 bool TiclProfileSettingsProvider::UseGCMChannel() const {
+#if defined(VIVALDI_BUILD)
+  if (vivaldi::IsVivaldiRunning())
+    return false;
+#endif
+
   if (prefs_->GetBoolean(prefs::kInvalidationServiceUseGCMChannel)) {
     // Use GCM channel if it was enabled via prefs.
     return true;

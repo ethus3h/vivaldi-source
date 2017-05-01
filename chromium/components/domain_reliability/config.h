@@ -5,12 +5,12 @@
 #ifndef COMPONENTS_DOMAIN_RELIABILITY_CONFIG_H_
 #define COMPONENTS_DOMAIN_RELIABILITY_CONFIG_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/json/json_value_converter.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -27,10 +27,11 @@ struct DOMAIN_RELIABILITY_EXPORT DomainReliabilityConfig {
   ~DomainReliabilityConfig();
 
   // Uses the JSONValueConverter to parse the JSON for a config into a struct.
-  static scoped_ptr<const DomainReliabilityConfig> FromJSON(
+  static std::unique_ptr<const DomainReliabilityConfig> FromJSON(
       const base::StringPiece& json);
 
   bool IsValid() const;
+  bool Equals(const DomainReliabilityConfig& other) const;
 
   double GetSampleRate(bool request_successful) const;
 
@@ -41,11 +42,11 @@ struct DOMAIN_RELIABILITY_EXPORT DomainReliabilityConfig {
 
   GURL origin;
   bool include_subdomains;
-  ScopedVector<GURL> collectors;
+  std::vector<std::unique_ptr<GURL>> collectors;
 
   double success_sample_rate;
   double failure_sample_rate;
-  ScopedVector<std::string> path_prefixes;
+  std::vector<std::unique_ptr<std::string>> path_prefixes;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DomainReliabilityConfig);

@@ -6,10 +6,12 @@
 
 #include "content/common/database_messages.h"
 #include "ipc/ipc_sync_message_filter.h"
+#include "third_party/WebKit/public/platform/WebSecurityOrigin.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/sqlite/sqlite3.h"
 
 using blink::Platform;
+using blink::WebSecurityOrigin;
 using blink::WebString;
 
 namespace content {
@@ -22,7 +24,7 @@ Platform::FileHandle DatabaseUtil::DatabaseOpenFile(
       IPC::InvalidPlatformFileForTransit();
 
   sync_message_filter->Send(new DatabaseHostMsg_OpenFile(
-      vfs_file_name, desired_flags, &file_handle));
+      vfs_file_name.utf16(), desired_flags, &file_handle));
 
   return IPC::PlatformFileForTransitToPlatformFile(file_handle);
 }
@@ -33,7 +35,7 @@ int DatabaseUtil::DatabaseDeleteFile(
     IPC::SyncMessageFilter* sync_message_filter) {
   int rv = SQLITE_IOERR_DELETE;
   sync_message_filter->Send(
-      new DatabaseHostMsg_DeleteFile(vfs_file_name, sync_dir, &rv));
+      new DatabaseHostMsg_DeleteFile(vfs_file_name.utf16(), sync_dir, &rv));
   return rv;
 }
 
@@ -42,7 +44,7 @@ long DatabaseUtil::DatabaseGetFileAttributes(
     IPC::SyncMessageFilter* sync_message_filter) {
   int32_t rv = -1;
   sync_message_filter->Send(
-      new DatabaseHostMsg_GetFileAttributes(vfs_file_name, &rv));
+      new DatabaseHostMsg_GetFileAttributes(vfs_file_name.utf16(), &rv));
   return rv;
 }
 
@@ -51,16 +53,15 @@ long long DatabaseUtil::DatabaseGetFileSize(
     IPC::SyncMessageFilter* sync_message_filter) {
   int64_t rv = 0LL;
   sync_message_filter->Send(
-      new DatabaseHostMsg_GetFileSize(vfs_file_name, &rv));
+      new DatabaseHostMsg_GetFileSize(vfs_file_name.utf16(), &rv));
   return rv;
 }
 
 long long DatabaseUtil::DatabaseGetSpaceAvailable(
-    const WebString& origin_identifier,
+    const WebSecurityOrigin& origin,
     IPC::SyncMessageFilter* sync_message_filter) {
   int64_t rv = 0LL;
-  sync_message_filter->Send(
-      new DatabaseHostMsg_GetSpaceAvailable(origin_identifier.utf8(), &rv));
+  sync_message_filter->Send(new DatabaseHostMsg_GetSpaceAvailable(origin, &rv));
   return rv;
 }
 
@@ -70,7 +71,7 @@ bool DatabaseUtil::DatabaseSetFileSize(
     IPC::SyncMessageFilter* sync_message_filter) {
   bool rv = false;
   sync_message_filter->Send(
-      new DatabaseHostMsg_SetFileSize(vfs_file_name, size, &rv));
+      new DatabaseHostMsg_SetFileSize(vfs_file_name.utf16(), size, &rv));
   return rv;
 }
 

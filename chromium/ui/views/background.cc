@@ -38,56 +38,34 @@ class SolidBackground : public Background {
 
 class BackgroundPainter : public Background {
  public:
-  BackgroundPainter(bool owns_painter, Painter* painter)
-      : owns_painter_(owns_painter), painter_(painter) {
-    DCHECK(painter);
+  explicit BackgroundPainter(std::unique_ptr<Painter> painter)
+      : painter_(std::move(painter)) {
+    DCHECK(painter_);
   }
 
-  ~BackgroundPainter() override {
-    if (owns_painter_)
-      delete painter_;
-  }
+  ~BackgroundPainter() override {}
 
   void Paint(gfx::Canvas* canvas, View* view) const override {
-    Painter::PaintPainterAt(canvas, painter_, view->GetLocalBounds());
+    Painter::PaintPainterAt(canvas, painter_.get(), view->GetLocalBounds());
   }
 
  private:
-  bool owns_painter_;
-  Painter* painter_;
+  std::unique_ptr<Painter> painter_;
 
   DISALLOW_COPY_AND_ASSIGN(BackgroundPainter);
 };
 
 Background::Background()
     : color_(SK_ColorWHITE)
-#if defined(OS_WIN)
-    , native_control_brush_(NULL)
-#endif
 {
 }
 
 Background::~Background() {
-#if defined(OS_WIN)
-  DeleteObject(native_control_brush_);
-#endif
 }
 
 void Background::SetNativeControlColor(SkColor color) {
   color_ = color;
-#if defined(OS_WIN)
-  DeleteObject(native_control_brush_);
-  native_control_brush_ = NULL;
-#endif
 }
-
-#if defined(OS_WIN)
-HBRUSH Background::GetNativeControlBrush() const {
-  if (!native_control_brush_)
-    native_control_brush_ = CreateSolidBrush(skia::SkColorToCOLORREF(color_));
-  return native_control_brush_;
-}
-#endif
 
 // static
 Background* Background::CreateSolidBackground(SkColor color) {
@@ -103,8 +81,8 @@ Background* Background::CreateStandardPanelBackground() {
 // static
 Background* Background::CreateVerticalGradientBackground(SkColor color1,
                                                          SkColor color2) {
-  Background* background = CreateBackgroundPainter(
-      true, Painter::CreateVerticalGradient(color1, color2));
+  Background* background =
+      CreateBackgroundPainter(Painter::CreateVerticalGradient(color1, color2));
   background->SetNativeControlColor(
       color_utils::AlphaBlend(color1, color2, 128));
 
@@ -112,22 +90,9 @@ Background* Background::CreateVerticalGradientBackground(SkColor color1,
 }
 
 // static
-Background* Background::CreateVerticalMultiColorGradientBackground(
-    SkColor* colors,
-    SkScalar* pos,
-    size_t count) {
-  Background* background = CreateBackgroundPainter(
-      true, Painter::CreateVerticalMultiColorGradient(colors, pos, count));
-  background->SetNativeControlColor(
-      color_utils::AlphaBlend(colors[0], colors[count-1], 128));
-
-  return background;
-}
-
-// static
-Background* Background::CreateBackgroundPainter(bool owns_painter,
-                                                Painter* painter) {
-  return new BackgroundPainter(owns_painter, painter);
+Background* Background::CreateBackgroundPainter(
+    std::unique_ptr<Painter> painter) {
+  return new BackgroundPainter(std::move(painter));
 }
 
 }  // namespace views

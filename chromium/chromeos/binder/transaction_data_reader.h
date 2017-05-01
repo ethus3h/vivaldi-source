@@ -65,10 +65,14 @@ class CHROMEOS_EXPORT TransactionDataReader {
   // Reads an object. Returns null on failure.
   // |command_broker| will be used for object ref-count operations.
   scoped_refptr<Object> ReadObject(CommandBroker* command_broker);
-  // TODO(hashimoto): Support more types (i.e. strings, FDs, objects).
+
+  // Reads a file descriptor.
+  // The file descriptor is owned by the TransactionData, and it will be closed
+  // when the TransactionData gets destroyed. You should duplicate the FD (e.g.
+  // by calling dup()) to keep owning it.
+  bool ReadFileDescriptor(int* fd);
 
  private:
-  const TransactionData& data_;
   BufferReader reader_;
 
   DISALLOW_COPY_AND_ASSIGN(TransactionDataReader);

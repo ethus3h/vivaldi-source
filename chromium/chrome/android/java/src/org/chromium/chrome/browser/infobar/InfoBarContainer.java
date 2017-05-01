@@ -7,13 +7,13 @@ package org.chromium.chrome.browser.infobar;
 import android.content.Context;
 import android.view.Gravity;
 import android.view.View;
-import android.view.View.OnLayoutChangeListener;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import org.chromium.base.ObserverList;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.banners.SwipableOverlayView;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
@@ -78,34 +78,13 @@ public class InfoBarContainer extends SwipableOverlayView {
          * @param isLast Whether the infobar container is going to be empty
          */
         void onRemoveInfoBar(InfoBarContainer container, InfoBar infoBar, boolean isLast);
-    }
 
-    /** Toggles visibility of the InfoBarContainer when the keyboard appears. */
-    private OnLayoutChangeListener mParentLayoutListener = new OnLayoutChangeListener() {
-        @Override
-        public void onLayoutChange(View v, int left, int top, int right, int bottom, int oldLeft,
-                int oldTop, int oldRight, int oldBottom) {
-            // This check is posted because this is triggered during the layout pass of the parent.
-            // Setting the visibility on this View (its child) immediately results in Android giving
-            // warnings about triggering another layout (via setVisibility) during the current one.
-            post(new Runnable() {
-                @Override
-                public void run() {
-                    // Hide the View when the keyboard is showing.
-                    boolean isShowing = (getVisibility() == View.VISIBLE);
-                    if (UiUtils.isKeyboardShowing(getContext(), InfoBarContainer.this)) {
-                        if (isShowing) {
-                            setVisibility(View.GONE);
-                        }
-                    } else {
-                        if (!isShowing && !mIsObscured) {
-                            setVisibility(View.VISIBLE);
-                        }
-                    }
-                }
-            });
-        }
-    };
+        /**
+         * Called when the InfobarContainer is attached to the window.
+         * @param hasInfobars True if infobar container has infobars to show.
+         */
+        void onInfoBarContainerAttachedToWindow(boolean hasInfobars);
+    }
 
     /** Resets the state of the InfoBarContainer when the user navigates. */
     private final TabObserver mTabObserver = new EmptyTabObserver() {
@@ -114,6 +93,35 @@ public class InfoBarContainer extends SwipableOverlayView {
                 boolean isNavigationToDifferentPage, boolean isFragmentNavigation,
                 int statusCode) {
             setIsObscuredByOtherView(false);
+        }
+
+        @Override
+        public void onContentChanged(Tab tab) {
+            mTabView.removeOnAttachStateChangeListener(mAttachedStateListener);
+            mTabView = tab.getView();
+            mTabView.addOnAttachStateChangeListener(mAttachedStateListener);
+        }
+
+        @Override
+        public void onReparentingFinished(Tab tab) {
+            setParentView((ViewGroup) tab.getActivity().findViewById(R.id.bottom_container));
+        }
+    };
+
+    /**
+     * Adds/removes the {@link InfoBarContainer} when the tab's view is attached/detached. This is
+     * mostly to ensure the infobars are not shown in tab switcher overview mode.
+     */
+    private final OnAttachStateChangeListener mAttachedStateListener =
+            new OnAttachStateChangeListener() {
+        @Override
+        public void onViewDetachedFromWindow(View v) {
+            removeFromParentView();
+        }
+
+        @Override
+        public void onViewAttachedToWindow(View v) {
+            addToParentView();
         }
     };
 
@@ -126,13 +134,13 @@ public class InfoBarContainer extends SwipableOverlayView {
     private final ArrayList<InfoBar> mInfoBars = new ArrayList<InfoBar>();
 
     /** True when this container has been emptied and its native counterpart has been destroyed. */
-    private boolean mDestroyed = false;
-
-    /** The id of the tab associated with us. Set to Tab.INVALID_TAB_ID if no tab is associated. */
-    private int mTabId;
+    private boolean mDestroyed;
 
     /** Parent view that contains the InfoBarContainerLayout. */
     private ViewGroup mParentView;
+
+    /** The view that {@link Tab#getView()} returns. */
+    private View mTabView;
 
     /** Whether or not another View is occupying the same space as this one. */
     private boolean mIsObscured;
@@ -140,9 +148,10 @@ public class InfoBarContainer extends SwipableOverlayView {
     private final ObserverList<InfoBarContainerObserver> mObservers =
             new ObserverList<InfoBarContainerObserver>();
 
-    public InfoBarContainer(Context context, int tabId, ViewGroup parentView, Tab tab) {
+    public InfoBarContainer(Context context, final ViewGroup parentView, Tab tab) {
         super(context, null);
         tab.addObserver(mTabObserver);
+        mTabView = tab.getView();
 
         // TODO(newt): move this workaround into the infobar views if/when they're scrollable.
         // Workaround for http://crbug.com/407149. See explanation in onMeasure() below.
@@ -155,11 +164,11 @@ public class InfoBarContainer extends SwipableOverlayView {
         lp.topMargin = Math.round(topMarginDp * getResources().getDisplayMetrics().density);
         setLayoutParams(lp);
 
-        mTabId = tabId;
         mParentView = parentView;
 
         mLayout = new InfoBarContainerLayout(context);
-        addView(mLayout);
+        addView(mLayout, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT,
+                LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
 
         // Chromium's InfoBarContainer may add an InfoBar immediately during this initialization
         // call, so make sure everything in the InfoBarContainer is completely ready beforehand.
@@ -190,6 +199,15 @@ public class InfoBarContainer extends SwipableOverlayView {
         }
     }
 
+    /**
+     * Sets the parent {@link ViewGroup} that contains the {@link InfoBarContainer}.
+     */
+    public void setParentView(ViewGroup parent) {
+        mParentView = parent;
+        removeFromParentView();
+        addToParentView();
+    }
+
     @VisibleForTesting
     public void setAnimationListener(InfoBarAnimationListener listener) {
         mLayout.setAnimationListener(listener);
@@ -205,29 +223,6 @@ public class InfoBarContainer extends SwipableOverlayView {
 
     private void addToParentView() {
         super.addToParentView(mParentView);
-        if (mParentView != null) {
-            mParentView.addOnLayoutChangeListener(mParentLayoutListener);
-        }
-    }
-
-    /**
-     * Called when the parent {@link android.view.ViewGroup} has changed for
-     * this container.
-     */
-    public void onParentViewChanged(int tabId, ViewGroup parentView) {
-        mTabId = tabId;
-        mParentView = parentView;
-
-        removeFromParentView();
-        addToParentView();
-    }
-
-    @Override
-    public boolean removeFromParentView() {
-        if (mParentView != null) {
-            mParentView.addOnLayoutChangeListener(mParentLayoutListener);
-        }
-        return super.removeFromParentView();
     }
 
     /**
@@ -235,7 +230,7 @@ public class InfoBarContainer extends SwipableOverlayView {
      * @param infoBar InfoBar to add to the View hierarchy.
      */
     @CalledByNative
-    public void addInfoBar(InfoBar infoBar) {
+    private void addInfoBar(InfoBar infoBar) {
         assert !mDestroyed;
         if (infoBar == null) {
             return;
@@ -244,7 +239,6 @@ public class InfoBarContainer extends SwipableOverlayView {
             assert false : "Trying to add an info bar that has already been added.";
             return;
         }
-        addToParentView();
 
         // We notify observers immediately (before the animation starts).
         for (InfoBarContainerObserver observer : mObservers) {
@@ -272,10 +266,11 @@ public class InfoBarContainer extends SwipableOverlayView {
     }
 
     /**
-     * Removes an InfoBar from the view hierarchy.
+     * Called by {@link InfoBar} to remove itself from the view hierarchy.
+     *
      * @param infoBar InfoBar to remove from the View hierarchy.
      */
-    public void removeInfoBar(InfoBar infoBar) {
+    void removeInfoBar(InfoBar infoBar) {
         assert !mDestroyed;
 
         if (!mInfoBars.remove(infoBar)) {
@@ -299,21 +294,6 @@ public class InfoBarContainer extends SwipableOverlayView {
         return mDestroyed;
     }
 
-    // Called by the tab when it has started loading a new page.
-    public void onPageStarted() {
-        ArrayList<InfoBar> barsToRemove = new ArrayList<>();
-
-        for (InfoBar infoBar : mInfoBars) {
-            if (infoBar.shouldExpire()) {
-                barsToRemove.add(infoBar);
-            }
-        }
-
-        for (InfoBar infoBar : barsToRemove) {
-            infoBar.dismissJavaOnlyInfoBar();
-        }
-    }
-
     public void destroy() {
         mDestroyed = true;
         if (mNativeInfoBarContainer != 0) {
@@ -327,6 +307,24 @@ public class InfoBarContainer extends SwipableOverlayView {
     @VisibleForTesting
     public ArrayList<InfoBar> getInfoBarsForTesting() {
         return mInfoBars;
+    }
+
+    /**
+     * @return True if the container has any InfoBars.
+     */
+    @CalledByNative
+    public boolean hasInfoBars() {
+        return !mInfoBars.isEmpty();
+    }
+
+    /**
+     * @return Pointer to the native InfoBarAndroid object which is currently at the top of the
+     *         infobar stack, or 0 if there are no infobars.
+     */
+    @CalledByNative
+    private long getTopNativeInfoBarPtr() {
+        if (!hasInfoBars()) return 0;
+        return mInfoBars.get(0).getNativeInfoBarPtr();
     }
 
     /**
@@ -367,6 +365,29 @@ public class InfoBarContainer extends SwipableOverlayView {
             setAlpha(0f);
             animate().alpha(1f).setDuration(REATTACH_FADE_IN_MS);
         }
+        // Notify observers that the container has attached to the window.
+        for (InfoBarContainerObserver observer : mObservers) {
+            observer.onInfoBarContainerAttachedToWindow(!mInfoBars.isEmpty());
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        // Hide the View when the keyboard is showing.
+        boolean isShowing = (getVisibility() == View.VISIBLE);
+        if (UiUtils.isKeyboardShowing(getContext(), InfoBarContainer.this)) {
+            if (isShowing) {
+                // Set to invisible (instead of gone) so that onLayout() will be called when the
+                // keyboard is dismissed.
+                setVisibility(View.INVISIBLE);
+            }
+        } else {
+            if (!isShowing && !mIsObscured) {
+                setVisibility(View.VISIBLE);
+            }
+        }
+
+        super.onLayout(changed, l, t, r, b);
     }
 
     private native long nativeInit();

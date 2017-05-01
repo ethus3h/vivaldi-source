@@ -11,19 +11,24 @@
 goog.provide('__crWeb.core');
 
 goog.require('__crWeb.common');
-goog.require('__crWeb.coreDynamic');
 goog.require('__crWeb.message');
-
-/**
- * The Chrome object is populated in an anonymous object defined at
- * initialization to prevent polluting the global namespace.
- */
 
 /* Beginning of anonymous object. */
 (function() {
-  // TODO(jimblackler): use this namespace as a wrapper for all externally-
-  // visible functions, to be consistent with other JS scripts. crbug.com/380390
   __gCrWeb['core'] = {};
+
+  /**
+   * Handles document load completion tasks. Invoked from
+   * [WKNavigationDelegate webView:didFinishNavigation:], when document load is
+   * complete.
+   */
+  __gCrWeb.didFinishNavigation = function() {
+    // Send the favicons to the browser.
+    __gCrWeb.sendFaviconsToHost();
+    // Add placeholders for plugin content.
+    if (__gCrWeb.common.updatePluginPlaceholders())
+      __gCrWeb.message.invokeOnHost({'command': 'addPluginPlaceholders'});
+  }
 
   // JavaScript errors are logged on the main application side. The handler is
   // added ASAP to catch any errors in startup. Note this does not appear to
@@ -176,20 +181,24 @@ goog.require('__crWeb.message');
             tagName === 'select' || tagName === 'option') {
           // If the element is a known input element, stop the spiral search and
           // return empty results.
-          return '{}';
+          return {};
         }
 
         if (tagName === 'a' && element.href) {
           // Found a link.
-          return __gCrWeb.common.JSONStringify(
-              {href: element.href,
-               referrerPolicy: getReferrerPolicy_(element)});
+          return {
+            href: element.href,
+            referrerPolicy: getReferrerPolicy_(element),
+            innerText: element.innerText
+          };
         }
 
         if (tagName === 'img' && element.src) {
           // Found an image.
-          var result = {src: element.src,
-                        referrerPolicy: getReferrerPolicy_()};
+          var result = {
+            src: element.src,
+            referrerPolicy: getReferrerPolicy_()
+          };
           // Copy the title, if any.
           if (element.title) {
             result.title = element.title;
@@ -214,12 +223,22 @@ goog.require('__crWeb.message');
             }
             parent = parent.parentNode;
           }
-          return __gCrWeb.common.JSONStringify(result);
+          return result;
         }
         element = element.parentNode;
       }
     }
-    return '{}';
+    return {};
+  };
+
+  // Suppresses the next click such that they are not handled by JS click
+  // event handlers.
+  __gCrWeb['suppressNextClick'] = function() {
+    var suppressNextClick = function(evt) {
+      evt.preventDefault();
+      document.removeEventListener('click', suppressNextClick, false);
+    };
+    document.addEventListener('click', suppressNextClick);
   };
 
   // Returns true if the top window or any frames inside contain an input
@@ -274,8 +293,6 @@ goog.require('__crWeb.message');
         'type': evt.type,
         'value': value
       };
-      if (evt.keyCode)
-        msg.keyCode = evt.keyCode;
       invokeOnHost_(msg);
     };
 
@@ -321,10 +338,6 @@ goog.require('__crWeb.message');
     __gCrWeb.message.invokeOnHost(command);
   };
 
-  function invokeOnHostImmediate_(command) {
-    __gCrWeb.message.invokeOnHostImmediate(command);
-  };
-
   /**
    * Gets the referrer policy to use for navigations away from the current page.
    * If a link element is passed, and it includes a rel=noreferrer tag, that
@@ -359,8 +372,8 @@ goog.require('__crWeb.message');
   // Various aspects of global DOM behavior are overridden here.
 
   // A popstate event needs to be fired anytime the active history entry
-  // changes. Either via back, forward, go navigation or by loading the URL,
-  // clicking on a link, etc.
+  // changes without an associated document change. Either via back, forward, go
+  // navigation or by loading the URL, clicking on a link, etc.
   __gCrWeb['dispatchPopstateEvent'] = function(stateObject) {
     var popstateEvent = window.document.createEvent('HTMLEvents');
     popstateEvent.initEvent('popstate', true, false);
@@ -372,6 +385,24 @@ goog.require('__crWeb.message');
     // cause a ReentryGuard failure.
     window.setTimeout(function() {
       window.dispatchEvent(popstateEvent);
+    }, 0);
+  };
+
+  // A hashchange event needs to be fired after a same-document history
+  // navigation between two URLs that are equivalent except for their fragments.
+  __gCrWeb['dispatchHashchangeEvent'] = function(oldURL, newURL) {
+    var hashchangeEvent = window.document.createEvent('HTMLEvents');
+    hashchangeEvent.initEvent('hashchange', true, false);
+    if (oldURL)
+      hashchangeEvent.oldURL = oldURL;
+    if (newURL)
+      hashchangeEvent.newURL = newURL
+
+    // setTimeout() is used in order to return immediately. Otherwise the
+    // dispatchEvent call waits for all event handlers to return, which could
+    // cause a ReentryGuard failure.
+    window.setTimeout(function() {
+      window.dispatchEvent(hashchangeEvent);
     }, 0);
   };
 
@@ -392,7 +423,7 @@ goog.require('__crWeb.message');
     invokeOnHost_({'command': 'window.history.forward'});
   };
   window.history.go = function(delta) {
-    invokeOnHost_({'command': 'window.history.go', 'value': delta});
+    invokeOnHost_({'command': 'window.history.go', 'value': delta | 0});
   };
   window.history.pushState = function(stateObject, pageTitle, pageUrl) {
     __gCrWeb.message.invokeOnHost(
@@ -452,16 +483,9 @@ goog.require('__crWeb.message');
     originalWindowScrollTo(x, y);
   };
 
-  // Intercept window.close calls.
-  window.close = function() {
-    invokeOnHost_({'command': 'window.close.self'});
-  };
-
   window.addEventListener('hashchange', function(evt) {
     invokeOnHost_({'command': 'window.hashchange'});
   });
-
-  __gCrWeb.core_dynamic.addEventListeners();
 
   // Returns if a frame with |name| is found in |currentWindow|.
   // Note frame.name is undefined for cross domain frames.
@@ -542,15 +566,10 @@ goog.require('__crWeb.message');
       // W3C recommended behavior.
       href = 'about:blank';
     }
-    // ExternalRequest messages need to be handled before the expected
-    // shouldStartLoadWithRequest, as such we cannot wait for the regular
-    // message queue invoke which delays to avoid illegal recursion into
-    // UIWebView. This immediate class of messages is handled ASAP by
-    // CRWWebController.
-    invokeOnHostImmediate_({'command': 'externalRequest',
-                               'href': href,
-                             'target': target,
-                     'referrerPolicy': getReferrerPolicy_()});
+    invokeOnHost_({'command': 'externalRequest',
+                      'href': href,
+                    'target': target,
+            'referrerPolicy': getReferrerPolicy_()});
   };
 
   var resetExternalRequest_ = function() {
@@ -570,100 +589,76 @@ goog.require('__crWeb.message');
     return window.getComputedStyle(element, null)['webkitTouchCallout'];
   };
 
-  /**
-   * This method applies the various document-level overrides. Sometimes the
-   * document object gets reset in the early stages of the page lifecycle, so
-   * this is exposed as a method for the application to invoke later. That way
-   * the window-level overrides can be applied as soon as possible.
-   */
-  __gCrWeb.core.documentInject = function() {
-    // Perform web view specific operations requiring document.body presence.
-    // If necessary returns and waits for document to be present.
-    if (!__gCrWeb.core_dynamic.documentInject())
+  // Flush the message queue.
+  if (__gCrWeb.message) {
+    __gCrWeb.message.invokeQueues();
+  }
+
+  document.addEventListener('click', function(evt) {
+    var node = getTargetLink_(evt.target);
+
+    if (!node)
       return;
 
-    document.addEventListener('click', function(evt) {
-      var node = getTargetLink_(evt.target);
-
-      if (!node)
-        return;
-
-      if (isInternaLink_(node)) {
-        return;
-      }
-      setExternalRequest_(node.href, node.target);
-      // Add listener to the target and its immediate ancesters. These event
-      // listeners will be removed if they get called. The listeners for some
-      // elements might never be removed, but if multiple identical event
-      // listeners are registered on the same event target with the same
-      // parameters the duplicate instances are discarded.
-      for (var level = 0; level < 5; ++level) {
-        if (node && node != document) {
-          node.addEventListener('click', clickBubbleListener_, false);
-          node = node.parentNode;
-        } else {
-          break;
-        }
-      }
-    }, true);
-
-    // Intercept clicks on anchors (links) during bubbling phase so that the
-    // browser can handle target type appropriately.
-    document.addEventListener('click', function(evt) {
-      var node = getTargetLink_(evt.target);
-
-      if (!node)
-        return;
-
-      if (isInternaLink_(node)) {
-        if (evt['defaultPrevented'])
-          return;
-        // Internal link. The web view will handle navigation, but register
-        // the anchor for UIWebView to start the progress indicator ASAP and
-        // notify web controller as soon as possible of impending navigation.
-        if (__gCrWeb.core_dynamic.handleInternalClickEvent) {
-          __gCrWeb.core_dynamic.handleInternalClickEvent(node);
-        }
-        return;
+    if (isInternaLink_(node)) {
+      return;
+    }
+    setExternalRequest_(node.href, node.target);
+    // Add listener to the target and its immediate ancesters. These event
+    // listeners will be removed if they get called. The listeners for some
+    // elements might never be removed, but if multiple identical event
+    // listeners are registered on the same event target with the same
+    // parameters the duplicate instances are discarded.
+    for (var level = 0; level < 5; ++level) {
+      if (node && node != document) {
+        node.addEventListener('click', clickBubbleListener_, false);
+        node = node.parentNode;
       } else {
-        // Resets the external request if it has been canceled, otherwise
-        // updates the href in case it has been changed.
-        if (evt['defaultPrevented'])
-          resetExternalRequest_();
-        else
-          setExternalRequest_(node.href, node.target);
+        break;
       }
-    }, false);
+    }
+  }, true);
 
-    // Capture form submit actions.
-    document.addEventListener('submit', function(evt) {
+  // Intercept clicks on anchors (links) during bubbling phase so that the
+  // browser can handle target type appropriately.
+  document.addEventListener('click', function(evt) {
+    var node = getTargetLink_(evt.target);
+
+    if (!node)
+      return;
+
+    if (isInternaLink_(node)) {
+      return;
+    } else {
+      // Resets the external request if it has been canceled, otherwise
+      // updates the href in case it has been changed.
       if (evt['defaultPrevented'])
-        return;
+        resetExternalRequest_();
+      else
+        setExternalRequest_(node.href, node.target);
+    }
+  }, false);
 
-      var form = evt.target;
-      var targetsFrame = form.target && hasFrame_(window, form.target);
-      // TODO(stuartmorgan): Handle external targets. crbug.com/233543
+  // Capture form submit actions.
+  document.addEventListener('submit', function(evt) {
+    if (evt['defaultPrevented'])
+      return;
 
-      var action = form.getAttribute('action');
-      // Default action is to re-submit to same page.
-      if (!action)
-        action = document.location.href;
-      invokeOnHost_({
-               'command': 'document.submit',
-              'formName': __gCrWeb.common.getFormIdentifier(evt.srcElement),
-                  'href': __gCrWeb['getFullyQualifiedURL'](action),
-          'targetsFrame': targetsFrame
-      });
-    }, false);
+    var form = evt.target;
+    var targetsFrame = form.target && hasFrame_(window, form.target);
 
-    addFormEventListeners_();
+    var action = form.getAttribute('action');
+    // Default action is to re-submit to same page.
+    if (!action)
+      action = document.location.href;
+    invokeOnHost_({
+             'command': 'document.submit',
+            'formName': __gCrWeb.common.getFormIdentifier(evt.srcElement),
+                'href': __gCrWeb['getFullyQualifiedURL'](action),
+        'targetsFrame': targetsFrame
+    });
+  }, false);
 
-   // Handle or wait for and handle document load completion, if applicable.
-   if (__gCrWeb.core_dynamic.handleDocumentLoaded)
-     __gCrWeb.core_dynamic.handleDocumentLoaded();
+  addFormEventListeners_();
 
-    return true;
-  };
-
-  __gCrWeb.core.documentInject();
 }());  // End of anonymous object

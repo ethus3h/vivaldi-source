@@ -7,16 +7,17 @@
 
 #include <stdint.h>
 
+#include <unordered_map>
 #include <vector>
 
 #include "base/callback.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "content/browser/service_worker/service_worker_context_observer.h"
 #include "content/browser/service_worker/service_worker_info.h"
 
 namespace content {
 
 class ServiceWorkerContextWrapper;
+enum class EmbeddedWorkerStatus;
 
 // Used to monitor the status change of the ServiceWorker registrations and
 // versions in the ServiceWorkerContext from UI thread.
@@ -47,13 +48,14 @@ class ServiceWorkerContextWatcher
 
   void GetStoredRegistrationsOnIOThread();
   void OnStoredRegistrationsOnIOThread(
+      ServiceWorkerStatusCode status,
       const std::vector<ServiceWorkerRegistrationInfo>& stored_registrations);
   void StopOnIOThread();
 
   void StoreRegistrationInfo(
       const ServiceWorkerRegistrationInfo& registration,
-      base::ScopedPtrHashMap<int64_t,
-                             scoped_ptr<ServiceWorkerRegistrationInfo>>*
+      std::unordered_map<int64_t,
+                         std::unique_ptr<ServiceWorkerRegistrationInfo>>*
           info_map);
   void StoreVersionInfo(const ServiceWorkerVersionInfo& version);
 
@@ -66,15 +68,16 @@ class ServiceWorkerContextWatcher
   // ServiceWorkerContextObserver implements
   void OnNewLiveRegistration(int64_t registration_id,
                              const GURL& pattern) override;
-  void OnNewLiveVersion(int64_t version_id,
-                        int64_t registration_id,
-                        const GURL& script_url) override;
+  void OnNewLiveVersion(const ServiceWorkerVersionInfo& version_info) override;
   void OnRunningStateChanged(
       int64_t version_id,
-      content::ServiceWorkerVersion::RunningStatus running_status) override;
+      content::EmbeddedWorkerStatus running_status) override;
   void OnVersionStateChanged(
       int64_t version_id,
       content::ServiceWorkerVersion::Status status) override;
+  void OnVersionDevToolsRoutingIdChanged(int64_t version_id,
+                                         int process_id,
+                                         int devtools_agent_route_id) override;
   void OnMainScriptHttpResponseInfoSet(
       int64_t version_id,
       base::Time script_response_time,
@@ -98,10 +101,8 @@ class ServiceWorkerContextWatcher
                             const GURL& pattern) override;
   void OnRegistrationDeleted(int64_t registration_id,
                              const GURL& pattern) override;
-  void OnForceUpdateOnPageLoadChanged(int64_t registration_id,
-                                      bool force_update_on_page_load) override;
 
-  base::ScopedPtrHashMap<int64_t, scoped_ptr<ServiceWorkerVersionInfo>>
+  std::unordered_map<int64_t, std::unique_ptr<ServiceWorkerVersionInfo>>
       version_info_map_;
   scoped_refptr<ServiceWorkerContextWrapper> context_;
   WorkerRegistrationUpdatedCallback registration_callback_;

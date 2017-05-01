@@ -11,27 +11,23 @@
 #include "net/base/address_list.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
-#include "net/base/net_util.h"
 #include "net/base/network_change_notifier.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_protocol.h"
 #include "net/dns/dns_response.h"
 #include "net/dns/dns_transaction.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
 
 using base::TimeDelta;
 using content::BrowserThread;
 using net::AddressList;
-using net::BoundNetLog;
 using net::DnsClient;
 using net::DnsResponse;
 using net::DnsTransaction;
 using net::DnsTransactionFactory;
-using net::IPAddressNumber;
 using net::IPEndPoint;
-using net::NetLog;
+using net::NetLogWithSource;
 using net::NetworkChangeNotifier;
-using net::ParseIPLiteralToNumber;
 
 namespace chrome_browser_net {
 
@@ -85,7 +81,7 @@ DnsProbeRunner::DnsProbeRunner() : result_(UNKNOWN), weak_factory_(this) {}
 
 DnsProbeRunner::~DnsProbeRunner() {}
 
-void DnsProbeRunner::SetClient(scoped_ptr<net::DnsClient> client) {
+void DnsProbeRunner::SetClient(std::unique_ptr<net::DnsClient> client) {
   client_ = std::move(client);
 }
 
@@ -110,11 +106,10 @@ void DnsProbeRunner::RunProbe(const base::Closure& callback) {
   }
 
   transaction_ = factory->CreateTransaction(
-      kKnownGoodHostname,
-      net::dns_protocol::kTypeA,
+      kKnownGoodHostname, net::dns_protocol::kTypeA,
       base::Bind(&DnsProbeRunner::OnTransactionComplete,
                  weak_factory_.GetWeakPtr()),
-      BoundNetLog());
+      NetLogWithSource());
 
   transaction_->Start();
 }

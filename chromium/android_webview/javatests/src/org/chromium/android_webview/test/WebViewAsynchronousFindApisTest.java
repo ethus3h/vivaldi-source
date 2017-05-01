@@ -4,7 +4,7 @@
 
 package org.chromium.android_webview.test;
 
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.base.test.util.Feature;
 
@@ -113,7 +113,7 @@ public class WebViewAsynchronousFindApisTest extends WebViewFindApisTestBase {
         assertEquals(4, findAllAsyncOnUiThread("wood"));
         clearMatchesOnUiThread();
         assertEquals(4, findAllAsyncOnUiThread("wood"));
-        assertEquals(2, findNextOnUiThread(true));
+        assertEquals(1, findNextOnUiThread(true));
     }
 
     @SmallTest

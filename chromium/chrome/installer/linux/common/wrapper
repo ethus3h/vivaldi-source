@@ -9,25 +9,6 @@ export CHROME_WRAPPER="`readlink -f "$0"`"
 
 HERE="`dirname "$CHROME_WRAPPER"`"
 
-# Check if the CPU supports SSE2. If not, try to pop up a dialog to explain the
-# problem and exit. Otherwise the browser will just crash with a SIGILL.
-# http://crbug.com/348761
-grep ^flags /proc/cpuinfo|grep -qs sse2
-if [ $? != 0 ]; then
-  SSE2_DEPRECATION_MSG="This computer cannot run Vivaldi because \
-its hardware is no longer supported."
-  if which zenity &> /dev/null; then
-    zenity --warning --text="$SSE2_DEPRECATION_MSG"
-  elif which gmessage &> /dev/null; then
-    gmessage "$SSE2_DEPRECATION_MSG"
-  elif which xmessage &> /dev/null; then
-    xmessage "$SSE2_DEPRECATION_MSG"
-  else
-    echo "$SSE2_DEPRECATION_MSG" 1>&2
-  fi
-  exit 1
-fi
-
 # We include some xdg utilities next to the binary, and we want to prefer them
 # over the system versions when we know the system versions are very old. We
 # detect whether the system xdg utilities are sufficiently new to be likely to
@@ -45,36 +26,45 @@ else
 fi
 
 # Find libffmpeg.so with additional codecs.
-CHR_CODECS_CH="/usr/share/doc/chromium-codecs-ffmpeg-extra/changelog.Debian.gz"
-if [ -r $CHR_CODECS_CH ]; then
-  CHR_CODECS_VER=$(gzip -cd $CHR_CODECS_CH |
-    sed -n '1s/chromium-browser (\(\([0-9]\+\.\)\{3\}\).*/\1/p')
-  if [ "$CHR_CODECS_VER" = "@@CHR_MAJOR@@.@@CHR_MINOR@@.@@CHR_BUILD@@." ]; then
-    FFMPEG_LD_LIBRARY_PATH=":/usr/lib/chromium-browser/libs"
+checkffmpeg () {
+  if [ "$VIVALDI_FFMPEG_FOUND" = "NO" ]; then
+    if [[ -n "$2" ]] && [ -e "$2" ] || [[ -z "$2" ]]; then
+      # Chromium's FFMpeg version N-82746-g6bb7ea7 is the oldest known working version
+      # chromium/third_party/ffmpeg/chromium/config/Chromium/linux/x64/libavutil/ffversion.h
+      if [ -r "$1" ]; then
+        if [ `grep -aom1 'FFmpeg version N-[0-9]\+-' "$1" | cut -f2 -d-` -ge "82746" ]; then
+          if [[ -n "$LD_PRELOAD" ]]; then
+            export LD_PRELOAD="$LD_PRELOAD:$1"
+          else
+            export LD_PRELOAD="$1"
+          fi
+          export VIVALDI_FFMPEG_FOUND=YES
+        fi
+      fi
+    fi
   fi
-fi
-# Set LD_LIBRARY_PATH to prefer our libs, excluding $HERE/lib/libffmpeg.so if
-# an alternative ffmpeg was found.
-if [[ -n "$LD_LIBRARY_PATH" ]]; then
-  LD_LIBRARY_PATH="$HERE$FFMPEG_LD_LIBRARY_PATH:$HERE/lib:$LD_LIBRARY_PATH"
-else
-  LD_LIBRARY_PATH="$HERE$FFMPEG_LD_LIBRARY_PATH:$HERE/lib"
-fi
-export LD_LIBRARY_PATH
+}
+
+# Account for Debian multiarch directories
+case "`uname -m`" in
+  x86_64) DEBARCH="x86_64-linux-gnu" ;;
+    i?86) DEBARCH="i386-linux-gnu" ;;
+esac
+
+# Check for libs in order that they are most likely to appear.
+# Where possible, use other files/directories to confirm it's the correct variant.
+VIVALDI_FFMPEG_FOUND=NO
+checkffmpeg "/usr/lib/$DEBARCH/oxide-qt/libffmpeg.so" '/usr/share/doc/oxideqt-codecs-extra'
+checkffmpeg '/usr/lib/chromium-browser/libffmpeg.so' '/usr/share/doc/chromium-codecs-ffmpeg-extra'
+
+# Check if the user has manually placed suitable libs.
+checkffmpeg "$HOME/.local/lib/vivaldi/libffmpeg.so"
+checkffmpeg "$HERE/libffmpeg.so"
 
 export CHROME_VERSION_EXTRA="@@CHANNEL@@"
 
 # We don't want bug-buddy intercepting our crashes. http://crbug.com/24120
 export GNOME_DISABLE_CRASH_DIALOG=SET_BY_GOOGLE_CHROME
-
-# Automagically migrate user data directory.
-# TODO(phajdan.jr): Remove along with migration code in the browser for M33.
-if [[ -n "@@SXS_USER_DATA_DIR@@" ]]; then
-  if [[ ! -d "@@SXS_USER_DATA_DIR@@" ]]; then
-    "$HERE/@@PROGNAME@@-bin" "--migrate-data-dir-for-sxs=@@SXS_USER_DATA_DIR@@" \
-      --enable-logging=stderr --log-level=0
-  fi
-fi
 
 # Sanitize std{in,out,err} because they'll be shared with untrusted child
 # processes (http://crbug.com/376567).
@@ -82,37 +72,12 @@ exec < /dev/null
 exec > >(exec cat)
 exec 2> >(exec cat >&2)
 
-if [ -f "/opt/google/chrome/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/opt/google/chrome/PepperFlash/libpepflashplayer.so" # google
-elif [ -f "/usr/lib/pepperflashplugin-nonfree/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib/pepperflashplugin-nonfree/libpepflashplayer.so" # debian/ubuntu
-elif [ -f "/usr/lib/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib/PepperFlash/libpepflashplayer.so" # arch/slack
-elif [ -f "/usr/lib/chromium/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib/chromium/PepperFlash/libpepflashplayer.so" # openSuse 32-bit
-elif [ -f "/usr/lib64/chromium/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib64/chromium/PepperFlash/libpepflashplayer.so" # openSuse 64-bit
-elif [ -f "/usr/lib/pepflashplugin-installer/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib/pepflashplugin-installer/libpepflashplayer.so" # ppa:skunk/pepper-flash
-elif [ -f "/usr/lib/chromium-browser/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib/chromium-browser/PepperFlash/libpepflashplayer.so" # rosa/mandriva 32-bit
-elif [ -f "/usr/lib64/chromium-browser/PepperFlash/libpepflashplayer.so" ]; then
-  FLASH_PATH="/usr/lib64/chromium-browser/PepperFlash/libpepflashplayer.so" # rosa/mandriva 64-bit
-fi
-if [ -f $FLASH_PATH ]; then
-  FLASH_VERSION=`grep -m 1 -a -o "LNX [[:digit:]]\+,[[:digit:]]\+,[[:digit:]]\+,[[:digit:]]\+" $FLASH_PATH | cut -c 5- | sed -e "s/,/./g"`
-fi
-
 # Make sure that the profile directory specified in the environment, if any,
 # overrides the default.
 if [[ -n "$CHROME_USER_DATA_DIR" ]]; then
   # Note: exec -a below is a bashism.
   exec -a "$0" "$HERE/@@PROGNAME@@-bin" @@DEFAULT_FLAGS@@ \
-    --user-data-dir="$CHROME_USER_DATA_DIR" \
-    --ppapi-flash-path=$FLASH_PATH --ppapi-flash-version=$FLASH_VERSION \
-    "$@"
+    --user-data-dir="$CHROME_USER_DATA_DIR" "$@"
 else
-  exec -a "$0" "$HERE/@@PROGNAME@@"-bin @@DEFAULT_FLAGS@@ \
-    --ppapi-flash-path=$FLASH_PATH --ppapi-flash-version=$FLASH_VERSION \
-    "$@"
+  exec -a "$0" "$HERE/@@PROGNAME@@"-bin @@DEFAULT_FLAGS@@ "$@"
 fi

@@ -19,6 +19,8 @@ embedder.setUp_ = function(config) {
   embedder.redirectGuestURLDest =
       embedder.baseGuestURL + '/guest_redirect.html';
   embedder.windowOpenGuestURL = embedder.baseGuestURL + '/guest.html';
+  embedder.samePageNavigationURL =
+      embedder.baseGuestURL + '/guest_same_page_navigation.html';
 };
 
 window.runTest = function(testName) {
@@ -947,7 +949,7 @@ function testLoadAbortChromeExtensionURLWrongPartition() {
   var localResource = chrome.runtime.getURL('guest.html');
   var webview = document.createElement('webview');
   webview.addEventListener('loadabort', function(e) {
-    embedder.test.assertEq('ERR_ADDRESS_UNREACHABLE', e.reason);
+    embedder.test.assertEq('ERR_BLOCKED_BY_CLIENT', e.reason);
     embedder.test.succeed();
   });
   webview.addEventListener('loadstop', function(e) {
@@ -1049,6 +1051,28 @@ function testLoadAbortNonWebSafeScheme() {
   webview.src = chromeGuestURL;
   document.body.appendChild(webview);
 };
+
+// This test verifies that the loadStart isn't sent for same page navigations,
+// while loadCommit is (per docs).
+function testLoadEventsSamePageNavigation() {
+  var webview = new WebView();
+  var loadStartCount = 0;
+  var loadCommitCount = 0;
+  webview.addEventListener('loadstart', function(evt) {
+    loadStartCount++;
+  });
+  webview.addEventListener('loadcommit', function(e) {
+    loadCommitCount++;
+  });
+  webview.addEventListener('loadstop', function(evt) {
+    embedder.test.assertEq(1, loadStartCount);
+    embedder.test.assertEq(2, loadCommitCount);
+    embedder.test.succeed();
+  });
+
+  webview.src = embedder.samePageNavigationURL;
+  document.body.appendChild(webview);
+}
 
 // Tests that the 'loadprogress' event is triggered correctly.
 function testLoadProgressEvent() {
@@ -1685,6 +1709,36 @@ function testWebRequestAPIGoogleProperty() {
   document.body.appendChild(webview);
 }
 
+// This is a basic test to verify that image data is returned by
+// captureVisibleRegion().
+function testCaptureVisibleRegion() {
+  var webview = document.createElement('webview');
+  webview.setAttribute('src', 'data:text/html,webview test');
+
+  webview.addEventListener('loadstop', function(e) {
+    webview.captureVisibleRegion(
+        {},
+        function(imgdata) {
+          if (chrome.runtime.lastError) {
+            console.log(
+                'webview.apitest.testCaptureVisibleRegion: ' +
+                chrome.runtime.lastError.message);
+            embedder.test.fail();
+          } else {
+            if (!imgdata.startsWith('data:image/jpeg;base64'))
+              console.log('imgdata = ' + imgdata);
+
+            embedder.test.assertTrue(
+                imgdata.startsWith('data:image/jpeg;base64'));
+            embedder.test.succeed();
+          }
+        });
+  });
+  document.body.appendChild(webview);
+}
+
+function captureVisibleRegionDoCapture() {}
+
 // Tests end.
 
 embedder.test.testList = {
@@ -1726,6 +1780,7 @@ embedder.test.testList = {
   'testLoadAbortIllegalJavaScriptURL': testLoadAbortIllegalJavaScriptURL,
   'testLoadAbortInvalidNavigation': testLoadAbortInvalidNavigation,
   'testLoadAbortNonWebSafeScheme': testLoadAbortNonWebSafeScheme,
+  'testLoadEventsSamePageNavigation': testLoadEventsSamePageNavigation,
   'testLoadProgressEvent': testLoadProgressEvent,
   'testLoadStartLoadRedirect': testLoadStartLoadRedirect,
   'testNavigateAfterResize': testNavigateAfterResize,
@@ -1752,7 +1807,8 @@ embedder.test.testList = {
   'testWebRequestAPI': testWebRequestAPI,
   'testWebRequestAPIWithHeaders': testWebRequestAPIWithHeaders,
   'testWebRequestAPIExistence': testWebRequestAPIExistence,
-  'testWebRequestAPIGoogleProperty': testWebRequestAPIGoogleProperty
+  'testWebRequestAPIGoogleProperty': testWebRequestAPIGoogleProperty,
+  'testCaptureVisibleRegion': testCaptureVisibleRegion
 };
 
 onload = function() {

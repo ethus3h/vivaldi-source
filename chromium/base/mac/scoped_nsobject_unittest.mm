@@ -24,7 +24,10 @@ TEST(ScopedNSObjectTest, ScopedNSObject) {
     base::scoped_nsobject<NSObject> p3 = p1;
     ASSERT_EQ(p1.get(), p3.get());
     ASSERT_EQ(2u, [p1 retainCount]);
-    p3 = p1;
+    {
+      base::mac::ScopedNSAutoreleasePool pool;
+      p3 = p1;
+    }
     ASSERT_EQ(p1.get(), p3.get());
     ASSERT_EQ(2u, [p1 retainCount]);
   }
@@ -50,6 +53,12 @@ TEST(ScopedNSObjectTest, ScopedNSObject) {
     ASSERT_EQ(3u, [p1 retainCount]);
   }
   ASSERT_EQ(2u, [p1 retainCount]);
+
+  base::scoped_nsobject<NSObject> p7([NSObject new]);
+  base::scoped_nsobject<NSObject> p8(std::move(p7));
+  ASSERT_TRUE(p8);
+  ASSERT_EQ(1u, [p8 retainCount]);
+  ASSERT_FALSE(p7.get());
 }
 
 // Instantiating scoped_nsobject<> with T=NSAutoreleasePool should trip a

@@ -7,12 +7,13 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <memory>
+
 #include "base/mac/scoped_nsobject.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/prefs/pref_member.h"
 #import "chrome/browser/ui/cocoa/has_weak_browser_pointer.h"
 #import "chrome/browser/ui/cocoa/url_drop_target.h"
 #import "chrome/browser/ui/cocoa/view_resizer.h"
+#include "components/prefs/pref_member.h"
 #import "ui/base/cocoa/tracking_area.h"
 
 @class AutocompleteTextField;
@@ -20,7 +21,6 @@
 @class BackForwardMenuController;
 class Browser;
 @class BrowserActionsContainerView;
-class BrowserActionsContainerViewSizeDelegate;
 @class BrowserActionsController;
 class CommandUpdater;
 class LocationBarViewMac;
@@ -62,21 +62,21 @@ class NotificationBridge;
   CommandUpdater* commands_;  // weak, one per window
   Profile* profile_;  // weak, one per window
   Browser* browser_;  // weak, one per window
-  scoped_ptr<ToolbarControllerInternal::CommandObserverBridge> commandObserver_;
-  scoped_ptr<LocationBarViewMac> locationBarView_;
+  std::unique_ptr<ToolbarControllerInternal::CommandObserverBridge>
+      commandObserver_;
+  std::unique_ptr<LocationBarViewMac> locationBarView_;
   base::scoped_nsobject<AutocompleteTextFieldEditor>
       autocompleteTextFieldEditor_;
   base::scoped_nsobject<BackForwardMenuController> backMenuController_;
   base::scoped_nsobject<BackForwardMenuController> forwardMenuController_;
   base::scoped_nsobject<BrowserActionsController> browserActionsController_;
-  scoped_ptr<BrowserActionsContainerViewSizeDelegate>
-      browserActionsContainerDelegate_;
 
   // Lazily-instantiated menu controller.
   base::scoped_nsobject<AppMenuController> appMenuController_;
 
   // Used for monitoring the optional toolbar button prefs.
-  scoped_ptr<ToolbarControllerInternal::NotificationBridge> notificationBridge_;
+  std::unique_ptr<ToolbarControllerInternal::NotificationBridge>
+      notificationBridge_;
   BooleanPrefMember showHomeButton_;
   BOOL hasToolbar_;  // If NO, we may have only the location bar.
   BOOL hasLocationBar_;  // If |hasToolbar_| is YES, this must also be YES.
@@ -92,6 +92,10 @@ class NotificationBridge;
   // setMouseInside:animate:.
   NSButton* hoveredButton_;
 }
+
+// Return the inset needed to center a toolbar button's icon within the 28x28
+// design area defined by Material Design.
++ (CGFloat)materialDesignButtonInset;
 
 // Initialize the toolbar and register for command updates. The profile is
 // needed for initializing the location bar. The browser is needed for
@@ -110,6 +114,9 @@ class NotificationBridge;
 // Note that this may be called for objects unrelated to the toolbar.
 // returns nil if we don't want to override the custom field editor for |obj|.
 - (id)customFieldEditorForObject:(id)obj;
+
+// Called by the |locationBar_| when it has been added to its window.
+- (void)locationBarWasAddedToWindow;
 
 // Make the location bar the first responder, if possible.
 - (void)focusLocationBar:(BOOL)selectAll;
@@ -155,8 +162,8 @@ class NotificationBridge;
 // Point on the save credit card icon for the save credit card bubble.
 - (NSPoint)saveCreditCardBubblePoint;
 
-// Point on the translate icon for the Translate bubble.
-- (NSPoint)translateBubblePoint;
+// Point in the window's coordinate system for bubbles attached to the app menu.
+- (NSPoint)appMenuBubblePoint;
 
 // Returns the desired toolbar height for the given compression factor.
 - (CGFloat)desiredHeightForCompression:(CGFloat)compressByHeight;
@@ -180,6 +187,9 @@ class NotificationBridge;
 // Returns the app menu controller.
 - (AppMenuController*)appMenuController;
 
+// Returns true of the location bar is focused.
+- (BOOL)isLocationBarFocused;
+
 @end
 
 // A set of private methods used by tests, in the absence of "friends" in ObjC.
@@ -190,6 +200,10 @@ class NotificationBridge;
 - (void)installAppMenu;
 // Return a hover button for the current event.
 - (NSButton*)hoverButtonForEvent:(NSEvent*)theEvent;
+// Adjusts browser actions container view in response to toolbar frame changes.
+// Outside of tests, called in response to frame changed/new window
+// notifications.
+- (void)toolbarFrameChanged;
 @end
 
 #endif  // CHROME_BROWSER_UI_COCOA_TOOLBAR_TOOLBAR_CONTROLLER_H_

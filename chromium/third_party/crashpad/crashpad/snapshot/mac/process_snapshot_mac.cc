@@ -15,6 +15,7 @@
 #include "snapshot/mac/process_snapshot_mac.h"
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "util/misc/tri_state.h"
 
 namespace crashpad {
@@ -104,11 +105,18 @@ void ProcessSnapshotMac::GetCrashpadOptions(
       local_options.system_crash_reporter_forwarding =
           module_options.system_crash_reporter_forwarding;
     }
+    if (local_options.gather_indirectly_referenced_memory == TriState::kUnset) {
+      local_options.gather_indirectly_referenced_memory =
+          module_options.gather_indirectly_referenced_memory;
+      local_options.indirectly_referenced_memory_cap =
+          module_options.indirectly_referenced_memory_cap;
+    }
 
     // If non-default values have been found for all options, the loop can end
     // early.
     if (local_options.crashpad_handler_behavior != TriState::kUnset &&
-        local_options.system_crash_reporter_forwarding != TriState::kUnset) {
+        local_options.system_crash_reporter_forwarding != TriState::kUnset &&
+        local_options.gather_indirectly_referenced_memory != TriState::kUnset) {
       break;
     }
   }
@@ -181,6 +189,12 @@ std::vector<const ModuleSnapshot*> ProcessSnapshotMac::Modules() const {
   return modules;
 }
 
+std::vector<UnloadedModuleSnapshot> ProcessSnapshotMac::UnloadedModules()
+    const {
+  INITIALIZATION_STATE_DCHECK_VALID(initialized_);
+  return std::vector<UnloadedModuleSnapshot>();
+}
+
 const ExceptionSnapshot* ProcessSnapshotMac::Exception() const {
   INITIALIZATION_STATE_DCHECK_VALID(initialized_);
   return exception_.get();
@@ -207,7 +221,7 @@ void ProcessSnapshotMac::InitializeThreads() {
       process_reader_.Threads();
   for (const ProcessReader::Thread& process_reader_thread :
        process_reader_threads) {
-    auto thread = make_scoped_ptr(new internal::ThreadSnapshotMac());
+    auto thread = base::WrapUnique(new internal::ThreadSnapshotMac());
     if (thread->Initialize(&process_reader_, process_reader_thread)) {
       threads_.push_back(thread.release());
     }
@@ -219,7 +233,7 @@ void ProcessSnapshotMac::InitializeModules() {
       process_reader_.Modules();
   for (const ProcessReader::Module& process_reader_module :
        process_reader_modules) {
-    auto module = make_scoped_ptr(new internal::ModuleSnapshotMac());
+    auto module = base::WrapUnique(new internal::ModuleSnapshotMac());
     if (module->Initialize(&process_reader_, process_reader_module)) {
       modules_.push_back(module.release());
     }

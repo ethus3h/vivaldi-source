@@ -7,11 +7,14 @@
 
 #include <stdint.h>
 
+#include <string>
+#include <tuple>
 #include <vector>
 
 #include "content/common/p2p_messages.h"
 #include "ipc/ipc_sender.h"
 #include "net/base/net_errors.h"
+#include "net/log/net_log_with_source.h"
 #include "net/socket/stream_socket.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -57,12 +60,11 @@ class FakeSocket : public net::StreamSocket {
   bool IsConnectedAndIdle() const override;
   int GetPeerAddress(net::IPEndPoint* address) const override;
   int GetLocalAddress(net::IPEndPoint* address) const override;
-  const net::BoundNetLog& NetLog() const override;
+  const net::NetLogWithSource& NetLog() const override;
   void SetSubresourceSpeculation() override;
   void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
-  bool UsingTCPFastOpen() const override;
-  bool WasNpnNegotiated() const override;
+  bool WasAlpnNegotiated() const override;
   net::NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(net::SSLInfo* ssl_info) override;
   void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
@@ -90,7 +92,7 @@ class FakeSocket : public net::StreamSocket {
   net::IPEndPoint peer_address_;
   net::IPEndPoint local_address_;
 
-  net::BoundNetLog net_log_;
+  net::NetLogWithSource net_log_;
 };
 
 void CreateRandomPacket(std::vector<char>* packet);
@@ -109,7 +111,7 @@ MATCHER_P(MatchPacketMessage, packet_content, "") {
     return false;
   P2PMsg_OnDataReceived::Param params;
   P2PMsg_OnDataReceived::Read(arg, &params);
-  return base::get<2>(params) == packet_content;
+  return std::get<2>(params) == packet_content;
 }
 
 MATCHER_P(MatchIncomingSocketMessage, address, "") {
@@ -118,7 +120,7 @@ MATCHER_P(MatchIncomingSocketMessage, address, "") {
   P2PMsg_OnIncomingTcpConnection::Param params;
   P2PMsg_OnIncomingTcpConnection::Read(
       arg, &params);
-  return base::get<1>(params) == address;
+  return std::get<1>(params) == address;
 }
 
 #endif  // CONTENT_BROWSER_RENDERER_HOST_P2P_SOCKET_HOST_TEST_UTILS_H_

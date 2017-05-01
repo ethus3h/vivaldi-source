@@ -12,14 +12,13 @@
 
 namespace ui {
 
-class Event;
 class CursorDelegateEvdev;
 class DeviceEventDispatcherEvdev;
 
 class EVENTS_OZONE_EVDEV_EXPORT InputInjectorEvdev
     : public SystemInputInjector {
  public:
-  InputInjectorEvdev(scoped_ptr<DeviceEventDispatcherEvdev> dispatcher,
+  InputInjectorEvdev(std::unique_ptr<DeviceEventDispatcherEvdev> dispatcher,
                      CursorDelegateEvdev* cursor);
 
   ~InputInjectorEvdev() override;
@@ -37,7 +36,7 @@ class EVENTS_OZONE_EVDEV_EXPORT InputInjectorEvdev
   CursorDelegateEvdev* cursor_;
 
   // Interface for dispatching events.
-  scoped_ptr<DeviceEventDispatcherEvdev> dispatcher_;
+  std::unique_ptr<DeviceEventDispatcherEvdev> dispatcher_;
 
   DISALLOW_COPY_AND_ASSIGN(InputInjectorEvdev);
 };

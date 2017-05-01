@@ -9,8 +9,11 @@
 #include <string>
 
 #include "base/strings/stringprintf.h"
+#include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_argument.h"
 #include "base/values.h"
+#include "cc/blimp/client_picture_cache.h"
+#include "cc/blimp/image_serialization_processor.h"
 #include "cc/debug/picture_debug_util.h"
 #include "cc/proto/display_item.pb.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -23,69 +26,66 @@
 
 namespace cc {
 
-DrawingDisplayItem::DrawingDisplayItem() {}
+DrawingDisplayItem::DrawingDisplayItem() : DisplayItem(DRAWING) {}
 
-DrawingDisplayItem::DrawingDisplayItem(skia::RefPtr<const SkPicture> picture) {
+DrawingDisplayItem::DrawingDisplayItem(sk_sp<const SkPicture> picture)
+    : DisplayItem(DRAWING) {
   SetNew(std::move(picture));
 }
 
-DrawingDisplayItem::DrawingDisplayItem(const proto::DisplayItem& proto) {
+DrawingDisplayItem::DrawingDisplayItem(
+    const proto::DisplayItem& proto,
+    ClientPictureCache* client_picture_cache,
+    std::vector<uint32_t>* used_engine_picture_ids)
+    : DisplayItem(DRAWING) {
   DCHECK_EQ(proto::DisplayItem::Type_Drawing, proto.type());
+  DCHECK(client_picture_cache);
 
-  skia::RefPtr<SkPicture> picture;
   const proto::DrawingDisplayItem& details = proto.drawing_item();
-  if (details.has_picture()) {
-    SkMemoryStream stream(details.picture().data(), details.picture().size());
+  DCHECK(details.has_id());
+  const proto::SkPictureID& sk_picture_id = details.id();
+  DCHECK(sk_picture_id.has_unique_id());
 
-    // TODO(dtrainor, nyquist): Add an image decoder.
-    picture = skia::AdoptRef(SkPicture::CreateFromStream(&stream, nullptr));
-  }
+  uint32_t unique_id = sk_picture_id.unique_id();
+  sk_sp<const SkPicture> picture = client_picture_cache->GetPicture(unique_id);
+  DCHECK(picture);
 
+  used_engine_picture_ids->push_back(unique_id);
   SetNew(std::move(picture));
 }
 
-DrawingDisplayItem::DrawingDisplayItem(const DrawingDisplayItem& item) {
+DrawingDisplayItem::DrawingDisplayItem(const DrawingDisplayItem& item)
+    : DisplayItem(DRAWING) {
   item.CloneTo(this);
 }
 
 DrawingDisplayItem::~DrawingDisplayItem() {
 }
 
-void DrawingDisplayItem::SetNew(skia::RefPtr<const SkPicture> picture) {
+void DrawingDisplayItem::SetNew(sk_sp<const SkPicture> picture) {
   picture_ = std::move(picture);
 }
 
 void DrawingDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
+  TRACE_EVENT0("cc.remote", "DrawingDisplayItem::ToProtobuf");
   proto->set_type(proto::DisplayItem::Type_Drawing);
 
-  proto::DrawingDisplayItem* details = proto->mutable_drawing_item();
+  if (!picture_)
+    return;
 
-  // Just use skia's serialize() method for now.
-  if (picture_) {
-    SkDynamicMemoryWStream stream;
-
-    // TODO(dtrainor, nyquist): Add an SkPixelSerializer to not serialize images
-    // more than once (crbug.com/548434).
-    picture_->serialize(&stream, nullptr);
-    if (stream.bytesWritten() > 0) {
-      SkAutoDataUnref data(stream.copyToData());
-      details->set_picture(data->data(), data->size());
-    }
-  }
+  proto->mutable_drawing_item()->mutable_id()->set_unique_id(
+      picture_->uniqueID());
 }
 
+sk_sp<const SkPicture> DrawingDisplayItem::GetPicture() const {
+  return picture_;
+}
+
+DISABLE_CFI_PERF
 void DrawingDisplayItem::Raster(SkCanvas* canvas,
-                                const gfx::Rect& canvas_target_playback_rect,
                                 SkPicture::AbortCallback* callback) const {
-  // The canvas_playback_rect can be empty to signify no culling is desired.
-  if (!canvas_target_playback_rect.IsEmpty()) {
-    const SkMatrix& matrix = canvas->getTotalMatrix();
-    const SkRect& cull_rect = picture_->cullRect();
-    SkRect target_rect;
-    matrix.mapRect(&target_rect, cull_rect);
-    if (!target_rect.intersect(gfx::RectToSkRect(canvas_target_playback_rect)))
-      return;
-  }
+  if (canvas->quickReject(picture_->cullRect()))
+    return;
 
   // SkPicture always does a wrapping save/restore on the canvas, so it is not
   // necessary here.
@@ -129,12 +129,9 @@ size_t DrawingDisplayItem::ExternalMemoryUsage() const {
   return SkPictureUtils::ApproximateBytesUsed(picture_.get());
 }
 
+DISABLE_CFI_PERF
 int DrawingDisplayItem::ApproximateOpCount() const {
   return picture_->approximateOpCount();
-}
-
-bool DrawingDisplayItem::IsSuitableForGpuRasterization() const {
-  return picture_->suitableForGpuRasterization(NULL);
 }
 
 }  // namespace cc

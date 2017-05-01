@@ -6,12 +6,11 @@
 #define COMPONENTS_DOMAIN_RELIABILITY_UTIL_H_
 
 #include <map>
+#include <memory>
 
 #include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/time/clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
@@ -19,7 +18,6 @@
 #include "components/domain_reliability/domain_reliability_export.h"
 #include "components/domain_reliability/uploader.h"
 #include "net/http/http_response_info.h"
-#include "net/quic/quic_protocol.h"
 #include "net/url_request/url_request_status.h"
 
 namespace domain_reliability {
@@ -34,13 +32,6 @@ bool GetDomainReliabilityBeaconStatus(
     int net_error,
     int http_response_code,
     std::string* beacon_status_out);
-
-// Attempts to convert a QUIC error into the quic_error string
-// that should be recorded in a beacon. Returns true and parse the QUIC error
-// code in |beacon_quic_error_out| if it could.
-// Returns false and clear |beacon_quic_error_out| otherwise.
-bool GetDomainReliabilityBeaconQuicError(net::QuicErrorCode quic_error,
-                                         std::string* beacon_quic_error_out);
 
 std::string GetDomainReliabilityProtocol(
     net::HttpResponseInfo::ConnectionInfo connection_info,
@@ -59,13 +50,14 @@ void GetUploadResultFromResponseDetails(
     base::TimeDelta retry_after,
     DomainReliabilityUploader::UploadResult* result);
 
-GURL SanitizeURLForReport(const GURL& beacon_url,
-                          const GURL& collector_url,
-                          const ScopedVector<std::string>& path_prefixes);
+GURL SanitizeURLForReport(
+    const GURL& beacon_url,
+    const GURL& collector_url,
+    const std::vector<std::unique_ptr<std::string>>& path_prefixes);
 
 // Mockable wrapper around TimeTicks::Now and Timer. Mock version is in
 // test_util.h.
-// TODO(ttuttle): Rename to Time{Provider,Source,?}.
+// TODO(juliatuttle): Rename to Time{Provider,Source,?}.
 class DOMAIN_RELIABILITY_EXPORT MockableTime : public base::Clock,
                                                public base::TickClock {
  public:
@@ -92,7 +84,7 @@ class DOMAIN_RELIABILITY_EXPORT MockableTime : public base::Clock,
   base::TimeTicks NowTicks() override = 0;
 
   // Returns a new Timer, or a mocked version thereof.
-  virtual scoped_ptr<MockableTime::Timer> CreateTimer() = 0;
+  virtual std::unique_ptr<MockableTime::Timer> CreateTimer() = 0;
 
  protected:
   MockableTime();
@@ -112,7 +104,7 @@ class DOMAIN_RELIABILITY_EXPORT ActualTime : public MockableTime {
   // MockableTime implementation:
   base::Time Now() override;
   base::TimeTicks NowTicks() override;
-  scoped_ptr<MockableTime::Timer> CreateTimer() override;
+  std::unique_ptr<MockableTime::Timer> CreateTimer() override;
 };
 
 }  // namespace domain_reliability

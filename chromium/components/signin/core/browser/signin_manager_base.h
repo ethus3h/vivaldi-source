@@ -23,18 +23,19 @@
 #ifndef COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_MANAGER_BASE_H_
 #define COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_MANAGER_BASE_H_
 
+#include <memory>
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/pref_change_registrar.h"
-#include "base/prefs/pref_member.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
+#include "components/prefs/pref_member.h"
 #include "components/signin/core/browser/account_info.h"
 #include "components/signin/core/browser/signin_internals_util.h"
+#include "components/signin/core/browser/signin_metrics.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
 class AccountTrackerService;
@@ -93,17 +94,13 @@ class SigninManagerBase : public KeyedService {
   AccountInfo GetAuthenticatedAccountInfo() const;
 
   // If a user has previously signed in (and has not signed out), this returns
-  // the account id. Otherwise, it returns an empty string.  This id can be used
-  // to uniquely identify an account, so for example can be used as a key to
-  // map accounts to data.
-  //
-  // TODO(rogerta): eventually the account id should be an obfuscated gaia id.
-  // For now though, this function returns the same value as
-  // GetAuthenticatedAccountInfo().email since lots of code assumes the unique
-  // id for an account is the username.  For code that needs a unique id to
-  // represent the connected account, call this method. Example: the
-  // AccountStatusMap type in MutableProfileOAuth2TokenService.  For code that
-  // needs to know the normalized email address of the connected account, use
+  // the account id. Otherwise, it returns an empty string.  This id is the
+  // G+/Focus obfuscated gaia id of the user. It can be used to uniquely
+  // identify an account, so for example as a key to map accounts to data. For
+  // code that needs a unique id to represent the connected account, call this
+  // method. Example: the AccountStatusMap type in
+  // MutableProfileOAuth2TokenService. For code that needs to know the
+  // normalized email address of the connected account, use
   // GetAuthenticatedAccountInfo().email.  Example: to show the string "Signed
   // in as XXX" in the hotdog menu.
   const std::string& GetAuthenticatedAccountId() const;
@@ -119,6 +116,11 @@ class SigninManagerBase : public KeyedService {
 
   // Returns true if there's a signin in progress.
   virtual bool AuthInProgress() const;
+
+  // Sign a user out, removing the preference, erasing all keys
+  // associated with the user, and canceling all auth in progress.
+  virtual void SignOut(signin_metrics::ProfileSignout signout_source_metric,
+                       signin_metrics::SignoutDelete signout_delete_metric);
 
   // KeyedService implementation.
   void Shutdown() override;

@@ -7,6 +7,7 @@ package org.chromium.chrome.browser;
 import android.content.Context;
 import android.content.pm.PackageManager;
 
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.annotations.CalledByNative;
 
 /**
@@ -15,7 +16,7 @@ import org.chromium.base.annotations.CalledByNative;
 public class DevToolsServer {
     private static final String DEBUG_PERMISSION_SIFFIX = ".permission.DEBUG";
 
-    private long mNativeDevToolsServer = 0;
+    private long mNativeDevToolsServer;
 
     // Defines what processes may access to the socket.
     public enum Security {
@@ -58,7 +59,7 @@ public class DevToolsServer {
     @CalledByNative
     private static boolean checkDebugPermission(Context context, int pid, int uid) {
         String debugPermissionName = context.getPackageName() + DEBUG_PERMISSION_SIFFIX;
-        return context.checkPermission(debugPermissionName, pid, uid)
+        return ApiCompatibilityUtils.checkPermission(context, debugPermissionName, pid, uid)
                 == PackageManager.PERMISSION_GRANTED;
     }
 }

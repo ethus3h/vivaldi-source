@@ -11,7 +11,7 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/appcache/appcache.h"
 #include "content/browser/appcache/appcache_host.h"
 #include "content/browser/appcache/appcache_service_impl.h"
@@ -114,6 +114,7 @@ void AppCacheGroup::AddCache(AppCache* complete_cache) {
 void AppCacheGroup::RemoveCache(AppCache* cache) {
   DCHECK(cache->associated_hosts().empty());
   if (cache == newest_complete_cache_) {
+    CancelUpdate();
     AppCache* tmp_cache = newest_complete_cache_;
     newest_complete_cache_ = NULL;
     tmp_cache->set_owning_group(NULL);  // may cause this group to be deleted
@@ -259,7 +260,8 @@ void AppCacheGroup::SetUpdateAppCacheStatus(UpdateAppCacheStatus status) {
     // deletion by adding an extra ref in this scope (but only if we're not
     // in our destructor).
     scoped_refptr<AppCacheGroup> protect(is_in_dtor_ ? NULL : this);
-    FOR_EACH_OBSERVER(UpdateObserver, observers_, OnUpdateComplete(this));
+    for (auto& observer : observers_)
+      observer.OnUpdateComplete(this);
     if (!queued_updates_.empty())
       ScheduleUpdateRestart(kUpdateRestartDelayMs);
   }

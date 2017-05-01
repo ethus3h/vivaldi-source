@@ -9,11 +9,11 @@
 
 #include "base/command_line.h"
 #include "base/memory/ref_counted.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_info.h"
 #include "components/signin/core/browser/account_tracker_service.h"
 #include "components/signin/core/browser/signin_client.h"
@@ -227,6 +227,10 @@ bool SigninManagerBase::AuthInProgress() const {
   return false;
 }
 
+void SigninManagerBase::SignOut(
+      signin_metrics::ProfileSignout signout_source_metric,
+      signin_metrics::SignoutDelete signout_delete_metric){}
+
 void SigninManagerBase::Shutdown() {}
 
 void SigninManagerBase::AddObserver(Observer* observer) {
@@ -250,7 +254,6 @@ void SigninManagerBase::RemoveSigninDiagnosticsObserver(
 void SigninManagerBase::NotifyDiagnosticsObservers(
     const TimedSigninStatusField& field,
     const std::string& value) {
-  FOR_EACH_OBSERVER(SigninDiagnosticsObserver,
-                    signin_diagnostics_observers_,
-                    NotifySigninValueChanged(field, value));
+  for (auto& observer : signin_diagnostics_observers_)
+    observer.NotifySigninValueChanged(field, value);
 }

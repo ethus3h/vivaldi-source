@@ -4,12 +4,18 @@
 
 package org.chromium.chrome.browser.media.remote;
 
-import android.app.PendingIntent.CanceledException;
-import android.graphics.Rect;
-import android.test.suitebuilder.annotation.LargeTest;
+import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 
+import android.graphics.Rect;
+import android.support.test.filters.LargeTest;
+
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.browser.media.remote.NotificationTransportControl.ListenerService;
+import org.chromium.base.test.util.FlakyTest;
+import org.chromium.base.test.util.Restriction;
+import org.chromium.base.test.util.RetryOnFailure;
+import org.chromium.chrome.browser.media.ui.MediaNotificationListener;
 import org.chromium.chrome.browser.tab.Tab;
 
 import java.util.concurrent.TimeoutException;
@@ -25,6 +31,8 @@ public class CastStartStopTest extends CastTestBase {
      */
     @Feature({"VideoFling"})
     @LargeTest
+    @RetryOnFailure
+    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE) // crbug.com/652872
     public void testCastingGenericVideo() throws InterruptedException, TimeoutException {
         castDefaultVideoFromPage(DEFAULT_VIDEO_PAGE);
         checkVideoStarted(DEFAULT_VIDEO);
@@ -35,6 +43,8 @@ public class CastStartStopTest extends CastTestBase {
      */
     @Feature({"VideoFling"})
     @LargeTest
+    @RetryOnFailure
+    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE) // crbug.com/652872
     public void testStopFromVideoControls() throws InterruptedException, TimeoutException {
         Rect videoRect = castDefaultVideoFromPage(DEFAULT_VIDEO_PAGE);
 
@@ -50,31 +60,31 @@ public class CastStartStopTest extends CastTestBase {
      */
     @Feature({"VideoFling"})
     @LargeTest
+    @RetryOnFailure
+    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE) // crbug.com/652872
     public void testStopFromNotification() throws InterruptedException, TimeoutException {
         castDefaultVideoFromPage(DEFAULT_VIDEO_PAGE);
 
         // Get the notification
-        NotificationTransportControl notificationTransportControl = waitForCastNotification();
+        final CastNotificationControl notificationControl = waitForCastNotification();
 
-        // We can't actually click the notification's stop button, since it is owned by a different
-        // process and hence is not accessible through instrumentation, so send the stop event
-        // instead.
-        NotificationTransportControl.ListenerService service =
-                waitForCastNotificationService(notificationTransportControl);
-
-        try {
-            service.getPendingIntent(ListenerService.ACTION_ID_STOP).send();
-        } catch (CanceledException e) {
-            fail();
-        }
+        // Send play
+        ThreadUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                notificationControl.onStop(MediaNotificationListener.ACTION_SOURCE_MEDIA_SESSION);
+            }
+        });
         checkDisconnected();
     }
 
     /*
      * Test that a cast session disconnects when the video ends
      */
+    @DisableIf.Build(sdk_is_less_than = 19, message = "crbug.com/582067")
     @Feature({"VideoFling"})
     @LargeTest
+    @FlakyTest
     public void testStopWhenVideoEnds() throws InterruptedException, TimeoutException {
         castDefaultVideoFromPage(DEFAULT_VIDEO_PAGE);
         // Wait for the video to finish (this assumes the video is short, the test video

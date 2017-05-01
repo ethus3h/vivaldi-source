@@ -10,6 +10,10 @@
 #include "net/base/int128.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace net {
+
+namespace test {
+
 TEST(Int128, AllTests) {
   uint128 zero(0);
   uint128 one(1);
@@ -260,3 +264,7 @@ TEST(Int128, AliasTests) {
   x3 += x3;
   EXPECT_EQ(x4, x3);
 }
+
+}  // namespace test
+
+}  // namespace net

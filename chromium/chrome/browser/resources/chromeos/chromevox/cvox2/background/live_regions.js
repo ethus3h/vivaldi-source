@@ -12,6 +12,7 @@ goog.require('ChromeVoxState');
 
 goog.scope(function() {
 var AutomationNode = chrome.automation.AutomationNode;
+var RoleType = chrome.automation.RoleType;
 var TreeChange = chrome.automation.TreeChange;
 
 /**
@@ -41,13 +42,8 @@ LiveRegions = function(chromeVoxState) {
    * @private
    */
   this.liveRegionNodeSet_ = new WeakSet();
-
-  // API only exists >= m49. Prevent us from crashing.
-  try {
-    chrome.automation.addTreeChangeObserver(
-        'liveRegionTreeChanges', this.onTreeChange.bind(this));
-  } catch (e) {
-  }
+  chrome.automation.addTreeChangeObserver(
+      'liveRegionTreeChanges', this.onTreeChange.bind(this));
 };
 
 /**
@@ -56,7 +52,15 @@ LiveRegions = function(chromeVoxState) {
  * @type {number}
  * @const
  */
-LiveRegions.LIVE_REGION_QUEUE_TIME_MS = 500;
+LiveRegions.LIVE_REGION_QUEUE_TIME_MS = 5000;
+
+/**
+ * Live region events received on the same node in fewer than this many
+ * milliseconds will be dropped to avoid a stream of constant chatter.
+ * @type {number}
+ * @const
+ */
+LiveRegions.LIVE_REGION_MIN_SAME_NODE_MS = 20;
 
 /**
  * Whether live regions from background tabs should be announced or not.
@@ -84,22 +88,30 @@ LiveRegions.prototype = {
     if (!currentRange)
       return;
 
+    var webView = AutomationUtil.getTopLevelRoot(node);
+    webView = webView ? webView.parent : null;
     if (!LiveRegions.announceLiveRegionsFromBackgroundTabs_ &&
-        !AutomationUtil.isInSameWebpage(node, currentRange.start.node)) {
+        currentRange.start.node.role != RoleType.desktop &&
+        (!webView || !webView.state.focused)) {
       return;
     }
 
     var type = treeChange.type;
     var relevant = node.containerLiveRelevant;
-    if (relevant.indexOf('additions') >= 0 &&
-        (type == 'nodeCreated' || type == 'subtreeCreated')) {
+    var additions = relevant.indexOf('additions') >= 0;
+    var text = relevant.indexOf('text') >= 0;
+    var removals = relevant.indexOf('removals') >= 0;
+    var all = relevant.indexOf('all') >= 0;
+
+    if (all || (additions &&
+        (type == 'nodeCreated' || type == 'subtreeCreated'))) {
       this.outputLiveRegionChange_(node, null);
     }
 
-    if (relevant.indexOf('text') >= 0 && type == 'nodeChanged')
+    if (all || (text && type == 'textChanged'))
       this.outputLiveRegionChange_(node, null);
 
-    if (relevant.indexOf('removals') >= 0 && type == 'nodeRemoved')
+    if (all || (removals && type == 'nodeRemoved'))
       this.outputLiveRegionChange_(node, '@live_regions_removed');
   },
 
@@ -116,12 +128,28 @@ LiveRegions.prototype = {
     if (node.containerLiveBusy)
       return;
 
-    if (node.containerLiveAtomic && !node.liveAtomic) {
-      if (node.parent)
-        this.outputLiveRegionChange_(node.parent, opt_prependFormatStr);
+    var delta = new Date() - this.lastLiveRegionTime_;
+    if (delta > LiveRegions.LIVE_REGION_MIN_SAME_NODE_MS)
+      this.liveRegionNodeSet_ = new WeakSet();
+
+    while (node.containerLiveAtomic && !node.liveAtomic && node.parent)
+      node = node.parent;
+
+    if (this.liveRegionNodeSet_.has(node)) {
+      this.lastLiveRegionTime_ = new Date();
       return;
     }
 
+    this.outputLiveRegionChangeForNode_(node, opt_prependFormatStr);
+  },
+
+  /**
+   * @param {!AutomationNode} node The changed node.
+   * @param {?string=} opt_prependFormatStr If set, a format string for
+   *     cvox2.Output to prepend to the output.
+   * @private
+   */
+  outputLiveRegionChangeForNode_: function(node, opt_prependFormatStr) {
     var range = cursors.Range.fromNode(node);
     var output = new Output();
     if (opt_prependFormatStr)
@@ -129,34 +157,32 @@ LiveRegions.prototype = {
     output.withSpeech(range, range, Output.EventType.NAVIGATE);
 
     if (!output.hasSpeech && node.liveAtomic)
-      output.format('$descendants', node);
+      output.format('$joinedDescendants', node);
 
     output.withSpeechCategory(cvox.TtsCategory.LIVE);
 
+    var currentTime = new Date();
     if (!output.hasSpeech)
       return;
 
+    // Queue live regions coming from background tabs.
+    var webView = AutomationUtil.getTopLevelRoot(node);
+    webView = webView ? webView.parent : null;
+    var forceQueueForBackgroundedLiveRegion =
+        !webView || !webView.state.focused;
+
     // Enqueue live region updates that were received at approximately
     // the same time, otherwise flush previous live region updates.
-    var currentTime = new Date();
     var queueTime = LiveRegions.LIVE_REGION_QUEUE_TIME_MS;
-    if (currentTime - this.lastLiveRegionTime_ > queueTime) {
-      this.liveRegionNodeSet_ = new WeakSet();
+    var delta = currentTime - this.lastLiveRegionTime_;
+    if (delta > queueTime && !forceQueueForBackgroundedLiveRegion)
       output.withQueueMode(cvox.QueueMode.CATEGORY_FLUSH);
-      this.lastLiveRegionTime_ = currentTime;
-    } else {
+    else
       output.withQueueMode(cvox.QueueMode.QUEUE);
-    }
-
-    var parent = node;
-    while (parent) {
-      if (this.liveRegionNodeSet_.has(parent))
-        return;
-      parent = parent.parent;
-    }
 
     this.liveRegionNodeSet_.add(node);
     output.go();
+    this.lastLiveRegionTime_ = currentTime;
   },
 };
 

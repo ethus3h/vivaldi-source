@@ -9,14 +9,13 @@
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/observer_list.h"
-#include "base/prefs/pref_change_registrar.h"
 #include "base/scoped_observer.h"
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/component_migration_helper.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension.h"
@@ -29,8 +28,8 @@ class ToolbarActionViewController;
 
 namespace extensions {
 class ExtensionActionManager;
+class ExtensionMessageBubbleController;
 class ExtensionRegistry;
-class ExtensionSet;
 }
 
 // Model for the browser actions toolbar. This is a per-profile instance, and
@@ -49,7 +48,6 @@ class ToolbarActionsModel
   // The different options for highlighting.
   enum HighlightType {
     HIGHLIGHT_NONE,
-    HIGHLIGHT_INFO,
     HIGHLIGHT_WARNING,
   };
 
@@ -153,10 +151,10 @@ class ToolbarActionsModel
 
   bool actions_initialized() const { return actions_initialized_; }
 
-  ScopedVector<ToolbarActionViewController> CreateActions(
+  std::vector<std::unique_ptr<ToolbarActionViewController>> CreateActions(
       Browser* browser,
       ToolbarActionsBar* bar);
-  scoped_ptr<ToolbarActionViewController> CreateActionForItem(
+  std::unique_ptr<ToolbarActionViewController> CreateActionForItem(
       Browser* browser,
       ToolbarActionsBar* bar,
       const ToolbarItem& item);
@@ -171,13 +169,16 @@ class ToolbarActionsModel
 
   bool is_highlighting() const { return highlight_type_ != HIGHLIGHT_NONE; }
   HighlightType highlight_type() const { return highlight_type_; }
-  bool highlighting_for_toolbar_redesign() const {
-    return highlighting_for_toolbar_redesign_;
+
+  bool has_active_bubble() const { return has_active_bubble_; }
+  void set_has_active_bubble(bool has_active_bubble) {
+    has_active_bubble_ = has_active_bubble;
   }
 
   void SetActionVisibility(const std::string& action_id, bool visible);
 
   // ComponentMigrationHelper::ComponentActionDelegate:
+  // AddComponentAction() is a no-op if |actions_initialized_| is false.
   void AddComponentAction(const std::string& action_id) override;
   void RemoveComponentAction(const std::string& action_id) override;
   bool HasComponentAction(const std::string& action_id) const override;
@@ -196,9 +197,10 @@ class ToolbarActionsModel
   // number of visible icons will be reset to what it was before highlighting.
   void StopHighlighting();
 
-  // Returns true if the toolbar model is running with the redesign and is
-  // showing new icons as a result.
-  bool RedesignIsShowingNewIcons() const;
+  // Gets the ExtensionMessageBubbleController that should be shown for this
+  // profile, if any.
+  std::unique_ptr<extensions::ExtensionMessageBubbleController>
+  GetExtensionMessageBubbleController(Browser* browser);
 
  private:
   // Callback when actions are ready.
@@ -256,12 +258,11 @@ class ToolbarActionsModel
   bool HasItem(const ToolbarItem& item) const;
 
   // Adds |item| to the toolbar.  If the item has an existing preference for
-  // toolbar position, that will be used to determine its location.  If
-  // |is_component| is true, the item will be given a default postion of 0,
-  // otherwise the default is at the end of the visible items. If the toolbar is
-  // in highlighting mode, the item will not be visible until highlighting mode
-  // is exited.
-  void AddItem(const ToolbarItem& item, bool is_component);
+  // toolbar position, that will be used to determine its location. Otherwise
+  // it will be placed at the end of the visible items. If the toolbar is in
+  // highlighting mode, the item will not be visible until highlighting mode is
+  // exited.
+  void AddItem(const ToolbarItem& item);
 
   // Removes |item| from the toolbar.  If the toolbar is in highlighting mode,
   // the item is also removed from the highlighted list (if present).
@@ -270,6 +271,9 @@ class ToolbarActionsModel
   // Looks up and returns the extension with the given |id| in the set of
   // enabled extensions.
   const extensions::Extension* GetExtensionById(const std::string& id) const;
+
+  // Returns true if the action is visible on the toolbar.
+  bool IsActionVisible(const std::string& action_id) const;
 
   // Our observers.
   base::ObserverList<Observer> observers_;
@@ -290,7 +294,8 @@ class ToolbarActionsModel
   extensions::ExtensionActionManager* extension_action_manager_;
 
   // The ComponentMigrationHelper.
-  scoped_ptr<extensions::ComponentMigrationHelper> component_migration_helper_;
+  std::unique_ptr<extensions::ComponentMigrationHelper>
+      component_migration_helper_;
 
   // True if we've handled the initial EXTENSIONS_READY notification.
   bool actions_initialized_;
@@ -308,10 +313,6 @@ class ToolbarActionsModel
   // highlight).
   HighlightType highlight_type_;
 
-  // Whether or not the toolbar model is actively highlighting for the toolbar
-  // redesign.
-  bool highlighting_for_toolbar_redesign_;
-
   // A list of action ids ordered to correspond with their last known
   // positions.
   std::vector<std::string> last_known_positions_;
@@ -323,6 +324,10 @@ class ToolbarActionsModel
   // TODO(devlin): Make a new variable to indicate that all icons should be
   // visible, instead of overloading this one.
   int visible_icon_count_;
+
+  // Whether or not there is an active ExtensionMessageBubbleController
+  // associated with the profile. There should only be one at a time.
+  bool has_active_bubble_;
 
   ScopedObserver<extensions::ExtensionActionAPI,
                  extensions::ExtensionActionAPI::Observer>

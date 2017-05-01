@@ -6,11 +6,13 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/run_loop.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "storage/browser/fileapi/file_system_usage_cache.h"
 #include "storage/browser/fileapi/obfuscated_file_util.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -100,7 +102,7 @@ class QuotaBackendImplTest : public testing::Test {
     ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
     file_util_.reset(ObfuscatedFileUtil::CreateForTesting(
-        NULL, data_dir_.path(), in_memory_env_.get(), file_task_runner()));
+        NULL, data_dir_.GetPath(), in_memory_env_.get(), file_task_runner()));
     backend_.reset(new QuotaBackendImpl(file_task_runner(),
                                         file_util_.get(),
                                         &file_system_usage_cache_,
@@ -111,7 +113,7 @@ class QuotaBackendImplTest : public testing::Test {
     backend_.reset();
     quota_manager_proxy_ = NULL;
     file_util_.reset();
-    message_loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
  protected:
@@ -147,11 +149,11 @@ class QuotaBackendImplTest : public testing::Test {
 
   base::MessageLoop message_loop_;
   base::ScopedTempDir data_dir_;
-  scoped_ptr<leveldb::Env> in_memory_env_;
-  scoped_ptr<ObfuscatedFileUtil> file_util_;
+  std::unique_ptr<leveldb::Env> in_memory_env_;
+  std::unique_ptr<ObfuscatedFileUtil> file_util_;
   FileSystemUsageCache file_system_usage_cache_;
   scoped_refptr<MockQuotaManagerProxy> quota_manager_proxy_;
-  scoped_ptr<QuotaBackendImpl> backend_;
+  std::unique_ptr<QuotaBackendImpl> backend_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuotaBackendImplTest);

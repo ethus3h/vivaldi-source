@@ -17,29 +17,12 @@
 
 namespace autofill {
 
-bool IsValidCreditCardExpirationDate(const base::string16& year,
-                                     const base::string16& month,
-                                     const base::Time& now) {
-  base::string16 year_cleaned, month_cleaned;
-  base::TrimWhitespace(year, base::TRIM_ALL, &year_cleaned);
-  base::TrimWhitespace(month, base::TRIM_ALL, &month_cleaned);
-  if (year_cleaned.length() != 4)
-    return false;
-
-  int cc_year;
-  if (!base::StringToInt(year_cleaned, &cc_year))
-    return false;
-
-  int cc_month;
-  if (!base::StringToInt(month_cleaned, &cc_month))
-    return false;
-
-  return IsValidCreditCardExpirationDate(cc_year, cc_month, now);
-}
-
 bool IsValidCreditCardExpirationDate(int year,
                                      int month,
                                      const base::Time& now) {
+  if (month < 1 || month > 12)
+    return false;
+
   base::Time::Exploded now_exploded;
   now.LocalExplode(&now_exploded);
 
@@ -60,6 +43,7 @@ bool IsValidCreditCardNumber(const base::string16& text) {
   // defined sizes.
   // [1] http://www.merriampark.com/anatomycc.htm
   // [2] http://en.wikipedia.org/wiki/Bank_card_number
+  // CardEditor.isCardNumberLengthMaxium() needs to be kept in sync.
   const char* const type = CreditCard::GetCreditCardType(text);
   if (type == kAmericanExpressCard && number.size() != 15)
     return false;
@@ -71,17 +55,14 @@ bool IsValidCreditCardNumber(const base::string16& text) {
     return false;
   if (type == kMasterCard && number.size() != 16)
     return false;
+  if (type == kMirCard && number.size() != 16)
+    return false;
   if (type == kUnionPay && (number.size() < 16 || number.size() > 19))
     return false;
   if (type == kVisaCard && number.size() != 13 && number.size() != 16)
     return false;
   if (type == kGenericCard && (number.size() < 12 || number.size() > 19))
     return false;
-
-  // Unlike all the other supported types, UnionPay cards lack Luhn checksum
-  // validation.
-  if (type == kUnionPay)
-    return true;
 
   // Use the Luhn formula [3] to validate the number.
   // [3] http://en.wikipedia.org/wiki/Luhn_algorithm
@@ -106,25 +87,11 @@ bool IsValidCreditCardNumber(const base::string16& text) {
   return (sum % 10) == 0;
 }
 
-bool IsValidCreditCardSecurityCode(const base::string16& text) {
-  if (text.size() < 3U || text.size() > 4U)
-    return false;
-
-  for (const base::char16& it : text) {
-    if (!base::IsAsciiDigit(it))
-      return false;
-  }
-  return true;
-}
-
 bool IsValidCreditCardSecurityCode(const base::string16& code,
-                                   const base::string16& number) {
-  const char* const type = CreditCard::GetCreditCardType(number);
-  size_t required_length = 3;
-  if (type == kAmericanExpressCard)
-    required_length = 4;
-
-  return code.length() == required_length;
+                                   const base::StringPiece card_type) {
+  size_t required_length = card_type == kAmericanExpressCard ? 4 : 3;
+  return code.length() == required_length &&
+         base::ContainsOnlyChars(code, base::ASCIIToUTF16("0123456789"));
 }
 
 bool IsValidEmailAddress(const base::string16& text) {

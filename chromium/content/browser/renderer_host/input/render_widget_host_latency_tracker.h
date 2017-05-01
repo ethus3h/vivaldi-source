@@ -12,20 +12,28 @@
 #include "base/macros.h"
 #include "content/browser/renderer_host/event_with_latency_info.h"
 #include "content/common/content_export.h"
+#include "content/common/input/input_event_ack_state.h"
 #include "ui/events/latency_info.h"
 
 namespace content {
+
+class RenderWidgetHostDelegate;
 
 // Utility class for tracking the latency of events passing through
 // a given RenderWidgetHost.
 class CONTENT_EXPORT RenderWidgetHostLatencyTracker {
  public:
-  RenderWidgetHostLatencyTracker();
+  explicit RenderWidgetHostLatencyTracker();
   ~RenderWidgetHostLatencyTracker();
 
   // Associates the latency tracker with a given route and process.
   // Called once after the RenderWidgetHost is fully initialized.
   void Initialize(int routing_id, int process_id);
+
+  void ComputeInputLatencyHistograms(blink::WebInputEvent::Type type,
+                                     int64_t latency_component_id,
+                                     const ui::LatencyInfo& latency,
+                                     InputEventAckState ack_result);
 
   // Populates the LatencyInfo with relevant entries for latency tracking.
   // Called when an event is received by the RenderWidgetHost, prior to
@@ -38,7 +46,8 @@ class CONTENT_EXPORT RenderWidgetHostLatencyTracker {
   // performing relevant UMA latency reporting. Called when an event is ack'ed
   // to the RenderWidgetHost (from the InputRouter).
   void OnInputEventAck(const blink::WebInputEvent& event,
-                       ui::LatencyInfo* latency);
+                       ui::LatencyInfo* latency,
+                       InputEventAckState ack_result);
 
   // Populates renderer-created LatencyInfo entries with the appropriate latency
   // component id. Called when the RenderWidgetHost receives a compositor swap
@@ -48,7 +57,8 @@ class CONTENT_EXPORT RenderWidgetHostLatencyTracker {
   // Terminates latency tracking for events that triggered rendering, also
   // performing relevant UMA latency reporting.
   // Called when the RenderWidgetHost receives a swap update from the GPU.
-  void OnFrameSwapped(const ui::LatencyInfo& latency);
+  void OnFrameSwapped(const ui::LatencyInfo& latency,
+                      bool is_running_navigation_hint_task);
 
   // WebInputEvent coordinates are in DPIs, while LatencyInfo expects
   // coordinates in device pixels.
@@ -60,11 +70,23 @@ class CONTENT_EXPORT RenderWidgetHostLatencyTracker {
   // subsystem.
   int64_t latency_component_id() const { return latency_component_id_; }
 
+  // A delegate is used to get the url to be stored in Rappor Sample.
+  // If delegate is null no Rappor sample will be reported.
+  void SetDelegate(RenderWidgetHostDelegate*);
+
  private:
   int64_t last_event_id_;
   int64_t latency_component_id_;
   float device_scale_factor_;
-  bool has_seent_first_gesture_scroll_update_;
+  bool has_seen_first_gesture_scroll_update_;
+  // Whether the current stream of touch events has ever included more than one
+  // touch point.
+  bool multi_finger_gesture_;
+  // Whether the touch start for the current stream of touch events had its
+  // default action prevented. Only valid for single finger gestures.
+  bool touch_start_default_prevented_;
+
+  RenderWidgetHostDelegate* render_widget_host_delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostLatencyTracker);
 };

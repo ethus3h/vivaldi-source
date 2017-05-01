@@ -15,7 +15,6 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "gpu/command_buffer/service/gpu_switches.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_version_info.h"
 
@@ -28,12 +27,12 @@ class ShaderTranslatorInitializer {
  public:
   ShaderTranslatorInitializer() {
     TRACE_EVENT0("gpu", "ShInitialize");
-    CHECK(ShInitialize());
+    CHECK(sh::Initialize());
   }
 
   ~ShaderTranslatorInitializer() {
     TRACE_EVENT0("gpu", "ShFinalize");
-    ShFinalize();
+    sh::Finalize();
   }
 };
 
@@ -44,7 +43,7 @@ void GetAttributes(ShHandle compiler, AttributeMap* var_map) {
   if (!var_map)
     return;
   var_map->clear();
-  const std::vector<sh::Attribute>* attribs = ShGetAttributes(compiler);
+  const std::vector<sh::Attribute>* attribs = sh::GetAttributes(compiler);
   if (attribs) {
     for (size_t ii = 0; ii < attribs->size(); ++ii)
       (*var_map)[(*attribs)[ii].mappedName] = (*attribs)[ii];
@@ -55,7 +54,7 @@ void GetUniforms(ShHandle compiler, UniformMap* var_map) {
   if (!var_map)
     return;
   var_map->clear();
-  const std::vector<sh::Uniform>* uniforms = ShGetUniforms(compiler);
+  const std::vector<sh::Uniform>* uniforms = sh::GetUniforms(compiler);
   if (uniforms) {
     for (size_t ii = 0; ii < uniforms->size(); ++ii)
       (*var_map)[(*uniforms)[ii].mappedName] = (*uniforms)[ii];
@@ -66,7 +65,7 @@ void GetVaryings(ShHandle compiler, VaryingMap* var_map) {
   if (!var_map)
     return;
   var_map->clear();
-  const std::vector<sh::Varying>* varyings = ShGetVaryings(compiler);
+  const std::vector<sh::Varying>* varyings = sh::GetVaryings(compiler);
   if (varyings) {
     for (size_t ii = 0; ii < varyings->size(); ++ii)
       (*var_map)[(*varyings)[ii].mappedName] = (*varyings)[ii];
@@ -75,7 +74,7 @@ void GetVaryings(ShHandle compiler, VaryingMap* var_map) {
 void GetOutputVariables(ShHandle compiler, OutputVariableList* var_list) {
   if (!var_list)
     return;
-  *var_list = *ShGetOutputVariables(compiler);
+  *var_list = *sh::GetOutputVariables(compiler);
 }
 
 void GetInterfaceBlocks(ShHandle compiler, InterfaceBlockMap* var_map) {
@@ -83,7 +82,7 @@ void GetInterfaceBlocks(ShHandle compiler, InterfaceBlockMap* var_map) {
     return;
   var_map->clear();
   const std::vector<sh::InterfaceBlock>* interface_blocks =
-      ShGetInterfaceBlocks(compiler);
+      sh::GetInterfaceBlocks(compiler);
   if (interface_blocks) {
     for (const auto& block : *interface_blocks) {
       (*var_map)[block.mappedName] = block;
@@ -97,7 +96,7 @@ void GetNameHashingInfo(ShHandle compiler, NameMap* name_map) {
   name_map->clear();
 
   typedef std::map<std::string, std::string> NameMapANGLE;
-  const NameMapANGLE* angle_map = ShGetNameHashingMap(compiler);
+  const NameMapANGLE* angle_map = sh::GetNameHashingMap(compiler);
   DCHECK(angle_map);
 
   for (NameMapANGLE::const_iterator iter = angle_map->begin();
@@ -111,7 +110,7 @@ void GetNameHashingInfo(ShHandle compiler, NameMap* name_map) {
 }  // namespace
 
 ShShaderOutput ShaderTranslator::GetShaderOutputLanguageForContext(
-    const gfx::GLVersionInfo& version_info) {
+    const gl::GLVersionInfo& version_info) {
   if (version_info.is_es) {
     return SH_ESSL_OUTPUT;
   }
@@ -162,14 +161,15 @@ ShaderTranslator::DestructionObserver::~DestructionObserver() {
 
 ShaderTranslator::ShaderTranslator()
     : compiler_(NULL),
-      driver_bug_workarounds_(static_cast<ShCompileOptions>(0)) {
+      compile_options_(0) {
 }
 
 bool ShaderTranslator::Init(GLenum shader_type,
                             ShShaderSpec shader_spec,
                             const ShBuiltInResources* resources,
                             ShShaderOutput shader_output_language,
-                            ShCompileOptions driver_bug_workarounds) {
+                            ShCompileOptions driver_bug_workarounds,
+                            bool gl_shader_interm_output) {
   // Make sure Init is called only once.
   DCHECK(compiler_ == NULL);
   DCHECK(shader_type == GL_FRAGMENT_SHADER || shader_type == GL_VERTEX_SHADER);
@@ -182,26 +182,31 @@ bool ShaderTranslator::Init(GLenum shader_type,
 
   {
     TRACE_EVENT0("gpu", "ShConstructCompiler");
-    compiler_ = ShConstructCompiler(shader_type, shader_spec,
-                                    shader_output_language, resources);
+    compiler_ = sh::ConstructCompiler(shader_type, shader_spec,
+                                      shader_output_language, resources);
   }
-  driver_bug_workarounds_ = driver_bug_workarounds;
-  return compiler_ != NULL;
-}
 
-int ShaderTranslator::GetCompileOptions() const {
-  int compile_options =
+  compile_options_ =
       SH_OBJECT_CODE | SH_VARIABLES | SH_ENFORCE_PACKING_RESTRICTIONS |
       SH_LIMIT_EXPRESSION_COMPLEXITY | SH_LIMIT_CALL_STACK_DEPTH |
       SH_CLAMP_INDIRECT_ARRAY_BOUNDS;
+  if (gl_shader_interm_output)
+    compile_options_ |= SH_INTERMEDIATE_TREE;
+  compile_options_ |= driver_bug_workarounds;
+  switch (shader_spec) {
+    case SH_WEBGL_SPEC:
+    case SH_WEBGL2_SPEC:
+      compile_options_ |= SH_INIT_OUTPUT_VARIABLES;
+      break;
+    default:
+      break;
+  }
 
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kGLShaderIntermOutput))
-    compile_options |= SH_INTERMEDIATE_TREE;
+  return compiler_ != NULL;
+}
 
-  compile_options |= driver_bug_workarounds_;
-
-  return compile_options;
+ShCompileOptions ShaderTranslator::GetCompileOptions() const {
+  return compile_options_;
 }
 
 bool ShaderTranslator::Translate(const std::string& shader_source,
@@ -221,16 +226,15 @@ bool ShaderTranslator::Translate(const std::string& shader_source,
   {
     TRACE_EVENT0("gpu", "ShCompile");
     const char* const shader_strings[] = { shader_source.c_str() };
-    success = ShCompile(
-        compiler_, shader_strings, 1, GetCompileOptions());
+    success = sh::Compile(compiler_, shader_strings, 1, GetCompileOptions());
   }
   if (success) {
     // Get translated shader.
     if (translated_source) {
-      *translated_source = ShGetObjectCode(compiler_);
+      *translated_source = sh::GetObjectCode(compiler_);
     }
     // Get shader version.
-    *shader_version = ShGetShaderVersion(compiler_);
+    *shader_version = sh::GetShaderVersion(compiler_);
     // Get info for attribs, uniforms, varyings and output variables.
     GetAttributes(compiler_, attrib_map);
     GetUniforms(compiler_, uniform_map);
@@ -243,11 +247,11 @@ bool ShaderTranslator::Translate(const std::string& shader_source,
 
   // Get info log.
   if (info_log) {
-    *info_log = ShGetInfoLog(compiler_);
+    *info_log = sh::GetInfoLog(compiler_);
   }
 
   // We don't need results in the compiler anymore.
-  ShClearResults(compiler_);
+  sh::ClearResults(compiler_);
 
   return success;
 }
@@ -256,8 +260,8 @@ std::string ShaderTranslator::GetStringForOptionsThatWouldAffectCompilation()
     const {
   DCHECK(compiler_ != NULL);
   return std::string(":CompileOptions:" +
-         base::IntToString(GetCompileOptions())) +
-         ShGetBuiltInResourcesString(compiler_);
+                     base::Uint64ToString(GetCompileOptions())) +
+         sh::GetBuiltInResourcesString(compiler_);
 }
 
 void ShaderTranslator::AddDestructionObserver(
@@ -271,12 +275,11 @@ void ShaderTranslator::RemoveDestructionObserver(
 }
 
 ShaderTranslator::~ShaderTranslator() {
-  FOR_EACH_OBSERVER(DestructionObserver,
-                    destruction_observers_,
-                    OnDestruct(this));
+  for (auto& observer : destruction_observers_)
+    observer.OnDestruct(this);
 
   if (compiler_ != NULL)
-    ShDestruct(compiler_);
+    sh::Destruct(compiler_);
 }
 
 }  // namespace gles2

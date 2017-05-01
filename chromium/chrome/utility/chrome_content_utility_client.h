@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -32,44 +33,29 @@ class ChromeContentUtilityClient : public content::ContentUtilityClient {
 
   void UtilityThreadStarted() override;
   bool OnMessageReceived(const IPC::Message& message) override;
-  void RegisterMojoServices(content::ServiceRegistry* registry) override;
+  void ExposeInterfacesToBrowser(
+      service_manager::InterfaceRegistry* registry) override;
+  void RegisterServices(StaticServiceMap* services) override;
 
-  void AddHandler(scoped_ptr<UtilityMessageHandler> handler);
+  void AddHandler(std::unique_ptr<UtilityMessageHandler> handler);
 
   static void PreSandboxStartup();
-
-  // Shared with extensions::ExtensionsHandler.
-  static SkBitmap DecodeImage(const std::vector<unsigned char>& encoded_data,
-                              bool shrink_to_fit);
-  static void DecodeImageAndSend(const std::vector<unsigned char>& encoded_data,
-                                 bool shrink_to_fit,
-                                 int request_id);
-
-  static void set_max_ipc_message_size_for_test(int64_t max_message_size) {
-    max_ipc_message_size_ = max_message_size;
-  }
 
  private:
   // IPC message handlers.
   void OnUnpackWebResource(const std::string& resource_data);
-  void OnDecodeImage(const std::vector<unsigned char>& encoded_data,
-                     bool shrink_to_fit,
-                     int request_id);
 #if defined(OS_CHROMEOS)
-  void OnRobustJPEGDecodeImage(const std::vector<unsigned char>& encoded_data,
-                               int request_id);
-
   void OnCreateZipFile(const base::FilePath& src_dir,
                        const std::vector<base::FilePath>& src_relative_paths,
                        const base::FileDescriptor& dest_fd);
 #endif  // defined(OS_CHROMEOS)
 
-  void OnPatchFileBsdiff(const base::FilePath& input_file,
-                         const base::FilePath& patch_file,
-                         const base::FilePath& output_file);
-  void OnPatchFileCourgette(const base::FilePath& input_file,
-                            const base::FilePath& patch_file,
-                            const base::FilePath& output_file);
+  void OnPatchFileBsdiff(const IPC::PlatformFileForTransit& input_file,
+                         const IPC::PlatformFileForTransit& patch_file,
+                         const IPC::PlatformFileForTransit& output_file);
+  void OnPatchFileCourgette(const IPC::PlatformFileForTransit& input_file,
+                            const IPC::PlatformFileForTransit& patch_file,
+                            const IPC::PlatformFileForTransit& output_file);
   void OnStartupPing();
 #if defined(FULL_SAFE_BROWSING)
   void OnAnalyzeZipFileForDownloadProtection(
@@ -88,8 +74,6 @@ class ChromeContentUtilityClient : public content::ContentUtilityClient {
   bool filter_messages_;
   // A list of message_ids to filter.
   std::set<int> message_id_whitelist_;
-  // Maximum IPC msg size (default to kMaximumMessageSize; override for testing)
-  static int64_t max_ipc_message_size_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeContentUtilityClient);
 };

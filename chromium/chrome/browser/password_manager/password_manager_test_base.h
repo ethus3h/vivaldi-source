@@ -5,16 +5,19 @@
 #ifndef CHROME_BROWSER_PASSWORD_MANAGER_PASSWORD_MANAGER_TEST_BASE_H_
 #define CHROME_BROWSER_PASSWORD_MANAGER_PASSWORD_MANAGER_TEST_BASE_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/password_manager/core/browser/password_store_consumer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/test_utils.h"
 
 namespace autofill {
 struct PasswordForm;
 }
+
+class ManagePasswordsUIController;
 
 class NavigationObserver : public content::WebContentsObserver {
  public:
@@ -39,10 +42,10 @@ class NavigationObserver : public content::WebContentsObserver {
   content::RenderFrameHost* render_frame_host() { return render_frame_host_; }
 
   // content::WebContentsObserver:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
                      const GURL& validated_url) override;
-  void NavigationEntryCommitted(
-      const content::LoadCommittedDetails& load_details) override;
 
  private:
   std::string wait_for_path_;
@@ -53,49 +56,35 @@ class NavigationObserver : public content::WebContentsObserver {
   DISALLOW_COPY_AND_ASSIGN(NavigationObserver);
 };
 
-// Observes the save password prompt (bubble or infobar) for a specified
-// WebContents, keeps track of whether or not it is currently shown, and allows
-// accepting saving passwords through it.
-class PromptObserver {
+// Observes the save password prompt for a specified WebContents, keeps track of
+// whether or not it is currently shown, and allows accepting saving passwords
+// through it.
+class BubbleObserver {
  public:
-  virtual ~PromptObserver();
+  explicit BubbleObserver(content::WebContents* web_contents);
 
   // Checks if the save prompt is being currently shown.
-  virtual bool IsShowingPrompt() const = 0;
+  bool IsShowingSavePrompt() const;
 
   // Checks if the update prompt is being currently shown.
-  virtual bool IsShowingUpdatePrompt() const;
+  bool IsShowingUpdatePrompt() const;
+
+  // Dismisses the prompt currently open and moves the controller to the
+  // inactive state.
+  void Dismiss() const;
 
   // Expecting that the prompt is shown, saves the password. Checks that the
   // prompt is no longer visible afterwards.
-  void Accept() const;
+  void AcceptSavePrompt() const;
 
   // Expecting that the prompt is shown, update |form| with the password from
   // observed form. Checks that the prompt is no longer visible afterwards.
   void AcceptUpdatePrompt(const autofill::PasswordForm& form) const;
 
-  // Chooses the right implementation of PromptObserver and creates an instance
-  // of it.
-  static scoped_ptr<PromptObserver> Create(content::WebContents* web_contents);
-
- protected:
-  PromptObserver();
-
-  // Accepts the password. The implementation can assume that the prompt is
-  // currently shown, but is required to verify that the prompt is eventually
-  // closed.
-  virtual void AcceptImpl() const = 0;
-
-  // Accepts the password update. The implementation can assume that the prompt
-  // is currently shown, but is required to verify that the prompt is eventually
-  // closed.
-  // TODO(dvadym): Make this method pure virtual as soon as update UI is
-  // implemented for infobar. http://crbug.com/359315
-  virtual void AcceptUpdatePromptImpl(
-      const autofill::PasswordForm& form) const {}
-
  private:
-  DISALLOW_COPY_AND_ASSIGN(PromptObserver);
+  ManagePasswordsUIController* const passwords_ui_controller_;
+
+  DISALLOW_COPY_AND_ASSIGN(BubbleObserver);
 };
 
 class PasswordManagerBrowserTestBase : public InProcessBrowserTest {
@@ -134,6 +123,9 @@ class PasswordManagerBrowserTestBase : public InProcessBrowserTest {
   void WaitForElementValue(const std::string& iframe_id,
                            const std::string& element_id,
                            const std::string& expected_value);
+  // Make sure that the password store processed all the previous calls which
+  // are executed on another thread.
+  void WaitForPasswordStore();
   // Checks that the current "value" attribute of the HTML element with
   // |element_id| is equal to |expected_value|.
   void CheckElementValue(const std::string& element_id,

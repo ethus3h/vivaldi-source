@@ -7,44 +7,55 @@
 #include "core/css/CSSPathValue.h"
 #include "core/svg/SVGPathByteStream.h"
 #include "core/svg/SVGPathUtilities.h"
+#include "platform/graphics/Path.h"
+#include "wtf/PtrUtil.h"
+#include <memory>
 
 namespace blink {
 
-StylePath::StylePath(PassRefPtr<SVGPathByteStream> pathByteStream)
-    : m_byteStream(pathByteStream)
-{
-    ASSERT(m_byteStream);
-    buildPathFromByteStream(*m_byteStream, m_path);
+StylePath::StylePath(std::unique_ptr<SVGPathByteStream> pathByteStream)
+    : m_byteStream(std::move(pathByteStream)),
+      m_pathLength(std::numeric_limits<float>::quiet_NaN()) {
+  ASSERT(m_byteStream);
 }
 
-StylePath::~StylePath()
-{
+StylePath::~StylePath() {}
+
+PassRefPtr<StylePath> StylePath::create(
+    std::unique_ptr<SVGPathByteStream> pathByteStream) {
+  return adoptRef(new StylePath(std::move(pathByteStream)));
 }
 
-PassRefPtr<StylePath> StylePath::create(PassRefPtr<SVGPathByteStream> pathByteStream)
-{
-    return adoptRef(new StylePath(pathByteStream));
+StylePath* StylePath::emptyPath() {
+  DEFINE_STATIC_REF(StylePath, emptyPath,
+                    StylePath::create(SVGPathByteStream::create()));
+  return emptyPath;
 }
 
-StylePath* StylePath::emptyPath()
-{
-    DEFINE_STATIC_REF(StylePath, emptyPath, StylePath::create(SVGPathByteStream::create()));
-    return emptyPath;
+const Path& StylePath::path() const {
+  if (!m_path) {
+    m_path = WTF::wrapUnique(new Path);
+    buildPathFromByteStream(*m_byteStream, *m_path);
+  }
+  return *m_path;
 }
 
-const SVGPathByteStream& StylePath::byteStream() const
-{
-    return *m_byteStream;
+float StylePath::length() const {
+  if (std::isnan(m_pathLength))
+    m_pathLength = path().length();
+  return m_pathLength;
 }
 
-PassRefPtrWillBeRawPtr<CSSValue> StylePath::computedCSSValue() const
-{
-    return CSSPathValue::create(m_byteStream, const_cast<StylePath*>(this));
+bool StylePath::isClosed() const {
+  return path().isClosed();
 }
 
-bool StylePath::equals(const StylePath& other) const
-{
-    return *m_byteStream == *other.m_byteStream;
+CSSValue* StylePath::computedCSSValue() const {
+  return CSSPathValue::create(const_cast<StylePath*>(this));
 }
 
-} // namespace blink
+bool StylePath::operator==(const StylePath& other) const {
+  return *m_byteStream == *other.m_byteStream;
+}
+
+}  // namespace blink

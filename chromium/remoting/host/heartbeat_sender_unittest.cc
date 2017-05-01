@@ -10,6 +10,7 @@
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/mock_callback.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/base/test_rsa_key_pair.h"
@@ -17,8 +18,8 @@
 #include "remoting/signaling/mock_signal_strategy.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
-#include "third_party/webrtc/libjingle/xmpp/constants.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmpp/constants.h"
 
 using buzz::QName;
 using buzz::XmlElement;
@@ -53,16 +54,6 @@ ACTION_P(RemoveListener, list) {
   list->erase(arg0);
 }
 
-class MockClosure {
- public:
-  MOCK_CONST_METHOD0(Run, void());
-};
-
-class MockAckCallback {
- public:
-  MOCK_CONST_METHOD1(Run, void(bool success));
-};
-
 class HeartbeatSenderTest
     : public testing::Test {
  protected:
@@ -80,12 +71,10 @@ class HeartbeatSenderTest
     EXPECT_CALL(mock_unknown_host_id_error_callback_, Run())
         .Times(0);
 
-    heartbeat_sender_.reset(new HeartbeatSender(
-        base::Bind(&MockClosure::Run,
-                   base::Unretained(&mock_heartbeat_successful_callback_)),
-        base::Bind(&MockClosure::Run,
-                   base::Unretained(&mock_unknown_host_id_error_callback_)),
-        kHostId, &signal_strategy_, key_pair_, kTestBotJid));
+    heartbeat_sender_.reset(
+        new HeartbeatSender(mock_heartbeat_successful_callback_.Get(),
+                            mock_unknown_host_id_error_callback_.Get(), kHostId,
+                            &signal_strategy_, key_pair_, kTestBotJid));
   }
 
   void TearDown() override {
@@ -103,11 +92,11 @@ class HeartbeatSenderTest
 
   base::MessageLoop message_loop_;
   MockSignalStrategy signal_strategy_;
-  MockClosure mock_heartbeat_successful_callback_;
-  MockClosure mock_unknown_host_id_error_callback_;
+  base::MockCallback<base::Closure> mock_heartbeat_successful_callback_;
+  base::MockCallback<base::Closure> mock_unknown_host_id_error_callback_;
   std::set<SignalStrategy::Listener*> signal_strategy_listeners_;
   scoped_refptr<RsaKeyPair> key_pair_;
-  scoped_ptr<HeartbeatSender> heartbeat_sender_;
+  std::unique_ptr<HeartbeatSender> heartbeat_sender_;
 };
 
 // Call Start() followed by Stop(), and make sure a valid heartbeat is sent.
@@ -125,7 +114,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanza) {
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza(sent_iq);
+  std::unique_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != nullptr);
   ValidateHeartbeatStanza(stanza.get(), "0", nullptr);
 
@@ -149,7 +138,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaTwice) {
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza(sent_iq);
+  std::unique_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != nullptr);
   ValidateHeartbeatStanza(stanza.get(), "0", nullptr);
 
@@ -166,7 +155,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaTwice) {
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza2(sent_iq);
+  std::unique_ptr<XmlElement> stanza2(sent_iq);
   ValidateHeartbeatStanza(stanza2.get(), "1", nullptr);
 
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::DISCONNECTED);
@@ -190,7 +179,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaWithExpectedSequenceId) {
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza(sent_iq);
+  std::unique_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != nullptr);
   ValidateHeartbeatStanza(stanza.get(), "0", nullptr);
 
@@ -202,7 +191,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaWithExpectedSequenceId) {
   EXPECT_CALL(signal_strategy_, SendStanzaPtr(NotNull()))
       .WillOnce(DoAll(SaveArg<0>(&sent_iq2), Return(true)));
 
-  scoped_ptr<XmlElement> response(new XmlElement(buzz::QN_IQ));
+  std::unique_ptr<XmlElement> response(new XmlElement(buzz::QN_IQ));
   response->AddAttr(QName(std::string(), "type"), "result");
   XmlElement* result =
       new XmlElement(QName(kChromotingXmlNamespace, "heartbeat-result"));
@@ -215,7 +204,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaWithExpectedSequenceId) {
   heartbeat_sender_->ProcessResponse(false, nullptr, response.get());
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza2(sent_iq2);
+  std::unique_ptr<XmlElement> stanza2(sent_iq2);
   ASSERT_TRUE(stanza2 != nullptr);
   ValidateHeartbeatStanza(stanza2.get(),
                           base::IntToString(kExpectedSequenceId).c_str(),
@@ -228,7 +217,7 @@ TEST_F(HeartbeatSenderTest, DoSendStanzaWithExpectedSequenceId) {
 void HeartbeatSenderTest::ProcessResponseWithInterval(
     bool is_offline_heartbeat_response,
     int interval) {
-  scoped_ptr<XmlElement> response(new XmlElement(buzz::QN_IQ));
+  std::unique_ptr<XmlElement> response(new XmlElement(buzz::QN_IQ));
   response->AddAttr(QName(std::string(), "type"), "result");
 
   XmlElement* result = new XmlElement(
@@ -257,7 +246,7 @@ TEST_F(HeartbeatSenderTest, ProcessResponseSetInterval) {
 // Make sure SetHostOfflineReason sends a correct stanza.
 TEST_F(HeartbeatSenderTest, DoSetHostOfflineReason) {
   XmlElement* sent_iq = nullptr;
-  MockAckCallback mock_ack_callback;
+  base::MockCallback<base::Callback<void(bool success)>> mock_ack_callback;
 
   EXPECT_CALL(signal_strategy_, GetLocalJid())
       .WillRepeatedly(Return(kTestJid));
@@ -270,13 +259,12 @@ TEST_F(HeartbeatSenderTest, DoSetHostOfflineReason) {
       .WillRepeatedly(Return(SignalStrategy::CONNECTED));
   EXPECT_CALL(mock_ack_callback, Run(_)).Times(0);
 
-  heartbeat_sender_->SetHostOfflineReason(
-      "test_error", kTestTimeout,
-      base::Bind(&MockAckCallback::Run, base::Unretained(&mock_ack_callback)));
+  heartbeat_sender_->SetHostOfflineReason("test_error", kTestTimeout,
+                                          mock_ack_callback.Get());
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza(sent_iq);
+  std::unique_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != nullptr);
   ValidateHeartbeatStanza(stanza.get(), "0", "test_error");
 
@@ -286,7 +274,7 @@ TEST_F(HeartbeatSenderTest, DoSetHostOfflineReason) {
 
 // Make sure SetHostOfflineReason triggers a callback when bot responds.
 TEST_F(HeartbeatSenderTest, ProcessHostOfflineResponses) {
-  MockAckCallback mock_ack_callback;
+  base::MockCallback<base::Callback<void(bool success)>> mock_ack_callback;
 
   EXPECT_CALL(signal_strategy_, GetLocalJid())
       .WillRepeatedly(Return(kTestJid));
@@ -303,9 +291,8 @@ TEST_F(HeartbeatSenderTest, ProcessHostOfflineResponses) {
   // Callback should not run, until response to offline-reason.
   EXPECT_CALL(mock_ack_callback, Run(_)).Times(0);
 
-  heartbeat_sender_->SetHostOfflineReason(
-      "test_error", kTestTimeout,
-      base::Bind(&MockAckCallback::Run, base::Unretained(&mock_ack_callback)));
+  heartbeat_sender_->SetHostOfflineReason("test_error", kTestTimeout,
+                                          mock_ack_callback.Get());
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
@@ -346,7 +333,7 @@ TEST_F(HeartbeatSenderTest, HostOsInfo) {
   heartbeat_sender_->OnSignalStrategyStateChange(SignalStrategy::CONNECTED);
   base::RunLoop().RunUntilIdle();
 
-  scoped_ptr<XmlElement> stanza(sent_iq);
+  std::unique_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != nullptr);
 
   XmlElement* heartbeat_stanza =

@@ -93,6 +93,11 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // Do any minimal work that must be done at browser startup.
   static void EarlyStartup();
 
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
+  // Launch the NaCl zygote early in the browser startup.
+  static void EarlyZygoteLaunch();
+#endif  // defined(OS_POSIX) && !defined(OS_MACOSX)
+
   // Specifies throttling time in milliseconds for PpapiHostMsg_Keepalive IPCs.
   static void SetPpapiKeepAliveThrottleForTesting(unsigned milliseconds);
 
@@ -115,8 +120,6 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   content::BrowserPpapiHost* browser_ppapi_host() { return ppapi_host_.get(); }
 
  private:
-  class ScopedChannelHandle;
-
   void LaunchNaClGdb();
 
   // Mark the process as using a particular GDB debug stub port and notify
@@ -146,9 +149,9 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // Sends the reply message to the renderer who is waiting for the plugin
   // to load. Returns true on success.
   void ReplyToRenderer(
-      ScopedChannelHandle ppapi_channel_handle,
-      ScopedChannelHandle trusted_channel_handle,
-      ScopedChannelHandle manifest_service_channel_handle);
+      mojo::ScopedMessagePipeHandle ppapi_channel_handle,
+      mojo::ScopedMessagePipeHandle trusted_channel_handle,
+      mojo::ScopedMessagePipeHandle manifest_service_channel_handle);
 
   // Sends the reply with error message to the renderer.
   void SendErrorToRenderer(const std::string& error_message);
@@ -167,14 +170,8 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
       const base::FilePath& file_path,
       base::File nexe_file);
 
-#if defined(OS_LINUX)
-  // Creates a pair of IPC::ChannelHandle. Returns true on success.
-  static bool CreateChannelHandlePair(ScopedChannelHandle* channel_handle1,
-                                      ScopedChannelHandle* channel_handle2);
-#endif
-
   // Starts browser PPAPI proxy. Returns true on success.
-  bool StartPPAPIProxy(ScopedChannelHandle channel_handle);
+  bool StartPPAPIProxy(mojo::ScopedMessagePipeHandle channel_handle);
 
   // Does post-process-launching tasks for starting the NaCl process once
   // we have a connection.
@@ -228,14 +225,14 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   IPC::Message* reply_msg_;
 #if defined(OS_WIN)
   bool debug_exception_handler_requested_;
-  scoped_ptr<IPC::Message> attach_debug_exception_handler_reply_msg_;
+  std::unique_ptr<IPC::Message> attach_debug_exception_handler_reply_msg_;
 #endif
 
   // The file path to the manifest is passed to nacl-gdb when it is used to
   // debug the NaCl loader.
   base::FilePath manifest_path_;
 
-  scoped_ptr<content::BrowserChildProcessHost> process_;
+  std::unique_ptr<content::BrowserChildProcessHost> process_;
 
   bool uses_nonsfi_mode_;
 
@@ -247,9 +244,9 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   const base::FilePath profile_directory_;
 
   // Channel proxy to terminate the NaCl-Browser PPAPI channel.
-  scoped_ptr<IPC::ChannelProxy> ipc_proxy_channel_;
+  std::unique_ptr<IPC::ChannelProxy> ipc_proxy_channel_;
   // Browser host for plugin process.
-  scoped_ptr<content::BrowserPpapiHost> ppapi_host_;
+  std::unique_ptr<content::BrowserPpapiHost> ppapi_host_;
 
   int render_view_id_;
 

@@ -12,6 +12,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -90,13 +91,13 @@ class AutocompleteActionPredictorTest : public testing::Test {
         db_thread_(BrowserThread::DB, &loop_),
         file_thread_(BrowserThread::FILE, &loop_),
         profile_(new TestingProfile()),
-        predictor_(new AutocompleteActionPredictor(profile_.get())) {
+        predictor_(nullptr) {
   }
 
   ~AutocompleteActionPredictorTest() override {
     predictor_.reset(NULL);
     profile_.reset(NULL);
-    loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   void SetUp() override {
@@ -104,8 +105,9 @@ class AutocompleteActionPredictorTest : public testing::Test {
         switches::kPrerenderFromOmnibox,
         switches::kPrerenderFromOmniboxSwitchValueEnabled);
 
-    predictor_->CreateLocalCachesFromDatabase();
     ASSERT_TRUE(profile_->CreateHistoryService(true, false));
+    predictor_.reset(new AutocompleteActionPredictor(profile_.get()));
+    predictor_->CreateLocalCachesFromDatabase();
     profile_->BlockUntilHistoryProcessesPendingRequests();
 
     ASSERT_TRUE(predictor_->initialized_);
@@ -114,8 +116,8 @@ class AutocompleteActionPredictorTest : public testing::Test {
   }
 
   void TearDown() override {
-    profile_->DestroyHistoryService();
     predictor_->Shutdown();
+    profile_->DestroyHistoryService();
   }
 
  protected:
@@ -220,8 +222,8 @@ class AutocompleteActionPredictorTest : public testing::Test {
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread db_thread_;
   content::TestBrowserThread file_thread_;
-  scoped_ptr<TestingProfile> profile_;
-  scoped_ptr<AutocompleteActionPredictor> predictor_;
+  std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<AutocompleteActionPredictor> predictor_;
 };
 
 

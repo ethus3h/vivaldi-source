@@ -18,15 +18,73 @@
 #include "base/power_monitor/power_monitor_device_source.h"
 #include "base/process/process_metrics.h"
 #include "base/system_monitor/system_monitor.h"
+#include "base/task_scheduler/initialization_util.h"
+#include "base/task_scheduler/scheduler_worker_pool_params.h"
+#include "base/task_scheduler/task_scheduler.h"
+#include "base/task_scheduler/task_traits.h"
 #include "base/threading/thread_restrictions.h"
-#include "crypto/nss_util.h"
-#include "ios/web/net/cookie_notification_bridge.h"
+#import "ios/web/net/cookie_notification_bridge.h"
 #include "ios/web/public/app/web_main_parts.h"
-#include "ios/web/public/web_client.h"
+#import "ios/web/public/web_client.h"
 #include "ios/web/web_thread_impl.h"
+#include "ios/web/webui/url_data_manager_ios.h"
 #include "net/base/network_change_notifier.h"
 
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
+
 namespace web {
+
+namespace {
+
+enum WorkerPoolType : size_t {
+  BACKGROUND = 0,
+  BACKGROUND_FILE_IO,
+  FOREGROUND,
+  FOREGROUND_FILE_IO,
+  WORKER_POOL_COUNT  // Always last.
+};
+
+std::vector<base::SchedulerWorkerPoolParams>
+GetDefaultSchedulerWorkerPoolParams() {
+  using StandbyThreadPolicy =
+      base::SchedulerWorkerPoolParams::StandbyThreadPolicy;
+  using ThreadPriority = base::ThreadPriority;
+  std::vector<base::SchedulerWorkerPoolParams> params_vector;
+  params_vector.emplace_back(
+      "Background", ThreadPriority::BACKGROUND, StandbyThreadPolicy::ONE,
+      base::RecommendedMaxNumberOfThreadsInPool(2, 8, 0.1, 0),
+      base::TimeDelta::FromSeconds(30));
+  params_vector.emplace_back(
+      "BackgroundFileIO", ThreadPriority::BACKGROUND, StandbyThreadPolicy::ONE,
+      base::RecommendedMaxNumberOfThreadsInPool(2, 8, 0.1, 0),
+      base::TimeDelta::FromSeconds(30));
+  params_vector.emplace_back(
+      "Foreground", ThreadPriority::NORMAL, StandbyThreadPolicy::ONE,
+      base::RecommendedMaxNumberOfThreadsInPool(3, 8, 0.3, 0),
+      base::TimeDelta::FromSeconds(30));
+  params_vector.emplace_back(
+      "ForegroundFileIO", ThreadPriority::NORMAL, StandbyThreadPolicy::ONE,
+      base::RecommendedMaxNumberOfThreadsInPool(3, 8, 0.1, 0),
+      base::TimeDelta::FromSeconds(30));
+  DCHECK_EQ(WORKER_POOL_COUNT, params_vector.size());
+  return params_vector;
+}
+
+// Returns the worker pool index for |traits| defaulting to FOREGROUND or
+// FOREGROUND_FILE_IO on any other priorities based off of worker pools defined
+// in GetDefaultSchedulerWorkerPoolParams().
+size_t DefaultBrowserWorkerPoolIndexForTraits(const base::TaskTraits& traits) {
+  const bool is_background =
+      traits.priority() == base::TaskPriority::BACKGROUND;
+  if (traits.may_block() || traits.with_base_sync_primitives())
+    return is_background ? BACKGROUND_FILE_IO : FOREGROUND_FILE_IO;
+
+  return is_background ? BACKGROUND : FOREGROUND;
+}
+
+}  // namespace
 
 // The currently-running WebMainLoop.  There can be one or zero.
 // TODO(rohitrao): Desktop uses this to implement
@@ -51,12 +109,6 @@ void WebMainLoop::Init() {
 void WebMainLoop::EarlyInitialization() {
   if (parts_) {
     parts_->PreEarlyInitialization();
-  }
-
-  // We want to be sure to init NSPR on the main thread.
-  crypto::EnsureNSPRInit();
-
-  if (parts_) {
     parts_->PostEarlyInitialization();
   }
 }
@@ -79,7 +131,7 @@ void WebMainLoop::MainMessageLoopStart() {
   system_monitor_.reset(new base::SystemMonitor);
 #endif
   // TODO(rohitrao): Do we need PowerMonitor on iOS, or can we get rid of it?
-  scoped_ptr<base::PowerMonitorSource> power_monitor_source(
+  std::unique_ptr<base::PowerMonitorSource> power_monitor_source(
       new base::PowerMonitorDeviceSource());
   power_monitor_.reset(new base::PowerMonitor(std::move(power_monitor_source)));
   network_change_notifier_.reset(net::NetworkChangeNotifier::Create());
@@ -117,6 +169,23 @@ int WebMainLoop::PreCreateThreads() {
 }
 
 int WebMainLoop::CreateThreads() {
+  std::vector<base::SchedulerWorkerPoolParams> params_vector;
+  base::TaskScheduler::WorkerPoolIndexForTraitsCallback
+      index_to_traits_callback;
+  GetWebClient()->GetTaskSchedulerInitializationParams(
+      &params_vector, &index_to_traits_callback);
+
+  if (params_vector.empty() || index_to_traits_callback.is_null()) {
+    params_vector = GetDefaultSchedulerWorkerPoolParams();
+    index_to_traits_callback =
+        base::Bind(&DefaultBrowserWorkerPoolIndexForTraits);
+  }
+
+  base::TaskScheduler::CreateAndSetDefaultTaskScheduler(
+      params_vector, index_to_traits_callback);
+
+  GetWebClient()->PerformExperimentalTaskSchedulerRedirections();
+
   base::Thread::Options io_message_loop_options;
   io_message_loop_options.message_loop_type = base::MessageLoop::TYPE_IO;
 
@@ -127,7 +196,7 @@ int WebMainLoop::CreateThreads() {
   // Must be size_t so we can increment it.
   for (size_t thread_id = WebThread::UI + 1; thread_id < WebThread::ID_COUNT;
        ++thread_id) {
-    scoped_ptr<WebThreadImpl>* thread_to_start = nullptr;
+    std::unique_ptr<WebThreadImpl>* thread_to_start = nullptr;
     base::Thread::Options options;
 
     switch (thread_id) {
@@ -251,6 +320,9 @@ void WebMainLoop::ShutdownThreadsAndCleanUp() {
   // it here (which will block until required operations are complete) gives
   // more head start for those operations to finish.
   WebThreadImpl::ShutdownThreadPool();
+  base::TaskScheduler::GetInstance()->Shutdown();
+
+  URLDataManagerIOS::DeleteDataSources();
 
   if (parts_) {
     parts_->PostDestroyThreads();
@@ -258,11 +330,7 @@ void WebMainLoop::ShutdownThreadsAndCleanUp() {
 }
 
 void WebMainLoop::InitializeMainThread() {
-  const char* kThreadName = "CrWebMain";
-  base::PlatformThread::SetName(kThreadName);
-  if (main_message_loop_) {
-    main_message_loop_->set_thread_name(kThreadName);
-  }
+  base::PlatformThread::SetName("CrWebMain");
 
   // Register the main thread by instantiating it, but don't call any methods.
   main_thread_.reset(

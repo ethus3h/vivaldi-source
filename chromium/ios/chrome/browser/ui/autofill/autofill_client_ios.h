@@ -5,11 +5,12 @@
 #ifndef IOS_CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_CLIENT_IOS_H_
 #define IOS_CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_CLIENT_IOS_H_
 
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/autofill/core/browser/autofill_client.h"
 #include "components/autofill/core/browser/ui/card_unmask_prompt_controller_impl.h"
 #include "components/autofill/ios/browser/autofill_client_ios_bridge.h"
@@ -28,8 +29,12 @@ namespace password_manager {
 class PasswordGenerationManager;
 }
 
-namespace sync_driver {
+namespace syncer {
 class SyncService;
+}
+
+namespace web {
+class WebState;
 }
 
 namespace autofill {
@@ -37,43 +42,40 @@ namespace autofill {
 class PersonalDataManager;
 
 // iOS implementation of AutofillClient.
-// TODO(dconnelly): Split this up, as it collects functionality that doesn't
-// necessarily fit together on iOS. http://crbug.com/432487.
 class AutofillClientIOS : public AutofillClient {
  public:
   AutofillClientIOS(
       ios::ChromeBrowserState* browser_state,
+      web::WebState* web_state,
       infobars::InfoBarManager* infobar_manager,
       id<AutofillClientIOSBridge> bridge,
       password_manager::PasswordGenerationManager* password_generation_manager,
-      scoped_ptr<IdentityProvider> identity_provider);
+      std::unique_ptr<IdentityProvider> identity_provider);
   ~AutofillClientIOS() override;
 
   // AutofillClient implementation.
   PersonalDataManager* GetPersonalDataManager() override;
   PrefService* GetPrefs() override;
-  sync_driver::SyncService* GetSyncService() override;
+  syncer::SyncService* GetSyncService() override;
   IdentityProvider* GetIdentityProvider() override;
-  rappor::RapporService* GetRapporService() override;
-  void HideRequestAutocompleteDialog() override;
+  rappor::RapporServiceImpl* GetRapporServiceImpl() override;
   void ShowAutofillSettings() override;
   void ShowUnmaskPrompt(const CreditCard& card,
+                        UnmaskCardReason reason,
                         base::WeakPtr<CardUnmaskDelegate> delegate) override;
   void OnUnmaskVerificationResult(PaymentsRpcResult result) override;
   void ConfirmSaveCreditCardLocally(const CreditCard& card,
                                     const base::Closure& callback) override;
   void ConfirmSaveCreditCardToCloud(
       const CreditCard& card,
-      scoped_ptr<base::DictionaryValue> legal_message,
+      std::unique_ptr<base::DictionaryValue> legal_message,
       const base::Closure& callback) override;
+  void ConfirmCreditCardFillAssist(const CreditCard& card,
+                                   const base::Closure& callback) override;
   void LoadRiskData(
       const base::Callback<void(const std::string&)>& callback) override;
   bool HasCreditCardScanFeature() override;
   void ScanCreditCard(const CreditCardScanCallback& callback) override;
-  void ShowRequestAutocompleteDialog(
-      const FormData& form,
-      content::RenderFrameHost* render_frame_host,
-      const ResultCallback& callback) override;
   void ShowAutofillPopup(
       const gfx::RectF& element_bounds,
       base::i18n::TextDirection text_direction,
@@ -91,14 +93,18 @@ class AutofillClientIOS : public AutofillClient {
                              const base::string16& profile_full_name) override;
   void OnFirstUserGestureObserved() override;
   scoped_refptr<AutofillWebDataService> GetDatabase() override;
-  bool IsContextSecure(const GURL& form_origin) override;
+  bool IsContextSecure() override;
+  bool ShouldShowSigninPromo() override;
+  void StartSigninFlow() override;
+  void ShowHttpNotSecureExplanation() override;
 
  private:
   ios::ChromeBrowserState* browser_state_;
+  web::WebState* web_state_;
   infobars::InfoBarManager* infobar_manager_;
   id<AutofillClientIOSBridge> bridge_;  // Weak
   password_manager::PasswordGenerationManager* password_generation_manager_;
-  scoped_ptr<IdentityProvider> identity_provider_;
+  std::unique_ptr<IdentityProvider> identity_provider_;
   CardUnmaskPromptControllerImpl unmask_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(AutofillClientIOS);

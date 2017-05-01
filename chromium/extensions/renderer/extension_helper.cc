@@ -16,6 +16,7 @@
 #include "third_party/WebKit/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
 #include "third_party/WebKit/public/web/WebView.h"
+
 #include "content/public/common/page_zoom.h"
 
 using blink::WebView;
@@ -47,12 +48,17 @@ bool ExtensionHelper::OnMessageReceived(const IPC::Message& message) {
   return handled;
 }
 
+void ExtensionHelper::OnDestruct() {
+  delete this;
+}
+
 void ExtensionHelper::DraggableRegionsChanged(blink::WebFrame* frame) {
   blink::WebVector<blink::WebDraggableRegion> webregions =
       frame->document().draggableRegions();
   std::vector<DraggableRegion> regions;
   for (size_t i = 0; i < webregions.size(); ++i) {
     DraggableRegion region;
+    render_view()->ConvertViewportToWindowViaWidget(&webregions[i].bounds);
     region.bounds = webregions[i].bounds;
     region.draggable = webregions[i].draggable;
     regions.push_back(region);
@@ -80,8 +86,8 @@ void ExtensionHelper::OnAppWindowClosed() {
       dispatcher_->script_context_set().GetByV8Context(v8_context);
   if (!script_context)
     return;
-  script_context->module_system()->CallModuleMethod("app.window",
-                                                    "onAppWindowClosed");
+  script_context->module_system()->CallModuleMethodSafe("app.window",
+                                                        "onAppWindowClosed");
 }
 
 void ExtensionHelper::OnWebContentsFromTabId(int result) {

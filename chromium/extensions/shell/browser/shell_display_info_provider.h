@@ -20,9 +20,8 @@ class ShellDisplayInfoProvider : public DisplayInfoProvider {
                const api::system_display::DisplayProperties& info,
                std::string* error) override;
   void UpdateDisplayUnitInfoForPlatform(
-      const gfx::Display& display,
+      const display::Display& display,
       extensions::api::system_display::DisplayUnitInfo* unit) override;
-  gfx::Screen* GetActiveScreen() override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ShellDisplayInfoProvider);

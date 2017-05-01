@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/files/file.h"
 #include "base/macros.h"
@@ -19,7 +21,6 @@
 
 namespace base {
 class FilePath;
-class SequencedTaskRunner;
 }
 
 namespace content {
@@ -69,7 +70,7 @@ class STORAGE_EXPORT FileSystemFileStreamReader
   FileSystemURL url_;
   const int64_t initial_offset_;
   const base::Time expected_modification_time_;
-  scoped_ptr<storage::FileStreamReader> local_file_reader_;
+  std::unique_ptr<storage::FileStreamReader> local_file_reader_;
   scoped_refptr<storage::ShareableFileReference> snapshot_ref_;
   bool has_pending_create_snapshot_;
   base::WeakPtrFactory<FileSystemFileStreamReader> weak_factory_;

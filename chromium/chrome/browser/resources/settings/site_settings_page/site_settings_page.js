@@ -6,98 +6,99 @@
  * @fileoverview
  * 'settings-site-settings-page' is the settings page containing privacy and
  * security site settings.
- *
- * Example:
- *
- *    <iron-animated-pages>
- *      <settings-site-settings-page prefs="{{prefs}}">
- *      </settings-site-settings-page>
- *      ... other pages ...
- *    </iron-animated-pages>
- *
- * @group Chrome Settings Elements
- * @element settings-site-settings-page
  */
 Polymer({
   is: 'settings-site-settings-page',
 
-  behaviors: [SiteSettingsBehavior],
+  behaviors: [SiteSettingsBehavior, WebUIListenerBehavior],
 
   properties: {
     /**
-     * Preferences state.
+     * An object to bind default value labels to (so they are not in the |this|
+     * scope). The keys of this object are the values of the
+     * settings.ContentSettingsTypes enum.
+     * @private
      */
-    prefs: {
+    default_: {
       type: Object,
-      notify: true,
+      value: function() {
+        return {};
+      },
     },
 
-    /**
-     * The current active route.
-     */
-    currentRoute: {
-      type: Object,
-      notify: true,
+    /** @private */
+    enableSiteSettings_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('enableSiteSettings');
+      },
     },
   },
 
+  /** @override */
   ready: function() {
-    CrSettingsPrefs.initialized.then(function() {
-      // TODO(finnur): Implement 'All Sites' list.
-      this.addCategory(settings.ContentSettingsTypes.COOKIES);
-      this.addCategory(settings.ContentSettingsTypes.GEOLOCATION);
-      this.addCategory(settings.ContentSettingsTypes.CAMERA);
-      this.addCategory(settings.ContentSettingsTypes.MIC);
-      this.addCategory(settings.ContentSettingsTypes.JAVASCRIPT);
-      this.addCategory(settings.ContentSettingsTypes.POPUPS);
-      this.addCategory(settings.ContentSettingsTypes.FULLSCREEN);
-      this.addCategory(settings.ContentSettingsTypes.NOTIFICATIONS);
-      this.addCategory(settings.ContentSettingsTypes.IMAGES);
-    }.bind(this));
+    this.ContentSettingsTypes = settings.ContentSettingsTypes;
+    this.ALL_SITES = settings.ALL_SITES;
+
+    var keys = Object.keys(settings.ContentSettingsTypes);
+    for (var i = 0; i < keys.length; ++i) {
+      var key = settings.ContentSettingsTypes[keys[i]];
+      // Default labels are not applicable to USB and ZOOM.
+      if (key == settings.ContentSettingsTypes.USB_DEVICES ||
+          key == settings.ContentSettingsTypes.ZOOM_LEVELS)
+        continue;
+      this.updateDefaultValueLabel_(key);
+    }
+
+    this.addWebUIListener(
+        'contentSettingCategoryChanged',
+        this.updateDefaultValueLabel_.bind(this));
+    this.addWebUIListener(
+        'setHandlersEnabled',
+        this.updateHandlersEnabled_.bind(this));
+    this.browserProxy.observeProtocolHandlersEnabledState();
   },
 
   /**
-   * Adds a single category to the page.
-   * @param {number} category The category to add.
+   * @param {string} category The category to update.
+   * @private
    */
-  addCategory: function(category) {
-    var root = this.$.list;
-    var paperIcon = document.createElement('paper-icon-item');
-    paperIcon.addEventListener('tap', this.onTapCategory.bind(this));
+  updateDefaultValueLabel_: function(category) {
+    this.browserProxy.getDefaultValueForContentType(
+        category).then(function(defaultValue) {
+          this.set(
+              'default_.' + Polymer.CaseMap.dashToCamelCase(category),
+              this.computeCategoryDesc(
+                  category,
+                  defaultValue.setting,
+                  /*showRecommendation=*/false));
+        }.bind(this));
+  },
 
-    var ironIcon = document.createElement('iron-icon');
-    ironIcon.setAttribute('icon', this.computeIconForContentCategory(category));
-    ironIcon.setAttribute('item-icon', '');
-
-    var description = document.createElement('div');
-    description.setAttribute('class', 'flex');
-    description.appendChild(
-        document.createTextNode(this.computeTitleForContentCategory(category)));
-    var setting = document.createElement('div');
-    setting.setAttribute('class', 'option-value');
-
-    setting.appendChild(document.createTextNode(
+  /**
+   * The protocol handlers have a separate enabled/disabled notifier.
+   * @param {boolean} enabled
+   * @private
+   */
+  updateHandlersEnabled_: function(enabled) {
+    var category = settings.ContentSettingsTypes.PROTOCOL_HANDLERS;
+    this.set(
+        'default_.' + Polymer.CaseMap.dashToCamelCase(category),
         this.computeCategoryDesc(
-            category, this.isCategoryAllowed(category), false)));
-
-    paperIcon.appendChild(ironIcon);
-    paperIcon.appendChild(description);
-    paperIcon.appendChild(setting);
-    root.appendChild(paperIcon);
+            category,
+            enabled ?
+                settings.PermissionValues.ALLOW :
+                settings.PermissionValues.BLOCK,
+            /*showRecommendation=*/false));
   },
 
   /**
-   * Handles selection of a single category and navigates to the details for
-   * that category.
+   * Navigate to the route specified in the event dataset.
+   * @param {!Event} event The tap event.
+   * @private
    */
-  onTapCategory: function(event) {
-    var description = event.currentTarget.querySelector('.flex').innerText;
-    var page = this.computeCategoryTextId(
-        this.computeCategoryFromDesc(description));
-    this.currentRoute = {
-      page: this.currentRoute.page,
-      section: 'privacy',
-      subpage: ['site-settings', 'site-settings-category-' + page],
-    };
+  onTapNavigate_: function(event) {
+    var dataSet = /** @type {{route: string}} */(event.currentTarget.dataset);
+    settings.navigateTo(settings.Route[dataSet.route]);
   },
 });

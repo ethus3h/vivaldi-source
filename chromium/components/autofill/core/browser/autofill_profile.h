@@ -99,11 +99,6 @@ class AutofillProfile : public AutofillDataModel {
   bool operator==(const AutofillProfile& profile) const;
   virtual bool operator!=(const AutofillProfile& profile) const;
 
-  // Returns concatenation of full name and address line 1.  This acts as the
-  // basis of comparison for new values that are submitted through forms to
-  // aid with correct aggregation of new data.
-  const base::string16 PrimaryValue() const;
-
   // Returns true if the data in this AutofillProfile is a subset of the data in
   // |profile|.
   bool IsSubsetOf(const AutofillProfile& profile,
@@ -114,9 +109,10 @@ class AutofillProfile : public AutofillDataModel {
                              const std::string& app_locale,
                              const ServerFieldTypeSet& types) const;
 
-  // Overwrites the field data in |profile| with this Profile. Returns |true| if
-  // at least one field was overwritten.
-  bool OverwriteWith(const AutofillProfile& profile,
+  // Merges the data from |this| profile and the given |profile| into |this|
+  // profile. Expects that |this| and |profile| have already been deemed
+  // mergeable by an AutofillProfileComparator.
+  bool MergeDataFrom(const AutofillProfile& profile,
                      const std::string& app_locale);
 
   // Saves info from |profile| into |this|, provided |this| and |profile| do not
@@ -156,6 +152,14 @@ class AutofillProfile : public AutofillDataModel {
       const std::string& app_locale,
       std::vector<base::string16>* labels);
 
+  // Builds inferred label from the first |num_fields_to_include| non-empty
+  // fields in |label_fields|. Uses as many fields as possible if there are not
+  // enough non-empty fields.
+  base::string16 ConstructInferredLabel(
+      const std::vector<ServerFieldType>& label_fields,
+      size_t num_fields_to_include,
+      const std::string& app_locale) const;
+
   const std::string& language_code() const { return language_code_; }
   void set_language_code(const std::string& language_code) {
     language_code_ = language_code;
@@ -174,34 +178,15 @@ class AutofillProfile : public AutofillDataModel {
   // use.
   void RecordAndLogUse();
 
-  // TODO(crbug.com/574081): Move common profile methods to a utils file.
-  // Returns a standardized representation of the given string for comparison
-  // purposes. The resulting string will be lower-cased with all punctuation
-  // substituted by spaces. Whitespace will be converted to ASCII space, and
-  // multiple whitespace characters will be collapsed.
-  //
-  // This string is designed for comparison purposes only and isn't suitable
-  // for storing or displaying to the user.
-  static base::string16 CanonicalizeProfileString(const base::string16& str);
-
-  // Returns true if the given two profile strings are similar enough that
-  // they probably refer to the same thing.
-  static bool AreProfileStringsSimilar(const base::string16& a,
-                                       const base::string16& b);
+  // Valid only when type() == SERVER_PROFILE.
+  bool has_converted() const { return has_converted_; }
+  void set_has_converted(bool has_converted) { has_converted_ = has_converted; }
 
  private:
   typedef std::vector<const FormGroup*> FormGroupList;
 
   // FormGroup:
   void GetSupportedTypes(ServerFieldTypeSet* supported_types) const override;
-
-  // Builds inferred label from the first |num_fields_to_include| non-empty
-  // fields in |label_fields|. Uses as many fields as possible if there are not
-  // enough non-empty fields.
-  base::string16 ConstructInferredLabel(
-      const std::vector<ServerFieldType>& label_fields,
-      size_t num_fields_to_include,
-      const std::string& app_locale) const;
 
   // Creates inferred labels for |profiles| at indices corresponding to
   // |indices|, and stores the results to the corresponding elements of
@@ -222,12 +207,6 @@ class AutofillProfile : public AutofillDataModel {
   const FormGroup* FormGroupForType(const AutofillType& type) const;
   FormGroup* MutableFormGroupForType(const AutofillType& type);
 
-  // If |name| has the same full name representation as |name_|,
-  // this will keep the one that has more information (i.e.
-  // is not reconstructible via a heuristic parse of the full name string).
-  // Returns |true| is |name_| was overwritten.
-  bool OverwriteName(const NameInfo& name, const std::string& app_locale);
-
   // Same as operator==, but ignores differences in GUID.
   bool EqualsSansGuid(const AutofillProfile& profile) const;
 
@@ -246,6 +225,10 @@ class AutofillProfile : public AutofillDataModel {
   // ID used for identifying this profile. Only set for SERVER_PROFILEs. This is
   // a hash of the contents.
   std::string server_id_;
+
+  // Only useful for SERVER_PROFILEs. Whether this server profile has been
+  // converted to a local profile.
+  bool has_converted_;
 };
 
 // So we can compare AutofillProfiles with EXPECT_EQ().

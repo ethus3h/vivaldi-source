@@ -17,11 +17,17 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 
+#include "app/vivaldi_apptools.h"
+#include "ui/dragging/drag_tab_handler.h"
+
 ChromeWebContentsViewDelegateMac::ChromeWebContentsViewDelegateMac(
     content::WebContents* web_contents)
     : ContextMenuDelegate(web_contents),
       bookmark_handler_(new WebDragBookmarkHandlerMac),
       web_contents_(web_contents) {
+  if (vivaldi::IsVivaldiRunning()) {
+    bookmark_handler_.reset(new vivaldi::DragTabHandler);
+  }
 }
 
 ChromeWebContentsViewDelegateMac::~ChromeWebContentsViewDelegateMac() {
@@ -57,7 +63,7 @@ void ChromeWebContentsViewDelegateMac::ShowContextMenu(
 }
 
 void ChromeWebContentsViewDelegateMac::ShowMenu(
-    scoped_ptr<RenderViewContextMenuBase> menu) {
+    std::unique_ptr<RenderViewContextMenuBase> menu) {
   // TODO(erikchen): Remove ScopedTracker below once crbug.com/458401 is fixed.
   tracked_objects::ScopedTracker tracking_profile(
       FROM_HERE_WITH_EXPLICIT_FUNCTION(
@@ -81,7 +87,7 @@ void ChromeWebContentsViewDelegateMac::ShowMenu(
   context_menu_->Show();
 }
 
-scoped_ptr<RenderViewContextMenuBase>
+std::unique_ptr<RenderViewContextMenuBase>
 ChromeWebContentsViewDelegateMac::BuildMenu(
     content::WebContents* web_contents,
     const content::ContextMenuParams& params) {
@@ -89,7 +95,7 @@ ChromeWebContentsViewDelegateMac::BuildMenu(
   tracked_objects::ScopedTracker tracking_profile1(
       FROM_HERE_WITH_EXPLICIT_FUNCTION(
           "458401 ChromeWebContentsViewDelegateMac::BuildMenu"));
-  scoped_ptr<RenderViewContextMenuBase> menu;
+  std::unique_ptr<RenderViewContextMenuBase> menu;
   content::RenderFrameHost* focused_frame = web_contents->GetFocusedFrame();
   // If the frame tree does not have a focused frame at this point, do not
   // bother creating RenderViewContextMenuMac.
@@ -122,7 +128,7 @@ content::RenderWidgetHostView*
 ChromeWebContentsViewDelegateMac::GetActiveRenderWidgetHostView() {
   return web_contents_->GetFullscreenRenderWidgetHostView() ?
       web_contents_->GetFullscreenRenderWidgetHostView() :
-      web_contents_->GetRenderWidgetHostView();
+      web_contents_->GetTopLevelRenderWidgetHostView();
 }
 
 namespace chrome {

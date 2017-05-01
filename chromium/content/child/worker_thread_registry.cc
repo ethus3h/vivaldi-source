@@ -4,16 +4,17 @@
 
 #include "content/child/worker_thread_registry.h"
 
+#include <memory>
+
 #include "base/callback.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread_local.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/child/worker_thread.h"
 
 namespace content {
@@ -106,8 +107,9 @@ void WorkerThreadRegistry::DidStartCurrentWorkerThread() {
 void WorkerThreadRegistry::WillStopCurrentWorkerThread() {
   WorkerThreadObservers* observers = g_observers_tls.Pointer()->Get();
   DCHECK(observers);
-  FOR_EACH_OBSERVER(WorkerThread::Observer, *observers,
-                    WillStopCurrentWorkerThread());
+  for (auto& observer : *observers)
+    observer.WillStopCurrentWorkerThread();
+
   {
     base::AutoLock locker(task_runner_map_lock_);
     task_runner_map_.erase(WorkerThread::GetCurrentId());
@@ -118,7 +120,7 @@ void WorkerThreadRegistry::WillStopCurrentWorkerThread() {
 
 base::TaskRunner* WorkerThreadRegistry::GetTaskRunnerFor(int worker_id) {
   base::AutoLock locker(task_runner_map_lock_);
-  return ContainsKey(task_runner_map_, worker_id)
+  return base::ContainsKey(task_runner_map_, worker_id)
              ? task_runner_map_[worker_id]
              : task_runner_for_dead_worker_.get();
 }

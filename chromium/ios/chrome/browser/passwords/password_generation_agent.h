@@ -20,7 +20,6 @@
 @class JsSuggestionManager;
 
 namespace autofill {
-struct FormData;
 struct FormFieldData;
 struct PasswordForm;
 }
@@ -45,11 +44,6 @@ class PasswordManagerDriver;
       passwordsUiDelegate:(id<PasswordsUiDelegate>)UIDelegate;
 
 - (instancetype)init NS_UNAVAILABLE;
-
-// Remembers that the specified |forms| are account creation forms, meaning that
-// they might contain fields suitable for password generation.
-- (void)registerAccountCreationForms:
-    (const std::vector<autofill::FormData>&)forms;
 
 // Indicates that the specified |form| has not been blacklisted by the user
 // for the purposes of password management.

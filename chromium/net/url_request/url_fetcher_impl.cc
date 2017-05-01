@@ -92,8 +92,9 @@ void URLFetcherImpl::SetRequestContext(
   core_->SetRequestContext(request_context_getter);
 }
 
-void URLFetcherImpl::SetInitiatorURL(const GURL& initiator) {
-  core_->SetInitiatorURL(initiator);
+void URLFetcherImpl::SetInitiator(
+    const base::Optional<url::Origin>& initiator) {
+  core_->SetInitiator(initiator);
 }
 
 void URLFetcherImpl::SetURLRequestUserData(
@@ -139,7 +140,7 @@ void URLFetcherImpl::SaveResponseToTemporaryFile(
 }
 
 void URLFetcherImpl::SaveResponseWithWriter(
-    scoped_ptr<URLFetcherResponseWriter> response_writer) {
+    std::unique_ptr<URLFetcherResponseWriter> response_writer) {
   core_->SaveResponseWithWriter(std::move(response_writer));
 }
 
@@ -185,10 +186,6 @@ const URLRequestStatus& URLFetcherImpl::GetStatus() const {
 
 int URLFetcherImpl::GetResponseCode() const {
   return core_->GetResponseCode();
-}
-
-const ResponseCookies& URLFetcherImpl::GetCookies() const {
-  return core_->GetCookies();
 }
 
 void URLFetcherImpl::ReceivedContentWasMalformed() {

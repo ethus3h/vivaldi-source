@@ -5,8 +5,8 @@
 package org.chromium.chrome.browser.omnibox;
 
 import android.content.res.Resources;
+import android.support.test.filters.MediumTest;
 import android.test.UiThreadTest;
-import android.test.suitebuilder.annotation.MediumTest;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 
@@ -129,8 +129,8 @@ public class OmniboxUrlEmphasizerTest extends NativeLibraryTestBase {
         EmphasizedUrlSpanHelper[] spans = EmphasizedUrlSpanHelper.getSpansForEmphasizedUrl(url);
 
         assertEquals("Unexpected number of spans:", 4, spans.length);
-        spans[0].assertIsColoredSpan("https", 0, ApiCompatibilityUtils.getColor(mResources,
-                R.color.url_emphasis_start_scheme_secure));
+        spans[0].assertIsColoredSpan(
+                "https", 0, ApiCompatibilityUtils.getColor(mResources, R.color.google_green_700));
         spans[1].assertIsColoredSpan("://", 5, ApiCompatibilityUtils.getColor(mResources,
                 R.color.url_emphasis_non_emphasized_text));
         spans[2].assertIsColoredSpan("www.google.com", 8, ApiCompatibilityUtils.getColor(mResources,
@@ -173,14 +173,14 @@ public class OmniboxUrlEmphasizerTest extends NativeLibraryTestBase {
     public void testLongInsecureHTTPSUrl() {
         Spannable url = new SpannableStringBuilder(
                 "https://www.google.com/q?query=abc123&results=1");
-        OmniboxUrlEmphasizer.emphasizeUrl(url, mResources, mProfile,
-                ConnectionSecurityLevel.SECURITY_ERROR, false, true, true);
+        OmniboxUrlEmphasizer.emphasizeUrl(
+                url, mResources, mProfile, ConnectionSecurityLevel.DANGEROUS, false, true, true);
         EmphasizedUrlSpanHelper[] spans = EmphasizedUrlSpanHelper.getSpansForEmphasizedUrl(url);
 
         assertEquals("Unexpected number of spans:", 5, spans.length);
         spans[0].assertIsStrikethroughSpan("https", 0);
-        spans[1].assertIsColoredSpan("https", 0, ApiCompatibilityUtils.getColor(mResources,
-                R.color.url_emphasis_start_scheme_security_error));
+        spans[1].assertIsColoredSpan(
+                "https", 0, ApiCompatibilityUtils.getColor(mResources, R.color.google_red_700));
         spans[2].assertIsColoredSpan("://", 5, ApiCompatibilityUtils.getColor(mResources,
                 R.color.url_emphasis_non_emphasized_text));
         spans[3].assertIsColoredSpan("www.google.com", 8, ApiCompatibilityUtils.getColor(mResources,
@@ -203,14 +203,14 @@ public class OmniboxUrlEmphasizerTest extends NativeLibraryTestBase {
                 ConnectionSecurityLevel.SECURITY_WARNING, false, true, true);
         EmphasizedUrlSpanHelper[] spans = EmphasizedUrlSpanHelper.getSpansForEmphasizedUrl(url);
 
-        assertEquals("Unexpected number of spans:", 4, spans.length);
-        spans[0].assertIsStrikethroughSpan("https", 0);
-        spans[1].assertIsColoredSpan("https", 0, ApiCompatibilityUtils.getColor(mResources,
-                R.color.url_emphasis_start_scheme_security_warning));
-        spans[2].assertIsColoredSpan("://", 5, ApiCompatibilityUtils.getColor(mResources,
-                R.color.url_emphasis_non_emphasized_text));
-        spans[3].assertIsColoredSpan("www.dodgysite.com", 8, ApiCompatibilityUtils.getColor(
-                mResources, R.color.url_emphasis_domain_and_registry));
+        assertEquals("Unexpected number of spans:", 3, spans.length);
+        spans[0].assertIsColoredSpan("https", 0, ApiCompatibilityUtils.getColor(mResources,
+                                                         R.color.url_emphasis_non_emphasized_text));
+        spans[1].assertIsColoredSpan("://", 5, ApiCompatibilityUtils.getColor(mResources,
+                                                       R.color.url_emphasis_non_emphasized_text));
+        spans[2].assertIsColoredSpan(
+                "www.dodgysite.com", 8, ApiCompatibilityUtils.getColor(mResources,
+                                                R.color.url_emphasis_domain_and_registry));
     }
 
     /**

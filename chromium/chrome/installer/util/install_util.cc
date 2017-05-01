@@ -11,14 +11,15 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 
-#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
@@ -33,7 +34,6 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/google_update_constants.h"
-#include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/installation_state.h"
 #include "chrome/installer/util/l10n_string_util.h"
 #include "chrome/installer/util/util_constants.h"
@@ -44,52 +44,8 @@ using installer::ProductState;
 
 namespace {
 
-const wchar_t kStageBinaryPatching[] = L"binary_patching";
-const wchar_t kStageBuilding[] = L"building";
-const wchar_t kStageConfiguringAutoLaunch[] = L"configuring_auto_launch";
-const wchar_t kStageCopyingPreferencesFile[] = L"copying_prefs";
-const wchar_t kStageCreatingShortcuts[] = L"creating_shortcuts";
-const wchar_t kStageEnsemblePatching[] = L"ensemble_patching";
-const wchar_t kStageExecuting[] = L"executing";
-const wchar_t kStageFinishing[] = L"finishing";
-const wchar_t kStagePreconditions[] = L"preconditions";
-const wchar_t kStageRefreshingPolicy[] = L"refreshing_policy";
-const wchar_t kStageRegisteringChrome[] = L"registering_chrome";
-const wchar_t kStageRemovingOldVersions[] = L"removing_old_ver";
-const wchar_t kStageRollingback[] = L"rollingback";
-const wchar_t kStageUncompressing[] = L"uncompressing";
-const wchar_t kStageUnpacking[] = L"unpacking";
-const wchar_t kStageUpdatingChannels[] = L"updating_channels";
-const wchar_t kStageCreatingVisualManifest[] = L"creating_visual_manifest";
-const wchar_t kStageUninstallingBinaries[] = L"uninstalling_binaries";
-const wchar_t kStageUninstallingChromeFrame[] = L"uninstalling_chrome_frame";
-
-const wchar_t* const kStages[] = {
-  NULL,
-  kStagePreconditions,
-  kStageUncompressing,
-  kStageEnsemblePatching,
-  kStageBinaryPatching,
-  kStageUnpacking,
-  kStageBuilding,
-  kStageExecuting,
-  kStageRollingback,
-  kStageRefreshingPolicy,
-  kStageUpdatingChannels,
-  kStageCopyingPreferencesFile,
-  kStageCreatingShortcuts,
-  kStageRegisteringChrome,
-  kStageRemovingOldVersions,
-  kStageFinishing,
-  kStageConfiguringAutoLaunch,
-  kStageCreatingVisualManifest,
-  nullptr,      // Deprecated with InstallerStage(18) in util_constants.h.
-  kStageUninstallingBinaries,
-  kStageUninstallingChromeFrame,
-};
-
-static_assert(installer::NUM_STAGES == arraysize(kStages),
-              "kStages disagrees with Stage; they must match!");
+const char kEnvProgramFilesPath[] = "CHROME_PROBED_PROGRAM_FILES_PATH";
+const wchar_t kRegDowngradeVersion[] = L"DowngradeVersion";
 
 // Creates a zero-sized non-decorated foreground window that doesn't appear
 // in the taskbar. This is used as a parent window for calls to ShellExecuteEx
@@ -207,19 +163,16 @@ bool InstallUtil::ExecuteExeAsAdmin(const base::CommandLine& cmd,
   return success;
 }
 
-base::CommandLine InstallUtil::GetChromeUninstallCmd(
-    bool system_install,
-    BrowserDistribution::Type distribution_type) {
+base::CommandLine InstallUtil::GetChromeUninstallCmd(bool system_install) {
   ProductState state;
-  if (state.Initialize(system_install, distribution_type)) {
+  if (state.Initialize(system_install))
     return state.uninstall_command();
-  }
   return base::CommandLine(base::CommandLine::NO_PROGRAM);
 }
 
 void InstallUtil::GetChromeVersion(BrowserDistribution* dist,
                                    bool system_install,
-                                   Version* version) {
+                                   base::Version* version) {
   DCHECK(dist);
   RegKey key;
   HKEY reg_root = (system_install) ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
@@ -231,11 +184,11 @@ void InstallUtil::GetChromeVersion(BrowserDistribution* dist,
   if (result == ERROR_SUCCESS)
     result = key.ReadValue(google_update::kRegVersionField, &version_str);
 
-  *version = Version();
+  *version = base::Version();
   if (result == ERROR_SUCCESS && !version_str.empty()) {
     VLOG(1) << "Existing " << dist->GetDisplayName() << " version found "
             << version_str;
-    *version = Version(base::UTF16ToASCII(version_str));
+    *version = base::Version(base::UTF16ToASCII(version_str));
   } else {
     DCHECK_EQ(ERROR_FILE_NOT_FOUND, result);
     VLOG(1) << "No existing " << dist->GetDisplayName()
@@ -245,7 +198,7 @@ void InstallUtil::GetChromeVersion(BrowserDistribution* dist,
 
 void InstallUtil::GetCriticalUpdateVersion(BrowserDistribution* dist,
                                            bool system_install,
-                                           Version* version) {
+                                           base::Version* version) {
   DCHECK(dist);
   RegKey key;
   HKEY reg_root = (system_install) ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
@@ -258,11 +211,11 @@ void InstallUtil::GetCriticalUpdateVersion(BrowserDistribution* dist,
     result = key.ReadValue(google_update::kRegCriticalVersionField,
                            &version_str);
 
-  *version = Version();
+  *version = base::Version();
   if (result == ERROR_SUCCESS && !version_str.empty()) {
     VLOG(1) << "Critical Update version for " << dist->GetDisplayName()
             << " found " << version_str;
-    *version = Version(base::UTF16ToASCII(version_str));
+    *version = base::Version(base::UTF16ToASCII(version_str));
   } else {
     DCHECK_EQ(ERROR_FILE_NOT_FOUND, result);
     VLOG(1) << "No existing " << dist->GetDisplayName()
@@ -271,13 +224,10 @@ void InstallUtil::GetCriticalUpdateVersion(BrowserDistribution* dist,
 }
 
 bool InstallUtil::IsOSSupported() {
-  // We do not support Win2K or older, or XP without service pack 2.
+  // We do not support anything prior to Windows 7.
   VLOG(1) << base::SysInfo::OperatingSystemName() << ' '
           << base::SysInfo::OperatingSystemVersion();
-  base::win::Version version = base::win::GetVersion();
-  return (version > base::win::VERSION_XP) ||
-      ((version == base::win::VERSION_XP) &&
-       (base::win::OSInfo::GetInstance()->service_pack().major >= 2));
+  return base::win::GetVersion() >= base::win::VERSION_WIN7;
 }
 
 void InstallUtil::AddInstallerResultItems(
@@ -288,6 +238,9 @@ void InstallUtil::AddInstallerResultItems(
     const base::string16* const launch_cmd,
     WorkItemList* install_list) {
   DCHECK(install_list);
+  DCHECK(install_list->best_effort());
+  DCHECK(!install_list->rollback_enabled());
+
   const HKEY root = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
   DWORD installer_result = (GetInstallReturnCode(status) == 0) ? 0 : 1;
   install_list->AddCreateRegKeyWorkItem(root, state_key, KEY_WOW64_32KEY);
@@ -323,50 +276,8 @@ void InstallUtil::AddInstallerResultItems(
   }
 }
 
-void InstallUtil::UpdateInstallerStage(bool system_install,
-                                       const base::string16& state_key_path,
-                                       installer::InstallerStage stage) {
-  DCHECK_LE(static_cast<installer::InstallerStage>(0), stage);
-  DCHECK_GT(installer::NUM_STAGES, stage);
-  const HKEY root = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
-  RegKey state_key;
-  LONG result =
-      state_key.Open(root,
-                     state_key_path.c_str(),
-                     KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_32KEY);
-  if (result == ERROR_SUCCESS) {
-    if (stage == installer::NO_STAGE) {
-      result = state_key.DeleteValue(installer::kInstallerExtraCode1);
-      LOG_IF(ERROR, result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND)
-          << "Failed deleting installer stage from " << state_key_path
-          << "; result: " << result;
-    } else {
-      const DWORD extra_code_1 = static_cast<DWORD>(stage);
-      result = state_key.WriteValue(installer::kInstallerExtraCode1,
-                                    extra_code_1);
-      LOG_IF(ERROR, result != ERROR_SUCCESS)
-          << "Failed writing installer stage to " << state_key_path
-          << "; result: " << result;
-    }
-    // TODO(grt): Remove code below here once we're convinced that our use of
-    // Google Update's new InstallerExtraCode1 value is good.
-    installer::ChannelInfo channel_info;
-    // This will return false if the "ap" value isn't present, which is fine.
-    channel_info.Initialize(state_key);
-    if (channel_info.SetStage(kStages[stage]) &&
-        !channel_info.Write(&state_key)) {
-      LOG(ERROR) << "Failed writing installer stage to " << state_key_path;
-    }
-  } else {
-    LOG(ERROR) << "Failed opening " << state_key_path
-               << " to update installer stage; result: " << result;
-  }
-}
-
 bool InstallUtil::IsPerUserInstall(const base::FilePath& exe_path) {
-  scoped_ptr<base::Environment> env(base::Environment::Create());
-
-  static const char kEnvProgramFilesPath[] = "CHROME_PROBED_PROGRAM_FILES_PATH";
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
   std::string env_program_files_path;
   // Check environment variable to find program files path.
   base::FilePath program_files_path;
@@ -403,11 +314,9 @@ bool InstallUtil::IsPerUserInstall(const base::FilePath& exe_path) {
       CSTR_EQUAL;
 }
 
-bool InstallUtil::IsMultiInstall(BrowserDistribution* dist,
-                                 bool system_install) {
-  DCHECK(dist);
-  ProductState state;
-  return state.Initialize(system_install, dist) && state.is_multi_install();
+void InstallUtil::ResetIsPerUserInstallForTest() {
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
+  env->UnSetVar(kEnvProgramFilesPath);
 }
 
 bool CheckIsChromeSxSProcess() {
@@ -586,7 +495,8 @@ int InstallUtil::GetInstallReturnCode(installer::InstallStatus status) {
     case installer::INSTALL_REPAIRED:
     case installer::NEW_VERSION_UPDATED:
     case installer::IN_USE_UPDATED:
-    case installer::UNUSED_BINARIES_UNINSTALLED:
+    case installer::OLD_VERSION_DOWNGRADE:
+    case installer::IN_USE_DOWNGRADE:
       return 0;
     default:
       return status;
@@ -632,6 +542,46 @@ bool InstallUtil::ProgramCompare::GetInfo(const base::File& file,
                                           BY_HANDLE_FILE_INFORMATION* info) {
   DCHECK(file.IsValid());
   return GetFileInformationByHandle(file.GetPlatformFile(), info) != 0;
+}
+
+// static
+base::Version InstallUtil::GetDowngradeVersion(
+    bool system_install,
+    const BrowserDistribution* dist) {
+  DCHECK(dist);
+  base::win::RegKey key;
+  base::string16 downgrade_version;
+  if (key.Open(system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER,
+               dist->GetStateKey().c_str(),
+               KEY_QUERY_VALUE | KEY_WOW64_32KEY) != ERROR_SUCCESS ||
+      key.ReadValue(kRegDowngradeVersion, &downgrade_version) !=
+          ERROR_SUCCESS) {
+    return base::Version();
+  }
+  return base::Version(base::UTF16ToASCII(downgrade_version));
+}
+
+// static
+void InstallUtil::AddUpdateDowngradeVersionItem(
+    bool system_install,
+    const base::Version* current_version,
+    const base::Version& new_version,
+    const BrowserDistribution* dist,
+    WorkItemList* list) {
+  DCHECK(list);
+  DCHECK(dist);
+  base::Version downgrade_version = GetDowngradeVersion(system_install, dist);
+  HKEY root = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
+  if (!current_version ||
+      (*current_version <= new_version &&
+       ((!downgrade_version.IsValid() || downgrade_version <= new_version)))) {
+    list->AddDeleteRegValueWorkItem(root, dist->GetStateKey(), KEY_WOW64_32KEY,
+                                    kRegDowngradeVersion);
+  } else if (*current_version > new_version && !downgrade_version.IsValid()) {
+    list->AddSetRegValueWorkItem(
+        root, dist->GetStateKey(), KEY_WOW64_32KEY, kRegDowngradeVersion,
+        base::ASCIIToUTF16(current_version->GetString()), true);
+  }
 }
 
 InstallUtil::ProgramCompare::ProgramCompare(const base::FilePath& path_to_match)

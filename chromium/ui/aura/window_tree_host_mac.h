@@ -14,15 +14,7 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 
-namespace ui {
-class MouseEvent;
-}
-
 namespace aura {
-
-namespace internal {
-class TouchEventCalibrate;
-}
 
 class AURA_EXPORT WindowTreeHostMac : public WindowTreeHost {
  public:

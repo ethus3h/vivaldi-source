@@ -2,19 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/installer/util/move_tree_work_item.h"
+
 #include <windows.h>
 
 #include <fstream>
+#include <memory>
 
 #include "base/base_paths.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/installer/util/installer_util_test_common.h"
-#include "chrome/installer/util/move_tree_work_item.h"
 #include "chrome/installer/util/work_item.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -59,7 +60,7 @@ const wchar_t kTextContent2[] = L"Overwrite Me";
 // exist.
 TEST_F(MoveTreeWorkItemTest, MoveDirectory) {
   // Create two level deep source dir
-  base::FilePath from_dir1(temp_from_dir_.path());
+  base::FilePath from_dir1(temp_from_dir_.GetPath());
   from_dir1 = from_dir1.AppendASCII("From_Dir1");
   base::CreateDirectory(from_dir1);
   ASSERT_TRUE(base::PathExists(from_dir1));
@@ -75,7 +76,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectory) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Generate destination path
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   ASSERT_FALSE(base::PathExists(to_dir));
 
@@ -85,11 +86,8 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectory) {
   ASSERT_FALSE(base::PathExists(to_file));
 
   // test Do()
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_dir1,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_dir1, to_dir, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_FALSE(base::PathExists(from_dir1));
@@ -108,7 +106,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectory) {
 // exists.
 TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExists) {
   // Create two level deep source dir
-  base::FilePath from_dir1(temp_from_dir_.path());
+  base::FilePath from_dir1(temp_from_dir_.GetPath());
   from_dir1 = from_dir1.AppendASCII("From_Dir1");
   base::CreateDirectory(from_dir1);
   ASSERT_TRUE(base::PathExists(from_dir1));
@@ -124,7 +122,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExists) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Create destination path
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   base::CreateDirectory(to_dir);
   ASSERT_TRUE(base::PathExists(to_dir));
@@ -140,11 +138,8 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExists) {
   ASSERT_FALSE(base::PathExists(new_to_file));
 
   // test Do(), don't check for duplicates.
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_dir1,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_dir1, to_dir, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_FALSE(base::PathExists(from_dir1));
@@ -167,7 +162,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExists) {
 // exist.
 TEST_F(MoveTreeWorkItemTest, MoveAFile) {
   // Create a file inside source dir
-  base::FilePath from_dir(temp_from_dir_.path());
+  base::FilePath from_dir(temp_from_dir_.GetPath());
   from_dir = from_dir.AppendASCII("From_Dir");
   base::CreateDirectory(from_dir);
   ASSERT_TRUE(base::PathExists(from_dir));
@@ -178,16 +173,13 @@ TEST_F(MoveTreeWorkItemTest, MoveAFile) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Generate destination file name
-  base::FilePath to_file(temp_from_dir_.path());
+  base::FilePath to_file(temp_from_dir_.GetPath());
   to_file = to_file.AppendASCII("To_File");
   ASSERT_FALSE(base::PathExists(to_file));
 
   // test Do()
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_file,
-                                       to_file,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_file, to_file, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_TRUE(base::PathExists(from_dir));
@@ -208,7 +200,7 @@ TEST_F(MoveTreeWorkItemTest, MoveAFile) {
 // exists.
 TEST_F(MoveTreeWorkItemTest, MoveFileDestExists) {
   // Create a file inside source dir
-  base::FilePath from_dir(temp_from_dir_.path());
+  base::FilePath from_dir(temp_from_dir_.GetPath());
   from_dir = from_dir.AppendASCII("From_Dir");
   base::CreateDirectory(from_dir);
   ASSERT_TRUE(base::PathExists(from_dir));
@@ -219,7 +211,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestExists) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Create destination path
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   base::CreateDirectory(to_dir);
   ASSERT_TRUE(base::PathExists(to_dir));
@@ -230,11 +222,8 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestExists) {
   ASSERT_TRUE(base::PathExists(to_file));
 
   // test Do()
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_file,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_file, to_dir, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_TRUE(base::PathExists(from_dir));
@@ -256,7 +245,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestExists) {
 // exists and is in use.
 TEST_F(MoveTreeWorkItemTest, MoveFileDestInUse) {
   // Create a file inside source dir
-  base::FilePath from_dir(temp_from_dir_.path());
+  base::FilePath from_dir(temp_from_dir_.GetPath());
   from_dir = from_dir.AppendASCII("From_Dir");
   base::CreateDirectory(from_dir);
   ASSERT_TRUE(base::PathExists(from_dir));
@@ -267,7 +256,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestInUse) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Create an executable in destination path by copying ourself to it.
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   base::CreateDirectory(to_dir);
   ASSERT_TRUE(base::PathExists(to_dir));
@@ -290,11 +279,8 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestInUse) {
                               NULL, NULL, &si, &pi));
 
   // test Do()
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_file,
-                                       to_file,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_file, to_file, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_TRUE(base::PathExists(from_dir));
@@ -319,7 +305,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileDestInUse) {
 // Move one file that is in use to destination.
 TEST_F(MoveTreeWorkItemTest, MoveFileInUse) {
   // Create an executable for source by copying ourself to a new source dir.
-  base::FilePath from_dir(temp_from_dir_.path());
+  base::FilePath from_dir(temp_from_dir_.GetPath());
   from_dir = from_dir.AppendASCII("From_Dir");
   base::CreateDirectory(from_dir);
   ASSERT_TRUE(base::PathExists(from_dir));
@@ -333,7 +319,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileInUse) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // Create a destination source dir and generate destination file name.
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   base::CreateDirectory(to_dir);
   ASSERT_TRUE(base::PathExists(to_dir));
@@ -353,11 +339,8 @@ TEST_F(MoveTreeWorkItemTest, MoveFileInUse) {
                               NULL, NULL, &si, &pi));
 
   // test Do()
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_file,
-                                       to_file,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_file, to_file, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_TRUE(work_item->Do());
 
   EXPECT_TRUE(base::PathExists(from_dir));
@@ -390,7 +373,7 @@ TEST_F(MoveTreeWorkItemTest, MoveFileInUse) {
 // exists.
 TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesFull) {
   // Create two level deep source dir
-  base::FilePath from_dir1(temp_from_dir_.path());
+  base::FilePath from_dir1(temp_from_dir_.GetPath());
   from_dir1 = from_dir1.AppendASCII("From_Dir1");
   base::CreateDirectory(from_dir1);
   ASSERT_TRUE(base::PathExists(from_dir1));
@@ -406,7 +389,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesFull) {
   ASSERT_TRUE(base::PathExists(from_file));
 
   // // Create a file hierarchy identical to the one in the source directory.
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   ASSERT_TRUE(installer::test::CopyFileHierarchy(from_dir1, to_dir));
 
@@ -417,20 +400,14 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesFull) {
   EXPECT_TRUE(mapped_file.Initialize(orig_to_file));
 
   // First check that we can't do the regular Move().
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_dir1,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::ALWAYS_MOVE));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_dir1, to_dir, temp_to_dir_.GetPath(), WorkItem::ALWAYS_MOVE));
   EXPECT_FALSE(work_item->Do());
   work_item->Rollback();
 
   // Now test Do() with the check for duplicates. This should pass.
-  work_item.reset(
-      WorkItem::CreateMoveTreeWorkItem(from_dir1,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::CHECK_DUPLICATES));
+  work_item.reset(WorkItem::CreateMoveTreeWorkItem(
+      from_dir1, to_dir, temp_to_dir_.GetPath(), WorkItem::CHECK_DUPLICATES));
   EXPECT_TRUE(work_item->Do());
 
   // Make sure that we "moved" the files, i.e. that the source directory isn't
@@ -440,7 +417,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesFull) {
   EXPECT_TRUE(base::PathExists(to_dir));
   EXPECT_TRUE(base::PathExists(orig_to_file));
   // Make sure that the backup path is not empty.
-  EXPECT_FALSE(base::IsDirectoryEmpty(temp_to_dir_.path()));
+  EXPECT_FALSE(base::IsDirectoryEmpty(temp_to_dir_.GetPath()));
 
   // Check that the work item believes the source to have been moved.
   EXPECT_TRUE(work_item->source_moved_to_backup_);
@@ -463,7 +440,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesFull) {
 // exists but contains only a subset of the files in source.
 TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesPartial) {
   // Create two level deep source dir
-  base::FilePath from_dir1(temp_from_dir_.path());
+  base::FilePath from_dir1(temp_from_dir_.GetPath());
   from_dir1 = from_dir1.AppendASCII("From_Dir1");
   base::CreateDirectory(from_dir1);
   ASSERT_TRUE(base::PathExists(from_dir1));
@@ -484,7 +461,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesPartial) {
   ASSERT_TRUE(base::PathExists(from_file2));
 
   // Create destination path
-  base::FilePath to_dir(temp_from_dir_.path());
+  base::FilePath to_dir(temp_from_dir_.GetPath());
   to_dir = to_dir.AppendASCII("To_Dir");
   base::CreateDirectory(to_dir);
   ASSERT_TRUE(base::PathExists(to_dir));
@@ -502,11 +479,8 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesPartial) {
   ASSERT_TRUE(base::PathExists(orig_to_file));
 
   // test Do(), check for duplicates.
-  scoped_ptr<MoveTreeWorkItem> work_item(
-      WorkItem::CreateMoveTreeWorkItem(from_dir1,
-                                       to_dir,
-                                       temp_to_dir_.path(),
-                                       WorkItem::CHECK_DUPLICATES));
+  std::unique_ptr<MoveTreeWorkItem> work_item(WorkItem::CreateMoveTreeWorkItem(
+      from_dir1, to_dir, temp_to_dir_.GetPath(), WorkItem::CHECK_DUPLICATES));
   EXPECT_TRUE(work_item->Do());
 
   // Make sure that we "moved" the files, i.e. that the source directory isn't
@@ -516,7 +490,7 @@ TEST_F(MoveTreeWorkItemTest, MoveDirectoryDestExistsCheckForDuplicatesPartial) {
   EXPECT_TRUE(base::PathExists(to_dir));
   EXPECT_TRUE(base::PathExists(orig_to_file));
   // Make sure that the backup path is not empty.
-  EXPECT_FALSE(base::IsDirectoryEmpty(temp_to_dir_.path()));
+  EXPECT_FALSE(base::IsDirectoryEmpty(temp_to_dir_.GetPath()));
   // Make sure that the "new" file is also present.
   base::FilePath new_to_file2(to_dir2);
   new_to_file2 = new_to_file2.AppendASCII("From_File2");

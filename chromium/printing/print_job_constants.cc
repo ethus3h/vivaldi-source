@@ -4,6 +4,8 @@
 
 #include "printing/print_job_constants.h"
 
+#include "printing/features/features.h"
+
 namespace printing {
 
 // True if this is the first preview request.
@@ -54,8 +56,8 @@ const char kSettingDeviceName[] = "deviceName";
 // Option to disable scaling. True if scaling is disabled else false.
 const char kSettingDisableScaling[] = "disableScaling";
 
-// Option to print a distilled page: true if requested, false if not.
-const char kSettingDistillPageEnabled[] = "distillPage";
+// Scaling value required to fit the document to page.
+const char kSettingFitToPageScaling[] = "fitToPageScaling";
 
 // Print job duplex mode.
 const char kSettingDuplexMode[] = "duplex";
@@ -167,6 +169,12 @@ const char kSettingPrintWithPrivet[] = "printWithPrivet";
 // false if not.
 const char kSettingPrintWithExtension[] = "printWithExtension";
 
+// Scaling factor
+const char kSettingScaleFactor[] = "scaleFactor";
+
+// Scaling factor
+const char kSettingRasterizePdf[] = "rasterizePDF";
+
 // Ticket option. Contains the ticket in CJT format.
 const char kSettingTicket[] = "ticket";
 
@@ -176,7 +184,7 @@ const char kSettingShouldPrintBackgrounds[] = "shouldPrintBackgrounds";
 // Whether to print selection only.
 const char kSettingShouldPrintSelectionOnly[] = "shouldPrintSelectionOnly";
 
-#if defined(ENABLE_BASIC_PRINTING)
+#if BUILDFLAG(ENABLE_BASIC_PRINTING)
 // Whether to print using the system dialog.
 const char kSettingShowSystemDialog[] = "showSystemDialog";
 #endif

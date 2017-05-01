@@ -22,12 +22,12 @@ class ExtensionInstallPromptTestHelper {
   // Note: This ADD_FAILURE()s if result_ has not been set.
   ExtensionInstallPrompt::Result result() const;
 
-  bool has_result() const { return result_.get() != nullptr; }
+  bool has_result() const { return result_ != nullptr; }
 
  private:
   void HandleResult(ExtensionInstallPrompt::Result result);
 
-  scoped_ptr<ExtensionInstallPrompt::Result> result_;
+  std::unique_ptr<ExtensionInstallPrompt::Result> result_;
 
   // A closure to run once HandleResult() has been called; used for exiting
   // run loops in tests.

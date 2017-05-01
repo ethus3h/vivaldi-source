@@ -7,15 +7,15 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "components/devtools_http_handler/devtools_http_handler.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/prefs/pref_service.h"
 #include "components/storage_monitor/storage_monitor.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/context_factory.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/common/result_codes.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
 #include "extensions/browser/app_window/app_window_client.h"
@@ -50,6 +50,8 @@
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/disks/disk_mount_manager.h"
 #include "chromeos/network/network_handler.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "extensions/shell/browser/shell_audio_controller_chromeos.h"
 #include "extensions/shell/browser/shell_network_controller_chromeos.h"
 #endif
@@ -65,6 +67,10 @@
 #include "extensions/shell/browser/shell_nacl_browser_delegate.h"
 #endif
 
+#if defined(USE_AURA) && defined(USE_X11)
+#include "ui/events/devices/x11/touch_factory_x11.h"
+#endif
+
 using base::CommandLine;
 using content::BrowserContext;
 
@@ -77,19 +83,19 @@ namespace extensions {
 ShellBrowserMainParts::ShellBrowserMainParts(
     const content::MainFunctionParams& parameters,
     ShellBrowserMainDelegate* browser_main_delegate)
-    : devtools_http_handler_(nullptr),
-      extension_system_(nullptr),
+    : extension_system_(nullptr),
       parameters_(parameters),
       run_message_loop_(true),
       browser_main_delegate_(browser_main_delegate) {
 }
 
 ShellBrowserMainParts::~ShellBrowserMainParts() {
-  DCHECK(!devtools_http_handler_);
 }
 
 void ShellBrowserMainParts::PreMainMessageLoopStart() {
-  // TODO(jamescook): Initialize touch here?
+#if defined(USE_AURA) && defined(USE_X11)
+  ui::TouchFactory::SetTouchDeviceListFromCommandLine();
+#endif
 #if defined(OS_MACOSX)
   MainPartsPreMainMessageLoopStartMac();
 #endif
@@ -103,6 +109,10 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
   chromeos::DBusThreadManager::Initialize();
   chromeos::disks::DiskMountManager::Initialize();
 
+  bluez::BluezDBusManager::Initialize(
+      chromeos::DBusThreadManager::Get()->GetSystemBus(),
+      chromeos::DBusThreadManager::Get()->IsUsingFakes());
+
   chromeos::NetworkHandler::Initialize();
   network_controller_.reset(new ShellNetworkController(
       base::CommandLine::ForCurrentProcess()->GetSwitchValueNative(
@@ -112,7 +122,6 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
       switches::kAppShellAllowRoaming)) {
     network_controller_->SetCellularAllowRoaming(true);
   }
-
 #else
   // Non-Chrome OS platforms are for developer convenience, so use a test IME.
   ui::InitializeInputMethodForTesting();
@@ -127,8 +136,6 @@ int ShellBrowserMainParts::PreCreateThreads() {
 
   content::ChildProcessSecurityPolicy::GetInstance()->RegisterWebSafeScheme(
       kExtensionScheme);
-  content::ChildProcessSecurityPolicy::GetInstance()->RegisterWebSafeScheme(
-      kExtensionResourceScheme);
 
   // Return no error.
   return 0;
@@ -136,7 +143,7 @@ int ShellBrowserMainParts::PreCreateThreads() {
 
 void ShellBrowserMainParts::PreMainMessageLoopRun() {
   // Initialize our "profile" equivalent.
-  browser_context_.reset(new ShellBrowserContext);
+  browser_context_.reset(new ShellBrowserContext(this));
 
   // app_shell only supports a single user, so all preferences live in the user
   // data directory, including the device-wide local state.
@@ -152,6 +159,8 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
 
 #if defined(USE_AURA)
   aura::Env::GetInstance()->set_context_factory(content::GetContextFactory());
+  aura::Env::GetInstance()->set_context_factory_private(
+      content::GetContextFactoryPrivate());
 #endif
 
   storage_monitor::StorageMonitor::Create();
@@ -200,14 +209,12 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   // Track the task so it can be canceled if app_shell shuts down very quickly,
   // such as in browser tests.
   task_tracker_.PostTask(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get(),
-      FROM_HERE,
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO).get(), FROM_HERE,
       base::Bind(nacl::NaClProcessHost::EarlyStartup));
 #endif
 
-  devtools_http_handler_.reset(
-      content::ShellDevToolsManagerDelegate::CreateHttpHandler(
-          browser_context_.get()));
+  content::ShellDevToolsManagerDelegate::StartHttpHandler(
+      browser_context_.get());
   if (parameters_.ui_task) {
     // For running browser tests.
     parameters_.ui_task->Run();
@@ -231,7 +238,7 @@ bool ShellBrowserMainParts::MainMessageLoopRun(int* result_code) {
 void ShellBrowserMainParts::PostMainMessageLoopRun() {
   // NOTE: Please destroy objects in the reverse order of their creation.
   browser_main_delegate_->Shutdown();
-  devtools_http_handler_.reset();
+  content::ShellDevToolsManagerDelegate::StopHttpHandler();
 
 #if !defined(DISABLE_NACL)
   task_tracker_.TryCancelAll();
@@ -246,6 +253,9 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
   extensions_browser_client_.reset();
 
   desktop_controller_.reset();
+
+  // ShellDeviceClient must be shutdown when the FILE thread is still alive.
+  device_client_->Shutdown();
 
   storage_monitor::StorageMonitor::Destroy();
 
@@ -267,6 +277,8 @@ void ShellBrowserMainParts::PostDestroyThreads() {
   network_controller_.reset();
   chromeos::NetworkHandler::Shutdown();
   chromeos::disks::DiskMountManager::Shutdown();
+  device::BluetoothAdapterFactory::Shutdown();
+  bluez::BluezDBusManager::Shutdown();
   chromeos::DBusThreadManager::Shutdown();
 #endif
 }

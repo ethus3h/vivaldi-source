@@ -5,14 +5,16 @@
 #include "components/suggestions/suggestions_store.h"
 
 #include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/base64.h"
-#include "base/prefs/pref_service.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "components/suggestions/suggestions_pref_names.h"
 
 namespace suggestions {
@@ -27,7 +29,8 @@ SuggestionsStore::SuggestionsStore() {
 
 SuggestionsStore::~SuggestionsStore() {}
 
-void SuggestionsStore::SetClockForTesting(scoped_ptr<base::Clock> test_clock) {
+void SuggestionsStore::SetClockForTesting(
+    std::unique_ptr<base::Clock> test_clock) {
   this->clock_ = std::move(test_clock);
 }
 

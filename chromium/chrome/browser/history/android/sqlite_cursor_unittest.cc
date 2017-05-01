@@ -11,6 +11,8 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
@@ -64,7 +66,7 @@ class SQLiteCursorTest : public testing::Test,
 
     testing_profile_->CreateBookmarkModel(true);
     bookmarks::test::WaitForBookmarkModelToLoad(
-        BookmarkModelFactory::GetForProfile(testing_profile_));
+        BookmarkModelFactory::GetForBrowserContext(testing_profile_));
 
     testing_profile_->CreateFaviconService();
     ASSERT_TRUE(testing_profile_->CreateHistoryService(true, false));
@@ -80,16 +82,28 @@ class SQLiteCursorTest : public testing::Test,
   }
 
   // Override SQLiteCursor::TestObserver.
-  void OnPostMoveToTask() override { base::MessageLoop::current()->Run(); }
-
-  void OnGetMoveToResult() override {
-    base::MessageLoop::current()->QuitWhenIdle();
+  void OnPostMoveToTask() override {
+    ASSERT_FALSE(run_loop_);
+    run_loop_ = base::MakeUnique<base::RunLoop>();
+    run_loop_->Run();
+    run_loop_ = nullptr;
   }
 
-  void OnPostGetFaviconTask() override { base::MessageLoop::current()->Run(); }
+  void OnGetMoveToResult() override {
+    ASSERT_TRUE(run_loop_);
+    run_loop_->QuitWhenIdle();
+  }
+
+  void OnPostGetFaviconTask() override {
+    ASSERT_FALSE(run_loop_);
+    run_loop_ = base::MakeUnique<base::RunLoop>();
+    run_loop_->Run();
+    run_loop_ = nullptr;
+  }
 
   void OnGetFaviconResult() override {
-    base::MessageLoop::current()->QuitWhenIdle();
+    ASSERT_TRUE(run_loop_);
+    run_loop_->QuitWhenIdle();
   }
 
  protected:
@@ -97,10 +111,11 @@ class SQLiteCursorTest : public testing::Test,
   base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
-  scoped_ptr<AndroidHistoryProviderService> service_;
+  std::unique_ptr<AndroidHistoryProviderService> service_;
   base::CancelableTaskTracker cancelable_tracker_;
   TestingProfile* testing_profile_;
   history::HistoryService* hs_;
+  std::unique_ptr<base::RunLoop> run_loop_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SQLiteCursorTest);
@@ -151,7 +166,7 @@ TEST_F(SQLiteCursorTest, Run) {
   row.set_url(GURL("http://www.google.com/"));
   std::vector<unsigned char> favicon_data;
   favicon_data.push_back(1);
-  base::RefCountedBytes *data_bytes =
+  scoped_refptr<base::RefCountedBytes> data_bytes =
       base::RefCountedBytes::TakeVector(&favicon_data);
   row.set_favicon(data_bytes);
   row.set_last_visit_time(Time::Now());
@@ -165,7 +180,7 @@ TEST_F(SQLiteCursorTest, Run) {
       Bind(&CallbackHelper::OnInserted, callback.get()),
       &cancelable_tracker_);
 
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   EXPECT_TRUE(callback->success());
 
   std::vector<HistoryAndBookmarkRow::ColumnID> projections;
@@ -182,7 +197,7 @@ TEST_F(SQLiteCursorTest, Run) {
       std::string(),
       Bind(&CallbackHelper::OnQueryResult, callback.get()),
       &cancelable_tracker_);
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   ASSERT_TRUE(callback->success());
 
   AndroidStatement* statement = callback->statement();

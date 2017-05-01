@@ -7,11 +7,11 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/sessions/core/base_session_service.h"
 #include "components/sessions/core/session_command.h"
@@ -64,8 +64,9 @@ class SESSIONS_EXPORT SessionBackend
 
   // Appends the specified commands to the current file. If reset_first is
   // true the the current file is recreated.
-  void AppendCommands(ScopedVector<sessions::SessionCommand> commands,
-                      bool reset_first);
+  void AppendCommands(
+      std::vector<std::unique_ptr<sessions::SessionCommand>> commands,
+      bool reset_first);
 
   // Invoked from the service to read the commands that make up the last
   // session, invokes ReadLastSessionCommandsImpl to do the work.
@@ -77,7 +78,7 @@ class SESSIONS_EXPORT SessionBackend
   //
   // On success, the read commands are added to commands.
   bool ReadLastSessionCommandsImpl(
-      ScopedVector<sessions::SessionCommand>* commands);
+      std::vector<std::unique_ptr<sessions::SessionCommand>>* commands);
 
   // Deletes the file containing the commands for the last session.
   void DeleteLastSession();
@@ -92,7 +93,7 @@ class SESSIONS_EXPORT SessionBackend
   // On success, the read commands are added to commands. It is up to the
   // caller to delete the commands.
   bool ReadCurrentSessionCommandsImpl(
-      ScopedVector<sessions::SessionCommand>* commands);
+      std::vector<std::unique_ptr<sessions::SessionCommand>>* commands);
 
  private:
   friend class base::RefCountedThreadSafe<SessionBackend>;
@@ -114,7 +115,7 @@ class SESSIONS_EXPORT SessionBackend
   // Appends the specified commands to the specified file.
   bool AppendCommandsToFile(
       base::File* file,
-      const ScopedVector<sessions::SessionCommand>& commands);
+      const std::vector<std::unique_ptr<sessions::SessionCommand>>& commands);
 
   const sessions::BaseSessionService::SessionType type_;
 
@@ -131,7 +132,7 @@ class SESSIONS_EXPORT SessionBackend
   bool last_session_valid_;
 
   // Handle to the target file.
-  scoped_ptr<base::File> current_session_file_;
+  std::unique_ptr<base::File> current_session_file_;
 
   // Whether we've inited. Remember, the constructor is run on the
   // Main thread, all others on the IO thread, hence lazy initialization.

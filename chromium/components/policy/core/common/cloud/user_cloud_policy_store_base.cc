@@ -9,7 +9,7 @@
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/policy_map.h"
-#include "policy/proto/cloud_policy.pb.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 
 namespace policy {
 
@@ -26,8 +26,9 @@ UserCloudPolicyStoreBase::UserCloudPolicyStoreBase(
 UserCloudPolicyStoreBase::~UserCloudPolicyStoreBase() {
 }
 
-scoped_ptr<UserCloudPolicyValidator> UserCloudPolicyStoreBase::CreateValidator(
-    scoped_ptr<enterprise_management::PolicyFetchResponse> policy,
+std::unique_ptr<UserCloudPolicyValidator>
+UserCloudPolicyStoreBase::CreateValidator(
+    std::unique_ptr<enterprise_management::PolicyFetchResponse> policy,
     CloudPolicyValidatorBase::ValidateTimestampOption timestamp_option) {
   // Configure the validator.
   UserCloudPolicyValidator* validator = UserCloudPolicyValidator::Create(
@@ -36,18 +37,21 @@ scoped_ptr<UserCloudPolicyValidator> UserCloudPolicyStoreBase::CreateValidator(
   validator->ValidateAgainstCurrentPolicy(
       policy_.get(),
       timestamp_option,
-      CloudPolicyValidatorBase::DM_TOKEN_REQUIRED);
+      CloudPolicyValidatorBase::DM_TOKEN_REQUIRED,
+      CloudPolicyValidatorBase::DEVICE_ID_REQUIRED);
   validator->ValidatePayload();
-  return scoped_ptr<UserCloudPolicyValidator>(validator);
+  return std::unique_ptr<UserCloudPolicyValidator>(validator);
 }
 
 void UserCloudPolicyStoreBase::InstallPolicy(
-    scoped_ptr<enterprise_management::PolicyData> policy_data,
-    scoped_ptr<enterprise_management::CloudPolicySettings> payload) {
+    std::unique_ptr<enterprise_management::PolicyData> policy_data,
+    std::unique_ptr<enterprise_management::CloudPolicySettings> payload,
+    const std::string& policy_signature_public_key) {
   // Decode the payload.
   policy_map_.Clear();
   DecodePolicy(*payload, external_data_manager(), &policy_map_);
   policy_ = std::move(policy_data);
+  policy_signature_public_key_ = policy_signature_public_key;
 }
 
 }  // namespace policy

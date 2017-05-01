@@ -4,8 +4,12 @@
 
 package org.chromium.chrome.browser.init;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -22,13 +26,18 @@ import android.view.WindowManager;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.TraceEvent;
+import org.chromium.base.VisibleForTesting;
+import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LoaderErrors;
 import org.chromium.base.library_loader.ProcessInitException;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeApplication;
 import org.chromium.chrome.browser.WarmupManager;
-import org.chromium.chrome.browser.metrics.LaunchMetrics;
 import org.chromium.chrome.browser.metrics.MemoryUma;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tabmodel.DocumentModeAssassin;
+import org.chromium.chrome.browser.upgrade.UpgradeActivity;
+import org.chromium.content.browser.ChildProcessCreationParams;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.lang.reflect.Field;
@@ -38,9 +47,6 @@ import java.lang.reflect.Field;
  */
 public abstract class AsyncInitializationActivity extends AppCompatActivity implements
         ChromeActivityNativeDelegate, BrowserParts {
-
-    private static final LaunchMetrics.BooleanEvent sBadIntentMetric =
-            new LaunchMetrics.BooleanEvent("Launch.InvalidIntent");
 
     protected final Handler mHandler;
 
@@ -54,8 +60,14 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
     private boolean mDestroyed;
     private NativeInitializationController mNativeInitializationController;
     private MemoryUma mMemoryUma;
-    private boolean mIsTablet;
     private long mLastUserInteractionTime;
+    private boolean mIsTablet;
+    private boolean mHadWarmStart;
+    private boolean mIsWarmOnResume;
+
+    // Stores whether the activity was not resumed yet. Always false after the
+    // first |onResume| call.
+    private boolean mFirstResumePending = true;
 
     public AsyncInitializationActivity() {
         mHandler = new Handler();
@@ -68,8 +80,36 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
     }
 
     @Override
+    @TargetApi(Build.VERSION_CODES.N)
+    protected void attachBaseContext(Context newBase) {
+        super.attachBaseContext(newBase);
+
+        // On N+, Chrome should always retain the tab strip layout on tablets. Normally in
+        // multi-window, if Chrome is launched into a smaller screen Android will load the tab
+        // switcher resources. Overriding the smallestScreenWidthDp in the Configuration ensures
+        // Android will load the tab strip resources. See crbug.com/588838.
+        if (Build.VERSION.CODENAME.equals("N") || Build.VERSION.SDK_INT > Build.VERSION_CODES.M) {
+            int smallestDeviceWidthDp = DeviceFormFactor.getSmallestDeviceWidthDp(this);
+
+            if (smallestDeviceWidthDp >= DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP) {
+                Configuration overrideConfiguration = new Configuration();
+                overrideConfiguration.smallestScreenWidthDp = smallestDeviceWidthDp;
+                applyOverrideConfiguration(overrideConfiguration);
+            }
+        }
+    }
+
+    @Override
     public void preInflationStartup() {
-        mIsTablet = DeviceFormFactor.isTablet(this);
+        mHadWarmStart = LibraryLoader.isInitialized();
+        // On some devices, OEM modifications have been made to the resource loader that cause the
+        // DeviceFormFactor calculation of whether a device is using tablet resources to be
+        // incorrect. Check which resources were actually loaded and set the DeviceFormFactor
+        // values. See crbug.com/662338.
+        boolean isTablet = getResources().getBoolean(R.bool.is_tablet);
+        boolean isLargeTablet = getResources().getBoolean(R.bool.is_large_tablet);
+        DeviceFormFactor.setIsTablet(isTablet, isLargeTablet);
+        mIsTablet = isTablet;
     }
 
     @Override
@@ -84,9 +124,21 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
         if (mLaunchBehindWorkaround != null) mLaunchBehindWorkaround.onSetContentView();
 
         // Kick off long running IO tasks that can be done in parallel.
-        mNativeInitializationController = new NativeInitializationController(this, this);
-        mNativeInitializationController.startBackgroundTasks();
+        mNativeInitializationController = new NativeInitializationController(this);
+        initializeChildProcessCreationParams();
+        mNativeInitializationController.startBackgroundTasks(shouldAllocateChildConnection());
     }
+
+    /** Controls the parameter of {@link NativeInitializationController#startBackgroundTasks()}.*/
+    @VisibleForTesting
+    public boolean shouldAllocateChildConnection() {
+        return true;
+    }
+
+    /**
+     * Allow derived classes to initialize their own {@link ChildProcessCreationParams}.
+     */
+    protected void initializeChildProcessCreationParams() {}
 
     @Override
     public void postInflationStartup() {
@@ -149,7 +201,7 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
     /**
      * Actions that may be run at some point after startup. Place tasks that are not critical to the
      * startup path here.  This method will be called automatically and should not be called
-     * directly by subclasses.  Overriding methods should call super.onDeferredStartup().
+     * directly by subclasses.
      */
     protected void onDeferredStartup() { }
 
@@ -167,20 +219,45 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
      * be called on that order.
      */
     @Override
+    @SuppressLint("MissingSuperCall")  // Called in onCreateInternal.
     protected final void onCreate(Bundle savedInstanceState) {
+        TraceEvent.begin("AsyncInitializationActivity.onCreate()");
+        onCreateInternal(savedInstanceState);
+        TraceEvent.end("AsyncInitializationActivity.onCreate()");
+    }
+
+    private final void onCreateInternal(Bundle savedInstanceState) {
+        if (DocumentModeAssassin.getInstance().isMigrationNecessary()) {
+            super.onCreate(null);
+
+            // Kick the user to the MigrationActivity.
+            UpgradeActivity.launchInstance(this, getIntent());
+
+            // Don't remove this task -- it may be a DocumentActivity that exists only in Recents.
+            finish();
+            return;
+        }
+
         if (!isStartedUpCorrectly(getIntent())) {
-            sBadIntentMetric.recordHit();
             super.onCreate(null);
             ApiCompatibilityUtils.finishAndRemoveTask(this);
             return;
         }
 
-        super.onCreate(savedInstanceState);
+        super.onCreate(transformSavedInstanceStateForOnCreate(savedInstanceState));
         mOnCreateTimestampMs = SystemClock.elapsedRealtime();
         mOnCreateTimestampUptimeMs = SystemClock.uptimeMillis();
         mSavedInstanceState = savedInstanceState;
 
         ChromeBrowserInitializer.getInstance(this).handlePreNativeStartup(this);
+    }
+
+    /**
+     * Allows subclasses to override the instance state passed to super.onCreate().
+     * The original instance state will still be available via getSavedInstanceState().
+     */
+    protected Bundle transformSavedInstanceStateForOnCreate(Bundle savedInstanceState) {
+        return savedInstanceState;
     }
 
     /**
@@ -229,6 +306,8 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
         super.onResume();
         mNativeInitializationController.onResume();
         if (mLaunchBehindWorkaround != null) mLaunchBehindWorkaround.onResume();
+        mIsWarmOnResume = !mFirstResumePending || hadWarmStart();
+        mFirstResumePending = false;
     }
 
     @Override
@@ -284,6 +363,16 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
     }
 
     @Override
+    public boolean isActivityFinishing() {
+        return isFinishing();
+    }
+
+    @Override
+    public boolean shouldStartGpuProcess() {
+        return true;
+    }
+
+    @Override
     public final void onFirstDrawComplete() {
         mHandler.post(new Runnable() {
             @Override
@@ -295,6 +384,11 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
 
     @Override
     public void onNewIntentWithNative(Intent intent) { }
+
+    @Override
+    public Intent getInitialIntent() {
+        return getIntent();
+    }
 
     @Override
     public boolean onActivityResultWithNative(int requestCode, int resultCode, Intent data) {
@@ -318,6 +412,26 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
      */
     public boolean isTablet() {
         return mIsTablet;
+    }
+
+    /**
+     * @return Whether the activity had a warm start because the native library was already fully
+     *     loaded and initialized.
+     */
+    public boolean hadWarmStart() {
+        return mHadWarmStart;
+    }
+
+    /**
+     * This returns true if the activity was started warm (native library loaded and initialized) or
+     * if a cold starts have been completed by the time onResume is/will be called.
+     * This is useful to distinguish between the case where an already running instance of Chrome is
+     * being brought back to the foreground from the case where Chrome is started, in order to avoid
+     * contention on browser startup
+     * @return Whether the activity is warm in onResume.
+     */
+    public boolean isWarmOnResume() {
+        return mIsWarmOnResume;
     }
 
     @Override
@@ -408,7 +522,7 @@ public abstract class AsyncInitializationActivity extends AppCompatActivity impl
                     : null;
 
     private class LaunchBehindWorkaround {
-        private boolean mPaused = false;
+        private boolean mPaused;
 
         private View getDecorView() {
             return getWindow().getDecorView();

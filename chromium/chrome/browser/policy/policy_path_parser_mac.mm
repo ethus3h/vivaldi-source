@@ -17,7 +17,7 @@
 #import "base/mac/scoped_nsautorelease_pool.h"
 #include "base/macros.h"
 #include "base/strings/sys_string_conversions.h"
-#include "policy/policy_constants.h"
+#include "components/policy/policy_constants.h"
 
 namespace policy {
 
@@ -48,8 +48,8 @@ base::FilePath::StringType ExpandPathVariables(
     return result;
   // Sanitize quotes in case of any around the whole string.
   if (result.length() > 1 &&
-      ((result[0] == '"' && result[result.length() - 1] == '"') ||
-      (result[0] == '\'' && result[result.length() - 1] == '\''))) {
+      ((result.front() == '"' && result.back() == '"') ||
+       (result.front() == '\'' && result.back() == '\''))) {
     // Strip first and last char which should be matching quotes now.
     result = result.substr(1, result.length() - 2);
   }
@@ -112,6 +112,12 @@ void CheckUserDataDirPolicy(base::FilePath* user_data_dir) {
     string_value = policy::path_parser::ExpandPathVariables(string_value);
     *user_data_dir = base::FilePath(string_value);
   }
+}
+
+void CheckDiskCacheDirPolicy(base::FilePath* user_data_dir) {
+  // This function is not implemented in Mac because it's only used by the
+  // feature in Windows.
+  NOTREACHED();
 }
 
 }  // namespace path_parser

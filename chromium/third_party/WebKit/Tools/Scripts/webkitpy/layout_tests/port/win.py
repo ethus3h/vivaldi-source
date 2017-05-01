@@ -29,14 +29,14 @@
 """Windows implementation of the Port interface."""
 
 import errno
-import os
 import logging
 
+# The _winreg library is only available on Windows.
+# https://docs.python.org/2/library/_winreg.html
 try:
-    import _winreg
-except ImportError as e:
-    _winreg = None
-    WindowsError = Exception  # this shuts up pylint.
+    import _winreg  # pylint: disable=import-error
+except ImportError:
+    _winreg = None  # pylint: disable=invalid-name
 
 from webkitpy.layout_tests.breakpad.dump_reader_win import DumpReaderWin
 from webkitpy.layout_tests.models import test_run_results
@@ -50,15 +50,14 @@ _log = logging.getLogger(__name__)
 class WinPort(base.Port):
     port_name = 'win'
 
-    SUPPORTED_VERSIONS = ('xp', 'win7', 'win10')
+    SUPPORTED_VERSIONS = ('win7', 'win10')
 
     FALLBACK_PATHS = {'win10': ['win']}
     FALLBACK_PATHS['win7'] = ['win7'] + FALLBACK_PATHS['win10']
-    FALLBACK_PATHS['xp'] = ['win-xp'] + FALLBACK_PATHS['win7']
 
     DEFAULT_BUILD_DIRECTORIES = ('build', 'out')
 
-    BUILD_REQUIREMENTS_URL = 'http://www.chromium.org/developers/how-tos/build-instructions-windows'
+    BUILD_REQUIREMENTS_URL = 'https://chromium.googlesource.com/chromium/src/+/master/docs/windows_build_instructions.md'
 
     @classmethod
     def determine_full_port_name(cls, host, options, port_name):
@@ -112,7 +111,7 @@ class WinPort(base.Port):
         # see comments in check_httpd(), above, for why this routine exists and what it's doing.
         try:
             # Note that we HKCR is a union of HKLM and HKCR (with the latter
-            # overridding the former), so reading from HKCR ensures that we get
+            # overriding the former), so reading from HKCR ensures that we get
             # the value if it is set in either place. See als comments below.
             hkey = _winreg.OpenKey(_winreg.HKEY_CLASSES_ROOT, sub_key)
             args = _winreg.QueryValue(hkey, '').split()
@@ -122,11 +121,10 @@ class WinPort(base.Port):
             # existing entry points to a valid path and has the right command line.
             if len(args) == 2 and self._filesystem.exists(args[0]) and args[0].endswith('perl.exe') and args[1] == '-wT':
                 return True
-        except WindowsError, e:
-            if e.errno != errno.ENOENT:
-                raise e
+        except WindowsError as error:  # WindowsError is not defined on non-Windows platforms - pylint: disable=undefined-variable
+            if error.errno != errno.ENOENT:
+                raise
             # The key simply probably doesn't exist.
-            pass
 
         # Note that we write to HKCU so that we don't need privileged access
         # to the registry, and that will get reflected in HKCR when it is read, above.
@@ -141,7 +139,7 @@ class WinPort(base.Port):
 
         if not self.get_option('disable_breakpad'):
             assert not self._crash_service, 'Already running a crash service'
-            if self._crash_service_available == None:
+            if self._crash_service_available is None:
                 self._crash_service_available = self._check_crash_service_available()
             if not self._crash_service_available:
                 return
@@ -156,13 +154,13 @@ class WinPort(base.Port):
             self._crash_service.stop()
             self._crash_service = None
 
-    def setup_environ_for_server(self, server_name=None):
-        env = super(WinPort, self).setup_environ_for_server(server_name)
+    def setup_environ_for_server(self):
+        env = super(WinPort, self).setup_environ_for_server()
 
         # FIXME: This is a temporary hack to get the cr-win bot online until
         # someone from the cr-win port can take a look.
         apache_envvars = ['SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'TMP']
-        for key, value in os.environ.items():
+        for key, value in self.host.environ.copy().items():
             if key not in env and key in apache_envvars:
                 env[key] = value
 
@@ -191,7 +189,7 @@ class WinPort(base.Port):
         if result:
             _log.error('For complete Windows build requirements, please see:')
             _log.error('')
-            _log.error('    http://dev.chromium.org/developers/how-tos/build-instructions-windows')
+            _log.error('    https://chromium.googlesource.com/chromium/src/+/master/docs/windows_build_instructions.md')
         return result
 
     def operating_system(self):
@@ -211,15 +209,15 @@ class WinPort(base.Port):
         return self.path_from_chromium_base('third_party', 'apache-win32', 'bin', 'httpd.exe')
 
     def path_to_apache_config_file(self):
-        return self._filesystem.join(self.layout_tests_dir(), 'http', 'conf', 'win-httpd.conf')
+        return self._filesystem.join(self.apache_config_directory(), 'win-httpd.conf')
 
     #
     # PROTECTED ROUTINES
     #
 
-    def _path_to_driver(self, configuration=None):
+    def _path_to_driver(self, target=None):
         binary_name = '%s.exe' % self.driver_name()
-        return self._build_path_with_configuration(configuration, binary_name)
+        return self._build_path_with_target(target, binary_name)
 
     def _path_to_crash_service(self):
         binary_name = 'content_shell_crash_service.exe'
@@ -228,9 +226,6 @@ class WinPort(base.Port):
     def _path_to_image_diff(self):
         binary_name = 'image_diff.exe'
         return self._build_path(binary_name)
-
-    def _path_to_wdiff(self):
-        return self.path_from_chromium_base('third_party', 'cygwin', 'bin', 'wdiff.exe')
 
     def _check_crash_service_available(self):
         """Checks whether the crash service binary is present."""

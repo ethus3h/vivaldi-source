@@ -8,17 +8,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "content/common/content_export.h"
-#include "media/base/video_capturer_source.h"
 #include "media/base/video_frame_pool.h"
+#include "media/capture/video_capturer_source.h"
 #include "third_party/WebKit/public/platform/WebCanvasCaptureHandler.h"
 #include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
 #include "third_party/WebKit/public/platform/WebSize.h"
-#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
+
+class SkImage;
 
 namespace content {
 
@@ -53,6 +58,7 @@ class CONTENT_EXPORT CanvasCaptureHandler final
       const media::VideoCapturerSource::VideoCaptureDeliverFrameCB&
           new_frame_callback,
       const media::VideoCapturerSource::RunningCallback& running_callback);
+  void RequestRefreshFrame();
   void StopVideoCapture();
   blink::WebSize GetSourceSize() const { return size_; }
 
@@ -69,12 +75,8 @@ class CONTENT_EXPORT CanvasCaptureHandler final
 
   void CreateNewFrame(const SkImage* image);
   void AddVideoCapturerSourceToVideoTrack(
-      scoped_ptr<media::VideoCapturerSource> source,
+      std::unique_ptr<media::VideoCapturerSource> source,
       blink::WebMediaStreamTrack* web_track);
-
-  // Implementation VideoCapturerSource that is owned by Blink and delegates
-  // the Start/Stop calls to CanvasCaptureHandler.
-  class VideoCapturerSource;
 
   // Object that does all the work of running |new_frame_callback_|.
   // Destroyed on |frame_callback_task_runner_| after the class is destroyed.
@@ -86,14 +88,17 @@ class CONTENT_EXPORT CanvasCaptureHandler final
   const blink::WebSize size_;
   gfx::Size last_size;
   std::vector<uint8_t> temp_data_;
-  size_t row_bytes_;
+  size_t temp_data_stride_;
   SkImageInfo image_info_;
   media::VideoFramePool frame_pool_;
 
+  scoped_refptr<media::VideoFrame> last_frame_;
+
   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
-  scoped_ptr<CanvasCaptureHandlerDelegate> delegate_;
-  // Bound to the main render thread.
-  base::ThreadChecker thread_checker_;
+  std::unique_ptr<CanvasCaptureHandlerDelegate> delegate_;
+
+  // Bound to Main Render thread.
+  base::ThreadChecker main_render_thread_checker_;
   base::WeakPtrFactory<CanvasCaptureHandler> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(CanvasCaptureHandler);

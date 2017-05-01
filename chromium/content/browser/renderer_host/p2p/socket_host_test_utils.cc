@@ -8,9 +8,10 @@
 
 #include "base/logging.h"
 #include "base/sys_byteorder.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
+#include "net/base/ip_address.h"
 
 const int kStunHeaderSize = 20;
 const uint16_t kStunBindingRequest = 0x0001;
@@ -41,7 +42,7 @@ void FakeSocket::AppendInputData(const char* data, int data_size) {
     CHECK(result > 0);
     memcpy(read_buffer_->data(), &input_data_[0] + input_pos_, result);
     input_pos_ += result;
-    read_buffer_ = NULL;
+    read_buffer_ = nullptr;
     net::CompletionCallback cb = read_callback_;
     read_callback_.Reset();
     cb.Run(result);
@@ -142,7 +143,7 @@ int FakeSocket::GetLocalAddress(net::IPEndPoint* address) const {
   return net::OK;
 }
 
-const net::BoundNetLog& FakeSocket::NetLog() const {
+const net::NetLogWithSource& FakeSocket::NetLog() const {
   NOTREACHED();
   return net_log_;
 }
@@ -159,11 +160,7 @@ bool FakeSocket::WasEverUsed() const {
   return true;
 }
 
-bool FakeSocket::UsingTCPFastOpen() const {
-  return false;
-}
-
-bool FakeSocket::WasNpnNegotiated() const {
+bool FakeSocket::WasAlpnNegotiated() const {
   return false;
 }
 
@@ -217,7 +214,7 @@ void CreateStunError(std::vector<char>* packet) {
 }
 
 net::IPEndPoint ParseAddress(const std::string& ip_str, uint16_t port) {
-  net::IPAddressNumber ip;
-  EXPECT_TRUE(net::ParseIPLiteralToNumber(ip_str, &ip));
+  net::IPAddress ip;
+  EXPECT_TRUE(ip.AssignFromIPLiteral(ip_str));
   return net::IPEndPoint(ip, port);
 }

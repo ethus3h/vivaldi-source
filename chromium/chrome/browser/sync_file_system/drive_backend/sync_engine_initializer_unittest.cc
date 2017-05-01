@@ -7,12 +7,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_test_util.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.h"
@@ -41,7 +43,7 @@ const int64_t kInitialLargestChangeID = 1234;
 class SyncEngineInitializerTest : public testing::Test {
  public:
   struct TrackedFile {
-    scoped_ptr<google_apis::FileResource> resource;
+    std::unique_ptr<google_apis::FileResource> resource;
     FileMetadata metadata;
     FileTracker tracker;
   };
@@ -53,14 +55,14 @@ class SyncEngineInitializerTest : public testing::Test {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
 
-    scoped_ptr<drive::FakeDriveService>
-        fake_drive_service(new drive::FakeDriveService);
+    std::unique_ptr<drive::FakeDriveService> fake_drive_service(
+        new drive::FakeDriveService);
     fake_drive_service_ = fake_drive_service.get();
 
     sync_context_.reset(new SyncEngineContext(
         std::move(fake_drive_service),
-        scoped_ptr<drive::DriveUploaderInterface>(), nullptr /* task_logger */,
-        base::ThreadTaskRunnerHandle::Get(),
+        std::unique_ptr<drive::DriveUploaderInterface>(),
+        nullptr /* task_logger */, base::ThreadTaskRunnerHandle::Get(),
         base::ThreadTaskRunnerHandle::Get(), nullptr /* worker_pool */));
 
     sync_task_manager_.reset(new SyncTaskManager(
@@ -78,9 +80,7 @@ class SyncEngineInitializerTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  base::FilePath database_path() {
-    return database_dir_.path();
-  }
+  base::FilePath database_path() { return database_dir_.GetPath(); }
 
   SyncStatusCode RunInitializer() {
     SyncEngineInitializer* initializer =
@@ -90,8 +90,7 @@ class SyncEngineInitializerTest : public testing::Test {
     SyncStatusCode status = SYNC_STATUS_UNKNOWN;
 
     sync_task_manager_->ScheduleSyncTask(
-        FROM_HERE,
-        scoped_ptr<SyncTask>(initializer),
+        FROM_HERE, std::unique_ptr<SyncTask>(initializer),
         SyncTaskManager::PRIORITY_MED,
         base::Bind(&SyncEngineInitializerTest::DidRunInitializer,
                    base::Unretained(this), initializer, &status));
@@ -109,34 +108,24 @@ class SyncEngineInitializerTest : public testing::Test {
 
   SyncStatusCode PopulateDatabase(
       const google_apis::FileResource& sync_root,
-      const google_apis::FileResource** app_roots,
-      size_t app_roots_count) {
+      const std::vector<std::unique_ptr<google_apis::FileResource>>&
+          app_root_list) {
     SyncStatusCode status = SYNC_STATUS_UNKNOWN;
-    scoped_ptr<MetadataDatabase> database = MetadataDatabase::Create(
+    std::unique_ptr<MetadataDatabase> database = MetadataDatabase::Create(
         database_path(), in_memory_env_.get(), &status);
     if (status != SYNC_STATUS_OK)
       return status;
 
-    // |app_root_list| must not own the resources here. Be sure to call
-    // weak_clear later.
-    ScopedVector<google_apis::FileResource> app_root_list;
-    for (size_t i = 0; i < app_roots_count; ++i) {
-      app_root_list.push_back(
-          const_cast<google_apis::FileResource*>(app_roots[i]));
-    }
-
     status = database->PopulateInitialData(
         kInitialLargestChangeID, sync_root, app_root_list);
-
-    app_root_list.weak_clear();
     return status;
   }
 
-  scoped_ptr<google_apis::FileResource> CreateRemoteFolder(
+  std::unique_ptr<google_apis::FileResource> CreateRemoteFolder(
       const std::string& parent_folder_id,
       const std::string& title) {
     google_apis::DriveApiErrorCode error = google_apis::DRIVE_OTHER_ERROR;
-    scoped_ptr<google_apis::FileResource> entry;
+    std::unique_ptr<google_apis::FileResource> entry;
     drive::AddNewDirectoryOptions options;
     options.visibility = google_apis::drive::FILE_VISIBILITY_PRIVATE;
     sync_context_->GetDriveService()->AddNewDirectory(
@@ -148,8 +137,8 @@ class SyncEngineInitializerTest : public testing::Test {
     return entry;
   }
 
-  scoped_ptr<google_apis::FileResource> CreateRemoteSyncRoot() {
-    scoped_ptr<google_apis::FileResource> sync_root(
+  std::unique_ptr<google_apis::FileResource> CreateRemoteSyncRoot() {
+    std::unique_ptr<google_apis::FileResource> sync_root(
         CreateRemoteFolder(std::string(), kSyncRootFolderTitle));
 
     for (size_t i = 0; i < sync_root->parents().size(); ++i) {
@@ -198,7 +187,7 @@ class SyncEngineInitializerTest : public testing::Test {
 
   bool HasNoParent(const std::string& file_id) {
     google_apis::DriveApiErrorCode error = google_apis::DRIVE_OTHER_ERROR;
-    scoped_ptr<google_apis::FileResource> entry;
+    std::unique_ptr<google_apis::FileResource> entry;
     sync_context_->GetDriveService()->GetFileResource(
         file_id,
         CreateResultReceiver(&error, &entry));
@@ -229,11 +218,11 @@ class SyncEngineInitializerTest : public testing::Test {
  private:
   content::TestBrowserThreadBundle browser_threads_;
   base::ScopedTempDir database_dir_;
-  scoped_ptr<leveldb::Env> in_memory_env_;
+  std::unique_ptr<leveldb::Env> in_memory_env_;
 
-  scoped_ptr<MetadataDatabase> metadata_database_;
-  scoped_ptr<SyncTaskManager> sync_task_manager_;
-  scoped_ptr<SyncEngineContext> sync_context_;
+  std::unique_ptr<MetadataDatabase> metadata_database_;
+  std::unique_ptr<SyncTaskManager> sync_task_manager_;
+  std::unique_ptr<SyncEngineContext> sync_context_;
   drive::FakeDriveService* fake_drive_service_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(SyncEngineInitializerTest);
@@ -253,11 +242,10 @@ TEST_F(SyncEngineInitializerTest, EmptyDatabase_NoRemoteSyncRoot) {
 }
 
 TEST_F(SyncEngineInitializerTest, EmptyDatabase_RemoteSyncRootExists) {
-  scoped_ptr<google_apis::FileResource> sync_root(
-      CreateRemoteSyncRoot());
-  scoped_ptr<google_apis::FileResource> app_root_1(
+  std::unique_ptr<google_apis::FileResource> sync_root(CreateRemoteSyncRoot());
+  std::unique_ptr<google_apis::FileResource> app_root_1(
       CreateRemoteFolder(sync_root->file_id(), "app-root 1"));
-  scoped_ptr<google_apis::FileResource> app_root_2(
+  std::unique_ptr<google_apis::FileResource> app_root_2(
       CreateRemoteFolder(sync_root->file_id(), "app-root 2"));
 
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
@@ -275,35 +263,34 @@ TEST_F(SyncEngineInitializerTest, EmptyDatabase_RemoteSyncRootExists) {
 }
 
 TEST_F(SyncEngineInitializerTest, DatabaseAlreadyInitialized) {
-  scoped_ptr<google_apis::FileResource> sync_root(CreateRemoteSyncRoot());
-  scoped_ptr<google_apis::FileResource> app_root_1(
+  std::unique_ptr<google_apis::FileResource> sync_root(CreateRemoteSyncRoot());
+  std::vector<std::unique_ptr<google_apis::FileResource>> app_root_list;
+  app_root_list.push_back(
       CreateRemoteFolder(sync_root->file_id(), "app-root 1"));
-  scoped_ptr<google_apis::FileResource> app_root_2(
+  app_root_list.push_back(
       CreateRemoteFolder(sync_root->file_id(), "app-root 2"));
 
-  const google_apis::FileResource* app_roots[] = {
-    app_root_1.get(), app_root_2.get()
-  };
-  EXPECT_EQ(SYNC_STATUS_OK,
-            PopulateDatabase(*sync_root, app_roots, arraysize(app_roots)));
+  EXPECT_EQ(SYNC_STATUS_OK, PopulateDatabase(*sync_root, app_root_list));
 
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
 
   EXPECT_EQ(1u, CountTrackersForFile(sync_root->file_id()));
-  EXPECT_EQ(1u, CountTrackersForFile(app_root_1->file_id()));
-  EXPECT_EQ(1u, CountTrackersForFile(app_root_2->file_id()));
+  EXPECT_EQ(1u, CountTrackersForFile(app_root_list[0]->file_id()));
+  EXPECT_EQ(1u, CountTrackersForFile(app_root_list[1]->file_id()));
 
   EXPECT_TRUE(HasActiveTracker(sync_root->file_id()));
-  EXPECT_FALSE(HasActiveTracker(app_root_1->file_id()));
-  EXPECT_FALSE(HasActiveTracker(app_root_2->file_id()));
+  EXPECT_FALSE(HasActiveTracker(app_root_list[0]->file_id()));
+  EXPECT_FALSE(HasActiveTracker(app_root_list[1]->file_id()));
 
   EXPECT_EQ(3u, CountFileMetadata());
   EXPECT_EQ(3u, CountFileTracker());
 }
 
 TEST_F(SyncEngineInitializerTest, EmptyDatabase_MultiCandidate) {
-  scoped_ptr<google_apis::FileResource> sync_root_1(CreateRemoteSyncRoot());
-  scoped_ptr<google_apis::FileResource> sync_root_2(CreateRemoteSyncRoot());
+  std::unique_ptr<google_apis::FileResource> sync_root_1(
+      CreateRemoteSyncRoot());
+  std::unique_ptr<google_apis::FileResource> sync_root_2(
+      CreateRemoteSyncRoot());
 
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
 
@@ -318,8 +305,8 @@ TEST_F(SyncEngineInitializerTest, EmptyDatabase_MultiCandidate) {
 }
 
 TEST_F(SyncEngineInitializerTest, EmptyDatabase_UndetachedRemoteSyncRoot) {
-  scoped_ptr<google_apis::FileResource> sync_root(CreateRemoteFolder(
-      std::string(), kSyncRootFolderTitle));
+  std::unique_ptr<google_apis::FileResource> sync_root(
+      CreateRemoteFolder(std::string(), kSyncRootFolderTitle));
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
 
   EXPECT_EQ(1u, CountTrackersForFile(sync_root->file_id()));
@@ -332,10 +319,10 @@ TEST_F(SyncEngineInitializerTest, EmptyDatabase_UndetachedRemoteSyncRoot) {
 }
 
 TEST_F(SyncEngineInitializerTest, EmptyDatabase_MultiparentSyncRoot) {
-  scoped_ptr<google_apis::FileResource> folder(CreateRemoteFolder(
-      std::string(), "folder"));
-  scoped_ptr<google_apis::FileResource> sync_root(CreateRemoteFolder(
-      std::string(), kSyncRootFolderTitle));
+  std::unique_ptr<google_apis::FileResource> folder(
+      CreateRemoteFolder(std::string(), "folder"));
+  std::unique_ptr<google_apis::FileResource> sync_root(
+      CreateRemoteFolder(std::string(), kSyncRootFolderTitle));
   AddParentFolder(sync_root->file_id(), folder->file_id());
 
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
@@ -350,10 +337,10 @@ TEST_F(SyncEngineInitializerTest, EmptyDatabase_MultiparentSyncRoot) {
 }
 
 TEST_F(SyncEngineInitializerTest, EmptyDatabase_FakeRemoteSyncRoot) {
-  scoped_ptr<google_apis::FileResource> folder(CreateRemoteFolder(
-      std::string(), "folder"));
-  scoped_ptr<google_apis::FileResource> sync_root(CreateRemoteFolder(
-      folder->file_id(), kSyncRootFolderTitle));
+  std::unique_ptr<google_apis::FileResource> folder(
+      CreateRemoteFolder(std::string(), "folder"));
+  std::unique_ptr<google_apis::FileResource> sync_root(
+      CreateRemoteFolder(folder->file_id(), kSyncRootFolderTitle));
 
   EXPECT_EQ(SYNC_STATUS_OK, RunInitializer());
 

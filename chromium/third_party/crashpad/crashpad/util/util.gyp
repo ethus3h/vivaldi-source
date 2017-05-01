@@ -84,6 +84,8 @@
         'mach/task_for_pid.h',
         'mach/task_memory.cc',
         'mach/task_memory.h',
+        'misc/address_sanitizer.h',
+        'misc/arraysize_unsafe.h',
         'misc/clock.h',
         'misc/clock_mac.cc',
         'misc/clock_posix.cc',
@@ -92,6 +94,8 @@
         'misc/initialization_state.h',
         'misc/initialization_state_dcheck.cc',
         'misc/initialization_state_dcheck.h',
+        'misc/metrics.cc',
+        'misc/metrics.h',
         'misc/pdb_structures.cc',
         'misc/pdb_structures.h',
         'misc/random_string.cc',
@@ -166,8 +170,12 @@
         'win/exception_handler_server.h',
         'win/get_function.cc',
         'win/get_function.h',
+        'win/get_module_information.cc',
+        'win/get_module_information.h',
         'win/handle.cc',
         'win/handle.h',
+        'win/initial_client_data.cc',
+        'win/initial_client_data.h',
         'win/module_version.cc',
         'win/module_version.h',
         'win/nt_internals.cc',
@@ -185,6 +193,7 @@
         'win/scoped_local_alloc.h',
         'win/scoped_process_suspend.cc',
         'win/scoped_process_suspend.h',
+        'win/termination_codes.h',
         'win/time.cc',
         'win/time.h',
         'win/xp_compat.h',
@@ -254,8 +263,6 @@
         ['OS=="win"', {
           'link_settings': {
             'libraries': [
-              '-ladvapi32.lib',
-              '-lrpcrt4.lib',
               '-lwinhttp.lib',
             ],
           },
@@ -263,6 +270,11 @@
             4201,  # nonstandard extension used : nameless struct/union.
             4577,  # 'noexcept' used with no exception handling mode specified
           ],
+          'direct_dependent_settings': {
+            'msvs_disabled_warnings': [
+              4577,  # 'noexcept' used with no exception handling mode specified
+            ],
+          },
           'conditions': [
             ['target_arch=="ia32"', {
               'msvs_settings': {
@@ -271,6 +283,10 @@
                 },
               },
             }],
+          ],
+        }, {  # else: OS!="win"
+          'sources!': [
+            'win/capture_context.asm',
           ],
         }],
       ],

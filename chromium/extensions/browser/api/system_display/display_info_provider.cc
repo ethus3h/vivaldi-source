@@ -6,8 +6,8 @@
 
 #include "base/strings/string_number_conversions.h"
 #include "extensions/common/api/system_display.h"
-#include "ui/gfx/display.h"
-#include "ui/gfx/screen.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 
 namespace extensions {
 
@@ -17,15 +17,15 @@ namespace {
 DisplayInfoProvider* g_display_info_provider = NULL;
 
 // Converts Rotation enum to integer.
-int RotationToDegrees(gfx::Display::Rotation rotation) {
+int RotationToDegrees(display::Display::Rotation rotation) {
   switch (rotation) {
-    case gfx::Display::ROTATE_0:
+    case display::Display::ROTATE_0:
       return 0;
-    case gfx::Display::ROTATE_90:
+    case display::Display::ROTATE_90:
       return 90;
-    case gfx::Display::ROTATE_180:
+    case display::Display::ROTATE_180:
       return 180;
-    case gfx::Display::ROTATE_270:
+    case display::Display::ROTATE_270:
       return 270;
   }
   return 0;
@@ -51,44 +51,106 @@ void DisplayInfoProvider::InitializeForTesting(
 
 // static
 // Creates new DisplayUnitInfo struct for |display|.
-api::system_display::DisplayUnitInfo*
-DisplayInfoProvider::CreateDisplayUnitInfo(const gfx::Display& display,
-                                           int64_t primary_display_id) {
-  api::system_display::DisplayUnitInfo* unit =
-      new api::system_display::DisplayUnitInfo();
+api::system_display::DisplayUnitInfo DisplayInfoProvider::CreateDisplayUnitInfo(
+    const display::Display& display,
+    int64_t primary_display_id) {
+  api::system_display::DisplayUnitInfo unit;
   const gfx::Rect& bounds = display.bounds();
   const gfx::Rect& work_area = display.work_area();
-  unit->id = base::Int64ToString(display.id());
-  unit->is_primary = (display.id() == primary_display_id);
-  unit->is_internal = display.IsInternal();
-  unit->is_enabled = true;
-  unit->rotation = RotationToDegrees(display.rotation());
-  unit->bounds.left = bounds.x();
-  unit->bounds.top = bounds.y();
-  unit->bounds.width = bounds.width();
-  unit->bounds.height = bounds.height();
-  unit->work_area.left = work_area.x();
-  unit->work_area.top = work_area.y();
-  unit->work_area.width = work_area.width();
-  unit->work_area.height = work_area.height();
+  unit.id = base::Int64ToString(display.id());
+  unit.is_primary = (display.id() == primary_display_id);
+  unit.is_internal = display.IsInternal();
+  unit.is_enabled = true;
+  unit.rotation = RotationToDegrees(display.rotation());
+  unit.bounds.left = bounds.x();
+  unit.bounds.top = bounds.y();
+  unit.bounds.width = bounds.width();
+  unit.bounds.height = bounds.height();
+  unit.work_area.left = work_area.x();
+  unit.work_area.top = work_area.y();
+  unit.work_area.width = work_area.width();
+  unit.work_area.height = work_area.height();
+  unit.has_touch_support =
+      display.touch_support() == display::Display::TOUCH_SUPPORT_AVAILABLE;
   return unit;
+}
+
+bool DisplayInfoProvider::SetDisplayLayout(const DisplayLayoutList& layout) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return false;
 }
 
 void DisplayInfoProvider::EnableUnifiedDesktop(bool enable) {}
 
-DisplayInfo DisplayInfoProvider::GetAllDisplaysInfo() {
-  // TODO(scottmg): Native is wrong http://crbug.com/133312
-  gfx::Screen* screen = gfx::Screen::GetNativeScreen();
+DisplayInfoProvider::DisplayUnitInfoList
+DisplayInfoProvider::GetAllDisplaysInfo() {
+  display::Screen* screen = display::Screen::GetScreen();
   int64_t primary_id = screen->GetPrimaryDisplay().id();
-  std::vector<gfx::Display> displays = screen->GetAllDisplays();
-  DisplayInfo all_displays;
-  for (const gfx::Display& display : displays) {
-    linked_ptr<api::system_display::DisplayUnitInfo> unit(
-        CreateDisplayUnitInfo(display, primary_id));
-    UpdateDisplayUnitInfoForPlatform(display, unit.get());
-    all_displays.push_back(unit);
+  std::vector<display::Display> displays = screen->GetAllDisplays();
+  DisplayUnitInfoList all_displays;
+  for (const display::Display& display : displays) {
+    api::system_display::DisplayUnitInfo unit =
+        CreateDisplayUnitInfo(display, primary_id);
+    UpdateDisplayUnitInfoForPlatform(display, &unit);
+    all_displays.push_back(std::move(unit));
   }
   return all_displays;
+}
+
+DisplayInfoProvider::DisplayLayoutList DisplayInfoProvider::GetDisplayLayout() {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return DisplayLayoutList();
+}
+
+bool DisplayInfoProvider::OverscanCalibrationStart(const std::string& id) {
+  return false;
+}
+
+bool DisplayInfoProvider::OverscanCalibrationAdjust(
+    const std::string& id,
+    const api::system_display::Insets& delta) {
+  return false;
+}
+
+bool DisplayInfoProvider::OverscanCalibrationReset(const std::string& id) {
+  return false;
+}
+
+bool DisplayInfoProvider::OverscanCalibrationComplete(const std::string& id) {
+  return false;
+}
+
+bool DisplayInfoProvider::ShowNativeTouchCalibration(
+    const std::string& id,
+    std::string* error,
+    const TouchCalibrationCallback& callback) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return false;
+}
+
+bool DisplayInfoProvider::StartCustomTouchCalibration(const std::string& id,
+                                                      std::string* error) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return false;
+}
+
+bool DisplayInfoProvider::CompleteCustomTouchCalibration(
+    const api::system_display::TouchCalibrationPairQuad& pairs,
+    const api::system_display::Bounds& bounds,
+    std::string* error) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return false;
+}
+
+bool DisplayInfoProvider::ClearTouchCalibration(const std::string& id,
+                                                std::string* error) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return false;
+}
+
+bool DisplayInfoProvider::IsNativeTouchCalibrationActive(std::string* error) {
+  NOTREACHED();  // Implemented on Chrome OS only in override.
+  return true;
 }
 
 DisplayInfoProvider::DisplayInfoProvider() {

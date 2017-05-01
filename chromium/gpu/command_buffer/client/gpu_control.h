@@ -13,6 +13,7 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "gpu/command_buffer/common/capabilities.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/gpu_export.h"
@@ -23,11 +24,8 @@ namespace base {
 class Lock;
 }
 
-namespace gfx {
-class GpuMemoryBuffer;
-}
-
 namespace gpu {
+class GpuControlClient;
 struct SyncToken;
 
 // Common interface for GpuControl implementations.
@@ -35,6 +33,8 @@ class GPU_EXPORT GpuControl {
  public:
   GpuControl() {}
   virtual ~GpuControl() {}
+
+  virtual void SetGpuControlClient(GpuControlClient* gpu_control_client) = 0;
 
   virtual Capabilities GetCapabilities() = 0;
 
@@ -55,23 +55,6 @@ class GPU_EXPORT GpuControl {
                                              unsigned internalformat,
                                              unsigned usage) = 0;
 
-  // Inserts a sync point, returning its ID. Sync point IDs are global and can
-  // be used for cross-context synchronization.
-  virtual uint32_t InsertSyncPoint() = 0;
-
-  // Inserts a future sync point, returning its ID. Sync point IDs are global
-  // and can be used for cross-context synchronization. The sync point won't be
-  // retired immediately.
-  virtual uint32_t InsertFutureSyncPoint() = 0;
-
-  // Retires a future sync point. This will signal contexts that are waiting
-  // on it to start executing.
-  virtual void RetireSyncPoint(uint32_t sync_point) = 0;
-
-  // Runs |callback| when a sync point is reached.
-  virtual void SignalSyncPoint(uint32_t sync_point,
-                               const base::Closure& callback) = 0;
-
   // Runs |callback| when a query created via glCreateQueryEXT() has cleared
   // passed the glEndQueryEXT() point.
   virtual void SignalQuery(uint32_t query, const base::Closure& callback) = 0;
@@ -81,10 +64,6 @@ class GPU_EXPORT GpuControl {
   // the GPU implementation if it is to be used from multiple threads. This
   // may not be supported with all implementations.
   virtual void SetLock(base::Lock*) = 0;
-
-  // Returns true if the channel to the Gpu is lost. When true, all contexts
-  // should be considered as lost.
-  virtual bool IsGpuChannelLost() = 0;
 
   // When this function returns it ensures all previously flushed work is
   // visible by the service. This command does this by sending a synchronous
@@ -100,20 +79,31 @@ class GPU_EXPORT GpuControl {
   // extra field to identify unverified sync tokens for the implementation of
   // the CanWaitUnverifiedSyncToken() function.
   virtual CommandBufferNamespace GetNamespaceID() const = 0;
-  virtual uint64_t GetCommandBufferID() const = 0;
+  virtual CommandBufferId GetCommandBufferID() const = 0;
   virtual int32_t GetExtraCommandBufferData() const = 0;
 
-  // Fence Syncs use release counters at a context level, these fence syncs
-  // need to be flushed before they can be shared with other contexts across
-  // channels. Subclasses should implement these functions and take care of
-  // figuring out when a fence sync has been flushed. The difference between
-  // IsFenceSyncFlushed and IsFenceSyncFlushReceived, one is testing is the
-  // client has issued the flush, and the other is testing if the service
-  // has received the flush.
+  // Generates a fence sync which should be inserted into the GL command stream.
+  // When the service executes the fence sync it is released. Fence syncs are
+  // shared with other contexts as sync tokens which encapsulate the fence sync
+  // and the command buffer on which it was generated. Fence syncs need to be
+  // flushed before they can be used by other contexts. Furthermore, the flush
+  // must be verified before sending a sync token across channel boundaries.
   virtual uint64_t GenerateFenceSyncRelease() = 0;
+
+  // Returns true if the fence sync is valid.
   virtual bool IsFenceSyncRelease(uint64_t release) = 0;
+
+  // Returns true if the client has flushed the fence sync.
   virtual bool IsFenceSyncFlushed(uint64_t release) = 0;
+
+  // Returns true if the service has received the fence sync. Used for verifying
+  // sync tokens.
   virtual bool IsFenceSyncFlushReceived(uint64_t release) = 0;
+
+  // Returns true if the service has released (executed) the fence sync. Some
+  // implementations may support calling this from any thread without holding
+  // the lock provided by the client.
+  virtual bool IsFenceSyncReleased(uint64_t release) = 0;
 
   // Runs |callback| when sync token is signalled.
   virtual void SignalSyncToken(const SyncToken& sync_token,

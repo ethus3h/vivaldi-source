@@ -11,21 +11,23 @@
 namespace blink {
 
 class PLATFORM_EXPORT PaintFilterEffect : public FilterEffect {
-public:
-    static PassRefPtrWillBeRawPtr<PaintFilterEffect> create(Filter*, const SkPaint&);
-    ~PaintFilterEffect() override;
+ public:
+  static PaintFilterEffect* create(Filter*, const SkPaint&);
+  ~PaintFilterEffect() override;
 
-    FilterEffectType filterEffectType() const override { return FilterEffectTypeSourceInput; }
+  FilterEffectType getFilterEffectType() const override {
+    return FilterEffectTypeSourceInput;
+  }
 
-    TextStream& externalRepresentation(TextStream&, int indention) const override;
-    PassRefPtr<SkImageFilter> createImageFilter(SkiaImageFilterBuilder&) override;
+  TextStream& externalRepresentation(TextStream&, int indention) const override;
+  sk_sp<SkImageFilter> createImageFilter() override;
 
-private:
-    PaintFilterEffect(Filter*, const SkPaint&);
+ private:
+  PaintFilterEffect(Filter*, const SkPaint&);
 
-    SkPaint m_paint;
+  SkPaint m_paint;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // PaintFilterEffect_h
+#endif  // PaintFilterEffect_h

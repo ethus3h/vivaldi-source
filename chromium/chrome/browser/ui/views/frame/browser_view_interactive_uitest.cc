@@ -4,18 +4,24 @@
 
 #include "chrome/browser/ui/views/frame/browser_view.h"
 
+#include "base/command_line.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "ui/views/focus/focus_manager.h"
 
+#if defined(USE_ASH)
+#include "ash/common/ash_switches.h"
+#endif
+
 #if defined(USE_AURA)
 #include "chrome/browser/ui/browser_window_state.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
-#include "ui/gfx/screen.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #endif
 
 using views::FocusManager;
@@ -57,16 +63,24 @@ class BrowserViewTestParam : public BrowserViewTest,
 // Test that docked state is remembered for app browser windows and not
 // remembered for tabbed browser windows.
 IN_PROC_BROWSER_TEST_P(BrowserViewTestParam, BrowserRemembersDockedState) {
+#if defined(USE_ASH)
+  // Enable window docking for this test.
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      ash::switches::kAshEnableDockedWindows);
+  const bool kIsAsh = true;
+#else
+  const bool kIsAsh = false;
+#endif  // defined(USE_ASH)
+
   // Open a new browser window (app or tabbed depending on a parameter).
   bool test_app = TestApp();
   Browser::CreateParams params =
       test_app ? Browser::CreateParams::CreateForApp(
                      "test_browser_app", true /* trusted_source */, gfx::Rect(),
-                     browser()->profile(), browser()->host_desktop_type())
-               : Browser::CreateParams(browser()->profile(),
-                                       browser()->host_desktop_type());
+                     browser()->profile())
+               : Browser::CreateParams(browser()->profile());
   params.initial_show_state = ui::SHOW_STATE_DEFAULT;
-  bool is_ash = browser()->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH;
+
   // Default |browser()| is not used by this test.
   browser()->window()->Close();
 
@@ -78,7 +92,7 @@ IN_PROC_BROWSER_TEST_P(BrowserViewTestParam, BrowserRemembersDockedState) {
   window->SetBounds(original_bounds);
   window->Show();
   // Dock the browser window using |kShowStateKey| property.
-  gfx::Rect work_area = gfx::Screen::GetScreenFor(window)
+  gfx::Rect work_area = display::Screen::GetScreen()
                             ->GetDisplayNearestPoint(window->bounds().origin())
                             .work_area();
   window->SetProperty(aura::client::kShowStateKey, ui::SHOW_STATE_DOCKED);
@@ -89,10 +103,10 @@ IN_PROC_BROWSER_TEST_P(BrowserViewTestParam, BrowserRemembersDockedState) {
   const views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
   widget->widget_delegate()->GetSavedWindowPlacement(widget, &bounds,
                                                      &show_state);
-  EXPECT_EQ(is_ash && test_app ? ui::SHOW_STATE_DOCKED : ui::SHOW_STATE_DEFAULT,
+  EXPECT_EQ(kIsAsh && test_app ? ui::SHOW_STATE_DOCKED : ui::SHOW_STATE_DEFAULT,
             show_state);
   // Docking is only relevant on Ash desktop.
-  if (!is_ash)
+  if (!kIsAsh)
     return;
 
   // Saved placement should reflect restore bounds.

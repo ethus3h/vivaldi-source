@@ -33,7 +33,7 @@ class ProfileSingletonFactory {
   bool profilesRequested;
   static bool instanceFlag;
   static ProfileSingletonFactory *single;
-  scoped_ptr<ImporterList> api_importer_list_;
+  std::unique_ptr<ImporterList> api_importer_list_;
   ProfileSingletonFactory();
 
   DISALLOW_COPY_AND_ASSIGN(ProfileSingletonFactory);
@@ -48,7 +48,7 @@ class ImportDataEventRouter {
 
   // Helper to actually dispatch an event to extension listeners.
   void DispatchEvent(const std::string& event_name,
-                     scoped_ptr<base::ListValue> event_args);
+                     std::unique_ptr<base::ListValue> event_args);
 
  private:
   content::BrowserContext* browser_context_;
@@ -71,6 +71,8 @@ class ImportDataAPI : public importer::ImporterProgressObserver,
   void ImportItemStarted(importer::ImportItem item) override;
   void ImportItemEnded(importer::ImportItem item) override;
   void ImportEnded() override;
+  void ImportItemFailed(importer::ImportItem item,
+                        const std::string& error) override;
 
   // KeyedService implementation.
   void Shutdown() override;
@@ -93,7 +95,7 @@ class ImportDataAPI : public importer::ImporterProgressObserver,
   static const bool kServiceIsNULLWhileTesting = true;
 
   // Created lazily upon OnListenerAdded.
-  scoped_ptr<ImportDataEventRouter> event_router_;
+  std::unique_ptr<ImportDataEventRouter> event_router_;
 
   // If non-null it means importing is in progress. ImporterHost takes care
   // of deleting itself when import is complete.
@@ -187,8 +189,7 @@ class ImportDataStartImportFunction : public ImporterApiFunction,
 
 
 class ImportDataSetVivaldiAsDefaultBrowserFunction :
-    public ChromeAsyncExtensionFunction ,
-    public ShellIntegration::DefaultWebClientObserver {
+    public ChromeAsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("importData.setVivaldiAsDefaultBrowser",
                               IMPORTDATA_SETVIVALDIDEFAULT)
@@ -196,23 +197,25 @@ class ImportDataSetVivaldiAsDefaultBrowserFunction :
 
  protected:
   ~ImportDataSetVivaldiAsDefaultBrowserFunction() override;
-  scoped_refptr<ShellIntegration::DefaultBrowserWorker> default_browser_worker_;
+  scoped_refptr<shell_integration::DefaultBrowserWorker>
+      default_browser_worker_;
 
-  // ShellIntegration::DefaultWebClientObserver implementation.
-  void SetDefaultWebClientUIState(
-    ShellIntegration::DefaultWebClientUIState state) override;
-  bool IsInteractiveSetDefaultPermitted() override;
+  void OnDefaultBrowserWorkerFinished(
+    shell_integration::DefaultWebClientState state);
 
   // ExtensionFunction:
   bool RunAsync() override;
 
  private:
+  // Used to get WeakPtr to self for use on the UI thread.
+  base::WeakPtrFactory<ImportDataSetVivaldiAsDefaultBrowserFunction>
+        weak_ptr_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(ImportDataSetVivaldiAsDefaultBrowserFunction);
 };
 
 class ImportDataIsVivaldiDefaultBrowserFunction
-    : public ChromeAsyncExtensionFunction,
-      public ShellIntegration::DefaultWebClientObserver {
+    : public ChromeAsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("importData.isVivaldiDefaultBrowser",
                               IMPORTDATA_ISVIVALDIDEFAULT)
@@ -221,17 +224,20 @@ class ImportDataIsVivaldiDefaultBrowserFunction
  protected:
   ~ImportDataIsVivaldiDefaultBrowserFunction() override;
 
-  scoped_refptr<ShellIntegration::DefaultBrowserWorker> default_browser_worker_;
+  scoped_refptr<shell_integration::DefaultBrowserWorker>
+      default_browser_worker_;
 
-  // ShellIntegration::DefaultWebClientObserver implementation.
-  void SetDefaultWebClientUIState(
-     ShellIntegration::DefaultWebClientUIState state) override;
-  bool IsInteractiveSetDefaultPermitted() override;
+  void OnDefaultBrowserWorkerFinished(
+    shell_integration::DefaultWebClientState state);
 
   // ExtensionFunction:
   bool RunAsync() override;
 
  private:
+  // Used to get WeakPtr to self for use on the UI thread.
+  base::WeakPtrFactory<ImportDataIsVivaldiDefaultBrowserFunction>
+        weak_ptr_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(ImportDataIsVivaldiDefaultBrowserFunction);
 };
 

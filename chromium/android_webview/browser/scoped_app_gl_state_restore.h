@@ -2,14 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-
-namespace gfx {
-class GLContext;
-}
 
 namespace android_webview {
 
@@ -44,6 +40,8 @@ class ScopedAppGLStateRestore {
     MODE_RESOURCE_MANAGEMENT,
   };
 
+  static ScopedAppGLStateRestore* Current();
+
   explicit ScopedAppGLStateRestore(CallMode mode);
   ~ScopedAppGLStateRestore();
 
@@ -51,7 +49,7 @@ class ScopedAppGLStateRestore {
   int framebuffer_binding_ext() const;
 
  private:
-  scoped_ptr<internal::ScopedAppGLStateRestoreImpl> impl_;
+  std::unique_ptr<internal::ScopedAppGLStateRestoreImpl> impl_;
 
   DISALLOW_COPY_AND_ASSIGN(ScopedAppGLStateRestore);
 };

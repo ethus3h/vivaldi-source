@@ -7,6 +7,8 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
+#include <utility>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -31,11 +33,8 @@
 #include "google_apis/gaia/gaia_switches.h"
 #include "ui/base/ui_base_switches.h"
 
-#if defined(OS_WIN)
-#include "components/startup_metric_utils/common/pre_read_field_trial_utils_win.h"
-#endif  // defined(OS_WIN)
-
 #include "app/vivaldi_apptools.h"
+#include "base/vivaldi_switches.h"
 
 #if !defined(OS_MACOSX)
 
@@ -83,13 +82,13 @@ ServiceProcessRunningState GetServiceProcessRunningState(
   if (service_version_out)
     *service_version_out = version;
 
-  Version service_version(version);
+  base::Version service_version(version);
   // If the version string is invalid, treat it like an older version.
   if (!service_version.IsValid())
     return SERVICE_OLDER_VERSION_RUNNING;
 
   // Get the version of the currently *running* instance of Chrome.
-  Version running_version(version_info::GetVersionNumber());
+  base::Version running_version(version_info::GetVersionNumber());
   if (!running_version.IsValid()) {
     NOTREACHED() << "Failed to parse version info";
     // Our own version is invalid. This is an error case. Pretend that we
@@ -121,7 +120,7 @@ std::string GetServiceProcessScopedVersionedName(
 // Reads the named shared memory to get the shared data. Returns false if no
 // matching shared memory was found.
 bool GetServiceProcessData(std::string* version, base::ProcessId* pid) {
-  scoped_ptr<base::SharedMemory> shared_mem_service_data;
+  std::unique_ptr<base::SharedMemory> shared_mem_service_data;
   shared_mem_service_data.reset(new base::SharedMemory());
   ServiceProcessSharedData* service_data = NULL;
   if (shared_mem_service_data.get() &&
@@ -159,17 +158,17 @@ std::string GetServiceProcessScopedName(const std::string& append_str) {
   return hex_hash + "." + append_str;
 }
 
-scoped_ptr<base::CommandLine> CreateServiceProcessCommandLine() {
+std::unique_ptr<base::CommandLine> CreateServiceProcessCommandLine() {
   base::FilePath exe_path;
   PathService::Get(content::CHILD_PROCESS_EXE, &exe_path);
   DCHECK(!exe_path.empty()) << "Unable to get service process binary name.";
-  scoped_ptr<base::CommandLine> command_line(new base::CommandLine(exe_path));
+  std::unique_ptr<base::CommandLine> command_line(
+      new base::CommandLine(exe_path));
   command_line->AppendSwitchASCII(switches::kProcessType,
                                   switches::kServiceProcess);
 
 #if defined(OS_WIN)
-  if (startup_metric_utils::GetPreReadOptions().use_prefetch_argument)
-    command_line->AppendArg(switches::kPrefetchArgumentOther);
+  command_line->AppendArg(switches::kPrefetchArgumentOther);
 #endif  // defined(OS_WIN)
 
   if (vivaldi::IsVivaldiRunning())
@@ -194,7 +193,7 @@ scoped_ptr<base::CommandLine> CreateServiceProcessCommandLine() {
     switches::kV,
     switches::kVModule,
     switches::kWaitForDebugger,
-	switches::kDebugVivaldi,
+    switches::kDebugVivaldi,
   };
 
   command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
@@ -264,7 +263,7 @@ bool ServiceProcessState::CreateSharedData() {
     return false;
   }
 
-  scoped_ptr<base::SharedMemory> shared_mem_service_data(
+  std::unique_ptr<base::SharedMemory> shared_mem_service_data(
       new base::SharedMemory());
   if (!shared_mem_service_data.get())
     return false;
@@ -286,11 +285,11 @@ bool ServiceProcessState::CreateSharedData() {
          version_info::GetVersionNumber().c_str(),
          version_info::GetVersionNumber().length());
   shared_data->service_process_pid = base::GetCurrentProcId();
-  shared_mem_service_data_.reset(shared_mem_service_data.release());
+  shared_mem_service_data_ = std::move(shared_mem_service_data);
   return true;
 }
 
-IPC::ChannelHandle ServiceProcessState::GetServiceProcessChannel() {
+mojo::edk::NamedPlatformHandle ServiceProcessState::GetServiceProcessChannel() {
   return ::GetServiceProcessChannel();
 }
 

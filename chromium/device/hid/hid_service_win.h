@@ -6,6 +6,8 @@
 #define DEVICE_HID_HID_SERVICE_WIN_H_
 
 #include <windows.h>
+
+// Must be after windows.h.
 #include <hidclass.h>
 
 extern "C" {
@@ -14,19 +16,12 @@ extern "C" {
 }
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observer.h"
 #include "base/win/scoped_handle.h"
-#include "device/core/device_monitor_win.h"
+#include "device/base/device_monitor_win.h"
 #include "device/hid/hid_device_info.h"
 #include "device/hid/hid_service.h"
-
-namespace base {
-namespace win {
-class MessageWindow;
-}
-}
 
 namespace device {
 

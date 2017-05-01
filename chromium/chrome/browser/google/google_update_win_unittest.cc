@@ -8,6 +8,7 @@
 #include <atlbase.h>
 #include <atlcom.h>
 
+#include <memory>
 #include <queue>
 
 #include "base/base_paths.h"
@@ -20,7 +21,7 @@
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
@@ -562,7 +563,7 @@ class GoogleUpdateWinTest : public ::testing::TestWithParam<bool> {
     registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER);
     registry_override_manager_.OverrideRegistry(HKEY_LOCAL_MACHINE);
 
-    // Chrome is installed as multi-install.
+    // Chrome is installed.
     const HKEY root =
         system_level_install_ ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
     base::win::RegKey key(root, kClients, KEY_WRITE | KEY_WOW64_32KEY);
@@ -576,8 +577,7 @@ class GoogleUpdateWinTest : public ::testing::TestWithParam<bool> {
     ASSERT_EQ(ERROR_SUCCESS,
               key.CreateKey(kChromeGuid, KEY_WRITE | KEY_WOW64_32KEY));
     ASSERT_EQ(ERROR_SUCCESS,
-              key.WriteValue(L"UninstallArguments",
-                             L"--uninstall --multi-install --chrome"));
+              key.WriteValue(L"UninstallArguments", L"--uninstall"));
 
     // Provide an IGoogleUpdate3Web class factory so that this test can provide
     // a mocked-out instance.
@@ -601,7 +601,7 @@ class GoogleUpdateWinTest : public ::testing::TestWithParam<bool> {
     CComObject<MockGoogleUpdate>* google_update =
         mock_google_update_factory_.MakeServerMock();
     CComObject<MockAppBundle>* app_bundle = google_update->MakeAppBundle();
-    CComObject<MockApp>* app = app_bundle->MakeApp(kChromeBinariesGuid);
+    CComObject<MockApp>* app = app_bundle->MakeApp(kChromeGuid);
 
     if (mock_app_bundle)
       *mock_app_bundle = app_bundle;
@@ -618,15 +618,14 @@ class GoogleUpdateWinTest : public ::testing::TestWithParam<bool> {
   static const base::char16 kClients[];
   static const base::char16 kClientState[];
   static const base::char16 kChromeGuid[];
-  static const base::char16 kChromeBinariesGuid[];
 
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   base::ThreadTaskRunnerHandle task_runner_handle_;
   bool system_level_install_;
-  scoped_ptr<base::ScopedPathOverride> file_exe_override_;
-  scoped_ptr<base::ScopedPathOverride> program_files_override_;
-  scoped_ptr<base::ScopedPathOverride> program_files_x86_override_;
-  scoped_ptr<base::ScopedPathOverride> local_app_data_override_;
+  std::unique_ptr<base::ScopedPathOverride> file_exe_override_;
+  std::unique_ptr<base::ScopedPathOverride> program_files_override_;
+  std::unique_ptr<base::ScopedPathOverride> program_files_x86_override_;
+  std::unique_ptr<base::ScopedPathOverride> local_app_data_override_;
   registry_util::RegistryOverrideManager registry_override_manager_;
 
   // A mock object, the OnUpdateCheckCallback method of which will be invoked
@@ -652,8 +651,6 @@ const base::char16 GoogleUpdateWinTest::kClientState[] =
     L"Software\\Google\\Update\\ClientState";
 const base::char16 GoogleUpdateWinTest::kChromeGuid[] =
     L"{8A69D345-D564-463c-AFF1-A69D9E530F96}";
-const base::char16 GoogleUpdateWinTest::kChromeBinariesGuid[] =
-    L"{4DC8B4CA-1BDA-483e-B5FA-D3C12E15B62D}";
 
 // Test that an update check fails with the proper error code if Chrome isn't in
 // one of the expected install directories.
@@ -913,40 +910,36 @@ TEST_P(GoogleUpdateWinTest, UpdateFailed) {
 TEST_P(GoogleUpdateWinTest, RetryAfterExternalUpdaterError) {
   static const HRESULT GOOPDATE_E_APP_USING_EXTERNAL_UPDATER = 0xa043081d;
 
-  CComObject<MockAppBundle>* mock_app_bundle1 =
+  CComObject<MockAppBundle>* mock_app_bundle =
       mock_google_update_factory_.MakeServerMock()->MakeAppBundle();
 
   // The first attempt will fail in createInstalledApp indicating that an update
   // is already in progress.
-  EXPECT_CALL(*mock_app_bundle1, createInstalledApp(StrEq(kChromeBinariesGuid)))
+  Sequence bundle_seq;
+  EXPECT_CALL(*mock_app_bundle, createInstalledApp(StrEq(kChromeGuid)))
+      .InSequence(bundle_seq)
       .WillOnce(Return(GOOPDATE_E_APP_USING_EXTERNAL_UPDATER));
 
-  // Retry with a second instance.
-  CComObject<MockAppBundle>* mock_app_bundle2 = nullptr;
+  // Expect a retry on the same instance.
+  EXPECT_CALL(*mock_app_bundle, createInstalledApp(StrEq(kChromeGuid)))
+      .InSequence(bundle_seq)
+      .WillOnce(Return(S_OK));
+
+  // See MakeApp() for an explanation of this:
   CComObject<MockApp>* mock_app = nullptr;
-  MakeGoogleUpdateMocks(&mock_app_bundle2, &mock_app);
+  EXPECT_EQ(S_OK, CComObject<MockApp>::CreateInstance(&mock_app));
+  mock_app->AddRef();
+  EXPECT_CALL(*mock_app_bundle, get_appWeb(0, _))
+      .WillOnce(DoAll(SetArgPointee<1>(mock_app), Return(S_OK)));
 
   // Expect the bundle to be called on to start the update.
-  EXPECT_CALL(*mock_app_bundle2, checkForUpdate())
-      .WillOnce(Return(S_OK));
+  EXPECT_CALL(*mock_app_bundle, checkForUpdate()).WillOnce(Return(S_OK));
 
   mock_app->PushState(STATE_INIT);
   mock_app->PushState(STATE_CHECKING_FOR_UPDATE);
   mock_app->PushState(STATE_NO_UPDATE);
 
-  // Until http://crbug.com/504516 is fixed, we expect the first update check
-  // to fail.
-  EXPECT_CALL(mock_update_check_delegate_,
-              OnError(GOOGLE_UPDATE_ONDEMAND_CLASS_REPORTED_ERROR, _, _));
-
-  // Run the first update check. When http://crbug.com/504516 is fixed, this
-  // update check will be subsumed in the one below.
-  BeginUpdateCheck(task_runner_, std::string(), true, 0,
-                   mock_update_check_delegate_.AsWeakPtr());
-  task_runner_->RunUntilIdle();
-
-  // Expect a second update check to succeed. When http://crbug.com/504516 is
-  // fixed, this will be the one and only update check.
+  // Expect the update check to succeed.
   EXPECT_CALL(mock_update_check_delegate_,
               OnUpdateCheckComplete(IsEmpty()));  // new_version
   BeginUpdateCheck(task_runner_, std::string(), false, 0,

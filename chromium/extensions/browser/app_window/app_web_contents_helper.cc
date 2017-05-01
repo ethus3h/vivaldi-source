@@ -14,6 +14,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/suggest_permission_util.h"
 #include "extensions/common/permissions/api_permission.h"
+#include "third_party/WebKit/public/platform/WebGestureEvent.h"
 
 #include "app/vivaldi_apptools.h"
 
@@ -41,20 +42,26 @@ bool AppWebContentsHelper::ShouldSuppressGestureEvent(
   }
 
   // Disable pinch zooming in app windows.
-  return event.type == blink::WebGestureEvent::GesturePinchBegin ||
-         event.type == blink::WebGestureEvent::GesturePinchUpdate ||
-         event.type == blink::WebGestureEvent::GesturePinchEnd;
+  return event.type() == blink::WebGestureEvent::GesturePinchBegin ||
+         event.type() == blink::WebGestureEvent::GesturePinchUpdate ||
+         event.type() == blink::WebGestureEvent::GesturePinchEnd;
 }
 
 content::WebContents* AppWebContentsHelper::OpenURLFromTab(
     const content::OpenURLParams& params) const {
+  // NOTE(andre@vivadi.com): Since we are using WebContents owned by the
+  // tabstrip this is all ok. Allow opening urls in the current tab.
+  if (vivaldi::IsVivaldiRunning()) {
+    return NULL;
+  }
+
   // Don't allow the current tab to be navigated. It would be nice to map all
   // anchor tags (even those without target="_blank") to new tabs, but right
   // now we can't distinguish between those and <meta> refreshes or window.href
   // navigations, which we don't want to allow.
   // TOOD(mihaip): Can we check for user gestures instead?
   WindowOpenDisposition disposition = params.disposition;
-  if (disposition == CURRENT_TAB) {
+  if (disposition == WindowOpenDisposition::CURRENT_TAB) {
     web_contents_->GetMainFrame()->AddMessageToConsole(
         content::CONSOLE_MESSAGE_LEVEL_ERROR,
         base::StringPrintf(
@@ -64,10 +71,9 @@ content::WebContents* AppWebContentsHelper::OpenURLFromTab(
   }
 
   // These dispositions aren't really navigations.
-  if (disposition == SUPPRESS_OPEN || disposition == SAVE_TO_DISK ||
-      disposition == IGNORE_ACTION) {
+  if (disposition == WindowOpenDisposition::SAVE_TO_DISK ||
+      disposition == WindowOpenDisposition::IGNORE_ACTION)
     return NULL;
-  }
 
   content::WebContents* contents =
       app_delegate_->OpenURLFromTab(browser_context_, web_contents_, params);

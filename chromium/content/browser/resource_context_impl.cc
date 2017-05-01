@@ -6,67 +6,47 @@
 
 #include <stdint.h>
 
+#include "base/base64.h"
+#include "base/bind.h"
 #include "base/logging.h"
-#include "content/browser/fileapi/chrome_blob_storage_context.h"
+#include "base/memory/ptr_util.h"
+#include "base/rand_util.h"
+#include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/loader/resource_request_info_impl.h"
 #include "content/browser/streams/stream_context.h"
 #include "content/browser/webui/url_data_manager_backend.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/base/keygen_handler.h"
-#include "net/ssl/client_cert_store.h"
 
 using base::UserDataAdapter;
 
 namespace content {
-
-namespace {
 
 // Key names on ResourceContext.
 const char kBlobStorageContextKeyName[] = "content_blob_storage_context";
 const char kStreamContextKeyName[] = "content_stream_context";
 const char kURLDataManagerBackendKeyName[] = "url_data_manager_backend";
 
-// Used by the default implementation of GetMediaDeviceIDSalt, below.
-std::string ReturnEmptySalt() {
-  return std::string();
-}
-
-}  // namespace
-
-
-ResourceContext::ResourceContext() {
-  if (ResourceDispatcherHostImpl::Get())
-    ResourceDispatcherHostImpl::Get()->AddResourceContext(this);
+ResourceContext::ResourceContext()
+    : media_device_id_salt_(CreateRandomMediaDeviceIDSalt()) {
 }
 
 ResourceContext::~ResourceContext() {
-  ResourceDispatcherHostImpl* rdhi = ResourceDispatcherHostImpl::Get();
-  if (rdhi) {
-    rdhi->CancelRequestsForContext(this);
-    rdhi->RemoveResourceContext(this);
-  }
-
-  // In some tests this object is destructed on UI thread.
-  DetachUserDataThread();
+  if (ResourceDispatcherHostImpl::Get())
+    ResourceDispatcherHostImpl::Get()->CancelRequestsForContext(this);
 }
 
-ResourceContext::SaltCallback ResourceContext::GetMediaDeviceIDSalt() {
-  return base::Bind(&ReturnEmptySalt);
+std::string ResourceContext::GetMediaDeviceIDSalt() {
+  return media_device_id_salt_;
 }
 
-scoped_ptr<net::ClientCertStore> ResourceContext::CreateClientCertStore() {
-  return scoped_ptr<net::ClientCertStore>();
-}
-
-void ResourceContext::CreateKeygenHandler(
-    uint32_t key_size_in_bits,
-    const std::string& challenge_string,
-    const GURL& url,
-    const base::Callback<void(scoped_ptr<net::KeygenHandler>)>& callback) {
-  callback.Run(make_scoped_ptr(
-      new net::KeygenHandler(key_size_in_bits, challenge_string, url)));
+// static
+std::string ResourceContext::CreateRandomMediaDeviceIDSalt() {
+  std::string salt;
+  base::Base64Encode(base::RandBytesAsString(16), &salt);
+  DCHECK(!salt.empty());
+  return salt;
 }
 
 ChromeBlobStorageContext* GetChromeBlobStorageContextForResourceContext(
@@ -107,7 +87,7 @@ void InitializeResourceContext(BrowserContext* browser_context) {
       new UserDataAdapter<StreamContext>(
           StreamContext::GetFor(browser_context)));
 
-  resource_context->DetachUserDataThread();
+  resource_context->DetachFromSequence();
 }
 
 }  // namespace content

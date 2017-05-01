@@ -6,11 +6,11 @@
 
 #include <stddef.h>
 
-#include "base/prefs/pref_service.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/values.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 
 namespace {
 
@@ -21,10 +21,10 @@ const char kKeyChromeApp[] = "chrome_app";
 // Default is false.
 const char kKeyGenerated[] = "generated";
 
-scoped_ptr<base::DictionaryValue> CreateInfoDict(
+std::unique_ptr<base::DictionaryValue> CreateInfoDict(
     const std::string& chrome_app_id,
     bool generated) {
-  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue);
   dict->SetStringWithoutPathExpansion(kKeyChromeApp, chrome_app_id);
 
   // Only writes non-default value.
@@ -84,7 +84,7 @@ std::string DriveAppMapping::GetDriveApp(
        it.Advance()) {
     const base::DictionaryValue* info_dict;
     std::string value_string;
-    DCHECK(it.value().IsType(base::Value::TYPE_DICTIONARY));
+    DCHECK(it.value().IsType(base::Value::Type::DICTIONARY));
     if (it.value().GetAsDictionary(&info_dict) &&
         info_dict->GetStringWithoutPathExpansion(kKeyChromeApp,
                                                  &value_string) &&
@@ -104,7 +104,7 @@ bool DriveAppMapping::IsChromeAppGenerated(
     const base::DictionaryValue* info_dict;
     std::string value_string;
     bool generated = false;
-    DCHECK(it.value().IsType(base::Value::TYPE_DICTIONARY));
+    DCHECK(it.value().IsType(base::Value::Type::DICTIONARY));
     if (it.value().GetAsDictionary(&info_dict) &&
         info_dict->GetStringWithoutPathExpansion(kKeyChromeApp,
                                                  &value_string) &&

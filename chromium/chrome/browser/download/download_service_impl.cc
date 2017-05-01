@@ -15,8 +15,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/history/core/browser/history_service.h"
 #include "content/public/browser/download_manager.h"
+#include "extensions/features/features.h"
 
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
 #endif
 
@@ -49,7 +50,7 @@ DownloadServiceImpl::GetDownloadManagerDelegate() {
 
   manager_delegate_->SetDownloadManager(manager);
 
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   extension_event_router_.reset(
       new extensions::ExtensionDownloadsEventRouter(profile_, manager));
 #endif
@@ -60,14 +61,14 @@ DownloadServiceImpl::GetDownloadManagerDelegate() {
     history->GetNextDownloadId(
         manager_delegate_->GetDownloadIdReceiverCallback());
     download_history_.reset(new DownloadHistory(
-        manager, scoped_ptr<DownloadHistory::HistoryAdapter>(
+        manager, std::unique_ptr<DownloadHistory::HistoryAdapter>(
                      new DownloadHistory::HistoryAdapter(history))));
   }
 
   // Pass an empty delegate when constructing the DownloadUIController. The
   // default delegate does all the notifications we need.
   download_ui_.reset(new DownloadUIController(
-      manager, scoped_ptr<DownloadUIController::Delegate>()));
+      manager, std::unique_ptr<DownloadUIController::Delegate>()));
 
   // Include this download manager in the set monitored by the
   // global status updater.
@@ -84,7 +85,7 @@ DownloadHistory* DownloadServiceImpl::GetDownloadHistory() {
   return download_history_.get();
 }
 
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 extensions::ExtensionDownloadsEventRouter*
 DownloadServiceImpl::GetExtensionEventRouter() {
   return extension_event_router_.get();
@@ -118,7 +119,7 @@ void DownloadServiceImpl::CancelDownloads() {
 }
 
 void DownloadServiceImpl::SetDownloadManagerDelegateForTesting(
-    scoped_ptr<ChromeDownloadManagerDelegate> new_delegate) {
+    std::unique_ptr<ChromeDownloadManagerDelegate> new_delegate) {
   manager_delegate_.swap(new_delegate);
   DownloadManager* dm = BrowserContext::GetDownloadManager(profile_);
   dm->SetDelegate(manager_delegate_.get());
@@ -144,7 +145,7 @@ void DownloadServiceImpl::Shutdown() {
     // manually earlier. See http://crbug.com/131692
     BrowserContext::GetDownloadManager(profile_)->Shutdown();
   }
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   extension_event_router_.reset();
 #endif
   manager_delegate_.reset();

@@ -13,7 +13,6 @@
 
 namespace gfx {
 class Point;
-class Range;
 class Rect;
 }
 
@@ -25,7 +24,7 @@ namespace content {
 class CONTENT_EXPORT TextInputClientMessageFilter
     : public BrowserMessageFilter {
  public:
-  explicit TextInputClientMessageFilter(int child_id);
+  TextInputClientMessageFilter();
 
   // BrowserMessageFilter override:
   bool OnMessageReceived(const IPC::Message& message) override;
@@ -38,14 +37,11 @@ class CONTENT_EXPORT TextInputClientMessageFilter
   void OnGotStringAtPoint(
       const mac::AttributedStringCoder::EncodedString& encoded_string,
       const gfx::Point& point);
-  void OnGotCharacterIndexForPoint(size_t index);
+  void OnGotCharacterIndexForPoint(uint32_t index);
   void OnGotFirstRectForRange(const gfx::Rect& rect);
   void OnGotStringFromRange(
       const mac::AttributedStringCoder::EncodedString& string,
       const gfx::Point& point);
-
-  // Child process id.
-  int child_process_id_;
 
   DISALLOW_COPY_AND_ASSIGN(TextInputClientMessageFilter);
 };

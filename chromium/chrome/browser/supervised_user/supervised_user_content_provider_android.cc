@@ -11,6 +11,8 @@
 #include "chrome/browser/supervised_user/supervised_user_interstitial.h"
 #include "chrome/browser/supervised_user/supervised_user_service.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "jni/SupervisedUserContentProvider_jni.h"
 
 using base::android::JavaRef;
@@ -31,7 +33,7 @@ class UrlFilterObserver : public SupervisedUserURLFilter::Observer {
  private:
   void OnSiteListUpdated() override {
     Java_SupervisedUserContentProvider_onSupervisedUserFilterUpdated(
-        AttachCurrentThread(), java_content_provider_.obj());
+        AttachCurrentThread(), java_content_provider_);
   }
   ScopedJavaGlobalRef<jobject> java_content_provider_;
 };
@@ -68,9 +70,12 @@ void SupervisedUserContentProvider::ShouldProceed(
     const JavaParamRef<jobject>& query_result_jobj,
     const JavaParamRef<jstring>& url) {
   if (!profile_->IsSupervised()) {
-    // User isn't supervised
-    Java_SupervisedUserQueryReply_onQueryComplete(env, query_result_jobj.obj(),
-                                                  true, nullptr);
+    // User isn't supervised, this can only happen if Chrome isn't signed in,
+    // in which case all requests should be rejected
+    Java_SupervisedUserQueryReply_onQueryFailed(
+        AttachCurrentThread(), query_result_jobj,
+        supervised_user_error_page::NOT_SIGNED_IN, false, true, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr);
     return;
   }
   SupervisedUserService* supervised_user_service =
@@ -103,18 +108,32 @@ void SupervisedUserContentProvider::RequestInsert(
 void SupervisedUserContentProvider::OnQueryComplete(
     ScopedJavaGlobalRef<jobject> query_reply_jobj,
     SupervisedUserURLFilter::FilteringBehavior behavior,
-    SupervisedUserURLFilter::FilteringBehaviorReason reason,
+    supervised_user_error_page::FilteringBehaviorReason reason,
     bool /* uncertain */) {
   if (behavior != SupervisedUserURLFilter::BLOCK) {
-    Java_SupervisedUserQueryReply_onQueryComplete(
-        AttachCurrentThread(), query_reply_jobj.obj(), true, nullptr);
+    Java_SupervisedUserQueryReply_onQueryComplete(AttachCurrentThread(),
+                                                  query_reply_jobj);
   } else {
     JNIEnv* env = AttachCurrentThread();
-    Java_SupervisedUserQueryReply_onQueryComplete(
-        env, query_reply_jobj.obj(), false,
+    SupervisedUserService* service =
+        SupervisedUserServiceFactory::GetForProfile(profile_);
+    Java_SupervisedUserQueryReply_onQueryFailed(
+        env, query_reply_jobj, reason, service->AccessRequestsEnabled(),
+        profile_->IsChild(),
         base::android::ConvertUTF8ToJavaString(
-            env, SupervisedUserInterstitial::GetHTMLContents(profile_, reason))
-            .obj());
+            env, profile_->GetPrefs()->GetString(
+                     prefs::kSupervisedUserCustodianProfileImageURL)),
+        base::android::ConvertUTF8ToJavaString(
+            env, profile_->GetPrefs()->GetString(
+                     prefs::kSupervisedUserSecondCustodianProfileImageURL)),
+        base::android::ConvertUTF8ToJavaString(env,
+                                               service->GetCustodianName()),
+        base::android::ConvertUTF8ToJavaString(
+            env, service->GetCustodianEmailAddress()),
+        base::android::ConvertUTF8ToJavaString(
+            env, service->GetSecondCustodianName()),
+        base::android::ConvertUTF8ToJavaString(
+            env, service->GetSecondCustodianEmailAddress()));
   }
 }
 
@@ -133,7 +152,7 @@ void SupervisedUserContentProvider::OnInsertRequestSendComplete(
     ScopedJavaGlobalRef<jobject> insert_reply_jobj,
     bool sent_ok) {
   Java_SupervisedUserInsertReply_onInsertRequestSendComplete(
-      AttachCurrentThread(), insert_reply_jobj.obj(), sent_ok);
+      AttachCurrentThread(), insert_reply_jobj, sent_ok);
 }
 
 bool SupervisedUserContentProvider::Register(JNIEnv* env) {

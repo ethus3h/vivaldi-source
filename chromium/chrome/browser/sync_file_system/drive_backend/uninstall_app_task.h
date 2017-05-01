@@ -7,10 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_task.h"
 #include "chrome/browser/sync_file_system/remote_file_sync_service.h"
@@ -24,10 +24,8 @@ class DriveServiceInterface;
 namespace sync_file_system {
 namespace drive_backend {
 
-class FileTracker;
 class MetadataDatabase;
 class SyncEngineContext;
-class TrackerSet;
 
 class UninstallAppTask : public ExclusiveTask {
  public:

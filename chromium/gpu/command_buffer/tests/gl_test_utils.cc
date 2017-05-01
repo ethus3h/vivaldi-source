@@ -4,13 +4,15 @@
 
 #include "gpu/command_buffer/tests/gl_test_utils.h"
 
+#include <GLES2/gl2extchromium.h>
 #include <stdint.h>
 #include <stdio.h>
 
+#include <memory>
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/size.h"
 
 // GCC requires these declarations, but MSVC requires they not be present.
 #ifndef COMPILER_MSVC
@@ -18,9 +20,13 @@ const uint8_t GLTestHelper::kCheckClearValue;
 #endif
 
 bool GLTestHelper::HasExtension(const char* extension) {
-  std::string extensions(
-      reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)));
-  return extensions.find(extension) != std::string::npos;
+  // Pad with an extra space to ensure that |extension| is not a substring of
+  // another extension.
+  std::string extensions =
+      std::string(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS))) +
+      " ";
+  std::string extension_padded = std::string(extension) + " ";
+  return extensions.find(extension_padded) != std::string::npos;
 }
 
 bool GLTestHelper::CheckGLError(const char* msg, int line) {
@@ -109,19 +115,29 @@ GLuint GLTestHelper::SetupUnitQuad(GLint position_location) {
   GLuint vbo = 0;
   glGenBuffers(1, &vbo);
   glBindBuffer(GL_ARRAY_BUFFER, vbo);
-  static float vertices[] = {
-      1.0f,  1.0f,
-     -1.0f,  1.0f,
-     -1.0f, -1.0f,
-      1.0f,  1.0f,
-     -1.0f, -1.0f,
-      1.0f, -1.0f,
+  static const float vertices[] = {
+      1.0f, 1.0f, -1.0f, 1.0f,  -1.0f, -1.0f,
+      1.0f, 1.0f, -1.0f, -1.0f, 1.0f,  -1.0f,
   };
   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
   glEnableVertexAttribArray(position_location);
   glVertexAttribPointer(position_location, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
   return vbo;
+}
+
+std::vector<GLuint> GLTestHelper::SetupIndexedUnitQuad(
+    GLint position_location) {
+  GLuint array_buffer = SetupUnitQuad(position_location);
+  static const uint8_t indices[] = {0, 1, 2, 3, 4, 5};
+  GLuint index_buffer = 0;
+  glGenBuffers(1, &index_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6, indices, GL_STATIC_DRAW);
+  std::vector<GLuint> buffers(2);
+  buffers[0] = array_buffer;
+  buffers[1] = index_buffer;
+  return buffers;
 }
 
 GLuint GLTestHelper::SetupColorsForUnitQuad(
@@ -147,9 +163,10 @@ bool GLTestHelper::CheckPixels(GLint x,
                                GLsizei width,
                                GLsizei height,
                                GLint tolerance,
-                               const uint8_t* color) {
+                               const uint8_t* color,
+                               const uint8_t* mask) {
   GLsizei size = width * height * 4;
-  scoped_ptr<uint8_t[]> pixels(new uint8_t[size]);
+  std::unique_ptr<uint8_t[]> pixels(new uint8_t[size]);
   memset(pixels.get(), kCheckClearValue, size);
   glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.get());
   int bad_count = 0;
@@ -161,7 +178,7 @@ bool GLTestHelper::CheckPixels(GLint x,
         uint8_t expected = color[jj];
         int diff = actual - expected;
         diff = diff < 0 ? -diff: diff;
-        if (diff > tolerance) {
+        if ((!mask || mask[jj]) && diff > tolerance) {
           EXPECT_EQ(expected, actual) << " at " << (xx + x) << ", " << (yy + y)
                                       << " channel " << jj;
           ++bad_count;
@@ -221,7 +238,7 @@ bool GLTestHelper::SaveBackbufferAsBMP(
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   int num_pixels = width * height;
   int size = num_pixels * 4;
-  scoped_ptr<uint8_t[]> data(new uint8_t[size]);
+  std::unique_ptr<uint8_t[]> data(new uint8_t[size]);
   uint8_t* pixels = data.get();
   glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
@@ -258,4 +275,28 @@ bool GLTestHelper::SaveBackbufferAsBMP(
   fwrite(pixels, size, 1, fp);
   fclose(fp);
   return true;
+}
+
+void GLTestHelper::DrawTextureQuad(const char* vertex_src,
+                                   const char* fragment_src,
+                                   const char* position_name,
+                                   const char* sampler_name) {
+  GLuint program = GLTestHelper::LoadProgram(vertex_src, fragment_src);
+  EXPECT_NE(program, 0u);
+  glUseProgram(program);
+
+  GLint position_loc = glGetAttribLocation(program, position_name);
+  GLint sampler_location = glGetUniformLocation(program, sampler_name);
+  ASSERT_NE(position_loc, -1);
+  ASSERT_NE(sampler_location, -1);
+
+  GLuint vertex_buffer = GLTestHelper::SetupUnitQuad(position_loc);
+  ASSERT_NE(vertex_buffer, 0u);
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1i(sampler_location, 0);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  glDeleteProgram(program);
+  glDeleteBuffers(1, &vertex_buffer);
 }

@@ -6,8 +6,9 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/lazy_instance.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -24,7 +25,8 @@ namespace keys = extensions::manifest_keys;
 namespace errors = manifest_errors;
 
 const char kDefaultSandboxedPageContentSecurityPolicy[] =
-    "sandbox allow-scripts allow-forms allow-popups allow-modals";
+    "sandbox allow-scripts allow-forms allow-popups allow-modals; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';";
 
 static base::LazyInstance<SandboxedPageInfo> g_empty_sandboxed_info =
     LAZY_INSTANCE_INITIALIZER;
@@ -64,7 +66,7 @@ SandboxedPageHandler::~SandboxedPageHandler() {
 }
 
 bool SandboxedPageHandler::Parse(Extension* extension, base::string16* error) {
-  scoped_ptr<SandboxedPageInfo> sandboxed_info(new SandboxedPageInfo);
+  std::unique_ptr<SandboxedPageInfo> sandboxed_info(new SandboxedPageInfo);
 
   const base::ListValue* list_value = NULL;
   if (!extension->manifest()->GetList(keys::kSandboxedPages, &list_value)) {
@@ -92,26 +94,31 @@ bool SandboxedPageHandler::Parse(Extension* extension, base::string16* error) {
   }
 
   if (extension->manifest()->HasPath(keys::kSandboxedPagesCSP)) {
-    if (!extension->manifest()->GetString(
-            keys::kSandboxedPagesCSP,
-            &sandboxed_info->content_security_policy)) {
+    std::string content_security_policy;
+    if (!extension->manifest()->GetString(keys::kSandboxedPagesCSP,
+                                          &content_security_policy)) {
       *error = base::ASCIIToUTF16(errors::kInvalidSandboxedPagesCSP);
       return false;
     }
 
-    if (!csp_validator::ContentSecurityPolicyIsLegal(
-            sandboxed_info->content_security_policy) ||
+    if (!csp_validator::ContentSecurityPolicyIsLegal(content_security_policy) ||
         !csp_validator::ContentSecurityPolicyIsSandboxed(
-            sandboxed_info->content_security_policy, extension->GetType())) {
+            content_security_policy, extension->GetType())) {
       *error = base::ASCIIToUTF16(errors::kInvalidSandboxedPagesCSP);
       return false;
     }
+
+    std::vector<InstallWarning> warnings;
+    sandboxed_info->content_security_policy =
+        csp_validator::GetEffectiveSandoxedPageCSP(content_security_policy,
+                                                   &warnings);
+    extension->AddInstallWarnings(warnings);
   } else {
     sandboxed_info->content_security_policy =
         kDefaultSandboxedPageContentSecurityPolicy;
-    CHECK(csp_validator::ContentSecurityPolicyIsSandboxed(
-        sandboxed_info->content_security_policy, extension->GetType()));
   }
+  CHECK(csp_validator::ContentSecurityPolicyIsSandboxed(
+      sandboxed_info->content_security_policy, extension->GetType()));
 
   extension->SetManifestData(keys::kSandboxedPages, sandboxed_info.release());
   return true;

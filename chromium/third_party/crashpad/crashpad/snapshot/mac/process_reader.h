@@ -21,11 +21,11 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "util/mach/task_memory.h"
 #include "util/misc/initialization_state_dcheck.h"
@@ -191,18 +191,18 @@ class ProcessReader {
   //! tag value. If these conditions cannot be met fully, as much of the red
   //! zone will be captured as is possible while meeting these conditions.
   //!
-  //! \param[inout] start_address The base address of the region to begin
+  //! \param[in,out] start_address The base address of the region to begin
   //!     capturing stack memory from. On entry, \a start_address is the stack
   //!     pointer. On return, \a start_address may be decreased to encompass a
   //!     red zone.
-  //! \param[inout] region_base The base address of the region that contains
+  //! \param[in,out] region_base The base address of the region that contains
   //!     stack memory. This is distinct from \a start_address in that \a
   //!     region_base will be page-aligned. On entry, \a region_base is the
   //!     base address of a region that contains \a start_address. On return,
   //!     if \a start_address is decremented and is outside of the region
   //!     originally described by \a region_base, \a region_base will also be
   //!     decremented appropriately.
-  //! \param[inout] region_size The size of the region that contains stack
+  //! \param[in,out] region_size The size of the region that contains stack
   //!     memory. This region begins at \a region_base. On return, if \a
   //!     region_base is decremented, \a region_size will be incremented
   //!     appropriately.
@@ -220,7 +220,7 @@ class ProcessReader {
   std::vector<Thread> threads_;  // owns send rights
   std::vector<Module> modules_;
   PointerVector<MachOImageReader> module_readers_;
-  scoped_ptr<TaskMemory> task_memory_;
+  std::unique_ptr<TaskMemory> task_memory_;
   task_t task_;  // weak
   InitializationStateDcheck initialized_;
 

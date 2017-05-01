@@ -6,13 +6,16 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "content/common/quota_messages.h"
 #include "content/public/browser/quota_permission_context.h"
-#include "net/base/net_util.h"
+#include "net/base/url_util.h"
 #include "storage/browser/quota/quota_manager.h"
 #include "url/gurl.h"
 
@@ -33,7 +36,8 @@ class QuotaDispatcherHost::RequestDispatcher {
       : dispatcher_host_(dispatcher_host),
         render_process_id_(dispatcher_host->process_id_),
         request_id_(request_id) {
-    dispatcher_host_->outstanding_requests_.AddWithID(this, request_id_);
+    dispatcher_host_->outstanding_requests_.AddWithID(base::WrapUnique(this),
+                                                      request_id_);
   }
   virtual ~RequestDispatcher() {}
 

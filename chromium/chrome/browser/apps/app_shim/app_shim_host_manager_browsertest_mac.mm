@@ -21,9 +21,12 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/version_info/version_info.h"
 #include "content/public/test/test_utils.h"
+#include "ipc/ipc_channel_mojo.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_message.h"
+#include "mojo/edk/embedder/embedder.h"
+#include "mojo/edk/embedder/named_platform_handle_utils.h"
 
 namespace {
 
@@ -46,7 +49,7 @@ class TestShimClient : public IPC::Listener {
   void OnChannelError() override;
 
   base::Thread io_thread_;
-  scoped_ptr<IPC::ChannelProxy> channel_;
+  std::unique_ptr<IPC::ChannelProxy> channel_;
 
   DISALLOW_COPY_AND_ASSIGN(TestShimClient);
 };
@@ -65,9 +68,12 @@ TestShimClient::TestShimClient() : io_thread_("TestShimClientIO") {
   CHECK(base::ReadSymbolicLink(symlink_path, &socket_path));
   app_mode::VerifySocketPermissions(socket_path);
 
-  IPC::ChannelHandle handle(socket_path.value());
-  channel_ = IPC::ChannelProxy::Create(handle, IPC::Channel::MODE_NAMED_CLIENT,
-                                       this, io_thread_.task_runner().get());
+  channel_ = IPC::ChannelProxy::Create(
+      IPC::ChannelMojo::CreateClientFactory(
+          mojo::edk::ConnectToPeerProcess(mojo::edk::CreateClientHandle(
+              mojo::edk::NamedPlatformHandle(socket_path.value()))),
+          io_thread_.task_runner().get()),
+      this, io_thread_.task_runner().get());
 }
 
 TestShimClient::~TestShimClient() {}
@@ -110,7 +116,7 @@ class AppShimHostManagerBrowserTest : public InProcessBrowserTest,
   }
   void OnShimQuit(apps::AppShimHandler::Host* host) override;
 
-  scoped_ptr<TestShimClient> test_client_;
+  std::unique_ptr<TestShimClient> test_client_;
   std::vector<base::FilePath> last_launch_files_;
   apps::AppShimLaunchType last_launch_type_;
 

@@ -14,7 +14,7 @@ GEN_INCLUDE(
 /**
  * @constructor
  * @extends {PolymerTest}
-*/
+ */
 function SettingsPageBrowserTest() {}
 
 SettingsPageBrowserTest.prototype = {
@@ -41,20 +41,26 @@ SettingsPageBrowserTest.prototype = {
   },
 
   /**
-   * @param {string} type The settings page type, e.g. 'advanced' or 'basic'.
+   * Toggles the Advanced sections.
+   */
+  toggleAdvanced: function() {
+    var settingsMain = document.querySelector('* /deep/ settings-main');
+    assert(!!settingsMain);
+    settingsMain.advancedToggleExpanded = !settingsMain.advancedToggleExpanded;
+    Polymer.dom.flush();
+  },
+
+  /**
+   * @param {string} type The settings page type, e.g. 'about' or 'basic'.
    * @return {!PolymerElement} The PolymerElement for the page.
    */
   getPage: function(type) {
-    var settings = document.querySelector('cr-settings');
-    assertTrue(!!settings);
-    var settingsUi = settings.$$('settings-ui');
+    var settingsUi = document.querySelector('settings-ui');
     assertTrue(!!settingsUi);
     var settingsMain = settingsUi.$$('settings-main');
     assertTrue(!!settingsMain);
-    var pages = settingsMain.$.pageContainer;
-    assertTrue(!!pages);
     var pageType = 'settings-' + type + '-page';
-    var page = pages.querySelector(pageType);
+    var page = settingsMain.$$(pageType);
     assertTrue(!!page);
     return page;
   },
@@ -74,5 +80,39 @@ SettingsPageBrowserTest.prototype = {
         return s;
     }
     return undefined;
+  },
+
+  /**
+   * Verifies the section has a visible #main element and that any possible
+   * sub-pages are hidden.
+   * @param {!Node} The DOM node for the section.
+   */
+  verifySubpagesHidden: function(section) {
+    // Check if there are sub-pages to verify.
+    var pages = section.querySelector('* /deep/ settings-animated-pages');
+    if (!pages)
+      return;
+
+    var children = pages.getContentChildren();
+    var stampedChildren = children.filter(function(element) {
+      return element.tagName != 'TEMPLATE';
+    });
+
+    // The section's main child should be stamped and visible.
+    var main = stampedChildren.filter(function(element) {
+      return element.getAttribute('route-path') == 'default';
+    });
+    assertEquals(main.length, 1, 'default card not found for section ' +
+        section.section);
+    assertGT(main[0].offsetHeight, 0);
+
+    // Any other stamped subpages should not be visible.
+    var subpages = stampedChildren.filter(function(element) {
+      return element.getAttribute('route-path') != 'default';
+    });
+    for (var subpage of subpages) {
+      assertEquals(subpage.offsetHeight, 0, 'Expected subpage #' + subpage.id +
+          ' in ' + section.section + ' not to be visible.');
+    }
   },
 };

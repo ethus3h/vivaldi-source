@@ -6,24 +6,24 @@
 #define BackgroundTaskRunner_h
 
 #include "platform/PlatformExport.h"
+#include "public/platform/WebTraceLocation.h"
 #include "wtf/Functional.h"
-#include "wtf/PassOwnPtr.h"
 
 namespace blink {
-
-class WebTraceLocation;
 
 namespace BackgroundTaskRunner {
 
 enum TaskSize {
-    TaskSizeShortRunningTask,
-    TaskSizeLongRunningTask,
+  TaskSizeShortRunningTask,
+  TaskSizeLongRunningTask,
 };
 
-PLATFORM_EXPORT void postOnBackgroundThread(const WebTraceLocation&, PassOwnPtr<Closure>, TaskSize);
+PLATFORM_EXPORT void postOnBackgroundThread(const WebTraceLocation&,
+                                            std::unique_ptr<CrossThreadClosure>,
+                                            TaskSize);
 
-} // BackgroundTaskRunner
+}  // BackgroundTaskRunner
 
-} // blink
+}  // namespace blink
 
 #endif

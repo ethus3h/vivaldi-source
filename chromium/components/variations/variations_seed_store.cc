@@ -10,11 +10,11 @@
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_math.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
 #include "base/sha1.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 #include "components/variations/pref_names.h"
 #include "components/variations/proto/variations_seed.pb.h"
 #include "crypto/signature_verifier.h"
@@ -38,22 +38,6 @@ bool SignatureVerificationEnabled() {
   return true;
 #endif
 }
-
-// This is the algorithm ID for ECDSA with SHA-256. Parameters are ABSENT.
-// RFC 5758:
-//   ecdsa-with-SHA256 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
-//        us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 2 }
-//   ...
-//   When the ecdsa-with-SHA224, ecdsa-with-SHA256, ecdsa-with-SHA384, or
-//   ecdsa-with-SHA512 algorithm identifier appears in the algorithm field
-//   as an AlgorithmIdentifier, the encoding MUST omit the parameters
-//   field.  That is, the AlgorithmIdentifier SHALL be a SEQUENCE of one
-//   component, the OID ecdsa-with-SHA224, ecdsa-with-SHA256, ecdsa-with-
-//   SHA384, or ecdsa-with-SHA512.
-// See also RFC 5480, Appendix A.
-const uint8_t kECDSAWithSHA256AlgorithmID[] = {
-    0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
-};
 
 // The ECDSA public key of the variations server for verifying variations seed
 // signatures.
@@ -128,7 +112,10 @@ base::Time TruncateToUTCDay(const base::Time& time) {
   exploded.second = 0;
   exploded.millisecond = 0;
 
-  return base::Time::FromUTCExploded(exploded);
+  base::Time out_time;
+  bool conversion_success = base::Time::FromUTCExploded(exploded, &out_time);
+  DCHECK(conversion_success);
+  return out_time;
 }
 
 VariationsSeedDateChangeState GetSeedDateChangeState(
@@ -152,6 +139,7 @@ enum FirstRunResult {
   FIRST_RUN_SEED_IMPORT_FAIL_NO_CALLBACK,
   FIRST_RUN_SEED_IMPORT_FAIL_NO_FIRST_RUN_SEED,
   FIRST_RUN_SEED_IMPORT_FAIL_STORE_FAILED,
+  FIRST_RUN_SEED_IMPORT_FAIL_INVALID_RESPONSE_DATE,
   FIRST_RUN_RESULT_ENUM_SIZE,
 };
 
@@ -341,10 +329,10 @@ VariationsSeedStore::VerifySeedSignature(
     return VARIATIONS_SEED_SIGNATURE_DECODE_FAILED;
 
   crypto::SignatureVerifier verifier;
-  if (!verifier.VerifyInit(
-          kECDSAWithSHA256AlgorithmID, sizeof(kECDSAWithSHA256AlgorithmID),
-          reinterpret_cast<const uint8_t*>(signature.data()), signature.size(),
-          kPublicKey, arraysize(kPublicKey))) {
+  if (!verifier.VerifyInit(crypto::SignatureVerifier::ECDSA_SHA256,
+                           reinterpret_cast<const uint8_t*>(signature.data()),
+                           signature.size(), kPublicKey,
+                           arraysize(kPublicKey))) {
     return VARIATIONS_SEED_SIGNATURE_INVALID_SIGNATURE;
   }
 
@@ -380,7 +368,11 @@ void VariationsSeedStore::ImportFirstRunJavaSeed() {
   }
 
   base::Time current_date;
-  base::Time::FromUTCString(response_date.c_str(), &current_date);
+  if (!base::Time::FromUTCString(response_date.c_str(), &current_date)) {
+    RecordFirstRunResult(FIRST_RUN_SEED_IMPORT_FAIL_INVALID_RESPONSE_DATE);
+    LOG(WARNING) << "Invalid response date: " << response_date;
+    return;
+  }
 
   if (!StoreSeedData(seed_data, seed_signature, seed_country, current_date,
                      false, is_gzip_compressed, nullptr)) {

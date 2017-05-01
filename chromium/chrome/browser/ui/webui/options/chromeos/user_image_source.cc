@@ -9,13 +9,13 @@
 #include "base/strings/string_split.h"
 #include "chrome/browser/chromeos/login/users/default_user_image/default_user_images.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/signin/core/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
-#include "grit/theme_resources.h"
-#include "grit/ui_chromeos_resources.h"
 #include "net/base/escape.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "url/third_party/mozilla/url_parse.h"
 
@@ -24,26 +24,27 @@ namespace {
 // Parses the user image URL, which looks like
 // "chrome://userimage/serialized-user-id?key1=value1&...&key_n=value_n",
 // to user email.
-void ParseRequest(const GURL& url,
-                  std::string* email) {
+void ParseRequest(const GURL& url, std::string* email) {
   DCHECK(url.is_valid());
   const std::string serialized_account_id = net::UnescapeURLComponent(
       url.path().substr(1),
-      (net::UnescapeRule::URL_SPECIAL_CHARS | net::UnescapeRule::SPACES));
+      net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
+          net::UnescapeRule::PATH_SEPARATORS | net::UnescapeRule::SPACES);
   AccountId account_id(EmptyAccountId());
   const bool status =
       AccountId::Deserialize(serialized_account_id, &account_id);
   // TODO(alemate): DCHECK(status) - should happen after options page is
   // migrated.
   if (!status) {
-    LOG(WARNING) << "Failed to deserialize '" << serialized_account_id << "'";
+    LOG(WARNING) << "Failed to deserialize account_id.";
     account_id = user_manager::known_user::GetAccountId(
-        serialized_account_id, std::string() /* gaia_id */);
+        serialized_account_id, std::string() /* id */, AccountType::UNKNOWN);
   }
   *email = account_id.GetUserEmail();
 }
 
-base::RefCountedMemory* GetUserImageInternal(const AccountId& account_id) {
+scoped_refptr<base::RefCountedMemory> GetUserImageInternal(
+    const AccountId& account_id) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id);
 
@@ -52,19 +53,19 @@ base::RefCountedMemory* GetUserImageInternal(const AccountId& account_id) {
   // for device scale factors up to 4. We do not use SCALE_FACTOR_NONE, as we
   // specifically want 100% scale images to not transmit more data than needed.
   if (user) {
-    if (user->has_raw_image()) {
-      return new base::RefCountedBytes(user->raw_image());
-    } else if (user->image_is_stub()) {
+    if (user->has_image_bytes())
+      return user->image_bytes();
+    if (user->image_is_stub()) {
       return ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
           IDR_PROFILE_PICTURE_LOADING, ui::SCALE_FACTOR_100P);
-    } else if (user->HasDefaultImage()) {
+    }
+    if (user->HasDefaultImage()) {
       return ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
           chromeos::default_user_image::kDefaultImageResourceIDs
               [user->image_index()],
           ui::SCALE_FACTOR_100P);
-    } else {
-      NOTREACHED() << "User with custom image missing raw data";
     }
+    NOTREACHED() << "User with custom image missing data bytes";
   }
   return ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_LOGIN_DEFAULT_USER, ui::SCALE_FACTOR_100P);
@@ -92,8 +93,7 @@ std::string UserImageSource::GetSource() const {
 
 void UserImageSource::StartDataRequest(
     const std::string& path,
-    int render_process_id,
-    int render_frame_id,
+    const content::ResourceRequestInfo::WebContentsGetter& wc_getter,
     const content::URLDataSource::GotDataCallback& callback) {
   std::string email;
   GURL url(chrome::kChromeUIUserImageURL + path);

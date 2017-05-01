@@ -16,7 +16,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/test/async_file_test_helper.h"
 #include "content/public/test/test_file_system_context.h"
 #include "net/base/io_buffer.h"
@@ -130,8 +130,9 @@ class FileWriterDelegateTest : public PlatformTest {
             offset,
             *file_system_context_->GetUpdateObservers(kFileSystemType));
     writer->set_default_quota(allowed_growth);
-    return new FileWriterDelegate(scoped_ptr<storage::FileStreamWriter>(writer),
-                                  storage::FlushPolicy::FLUSH_ON_COMPLETION);
+    return new FileWriterDelegate(
+        std::unique_ptr<storage::FileStreamWriter>(writer),
+        storage::FlushPolicy::FLUSH_ON_COMPLETION);
   }
 
   FileWriterDelegate::DelegateWriteCallback GetWriteCallback(Result* result) {
@@ -156,9 +157,9 @@ class FileWriterDelegateTest : public PlatformTest {
   scoped_refptr<storage::FileSystemContext> file_system_context_;
 
   net::URLRequestContext empty_context_;
-  scoped_ptr<FileWriterDelegate> file_writer_delegate_;
-  scoped_ptr<net::URLRequest> request_;
-  scoped_ptr<BlobURLRequestJobFactory> job_factory_;
+  std::unique_ptr<FileWriterDelegate> file_writer_delegate_;
+  std::unique_ptr<net::URLRequest> request_;
+  std::unique_ptr<BlobURLRequestJobFactory> job_factory_;
 
   base::ScopedTempDir dir_;
 
@@ -262,8 +263,8 @@ class BlobURLRequestJobFactory : public net::URLRequestJobFactory {
 void FileWriterDelegateTest::SetUp() {
   ASSERT_TRUE(dir_.CreateUniqueTempDir());
 
-  file_system_context_ = CreateFileSystemContextForTesting(
-      NULL, dir_.path());
+  file_system_context_ =
+      CreateFileSystemContextForTesting(NULL, dir_.GetPath());
   ASSERT_EQ(base::File::FILE_OK,
             AsyncFileTestHelper::CreateFile(file_system_context_.get(),
                                             GetFileSystemURL("test")));
@@ -285,7 +286,7 @@ TEST_F(FileWriterDelegateTest, WriteSuccessWithoutQuotaLimit) {
   Result result;
   ASSERT_EQ(0, usage());
   file_writer_delegate_->Start(std::move(request_), GetWriteCallback(&result));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
   file_writer_delegate_.reset();
@@ -305,7 +306,7 @@ TEST_F(FileWriterDelegateTest, WriteSuccessWithJustQuota) {
   Result result;
   ASSERT_EQ(0, usage());
   file_writer_delegate_->Start(std::move(request_), GetWriteCallback(&result));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
   file_writer_delegate_.reset();
 
@@ -325,7 +326,7 @@ TEST_F(FileWriterDelegateTest, DISABLED_WriteFailureByQuota) {
   Result result;
   ASSERT_EQ(0, usage());
   file_writer_delegate_->Start(std::move(request_), GetWriteCallback(&result));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   ASSERT_EQ(FileWriterDelegate::ERROR_WRITE_STARTED, result.write_status());
   file_writer_delegate_.reset();
 
@@ -346,7 +347,7 @@ TEST_F(FileWriterDelegateTest, WriteZeroBytesSuccessfullyWithZeroQuota) {
   Result result;
   ASSERT_EQ(0, usage());
   file_writer_delegate_->Start(std::move(request_), GetWriteCallback(&result));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
   file_writer_delegate_.reset();
 
@@ -359,8 +360,8 @@ TEST_F(FileWriterDelegateTest, WriteZeroBytesSuccessfullyWithZeroQuota) {
 }
 
 TEST_F(FileWriterDelegateTest, WriteSuccessWithoutQuotaLimitConcurrent) {
-  scoped_ptr<FileWriterDelegate> file_writer_delegate2;
-  scoped_ptr<net::URLRequest> request2;
+  std::unique_ptr<FileWriterDelegate> file_writer_delegate2;
+  std::unique_ptr<net::URLRequest> request2;
 
   ASSERT_EQ(base::File::FILE_OK,
             AsyncFileTestHelper::CreateFile(file_system_context_.get(),
@@ -382,10 +383,10 @@ TEST_F(FileWriterDelegateTest, WriteSuccessWithoutQuotaLimitConcurrent) {
   ASSERT_EQ(0, usage());
   file_writer_delegate_->Start(std::move(request_), GetWriteCallback(&result));
   file_writer_delegate2->Start(std::move(request2), GetWriteCallback(&result2));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
   if (result.write_status() == FileWriterDelegate::SUCCESS_IO_PENDING ||
       result2.write_status() == FileWriterDelegate::SUCCESS_IO_PENDING)
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
 
   ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
   ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result2.write_status());
@@ -416,7 +417,7 @@ TEST_F(FileWriterDelegateTest, WritesWithQuotaAndOffset) {
     ASSERT_EQ(0, usage());
     file_writer_delegate_->Start(std::move(request_),
                                  GetWriteCallback(&result));
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
     file_writer_delegate_.reset();
 
@@ -435,7 +436,7 @@ TEST_F(FileWriterDelegateTest, WritesWithQuotaAndOffset) {
     Result result;
     file_writer_delegate_->Start(std::move(request_),
                                  GetWriteCallback(&result));
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     EXPECT_EQ(kDataSize, usage());
     EXPECT_EQ(GetFileSizeOnDisk("test"), usage());
     EXPECT_EQ(kDataSize, result.bytes_written());
@@ -453,7 +454,7 @@ TEST_F(FileWriterDelegateTest, WritesWithQuotaAndOffset) {
     Result result;
     file_writer_delegate_->Start(std::move(request_),
                                  GetWriteCallback(&result));
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
     file_writer_delegate_.reset();
 
@@ -473,7 +474,7 @@ TEST_F(FileWriterDelegateTest, WritesWithQuotaAndOffset) {
     Result result;
     file_writer_delegate_->Start(std::move(request_),
                                  GetWriteCallback(&result));
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     ASSERT_EQ(FileWriterDelegate::SUCCESS_COMPLETED, result.write_status());
     file_writer_delegate_.reset();
 
@@ -494,7 +495,7 @@ TEST_F(FileWriterDelegateTest, WritesWithQuotaAndOffset) {
     Result result;
     file_writer_delegate_->Start(std::move(request_),
                                  GetWriteCallback(&result));
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     ASSERT_EQ(FileWriterDelegate::ERROR_WRITE_STARTED, result.write_status());
     file_writer_delegate_.reset();
 

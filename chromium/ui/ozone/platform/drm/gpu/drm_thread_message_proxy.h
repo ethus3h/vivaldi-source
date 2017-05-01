@@ -13,6 +13,7 @@
 #include "ui/display/types/display_constants.h"
 #include "ui/display/types/gamma_ramp_rgb_entry.h"
 #include "ui/gfx/native_widget_types.h"
+#include "ui/ozone/platform/drm/gpu/inter_thread_messaging_proxy.h"
 
 namespace base {
 struct FileDescriptor;
@@ -31,12 +32,16 @@ struct DisplayMode_Params;
 struct DisplaySnapshot_Params;
 struct OverlayCheck_Params;
 
-class DrmThreadMessageProxy : public IPC::MessageFilter {
+class DrmThreadMessageProxy : public IPC::MessageFilter,
+                              public InterThreadMessagingProxy {
  public:
-  DrmThreadMessageProxy(DrmThread* drm_thread);
+  DrmThreadMessageProxy();
+
+  // InterThreadMessagingProxy.
+  void SetDrmThread(DrmThread* thread) override;
 
   // IPC::MessageFilter:
-  void OnFilterAdded(IPC::Sender* sender) override;
+  void OnFilterAdded(IPC::Channel* channel) override;
   bool OnMessageReceived(const IPC::Message& message) override;
 
  private:
@@ -67,8 +72,12 @@ class DrmThreadMessageProxy : public IPC::MessageFilter {
                            const base::FileDescriptor& fd);
   void OnRemoveGraphicsDevice(const base::FilePath& path);
   void OnGetHDCPState(int64_t display_id);
-  void OnSetHDCPState(int64_t display_id, HDCPState state);
-  void OnSetGammaRamp(int64_t id, const std::vector<GammaRampRGBEntry>& lut);
+  void OnSetHDCPState(int64_t display_id, display::HDCPState state);
+  void OnSetColorCorrection(
+      int64_t id,
+      const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+      const std::vector<display::GammaRampRGBEntry>& gamma_lut,
+      const std::vector<float>& correction_matrix);
 
   void OnCheckOverlayCapabilitiesCallback(
       gfx::AcceleratedWidget widget,
@@ -81,7 +90,7 @@ class DrmThreadMessageProxy : public IPC::MessageFilter {
   void OnRelinquishDisplayControlCallback(bool success) const;
   void OnGetHDCPStateCallback(int64_t display_id,
                               bool success,
-                              HDCPState state) const;
+                              display::HDCPState state) const;
   void OnSetHDCPStateCallback(int64_t display_id, bool success) const;
 
   DrmThread* drm_thread_;

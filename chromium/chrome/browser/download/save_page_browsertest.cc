@@ -16,10 +16,9 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
 #include "base/path_service.h"
-#include "base/prefs/pref_member.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_file_util.h"
 #include "build/build_config.h"
@@ -44,10 +43,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/history/core/browser/download_constants.h"
 #include "components/history/core/browser/download_row.h"
+#include "components/prefs/pref_member.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
@@ -64,6 +67,8 @@ using content::BrowserContext;
 using content::BrowserThread;
 using content::DownloadItem;
 using content::DownloadManager;
+using content::RenderFrameHost;
+using content::RenderProcessHost;
 using content::WebContents;
 using net::URLRequestMockHTTPJob;
 using testing::ContainsRegex;
@@ -310,9 +315,9 @@ class SavePageBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     browser()->profile()->GetPrefs()->SetFilePath(
-        prefs::kDownloadDefaultDirectory, save_dir_.path());
+        prefs::kDownloadDefaultDirectory, save_dir_.GetPath());
     browser()->profile()->GetPrefs()->SetFilePath(
-        prefs::kSaveFileDefaultDirectory, save_dir_.path());
+        prefs::kSaveFileDefaultDirectory, save_dir_.GetPath());
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
         base::Bind(&chrome_browser_net::SetUrlRequestMocksEnabled, true));
@@ -333,8 +338,8 @@ class SavePageBrowserTest : public InProcessBrowserTest {
                                content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML) {
     std::string extension =
         (save_page_type == content::SAVE_PAGE_TYPE_AS_MHTML) ? ".mht" : ".htm";
-    *full_file_name = save_dir_.path().AppendASCII(prefix + extension);
-    *dir = save_dir_.path().AppendASCII(prefix + "_files");
+    *full_file_name = save_dir_.GetPath().AppendASCII(prefix + extension);
+    *dir = save_dir_.GetPath().AppendASCII(prefix + "_files");
   }
 
   WebContents* GetCurrentTab(Browser* browser) const {
@@ -489,9 +494,15 @@ class DelayingDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
   DISALLOW_COPY_AND_ASSIGN(DelayingDownloadManagerDelegate);
 };
 
-IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveHTMLOnlyTabDestroy) {
+// Disabled on ChromeOS due to flakiness. crbug.com/580766
+#if defined(OS_CHROMEOS)
+#define MAYBE_SaveHTMLOnlyTabDestroy DISABLED_SaveHTMLOnlyTabDestroy
+#else
+#define MAYBE_SaveHTMLOnlyTabDestroy SaveHTMLOnlyTabDestroy
+#endif
+IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, MAYBE_SaveHTMLOnlyTabDestroy) {
   GURL url = NavigateToMockURL("a");
-  scoped_ptr<DelayingDownloadManagerDelegate> delaying_delegate(
+  std::unique_ptr<DelayingDownloadManagerDelegate> delaying_delegate(
       new DelayingDownloadManagerDelegate(browser()->profile()));
   delaying_delegate->GetDownloadIdReceiverCallback().Run(
       content::DownloadItem::kInvalidId + 1);
@@ -568,7 +579,8 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest,
 
   // Navigate, unblocking with new tab.
   GURL url = URLRequestMockHTTPJob::GetMockUrl("save_page/b.htm");
-  NavigateToURLWithDisposition(incognito, url, NEW_FOREGROUND_TAB,
+  NavigateToURLWithDisposition(incognito, url,
+                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
                                ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   // Save the page before completion.
@@ -600,9 +612,9 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, NoSave) {
 IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, FileNameFromPageTitle) {
   GURL url = NavigateToMockURL("b");
 
-  base::FilePath full_file_name = save_dir_.path().AppendASCII(
+  base::FilePath full_file_name = save_dir_.GetPath().AppendASCII(
       std::string("Test page for saving page feature") + kAppendedExtension);
-  base::FilePath dir = save_dir_.path().AppendASCII(
+  base::FilePath dir = save_dir_.GetPath().AppendASCII(
       "Test page for saving page feature_files");
   DownloadPersistedObserver persisted(browser()->profile(), base::Bind(
       &DownloadStoredProperly, url, full_file_name, 3,
@@ -642,10 +654,9 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, RemoveFromList) {
   std::vector<DownloadItem*> downloads;
   manager->GetAllDownloads(&downloads);
   ASSERT_EQ(1UL, downloads.size());
+
   DownloadRemovedObserver removed(browser()->profile(), downloads[0]->GetId());
-
-  EXPECT_EQ(manager->RemoveAllDownloads(), 1);
-
+  downloads[0]->Remove();
   removed.WaitForRemoved();
 
   EXPECT_TRUE(base::PathExists(full_file_name));
@@ -725,6 +736,11 @@ IN_PROC_BROWSER_TEST_F(SavePageAsMHTMLBrowserTest, SavePageAsMHTML) {
   int64_t actual_file_size = -1;
   EXPECT_TRUE(base::GetFileSize(full_file_name, &actual_file_size));
   EXPECT_LE(kFileSizeMin, actual_file_size);
+
+  std::string contents;
+  EXPECT_TRUE(base::ReadFileToString(full_file_name, &contents));
+  // Test for a CSS encoded character.  This used to use HTML encoding.
+  EXPECT_THAT(contents, HasSubstr("content: \"\\e003 \\e004 b\""));
 }
 
 IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SavePageBrowserTest_NonMHTML) {
@@ -747,6 +763,23 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SavePageBrowserTest_NonMHTML) {
   EXPECT_EQ("foo", contents);
 }
 
+// If a save-page-complete operation results in creating subresources that would
+// otherwise be considered dangerous, such files should get a .download
+// extension appended so that they won't be accidentally executed by the user.
+IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, DangerousSubresources) {
+  GURL url =
+      URLRequestMockHTTPJob::GetMockUrl("/save_page/dubious-subresources.html");
+
+  ui_test_utils::NavigateToURL(browser(), url);
+  base::FilePath full_file_name, dir;
+  SaveCurrentTab(url, content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML,
+                 "dubious-subresources", 2, &dir, &full_file_name);
+  ASSERT_FALSE(HasFailure());
+
+  EXPECT_TRUE(base::PathExists(full_file_name));
+  EXPECT_TRUE(base::PathExists(dir.AppendASCII("not-a-crx.crx.download")));
+}
+
 // Test that we don't crash when the page contains an iframe that
 // was handled as a download (http://crbug.com/42212).
 IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveDownloadableIFrame) {
@@ -766,7 +799,10 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveDownloadableIFrame) {
 
     ASSERT_TRUE(VerifySavePackageExpectations(browser(), download_url));
     persisted.WaitForPersisted();
-    GetDownloadManager()->RemoveAllDownloads();
+    std::vector<content::DownloadItem*> downloads;
+    GetDownloadManager()->GetAllDownloads(&downloads);
+    for (auto download : downloads)
+      download->Remove();
   }
 
   base::FilePath full_file_name, dir;
@@ -777,6 +813,41 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveDownloadableIFrame) {
   EXPECT_TRUE(base::PathExists(full_file_name));
   EXPECT_TRUE(base::PathExists(dir.AppendASCII("thisdayinhistory.html")));
   EXPECT_TRUE(base::PathExists(dir.AppendASCII("no-such-file.html")));
+}
+
+// Test that file: URI won't be saved when referred to from an HTTP page.
+// See also https://crbug.com/616429.
+IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveUnauthorizedResource) {
+  GURL url = NavigateToMockURL("unauthorized-access");
+
+  // Create a test file (that the web page should not have access to).
+  base::ScopedTempDir temp_dir2;
+  ASSERT_TRUE(temp_dir2.CreateUniqueTempDir());
+  base::FilePath file_path =
+      temp_dir2.GetPath().Append(FILE_PATH_LITERAL("should-not-save.jpg"));
+  std::string file_content("fake-jpg");
+  ASSERT_LT(
+      0, base::WriteFile(file_path, file_content.data(), file_content.size()));
+
+  // Refer to the test file from the test page.
+  GURL file_url = net::FilePathToFileURL(file_path);
+  ASSERT_TRUE(ExecuteScript(
+      browser()->tab_strip_model()->GetWebContentsAt(0),
+      base::StringPrintf("document.getElementById('resource1').src = '%s';",
+                         file_url.spec().data())));
+
+  // Save the current page.
+  base::FilePath full_file_name, dir;
+  SaveCurrentTab(url, content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML,
+                 "unauthorized-access", 2, &dir, &full_file_name);
+
+  // We should not save resource that the web page didn't have access to.
+  // (because executing a resource request can have side effects - for example
+  // after https://crbug.com/590714 a website from the internet should not be
+  // able to issue a resource request to an intranet website and trigger
+  // server-side actions in the internet;  this test uses a file: URI as a
+  // canary for detecting whether a website can access restricted resources).
+  EXPECT_FALSE(base::PathExists(dir.AppendASCII("should-not-save.jpg")));
 }
 
 // Test suite that allows testing --site-per-process against cross-site frames.
@@ -797,8 +868,9 @@ class SavePageSitePerProcessBrowserTest : public SavePageBrowserTest {
     SavePageBrowserTest::SetUpOnMainThread();
 
     host_resolver()->AddRule("*", "127.0.0.1");
-    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
     content::SetupCrossSiteRedirector(embedded_test_server());
+    embedded_test_server()->StartAcceptingConnections();
   }
 
  private:
@@ -911,17 +983,53 @@ IN_PROC_BROWSER_TEST_F(SavePageSitePerProcessBrowserTest, SaveAsMHTML) {
   EXPECT_EQ(1, count) << "Verify number of image/png parts in the mhtml output";
 }
 
+// Test for crbug.com/541342 - handling of dead renderer processes.
+IN_PROC_BROWSER_TEST_F(SavePageSitePerProcessBrowserTest,
+                       CompleteHtmlWhenRendererIsDead) {
+  GURL url(
+      embedded_test_server()->GetURL("a.com", "/save_page/frames-xsite.htm"));
+  ui_test_utils::NavigateToURL(browser(), url);
+
+  // Kill one of renderer processes (this is the essence of this test).
+  WebContents* web_contents = GetCurrentTab(browser());
+  bool did_kill_a_process = false;
+  for (RenderFrameHost* frame : web_contents->GetAllFrames()) {
+    if (frame->GetLastCommittedURL().host() == "bar.com") {
+      RenderProcessHost* process_to_kill = frame->GetProcess();
+      EXPECT_NE(
+          web_contents->GetMainFrame()->GetProcess()->GetID(),
+          process_to_kill->GetID())
+          << "a.com and bar.com should be in different processes.";
+
+      EXPECT_TRUE(process_to_kill->FastShutdownIfPossible());
+      EXPECT_FALSE(process_to_kill->HasConnection());
+      did_kill_a_process = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(did_kill_a_process);
+
+  // Main verification is that we don't hang and time out when saving.
+  base::FilePath full_file_name, dir;
+  SaveCurrentTab(url, content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML,
+                 "frames-xsite-complete-html", 5, &dir, &full_file_name);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_TRUE(base::DirectoryExists(dir));
+  EXPECT_TRUE(base::PathExists(full_file_name));
+}
+
 // Test suite that verifies that the frame tree "looks" the same before
 // and after a save-page-as.
-class SavePageMultiFrameBrowserTest
+class SavePageOriginalVsSavedComparisonTest
     : public SavePageSitePerProcessBrowserTest,
       public ::testing::WithParamInterface<content::SavePageType> {
  protected:
-  void TestMultiFramePage(content::SavePageType save_page_type,
-                          const GURL& url,
-                          int expected_number_of_frames,
-                          const std::vector<std::string>& expected_substrings,
-                          bool skip_verification_of_original_page = false) {
+  void TestOriginalVsSavedPage(
+      content::SavePageType save_page_type,
+      const GURL& url,
+      int expected_number_of_frames_in_original_page,
+      int expected_number_of_frames_in_mhtml_page,
+      const std::vector<std::string>& expected_substrings) {
     // Navigate to the test page and verify if test expectations
     // are met (this is mostly a sanity check - a failure to meet
     // expectations would probably mean that there is a test bug
@@ -929,10 +1037,8 @@ class SavePageMultiFrameBrowserTest
     ui_test_utils::NavigateToURL(browser(), url);
     DLOG(INFO) << "Verifying test expectations for original page... : "
                << GetCurrentTab(browser())->GetLastCommittedURL();
-    if (!skip_verification_of_original_page) {
-      AssertExpectationsAboutCurrentTab(expected_number_of_frames,
-                                        expected_substrings);
-    }
+    AssertExpectationsAboutCurrentTab(
+        expected_number_of_frames_in_original_page, expected_substrings);
 
     // Save the page.
     base::FilePath full_file_name, dir;
@@ -952,8 +1058,47 @@ class SavePageMultiFrameBrowserTest
                                  GURL(net::FilePathToFileURL(full_file_name)));
     DLOG(INFO) << "Verifying test expectations for saved page... : "
                << GetCurrentTab(browser())->GetLastCommittedURL();
-    AssertExpectationsAboutCurrentTab(expected_number_of_frames,
+    // Hidden elements, i.e., hidden frames, will be removed only from MHTML
+    // page. They're still kept in other types of serialization, like saving
+    // as a complete html page.
+    int expected_number_of_frames_in_saved_page =
+        (save_page_type == content::SAVE_PAGE_TYPE_AS_MHTML) ?
+        expected_number_of_frames_in_mhtml_page :
+        expected_number_of_frames_in_original_page;
+    AssertExpectationsAboutCurrentTab(expected_number_of_frames_in_saved_page,
                                       expected_substrings);
+  }
+
+  // Helper method to deduplicate some code across 2 tests.
+  void RunObjectElementsTest(GURL url) {
+    content::SavePageType save_page_type = GetParam();
+
+    // 7 comes from:
+    // - main frame (frames-objects.htm)
+    // - object with frame-nested.htm + 2 subframes (frames-nested2.htm + b.htm)
+    // - iframe with a.htm
+    // - object with svg.svg
+    // - object with text.txt
+    // (pdf and png objects do not get a separate frame)
+    int expected_number_of_frames = 7;
+
+    std::string arr[] = {
+        "frames-objects.htm: 8da13db4-a512-4d9b-b1c5-dc1c134234b9",
+        "a.htm: 1b8aae2b-e164-462f-bd5b-98aa366205f2",
+        "b.htm: 3a35f7fa-96a9-4487-9f18-4470263907fa",
+        "frames-nested.htm: 4388232f-8d45-4d2e-9807-721b381be153",
+        "frames-nested2.htm: 6d23dc47-f283-4977-96ec-66bcf72301a4",
+        "text-object.txt: ae52dd09-9746-4b7e-86a6-6ada5e2680c2",
+    };
+    std::vector<std::string> expected_substrings(std::begin(arr),
+                                                 std::end(arr));
+
+    // TODO(lukasza): crbug.com/553478: Enable <object> testing of MHTML.
+    if (save_page_type == content::SAVE_PAGE_TYPE_AS_MHTML)
+      return;
+
+    TestOriginalVsSavedPage(save_page_type, url, expected_number_of_frames,
+                            expected_number_of_frames, expected_substrings);
   }
 
  private:
@@ -1007,7 +1152,7 @@ class SavePageMultiFrameBrowserTest
 // - crbug.com/539936: Subframe gets redirected.
 // Test compares original-vs-saved for a page with cross-site frames
 // (subframes get redirected to a different domain - see frames-xsite.htm).
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, CrossSite) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, CrossSite) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
@@ -1020,47 +1165,35 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, CrossSite) {
   GURL url(
       embedded_test_server()->GetURL("a.com", "/save_page/frames-xsite.htm"));
 
-  // TODO(lukasza/paulmeyer): crbug.com/457440: Can enable verification
-  // of the original page once find-in-page works for OOP frames.
-  bool skip_verification_of_original_page = true;
-
-  TestMultiFramePage(save_page_type, url, 3, expected_substrings,
-                     skip_verification_of_original_page);
+  TestOriginalVsSavedPage(save_page_type, url, 3, 3, expected_substrings);
 }
 
 // Test compares original-vs-saved for a page with <object> elements.
 // (see crbug.com/553478).
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, ObjectElements) {
-  content::SavePageType save_page_type = GetParam();
-
-  // 4 = main frame + iframe + object w/ html doc + object w/ pdf doc
-  // (svg and png objects do not get a separate frame)
-  int expected_number_of_frames = 6;
-
-  std::string arr[] = {
-      "frames-objects.htm: 8da13db4-a512-4d9b-b1c5-dc1c134234b9",
-      "a.htm: 1b8aae2b-e164-462f-bd5b-98aa366205f2",
-      "b.htm: 3a35f7fa-96a9-4487-9f18-4470263907fa",
-      "frames-nested.htm: 4388232f-8d45-4d2e-9807-721b381be153",
-      "frames-nested2.htm: 6d23dc47-f283-4977-96ec-66bcf72301a4",
-  };
-  std::vector<std::string> expected_substrings(std::begin(arr), std::end(arr));
-
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest,
+                       ObjectElementsViaHttp) {
   GURL url(
       embedded_test_server()->GetURL("a.com", "/save_page/frames-objects.htm"));
 
-  // TODO(lukasza): crbug.com/553478: Enable <object> testing of MHTML.
-  if (save_page_type == content::SAVE_PAGE_TYPE_AS_MHTML)
-    return;
+  RunObjectElementsTest(url);
+}
 
-  TestMultiFramePage(save_page_type, url, expected_number_of_frames,
-                     expected_substrings);
+// Tests that saving a page from file: URI works.
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest,
+                       ObjectElementsViaFile) {
+  base::FilePath test_data_dir;
+  ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
+  GURL url(net::FilePathToFileURL(
+      test_data_dir.Append(FILE_PATH_LITERAL("save_page/frames-objects.htm"))));
+  EXPECT_TRUE(url.SchemeIsFile());
+
+  RunObjectElementsTest(url);
 }
 
 // Test compares original-vs-saved for a page with frames at about:blank uri.
 // This tests handling of iframe elements without src attribute (only with
 // srcdoc attribute) and how they get saved / cross-referenced.
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, AboutBlank) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, AboutBlank) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
@@ -1074,13 +1207,13 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, AboutBlank) {
   GURL url(embedded_test_server()->GetURL("a.com",
                                           "/save_page/frames-about-blank.htm"));
 
-  TestMultiFramePage(save_page_type, url, 4, expected_substrings);
+  TestOriginalVsSavedPage(save_page_type, url, 4, 4, expected_substrings);
 }
 
 // Test compares original-vs-saved for a page with nested frames.
 // Two levels of nesting are especially good for verifying correct
 // link rewriting for subframes-vs-main-frame (see crbug.com/554666).
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, NestedFrames) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, NestedFrames) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
@@ -1093,7 +1226,7 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, NestedFrames) {
   GURL url(
       embedded_test_server()->GetURL("a.com", "/save_page/frames-nested.htm"));
 
-  TestMultiFramePage(save_page_type, url, 3, expected_substrings);
+  TestOriginalVsSavedPage(save_page_type, url, 3, 3, expected_substrings);
 }
 
 // Test for crbug.com/106364 and crbug.com/538188.
@@ -1101,7 +1234,7 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, NestedFrames) {
 //   subframe1 and subframe2 - both have src=b.htm
 //   subframe3 and subframe4 - about:blank (no src, only srcdoc attribute).
 // ... but different content (generated by main frame's javascript).
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, RuntimeChanges) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, RuntimeChanges) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
@@ -1113,25 +1246,10 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, RuntimeChanges) {
   };
   std::vector<std::string> expected_substrings(std::begin(arr), std::end(arr));
 
-  if (save_page_type == content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML) {
-    // TODO(lukasza): crbug.com/106364: Expand complete-html test beyond just
-    // being a crash test.  In particular, the |complete_html_arr| below should
-    // be the same as the |arr| above (and at this point the special-casing of
-    // complete-html can be removed).
-    // Draft CLs with fix proposals that should accomplish this:
-    // - crrev.com/1502563004
-    // - crrev.com/1500103002
-    std::string complete_html_arr[] = {
-        "frames-runtime-changes.htm: 4388232f-8d45-4d2e-9807-721b381be153",
-    };
-    expected_substrings = std::vector<std::string>(
-        std::begin(complete_html_arr), std::end(complete_html_arr));
-  }
-
   GURL url(embedded_test_server()->GetURL(
       "a.com", "/save_page/frames-runtime-changes.htm?do_runtime_changes=1"));
 
-  TestMultiFramePage(save_page_type, url, 5, expected_substrings);
+  TestOriginalVsSavedPage(save_page_type, url, 5, 5, expected_substrings);
 }
 
 // Test for saving frames with various encodings:
@@ -1139,7 +1257,7 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, RuntimeChanges) {
 // - utf16-le-bom.htm, utf16-be-bom.htm: encoding detected via BOM
 // - utf16-le-nobom.htm, utf16-le-nobom.htm, utf32.htm - encoding declared via
 //                                                       mocked http headers
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, Encoding) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, Encoding) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
@@ -1171,27 +1289,50 @@ IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, Encoding) {
   if (save_page_type == content::SAVE_PAGE_TYPE_AS_MHTML)
     return;
 
-  TestMultiFramePage(save_page_type, url, 7, expected_substrings);
+  TestOriginalVsSavedPage(save_page_type, url, 7, 7, expected_substrings);
 }
 
 // Test for saving style element and attribute (see also crbug.com/568293).
-IN_PROC_BROWSER_TEST_P(SavePageMultiFrameBrowserTest, Style) {
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, Style) {
   content::SavePageType save_page_type = GetParam();
 
   std::string arr[] = {
       "style.htm: af84c3ca-0fc6-4b0d-bf7a-5ac18a4dab62",
-      "frameE: c9539ccd-47b0-47cf-a03b-734614865872",
+      "frameF: c9539ccd-47b0-47cf-a03b-734614865872",
   };
   std::vector<std::string> expected_substrings(std::begin(arr), std::end(arr));
 
   GURL url(embedded_test_server()->GetURL("a.com", "/save_page/style.htm"));
 
-  TestMultiFramePage(save_page_type, url, 6, expected_substrings);
+  // The original page has 7 iframes. 2 of them are both hidden and affecting
+  // no layout. So these two are excluded from the saved page.
+  TestOriginalVsSavedPage(save_page_type, url, 7, 5, expected_substrings);
+}
+
+// Test for saving a page with broken subresources:
+// - Broken, undecodable image (see also https://crbug.com/586680)
+// - Broken link, to unresolvable host (see also https://crbug.com/594219)
+IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest, BrokenImage) {
+  // Clear resolver rules to make sure that *.no.such.host used in the test html
+  // doesn't resolve to 127.0.0.1
+  host_resolver()->ClearRules();
+
+  content::SavePageType save_page_type = GetParam();
+
+  std::string arr[] = {
+      "broken-image.htm: 1e846775-b3ed-4d9c-a124-029554a1eb9d",
+  };
+  std::vector<std::string> expected_substrings(std::begin(arr), std::end(arr));
+
+  GURL url(embedded_test_server()->GetURL("127.0.0.1",
+                                          "/save_page/broken-image.htm"));
+
+  TestOriginalVsSavedPage(save_page_type, url, 1, 1, expected_substrings);
 }
 
 INSTANTIATE_TEST_CASE_P(
     SaveType,
-    SavePageMultiFrameBrowserTest,
+    SavePageOriginalVsSavedComparisonTest,
     ::testing::Values(content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML,
                       content::SAVE_PAGE_TYPE_AS_MHTML));
 

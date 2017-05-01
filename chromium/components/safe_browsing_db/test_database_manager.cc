@@ -9,23 +9,12 @@
 #include <vector>
 
 #include "base/logging.h"
+#include "net/url_request/url_request_context_getter.h"
 
 namespace safe_browsing {
 
-bool TestSafeBrowsingDatabaseManager::IsSupported() const {
+void TestSafeBrowsingDatabaseManager::CancelCheck(Client* client) {
   NOTIMPLEMENTED();
-  return false;
-}
-
-safe_browsing::ThreatSource TestSafeBrowsingDatabaseManager::GetThreatSource()
-    const {
-  NOTIMPLEMENTED();
-  return safe_browsing::ThreatSource::UNKNOWN;
-}
-
-bool TestSafeBrowsingDatabaseManager::ChecksAreAlwaysAsync() const {
-  NOTIMPLEMENTED();
-  return false;
 }
 
 bool TestSafeBrowsingDatabaseManager::CanCheckResourceType(
@@ -39,7 +28,7 @@ bool TestSafeBrowsingDatabaseManager::CanCheckUrl(const GURL& url) const {
   return false;
 }
 
-bool TestSafeBrowsingDatabaseManager::download_protection_enabled() const {
+bool TestSafeBrowsingDatabaseManager::ChecksAreAlwaysAsync() const {
   NOTIMPLEMENTED();
   return false;
 }
@@ -64,19 +53,13 @@ bool TestSafeBrowsingDatabaseManager::CheckExtensionIDs(
   return true;
 }
 
+bool TestSafeBrowsingDatabaseManager::CheckResourceUrl(const GURL& url,
+                                                       Client* client) {
+  NOTIMPLEMENTED();
+  return true;
+}
+
 bool TestSafeBrowsingDatabaseManager::MatchCsdWhitelistUrl(const GURL& url) {
-  NOTIMPLEMENTED();
-  return true;
-}
-
-bool TestSafeBrowsingDatabaseManager::MatchMalwareIP(
-    const std::string& ip_address) {
-  NOTIMPLEMENTED();
-  return true;
-}
-
-bool TestSafeBrowsingDatabaseManager::MatchDownloadWhitelistUrl(
-    const GURL& url) {
   NOTIMPLEMENTED();
   return true;
 }
@@ -87,15 +70,28 @@ bool TestSafeBrowsingDatabaseManager::MatchDownloadWhitelistString(
   return true;
 }
 
-bool TestSafeBrowsingDatabaseManager::MatchInclusionWhitelistUrl(
+bool TestSafeBrowsingDatabaseManager::MatchDownloadWhitelistUrl(
     const GURL& url) {
   NOTIMPLEMENTED();
   return true;
 }
 
-bool TestSafeBrowsingDatabaseManager::IsMalwareKillSwitchOn() {
+bool TestSafeBrowsingDatabaseManager::MatchMalwareIP(
+    const std::string& ip_address) {
   NOTIMPLEMENTED();
-  return false;
+  return true;
+}
+
+bool TestSafeBrowsingDatabaseManager::MatchModuleWhitelistString(
+    const std::string& str) {
+  NOTIMPLEMENTED();
+  return true;
+}
+
+safe_browsing::ThreatSource TestSafeBrowsingDatabaseManager::GetThreatSource()
+    const {
+  NOTIMPLEMENTED();
+  return safe_browsing::ThreatSource::UNKNOWN;
 }
 
 bool TestSafeBrowsingDatabaseManager::IsCsdWhitelistKillSwitchOn() {
@@ -103,19 +99,19 @@ bool TestSafeBrowsingDatabaseManager::IsCsdWhitelistKillSwitchOn() {
   return false;
 }
 
-void TestSafeBrowsingDatabaseManager::CancelCheck(Client* client) {
+bool TestSafeBrowsingDatabaseManager::IsDownloadProtectionEnabled() const {
   NOTIMPLEMENTED();
+  return false;
 }
 
-void TestSafeBrowsingDatabaseManager::CheckApiBlacklistUrl(const GURL& url,
-                                                           Client* client) {
+bool TestSafeBrowsingDatabaseManager::IsMalwareKillSwitchOn() {
   NOTIMPLEMENTED();
+  return false;
 }
 
-void TestSafeBrowsingDatabaseManager::StartOnIOThread() {
-}
-
-void TestSafeBrowsingDatabaseManager::StopOnIOThread(bool shutdown) {
+bool TestSafeBrowsingDatabaseManager::IsSupported() const {
+  NOTIMPLEMENTED();
+  return false;
 }
 
 }  // namespace safe_browsing

@@ -7,6 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <string>
+#include <vector>
+
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
@@ -14,10 +17,8 @@
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/prefs/pref_service.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
@@ -25,26 +26,27 @@
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/browser_sync/browser/profile_sync_service.h"
+#include "components/browser_sync/profile_sync_service.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/signin_manager.h"
-#include "components/sync_driver/about_sync_util.h"
-#include "components/sync_driver/pref_names.h"
-#include "components/sync_driver/sync_prefs.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/sync/base/pref_names.h"
+#include "components/sync/driver/about_sync_util.h"
+#include "components/sync/engine/net/network_resources.h"
+#include "components/sync/syncable/read_transaction.h"
 #include "content/public/browser/browser_thread.h"
 #include "google/cacheinvalidation/types.pb.h"
 #include "google_apis/gaia/gaia_constants.h"
-#include "google_apis/gaia/google_service_auth_error.h"
-#include "grit/components_strings.h"
 #include "jni/ProfileSyncService_jni.h"
-#include "sync/internal_api/public/network_resources.h"
-#include "sync/internal_api/public/read_transaction.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using base::android::AttachCurrentThread;
 using base::android::CheckException;
 using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF8ToJavaString;
+using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
+using browser_sync::ProfileSyncService;
 using content::BrowserThread;
 
 namespace {
@@ -54,7 +56,7 @@ namespace {
 // results are sent to the Java callback.
 void NativeGetAllNodesCallback(
     const base::android::ScopedJavaGlobalRef<jobject>& callback,
-    scoped_ptr<base::ListValue> result) {
+    std::unique_ptr<base::ListValue> result) {
   JNIEnv* env = base::android::AttachCurrentThread();
   std::string json_string;
   if (!result.get() || !base::JSONWriter::Write(*result, &json_string)) {
@@ -64,9 +66,7 @@ void NativeGetAllNodesCallback(
 
   ScopedJavaLocalRef<jstring> java_json_string =
       ConvertUTF8ToJavaString(env, json_string);
-  Java_ProfileSyncService_onGetAllNodesResult(env,
-                                              callback.obj(),
-                                              java_json_string.obj());
+  Java_ProfileSyncService_onGetAllNodesResult(env, callback, java_json_string);
 }
 
 ScopedJavaLocalRef<jintArray> ModelTypeSetToJavaIntArray(
@@ -82,22 +82,22 @@ ScopedJavaLocalRef<jintArray> ModelTypeSetToJavaIntArray(
 }  // namespace
 
 ProfileSyncServiceAndroid::ProfileSyncServiceAndroid(JNIEnv* env, jobject obj)
-    : profile_(NULL),
-      sync_service_(NULL),
+    : profile_(nullptr),
+      sync_service_(nullptr),
       weak_java_profile_sync_service_(env, obj) {
-  if (g_browser_process == NULL ||
-      g_browser_process->profile_manager() == NULL) {
+  if (g_browser_process == nullptr ||
+      g_browser_process->profile_manager() == nullptr) {
     NOTREACHED() << "Browser process or profile manager not initialized";
     return;
   }
 
   profile_ = ProfileManager::GetActiveUserProfile();
-  if (profile_ == NULL) {
+  if (profile_ == nullptr) {
     NOTREACHED() << "Sync Init: Profile not found.";
     return;
   }
 
-  sync_prefs_.reset(new sync_driver::SyncPrefs(profile_->GetPrefs()));
+  sync_prefs_ = base::MakeUnique<syncer::SyncPrefs>(profile_->GetPrefs());
 
   sync_service_ =
       ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile_);
@@ -127,14 +127,14 @@ void ProfileSyncServiceAndroid::OnStateChanged() {
   // Notify the java world that our sync state has changed.
   JNIEnv* env = AttachCurrentThread();
   Java_ProfileSyncService_syncStateChanged(
-      env, weak_java_profile_sync_service_.get(env).obj());
+      env, weak_java_profile_sync_service_.get(env));
 }
 
 bool ProfileSyncServiceAndroid::IsSyncAllowedByAndroid() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   return Java_ProfileSyncService_isMasterSyncEnabled(
-      env, weak_java_profile_sync_service_.get(env).obj());
+      env, weak_java_profile_sync_service_.get(env));
 }
 
 // Pure ProfileSyncService calls.
@@ -172,11 +172,11 @@ jboolean ProfileSyncServiceAndroid::IsSyncActive(
   return sync_service_->IsSyncActive();
 }
 
-jboolean ProfileSyncServiceAndroid::IsBackendInitialized(
+jboolean ProfileSyncServiceAndroid::IsEngineInitialized(
     JNIEnv* env,
     const JavaParamRef<jobject>&) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return sync_service_->IsBackendInitialized();
+  return sync_service_->IsEngineInitialized();
 }
 
 void ProfileSyncServiceAndroid::SetSetupInProgress(
@@ -184,21 +184,25 @@ void ProfileSyncServiceAndroid::SetSetupInProgress(
     const JavaParamRef<jobject>& obj,
     jboolean in_progress) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  sync_service_->SetSetupInProgress(in_progress);
+  if (in_progress) {
+    sync_blocker_ = sync_service_->GetSetupInProgressHandle();
+  } else {
+    sync_blocker_.reset();
+  }
 }
 
-jboolean ProfileSyncServiceAndroid::HasSyncSetupCompleted(
+jboolean ProfileSyncServiceAndroid::IsFirstSetupComplete(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return sync_service_->HasSyncSetupCompleted();
+  return sync_service_->IsFirstSetupComplete();
 }
 
-void ProfileSyncServiceAndroid::SetSyncSetupCompleted(
+void ProfileSyncServiceAndroid::SetFirstSetupComplete(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  sync_service_->SetSyncSetupCompleted();
+  sync_service_->SetFirstSetupComplete();
 }
 
 ScopedJavaLocalRef<jintArray> ProfileSyncServiceAndroid::GetActiveDataTypes(
@@ -285,7 +289,7 @@ jint ProfileSyncServiceAndroid::GetPassphraseType(
     JNIEnv* env,
     const JavaParamRef<jobject>&) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return sync_service_->GetPassphraseType();
+  return static_cast<unsigned>(sync_service_->GetPassphraseType());
 }
 
 void ProfileSyncServiceAndroid::SetEncryptionPassphrase(
@@ -344,7 +348,7 @@ void ProfileSyncServiceAndroid::GetAllNodes(
   base::android::ScopedJavaGlobalRef<jobject> java_callback;
   java_callback.Reset(env, callback);
 
-  base::Callback<void(scoped_ptr<base::ListValue>)> native_callback =
+  base::Callback<void(std::unique_ptr<base::ListValue>)> native_callback =
       base::Bind(&NativeGetAllNodesCallback, java_callback);
   sync_service_->GetAllNodes(native_callback);
 }
@@ -360,6 +364,15 @@ jboolean ProfileSyncServiceAndroid::HasUnrecoverableError(
     const JavaParamRef<jobject>&) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   return sync_service_->HasUnrecoverableError();
+}
+
+jint ProfileSyncServiceAndroid::GetProtocolErrorClientAction(
+    JNIEnv* env,
+    const JavaParamRef<jobject>&) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  syncer::SyncStatus status;
+  sync_service_->QueryDetailedSyncStatus(&status);
+  return status.sync_protocol_error.action;
 }
 
 // Pure SyncPrefs calls.
@@ -432,10 +445,9 @@ ProfileSyncServiceAndroid::GetCurrentSignedInAccountText(
       SigninManagerFactory::GetForProfile(profile_)
           ->GetAuthenticatedAccountInfo()
           .email;
-  return base::android::ConvertUTF16ToJavaString(env,
-      l10n_util::GetStringFUTF16(
-          IDS_SYNC_ACCOUNT_SYNCING_TO_USER,
-          base::ASCIIToUTF16(sync_username)));
+  return base::android::ConvertUTF16ToJavaString(
+      env, l10n_util::GetStringFUTF16(IDS_SYNC_ACCOUNT_INFO,
+                                      base::ASCIIToUTF16(sync_username)));
 }
 
 ScopedJavaLocalRef<jstring>
@@ -454,8 +466,8 @@ ScopedJavaLocalRef<jstring> ProfileSyncServiceAndroid::GetAboutInfoForTest(
     const JavaParamRef<jobject>&) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  scoped_ptr<base::DictionaryValue> about_info =
-      sync_driver::sync_ui_util::ConstructAboutInformation(
+  std::unique_ptr<base::DictionaryValue> about_info =
+      syncer::sync_ui_util::ConstructAboutInformation(
           sync_service_, sync_service_->signin(), chrome::GetChannel());
   std::string about_info_json;
   base::JSONWriter::Write(*about_info, &about_info_json);
@@ -470,7 +482,7 @@ jlong ProfileSyncServiceAndroid::GetLastSyncedTimeForTest(
   // conversion, since SyncPrefs::GetLastSyncedTime() converts the stored value
   // to to base::Time.
   return static_cast<jlong>(
-      profile_->GetPrefs()->GetInt64(sync_driver::prefs::kSyncLastSyncedTime));
+      profile_->GetPrefs()->GetInt64(syncer::prefs::kSyncLastSyncedTime));
 }
 
 void ProfileSyncServiceAndroid::OverrideNetworkResourcesForTest(
@@ -480,7 +492,7 @@ void ProfileSyncServiceAndroid::OverrideNetworkResourcesForTest(
   syncer::NetworkResources* resources =
       reinterpret_cast<syncer::NetworkResources*>(network_resources);
   sync_service_->OverrideNetworkResourcesForTest(
-      make_scoped_ptr<syncer::NetworkResources>(resources));
+      base::WrapUnique<syncer::NetworkResources>(resources));
 }
 
 // static

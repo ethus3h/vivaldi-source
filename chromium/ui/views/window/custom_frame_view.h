@@ -5,16 +5,14 @@
 #ifndef UI_VIEWS_WINDOW_CUSTOM_FRAME_VIEW_H_
 #define UI_VIEWS_WINDOW_CUSTOM_FRAME_VIEW_H_
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/window/frame_buttons.h"
 #include "ui/views/window/non_client_view.h"
-
-namespace gfx {
-class ImageSkia;
-}
 
 namespace views {
 
@@ -48,6 +46,7 @@ class VIEWS_EXPORT CustomFrameView : public NonClientFrameView,
   void UpdateWindowIcon() override;
   void UpdateWindowTitle() override;
   void SizeConstraintsChanged() override;
+  void ActivationChanged(bool active) override;
 
   // Overridden from View:
   void OnPaint(gfx::Canvas* canvas) override;
@@ -105,7 +104,7 @@ class VIEWS_EXPORT CustomFrameView : public NonClientFrameView,
 
   // Compute aspects of the frame needed to paint the frame background.
   SkColor GetFrameColor() const;
-  const gfx::ImageSkia* GetFrameImage() const;
+  gfx::ImageSkia GetFrameImage() const;
 
   // Performs the layout for the window control buttons based on the
   // configuration specified in WindowButtonOrderProvider. The sizing and
@@ -147,12 +146,16 @@ class VIEWS_EXPORT CustomFrameView : public NonClientFrameView,
   ImageButton* close_button_;
 
   // Background painter for the window frame.
-  scoped_ptr<FrameBackground> frame_background_;
+  std::unique_ptr<FrameBackground> frame_background_;
 
   // The horizontal boundaries for the title bar to layout within. Restricted
   // by the space used by the leading and trailing buttons.
   int minimum_title_bar_x_;
   int maximum_title_bar_x_;
+
+  // True if the frame containing this frameview is currently active. Updated in
+  // ActivationChanged().
+  bool active_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(CustomFrameView);
 };

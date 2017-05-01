@@ -9,6 +9,8 @@
 
 #include <string>
 
+#include "base/strings/string_piece.h"
+
 class GURL;
 
 // This namespace provides various helpers around handling Google-related URLs.
@@ -17,7 +19,7 @@ namespace google_util {
 // True iff |str| contains a "q=" or "as_q=" query parameter with a non-empty
 // value. |str| should be a query or a hash fragment, without the ? or # (as
 // returned by GURL::query() or GURL::ref().
-bool HasGoogleSearchQueryParam(const std::string& str);
+bool HasGoogleSearchQueryParam(base::StringPiece str);
 
 // The query key that identifies a Google Extended API request for Instant.
 const char kInstantExtendedAPIParam[] = "espv";
@@ -36,15 +38,15 @@ GURL AppendGoogleLocaleParam(const GURL& url,
                              const std::string& application_locale);
 
 // Returns the Google country code string for the given Google homepage URL.
-std::string GetGoogleCountryCode(GURL google_homepage_url);
+std::string GetGoogleCountryCode(const GURL& google_homepage_url);
 
 // Returns the Google search URL for the given Google homepage URL.
-GURL GetGoogleSearchURL(GURL google_homepage_url);
+GURL GetGoogleSearchURL(const GURL& google_homepage_url);
 
 // Returns the Google base URL specified on the command line, if it exists.
 // This performs some fixup and sanity-checking to ensure that the resulting URL
 // is valid and has no query or ref.
-GURL CommandLineGoogleBaseURL();
+const GURL& CommandLineGoogleBaseURL();
 
 // Returns true if a Google base URL was specified on the command line and |url|
 // begins with that base URL.  This uses a simple string equality check.
@@ -76,7 +78,7 @@ enum PortPermission {
 // will also return true for any URL whose hostname exactly matches the hostname
 // of the URL specified on the command line.  In this case,
 // |subdomain_permission| is ignored.
-bool IsGoogleHostname(const std::string& host,
+bool IsGoogleHostname(base::StringPiece host,
                       SubdomainPermission subdomain_permission);
 
 // True if |url| is a valid URL with a host that returns true for
@@ -105,16 +107,13 @@ bool IsYoutubeDomainUrl(const GURL& url,
                         SubdomainPermission subdomain_permission,
                         PortPermission port_permission);
 
-bool IsWhatsappDomainUrl(const GURL& url,
-                         SubdomainPermission subdomain_permission,
-                         PortPermission port_permission);
-
 // True if |host| is "[www.]<domain_in_lower_case>.<TLD>" with a valid TLD. If
 // |subdomain_permission| is ALLOW_SUBDOMAIN, we check against host
 // "*.<domain_in_lower_case>.<TLD>" instead.
-bool IsValidHostName(const std::string& host,
-                     const std::string& domain_in_lower_case,
-                     google_util::SubdomainPermission subdomain_permission);
+bool IsValidHostName(base::StringPiece host,
+                     base::StringPiece domain_in_lower_case,
+                     google_util::SubdomainPermission subdomain_permission,
+                     base::StringPiece* tld = nullptr);
 
 // True if |url| is a valid URL with HTTP or HTTPS scheme. If |port_permission|
 // is DISALLOW_NON_STANDARD_PORTS, this also requires |url| to use the standard

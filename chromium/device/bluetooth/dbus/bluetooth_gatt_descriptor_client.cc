@@ -10,8 +10,10 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/values.h"
 #include "dbus/bus.h"
 #include "dbus/object_manager.h"
+#include "dbus/values_util.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace bluez {
@@ -99,6 +101,11 @@ class BluetoothGattDescriptorClientImpl
         bluetooth_gatt_descriptor::kBluetoothGattDescriptorInterface,
         bluetooth_gatt_descriptor::kReadValue);
 
+    // Append empty option dict
+    dbus::MessageWriter writer(&method_call);
+    base::DictionaryValue dict;
+    dbus::AppendValueData(&writer, dict);
+
     object_proxy->CallMethodWithErrorCallback(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::Bind(&BluetoothGattDescriptorClientImpl::OnValueSuccess,
@@ -125,6 +132,10 @@ class BluetoothGattDescriptorClientImpl
     dbus::MessageWriter writer(&method_call);
     writer.AppendArrayOfBytes(value.data(), value.size());
 
+    // Append empty option dict
+    base::DictionaryValue dict;
+    dbus::AppendValueData(&writer, dict);
+
     object_proxy->CallMethodWithErrorCallback(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::Bind(&BluetoothGattDescriptorClientImpl::OnSuccess,
@@ -149,16 +160,16 @@ class BluetoothGattDescriptorClientImpl
   void ObjectAdded(const dbus::ObjectPath& object_path,
                    const std::string& interface_name) override {
     VLOG(2) << "Remote GATT descriptor added: " << object_path.value();
-    FOR_EACH_OBSERVER(BluetoothGattDescriptorClient::Observer, observers_,
-                      GattDescriptorAdded(object_path));
+    for (auto& observer : observers_)
+      observer.GattDescriptorAdded(object_path);
   }
 
   // dbus::ObjectManager::Interface override.
   void ObjectRemoved(const dbus::ObjectPath& object_path,
                      const std::string& interface_name) override {
     VLOG(2) << "Remote GATT descriptor removed: " << object_path.value();
-    FOR_EACH_OBSERVER(BluetoothGattDescriptorClient::Observer, observers_,
-                      GattDescriptorRemoved(object_path));
+    for (auto& observer : observers_)
+      observer.GattDescriptorRemoved(object_path);
   }
 
  protected:
@@ -180,9 +191,8 @@ class BluetoothGattDescriptorClientImpl
                                  const std::string& property_name) {
     VLOG(2) << "Remote GATT descriptor property changed: "
             << object_path.value() << ": " << property_name;
-    FOR_EACH_OBSERVER(
-        BluetoothGattDescriptorClient::Observer, observers_,
-        GattDescriptorPropertyChanged(object_path, property_name));
+    for (auto& observer : observers_)
+      observer.GattDescriptorPropertyChanged(object_path, property_name);
   }
 
   // Called when a response for a successful method call is received.

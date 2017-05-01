@@ -13,6 +13,7 @@
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "dbus/bus.h"
@@ -205,11 +206,11 @@ class ObjectManagerTest
   }
 
   base::MessageLoop message_loop_;
-  scoped_ptr<base::RunLoop> run_loop_;
-  scoped_ptr<base::Thread> dbus_thread_;
+  std::unique_ptr<base::RunLoop> run_loop_;
+  std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
   ObjectManager* object_manager_;
-  scoped_ptr<TestService> test_service_;
+  std::unique_ptr<TestService> test_service_;
 
   std::string last_name_value_;
   bool timeout_expired_;
@@ -404,10 +405,9 @@ TEST_F(ObjectManagerTest, PropertiesChangedAsObjectsReceived) {
   // after setting up the match rule for PropertiesChanged. We should process
   // the PropertiesChanged event right after that. If we don't receive it within
   // 2 seconds, then fail the test.
-  message_loop_.PostDelayedTask(
-      FROM_HERE,
-      base::Bind(&ObjectManagerTest::PropertiesChangedTestTimeout,
-                 base::Unretained(this)),
+  message_loop_.task_runner()->PostDelayedTask(
+      FROM_HERE, base::Bind(&ObjectManagerTest::PropertiesChangedTestTimeout,
+                            base::Unretained(this)),
       base::TimeDelta::FromSeconds(2));
 
   while (last_name_value_ != "ChangedTestServiceName" && !timeout_expired_) {

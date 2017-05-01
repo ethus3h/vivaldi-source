@@ -20,6 +20,7 @@
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/history/core/browser/in_memory_database.h"
 #include "components/history/core/browser/keyword_search_term.h"
@@ -32,7 +33,6 @@
 #include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/browser/url_prefix.h"
 #include "components/search/search.h"
-#include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/url_formatter/url_formatter.h"
 #include "components/variations/net/variations_http_headers.h"
@@ -175,6 +175,7 @@ int SearchProvider::CalculateRelevanceForKeywordVerbatim(
 }
 
 void SearchProvider::ResetSession() {
+  set_field_trial_triggered(false);
   set_field_trial_triggered_in_session(false);
 }
 
@@ -219,6 +220,7 @@ ACMatches::iterator SearchProvider::FindTopMatch(ACMatches* matches) {
 
 void SearchProvider::Start(const AutocompleteInput& input,
                            bool minimal_changes) {
+  TRACE_EVENT0("omnibox", "SearchProvider::Start");
   // Do our best to load the model as early as possible.  This will reduce
   // odds of having the model not ready when really needed (a non-empty input).
   TemplateURLService* model = client()->GetTemplateURLService();
@@ -387,6 +389,7 @@ void SearchProvider::OnTemplateURLServiceChanged() {
 }
 
 void SearchProvider::OnURLFetchComplete(const net::URLFetcher* source) {
+  TRACE_EVENT0("omnibox", "SearchProvider::OnURLFetchComplete");
   DCHECK(!done_);
   const bool is_keyword = source == keyword_fetcher_.get();
 
@@ -400,8 +403,9 @@ void SearchProvider::OnURLFetchComplete(const net::URLFetcher* source) {
 
   bool results_updated = false;
   if (request_succeeded) {
-    scoped_ptr<base::Value> data(SearchSuggestionParser::DeserializeJsonData(
-        SearchSuggestionParser::ExtractJsonData(source)));
+    std::unique_ptr<base::Value> data(
+        SearchSuggestionParser::DeserializeJsonData(
+            SearchSuggestionParser::ExtractJsonData(source)));
     if (data) {
       SearchSuggestionParser::Results* results =
           is_keyword ? &keyword_results_ : &default_results_;
@@ -442,11 +446,10 @@ void SearchProvider::UpdateMatchContentsClass(
        sug_it != results->suggest_results.end(); ++sug_it) {
     sug_it->ClassifyMatchContents(false, input_text);
   }
-  const std::string languages(client()->GetAcceptLanguages());
   for (SearchSuggestionParser::NavigationResults::iterator nav_it =
            results->navigation_results.begin();
        nav_it != results->navigation_results.end(); ++nav_it) {
-    nav_it->CalculateAndClassifyMatchContents(false, input_text, languages);
+    nav_it->CalculateAndClassifyMatchContents(false, input_text);
   }
 }
 
@@ -484,9 +487,8 @@ void SearchProvider::LogFetchComplete(bool success, bool is_keyword) {
   // non-keyword mode.
   const TemplateURL* default_url = providers_.GetDefaultProviderURL();
   if (!is_keyword && default_url &&
-      (TemplateURLPrepopulateData::GetEngineType(
-           *default_url,
-           client()->GetTemplateURLService()->search_terms_data()) ==
+      (default_url->GetEngineType(
+          client()->GetTemplateURLService()->search_terms_data()) ==
        SEARCH_ENGINE_GOOGLE)) {
     const base::TimeDelta elapsed_time =
         base::TimeTicks::Now() - time_suggest_request_sent_;
@@ -513,7 +515,7 @@ void SearchProvider::UpdateMatches() {
     // relevances with minimal impact, preserving other suggested relevances.
     const TemplateURL* keyword_url = providers_.GetKeywordProviderURL();
     const bool is_extension_keyword = (keyword_url != NULL) &&
-        (keyword_url->GetType() == TemplateURL::OMNIBOX_API_EXTENSION);
+        (keyword_url->type() == TemplateURL::OMNIBOX_API_EXTENSION);
     if ((keyword_url != NULL) && !is_extension_keyword &&
         (FindTopMatch() == matches_.end())) {
       // In non-extension keyword mode, disregard the keyword verbatim suggested
@@ -715,7 +717,7 @@ void SearchProvider::StartOrStopSuggestQuery(bool minimal_changes) {
                           query_is_private));
 }
 
-void SearchProvider::CancelFetcher(scoped_ptr<net::URLFetcher>* fetcher) {
+void SearchProvider::CancelFetcher(std::unique_ptr<net::URLFetcher>* fetcher) {
   if (*fetcher) {
     LogOmniboxSuggestRequest(REQUEST_INVALIDATED);
     fetcher->reset();
@@ -740,11 +742,6 @@ bool SearchProvider::IsQuerySuitableForSuggest(bool* query_is_private) const {
 bool SearchProvider::IsQueryPotentionallyPrivate() const {
   // If the input type might be a URL, we take extra care so that private data
   // isn't sent to the server.
-
-  // FORCED_QUERY means the user is explicitly asking us to search for this, so
-  // we assume it isn't a URL and/or there isn't private data.
-  if (input_.type() == metrics::OmniboxInputType::FORCED_QUERY)
-    return false;
 
   // Next we check the scheme.  If this is UNKNOWN/URL with a scheme that isn't
   // http/https/ftp, we shouldn't send it.  Sending things like file: and data:
@@ -844,7 +841,7 @@ void SearchProvider::ApplyCalculatedNavigationRelevance(
   }
 }
 
-scoped_ptr<net::URLFetcher> SearchProvider::CreateSuggestFetcher(
+std::unique_ptr<net::URLFetcher> SearchProvider::CreateSuggestFetcher(
     int id,
     const TemplateURL* template_url,
     const AutocompleteInput& input) {
@@ -885,7 +882,7 @@ scoped_ptr<net::URLFetcher> SearchProvider::CreateSuggestFetcher(
 
   LogOmniboxSuggestRequest(REQUEST_SENT);
 
-  scoped_ptr<net::URLFetcher> fetcher =
+  std::unique_ptr<net::URLFetcher> fetcher =
       net::URLFetcher::Create(id, suggest_url, net::URLFetcher::GET, this);
   data_use_measurement::DataUseUserData::AttachToFetcher(
       fetcher.get(), data_use_measurement::DataUseUserData::OMNIBOX);
@@ -893,8 +890,12 @@ scoped_ptr<net::URLFetcher> SearchProvider::CreateSuggestFetcher(
   fetcher->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES);
   // Add Chrome experiment state to the request headers.
   net::HttpRequestHeaders headers;
-  variations::AppendVariationHeaders(
-      fetcher->GetOriginalURL(), client()->IsOffTheRecord(), false, &headers);
+  // Note: It's OK to pass |is_signed_in| false if it's unknown, as it does
+  // not affect transmission of experiments coming from the variations server.
+  bool is_signed_in = false;
+  variations::AppendVariationHeaders(fetcher->GetOriginalURL(),
+                                     client()->IsOffTheRecord(), false,
+                                     is_signed_in, &headers);
   fetcher->SetExtraRequestHeaders(headers.ToString());
   fetcher->Start();
   return fetcher;
@@ -927,7 +928,7 @@ void SearchProvider::ConvertResultsToAutocompleteMatches() {
     // verbatim, and if so, copy over answer contents.
     base::string16 answer_contents;
     base::string16 answer_type;
-    scoped_ptr<SuggestionAnswer> answer;
+    std::unique_ptr<SuggestionAnswer> answer;
     base::string16 trimmed_verbatim_lower =
         base::i18n::ToLower(trimmed_verbatim);
     for (ACMatches::iterator it = matches_.begin(); it != matches_.end();
@@ -957,7 +958,7 @@ void SearchProvider::ConvertResultsToAutocompleteMatches() {
     // to the keyword verbatim search query.  Do not create other matches
     // of type SEARCH_OTHER_ENGINE.
     if (keyword_url &&
-        (keyword_url->GetType() != TemplateURL::OMNIBOX_API_EXTENSION)) {
+        (keyword_url->type() != TemplateURL::OMNIBOX_API_EXTENSION)) {
       bool keyword_relevance_from_server;
       const int keyword_verbatim_relevance =
           GetKeywordVerbatimRelevance(&keyword_relevance_from_server);
@@ -1312,7 +1313,6 @@ int SearchProvider::
   switch (input_.type()) {
     case metrics::OmniboxInputType::UNKNOWN:
     case metrics::OmniboxInputType::QUERY:
-    case metrics::OmniboxInputType::FORCED_QUERY:
       return kNonURLVerbatimRelevance;
 
     case metrics::OmniboxInputType::URL:
@@ -1413,23 +1413,15 @@ AutocompleteMatch SearchProvider::NavigationToMatch(
       url_formatter::kFormatUrlOmitAll &
       ~(trim_http ? 0 : url_formatter::kFormatUrlOmitHTTP);
 
-  const std::string languages(client()->GetAcceptLanguages());
   size_t inline_autocomplete_offset = (prefix == NULL) ?
       base::string16::npos : (match_start + input.length());
   match.fill_into_edit +=
       AutocompleteInput::FormattedStringWithEquivalentMeaning(
           navigation.url(),
-          url_formatter::FormatUrl(navigation.url(), languages, format_types,
+          url_formatter::FormatUrl(navigation.url(), format_types,
                                    net::UnescapeRule::SPACES, nullptr, nullptr,
                                    &inline_autocomplete_offset),
           client()->GetSchemeClassifier());
-  // Preserve the forced query '?' prefix in |match.fill_into_edit|.
-  // Otherwise, user edits to a suggestion would show non-Search results.
-  if (input_.type() == metrics::OmniboxInputType::FORCED_QUERY) {
-    match.fill_into_edit.insert(0, base::ASCIIToUTF16("?"));
-    if (inline_autocomplete_offset != base::string16::npos)
-      ++inline_autocomplete_offset;
-  }
   if (inline_autocomplete_offset != base::string16::npos) {
     DCHECK(inline_autocomplete_offset <= match.fill_into_edit.length());
     match.inline_autocompletion =
@@ -1451,7 +1443,7 @@ AutocompleteMatch SearchProvider::NavigationToMatch(
       !navigation.received_after_last_keystroke() &&
       (match.inline_autocompletion.empty() ||
       (!input_.prevent_inline_autocomplete() && !trimmed_whitespace));
-  match.EnsureUWYTIsAllowedToBeDefault(input_, client()->GetAcceptLanguages(),
+  match.EnsureUWYTIsAllowedToBeDefault(input_,
                                        client()->GetTemplateURLService());
 
   match.contents = navigation.match_contents();

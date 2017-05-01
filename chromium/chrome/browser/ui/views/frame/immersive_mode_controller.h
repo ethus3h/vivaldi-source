@@ -8,7 +8,6 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "chrome/browser/ui/host_desktop.h"
 
 class BrowserView;
 
@@ -40,6 +39,12 @@ class ImmersiveModeController {
     ANIMATE_REVEAL_NO
   };
 
+  // TODO(sky): remove this, temporary while supporting both ash and mash.
+  enum class Type {
+    ASH,
+    STUB,
+  };
+
   class Observer {
    public:
     // Called when a reveal of the top-of-window views has been initiated.
@@ -52,7 +57,7 @@ class ImmersiveModeController {
     virtual ~Observer() {}
   };
 
-  ImmersiveModeController();
+  explicit ImmersiveModeController(Type type);
   virtual ~ImmersiveModeController();
 
   // Must initialize after browser view has a Widget and native window.
@@ -61,10 +66,6 @@ class ImmersiveModeController {
   // Enables or disables immersive mode.
   virtual void SetEnabled(bool enabled) = 0;
   virtual bool IsEnabled() const = 0;
-
-  // True if the miniature "tab indicators" should be hidden in the main browser
-  // view when immersive mode is enabled.
-  virtual bool ShouldHideTabIndicators() const = 0;
 
   // True when the top views are hidden due to immersive mode.
   virtual bool ShouldHideTopViews() const = 0;
@@ -101,10 +102,7 @@ class ImmersiveModeController {
   virtual void OnFindBarVisibleBoundsChanged(
       const gfx::Rect& new_visible_bounds_in_screen) = 0;
 
-  // Disables animations and moves the mouse so that it is not over the
-  // top-of-window views for the sake of testing. Must be called before
-  // enabling immersive fullscreen.
-  virtual void SetupForTest() = 0;
+  Type type() const { return type_; }
 
   virtual void AddObserver(Observer* observer);
   virtual void RemoveObserver(Observer* observer);
@@ -113,14 +111,15 @@ class ImmersiveModeController {
   base::ObserverList<Observer> observers_;
 
  private:
+  const Type type_;
+
   DISALLOW_COPY_AND_ASSIGN(ImmersiveModeController);
 };
 
 namespace chrome {
 
 // Implemented in immersive_mode_controller_factory.cc.
-ImmersiveModeController* CreateImmersiveModeController(
-    chrome::HostDesktopType host_desktop_type);
+ImmersiveModeController* CreateImmersiveModeController();
 
 }  // namespace chrome
 

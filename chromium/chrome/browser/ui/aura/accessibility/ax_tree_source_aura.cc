@@ -15,7 +15,10 @@
 #include "ui/views/accessibility/ax_aura_obj_cache.h"
 #include "ui/views/accessibility/ax_aura_obj_wrapper.h"
 #include "ui/views/accessibility/ax_view_obj_wrapper.h"
-#include "ui/views/controls/webview/webview.h"
+
+#if defined(TOOLKIT_VIEWS)
+#include "ui/views/controls/webview/webview.h"  // nogncheck
+#endif
 
 using views::AXAuraObjCache;
 using views::AXAuraObjWrapper;
@@ -58,12 +61,14 @@ void AXTreeSourceAura::ShowContextMenu(int32_t id) {
     obj->ShowContextMenu();
 }
 
-ui::AXTreeData AXTreeSourceAura::GetTreeData() const {
-  ui::AXTreeData tree_data;
-  tree_data.tree_id = 0;
-  tree_data.loaded = true;
-  tree_data.loading_progress = 1.0;
-  return tree_data;
+bool AXTreeSourceAura::GetTreeData(ui::AXTreeData* tree_data) const {
+  tree_data->tree_id = 0;
+  tree_data->loaded = true;
+  tree_data->loading_progress = 1.0;
+  AXAuraObjWrapper* focus = AXAuraObjCache::GetInstance()->GetFocus();
+  if (focus)
+    tree_data->focus_id = focus->GetID();
+  return true;
 }
 
 AXAuraObjWrapper* AXTreeSourceAura::GetRoot() const {

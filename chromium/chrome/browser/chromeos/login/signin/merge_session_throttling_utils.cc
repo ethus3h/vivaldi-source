@@ -63,6 +63,10 @@ base::AtomicRefCount g_all_profiles_restored_ = 0;
 
 }  // namespace
 
+bool ShouldAttachNavigationThrottle() {
+  return user_manager::UserManager::IsInitialized();
+}
+
 bool AreAllSessionMergedAlready() {
   return !base::AtomicRefCountIsZero(&g_all_profiles_restored_);
 }
@@ -98,7 +102,7 @@ void UnblockProfile(Profile* profile) {
   }
 }
 
-bool ShouldDelayRequest(content::WebContents* web_contents) {
+bool ShouldDelayRequestForProfile(Profile* profile) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (!user_manager::UserManager::Get()->IsUserLoggedIn()) {
@@ -113,11 +117,6 @@ bool ShouldDelayRequest(content::WebContents* web_contents) {
     return false;
   }
 
-  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  if (!browser_context)
-    return false;
-
-  Profile* profile = Profile::FromBrowserContext(browser_context);
   if (!profile)
     return false;
 
@@ -167,13 +166,45 @@ bool ShouldDelayRequest(content::WebContents* web_contents) {
   return false;
 }
 
+bool ShouldDelayRequestForWebContents(content::WebContents* web_contents) {
+  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  if (!browser_context)
+    return false;
+
+  return ShouldDelayRequestForProfile(
+      Profile::FromBrowserContext(browser_context));
+}
+
 bool ShouldDelayUrl(const GURL& url) {
   // If we are loading google properties while merge session is in progress,
   // we will show delayed loading page instead.
   return !net::NetworkChangeNotifier::IsOffline() &&
          !AreAllSessionMergedAlready() &&
-         google_util::IsGoogleHostname(url.host(),
+         google_util::IsGoogleHostname(url.host_piece(),
                                        google_util::ALLOW_SUBDOMAIN);
+}
+
+bool IsSessionRestorePending(Profile* profile) {
+  if (!profile)
+    return false;
+
+  chromeos::OAuth2LoginManager* login_manager =
+      chromeos::OAuth2LoginManagerFactory::GetInstance()->GetForProfile(
+          profile);
+  bool pending_session_restore = false;
+  if (login_manager) {
+    switch (login_manager->state()) {
+      case chromeos::OAuth2LoginManager::SESSION_RESTORE_PREPARING:
+      case chromeos::OAuth2LoginManager::SESSION_RESTORE_IN_PROGRESS:
+        pending_session_restore = true;
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  return pending_session_restore;
 }
 
 }  // namespace merge_session_throttling_utils

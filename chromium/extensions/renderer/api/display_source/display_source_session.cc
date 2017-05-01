@@ -4,7 +4,9 @@
 
 #include "extensions/renderer/api/display_source/display_source_session.h"
 
-#if defined(ENABLE_WIFI_DISPLAY)
+#include "extensions/features/features.h"
+
+#if BUILDFLAG(ENABLE_WIFI_DISPLAY)
 #include "extensions/renderer/api/display_source/wifi_display/wifi_display_session.h"
 #endif
 
@@ -14,6 +16,9 @@ DisplaySourceSessionParams::DisplaySourceSessionParams()
     : auth_method(api::display_source::AUTHENTICATION_METHOD_NONE) {
 }
 
+DisplaySourceSessionParams::DisplaySourceSessionParams(
+    const DisplaySourceSessionParams&) = default;
+
 DisplaySourceSessionParams::~DisplaySourceSessionParams() = default;
 
 DisplaySourceSession::DisplaySourceSession()
@@ -22,25 +27,24 @@ DisplaySourceSession::DisplaySourceSession()
 
 DisplaySourceSession::~DisplaySourceSession() = default;
 
-void DisplaySourceSession::SetCallbacks(
-    const SinkIdCallback& started_callback,
-    const SinkIdCallback& terminated_callback,
+void DisplaySourceSession::SetNotificationCallbacks(
+    const base::Closure& terminated_callback,
     const ErrorCallback& error_callback) {
-  DCHECK(started_callback_.is_null());
   DCHECK(terminated_callback_.is_null());
   DCHECK(error_callback_.is_null());
 
-  started_callback_ = started_callback;
   terminated_callback_ = terminated_callback;
   error_callback_ = error_callback;
 }
 
-scoped_ptr<DisplaySourceSession> DisplaySourceSessionFactory::CreateSession(
+std::unique_ptr<DisplaySourceSession>
+DisplaySourceSessionFactory::CreateSession(
     const DisplaySourceSessionParams& params) {
-#if defined(ENABLE_WIFI_DISPLAY)
-  return scoped_ptr<DisplaySourceSession>(new WiFiDisplaySession(params));
-#endif
+#if BUILDFLAG(ENABLE_WIFI_DISPLAY)
+  return std::unique_ptr<DisplaySourceSession>(new WiFiDisplaySession(params));
+#else
   return nullptr;
+#endif
 }
 
 }  // namespace extensions

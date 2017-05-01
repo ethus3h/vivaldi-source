@@ -36,82 +36,86 @@
 #include "platform/SharedBuffer.h"
 #include "platform/fonts/FontCache.h"
 #include "platform/fonts/FontPlatformData.h"
-#include "platform/fonts/opentype/OpenTypeSanitizer.h"
+#include "platform/fonts/WebFontDecoder.h"
+#include "platform/fonts/opentype/FontSettings.h"
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkTypeface.h"
-#include "wtf/PassOwnPtr.h"
+#include "wtf/PtrUtil.h"
+#include <memory>
 
 namespace blink {
 
-FontCustomPlatformData::FontCustomPlatformData(PassRefPtr<SkTypeface> typeface)
-    : m_typeface(typeface) { }
+FontCustomPlatformData::FontCustomPlatformData(sk_sp<SkTypeface> typeface,
+                                               size_t dataSize)
+    : m_baseTypeface(typeface), m_dataSize(dataSize) {}
 
-FontCustomPlatformData::~FontCustomPlatformData()
-{
-}
+FontCustomPlatformData::~FontCustomPlatformData() {}
 
-FontPlatformData FontCustomPlatformData::fontPlatformData(float size, bool bold, bool italic, FontOrientation orientation)
-{
-    ASSERT(m_typeface);
-#if OS(WIN)
-    if (!FontCache::useDirectWrite()) {
-        // FIXME: Skia currently renders synthetic bold and italics with
-        // hinting and without linear metrics on the windows GDI backend
-        // while the DirectWrite backend does the right thing. Using
-        // CreateFromName and specifying the bold/italics style allows
-        // for proper rendering of synthetic style. Once Skia has been
-        // updated this workaround will no longer be needed.
-        // http://crbug.com/332958
-        bool syntheticBold = bold && !m_typeface->isBold();
-        bool syntheticItalic = italic && !m_typeface->isItalic();
-        if (syntheticBold || syntheticItalic) {
-            SkString name;
-            m_typeface->getFamilyName(&name);
+FontPlatformData FontCustomPlatformData::fontPlatformData(
+    float size,
+    bool bold,
+    bool italic,
+    FontOrientation orientation,
+    const FontVariationSettings* variationSettings) {
+  DCHECK(m_baseTypeface);
 
-            int style = SkTypeface::kNormal;
-            if (syntheticBold)
-                style |= SkTypeface::kBold;
-            if (syntheticItalic)
-                style |= SkTypeface::kItalic;
+  sk_sp<SkTypeface> returnTypeface = m_baseTypeface;
 
-            RefPtr<SkTypeface> typeface = adoptRef(FontCache::fontCache()->fontManager()->legacyCreateTypeface(name.c_str(), static_cast<SkTypeface::Style>(style)));
-            syntheticBold = false;
-            syntheticItalic = false;
-            return FontPlatformData(typeface.release(), "", size, syntheticBold, syntheticItalic, orientation);
-        }
+  // Maximum axis count is maximum value for the OpenType USHORT, which is a
+  // 16bit unsigned.  https://www.microsoft.com/typography/otspec/fvar.htm
+  // Variation settings coming from CSS can have duplicate assignments and the
+  // list can be longer than UINT16_MAX, but ignoring this for now, going with a
+  // reasonable upper limit and leaving the deduplication for TODO(drott),
+  // crbug.com/674878 second duplicate value should supersede first..
+  if (variationSettings && variationSettings->size() < UINT16_MAX) {
+    sk_sp<SkFontMgr> fm(SkFontMgr::RefDefault());
+    Vector<SkFontMgr::FontParameters::Axis, 0> axes;
+    axes.reserveCapacity(variationSettings->size());
+    for (size_t i = 0; i < variationSettings->size(); ++i) {
+      SkFontMgr::FontParameters::Axis axis = {
+          atomicStringToFourByteTag(variationSettings->at(i).tag()),
+          SkFloatToScalar(variationSettings->at(i).value())};
+      axes.push_back(axis);
     }
-#endif
-    return FontPlatformData(m_typeface.get(), "", size, bold && !m_typeface->isBold(), italic && !m_typeface->isItalic(), orientation);
-}
 
-PassOwnPtr<FontCustomPlatformData> FontCustomPlatformData::create(SharedBuffer* buffer, String& otsParseMessage)
-{
-    ASSERT_ARG(buffer, buffer);
+    sk_sp<SkTypeface> skVariationFont(fm->createFromStream(
+        m_baseTypeface->openStream(nullptr)->duplicate(),
+        SkFontMgr::FontParameters().setAxes(axes.data(), axes.size())));
 
-    OpenTypeSanitizer sanitizer(buffer);
-    RefPtr<SharedBuffer> transcodeBuffer = sanitizer.sanitize();
-
-    if (!transcodeBuffer) {
-        otsParseMessage = sanitizer.getErrorString();
-        return nullptr; // validation failed.
+    if (skVariationFont) {
+      returnTypeface = skVariationFont;
+    } else {
+      SkString familyName;
+      m_baseTypeface->getFamilyName(&familyName);
+      // TODO: Surface this as a console message?
+      LOG(ERROR) << "Unable for apply variation axis properties for font: "
+                 << familyName.c_str();
     }
-    buffer = transcodeBuffer.get();
+  }
 
-    SkMemoryStream* stream = new SkMemoryStream(buffer->getAsSkData().get());
-#if OS(WIN)
-    RefPtr<SkTypeface> typeface = adoptRef(FontCache::fontCache()->fontManager()->createFromStream(stream));
-#else
-    RefPtr<SkTypeface> typeface = adoptRef(SkTypeface::CreateFromStream(stream));
-#endif
-    if (!typeface)
-        return nullptr;
-
-    return adoptPtr(new FontCustomPlatformData(typeface.release()));
+  return FontPlatformData(returnTypeface, "", size,
+                          bold && !m_baseTypeface->isBold(),
+                          italic && !m_baseTypeface->isItalic(), orientation);
 }
 
-bool FontCustomPlatformData::supportsFormat(const String& format)
-{
-    return equalIgnoringCase(format, "truetype") || equalIgnoringCase(format, "opentype") || OpenTypeSanitizer::supportsFormat(format);
+std::unique_ptr<FontCustomPlatformData> FontCustomPlatformData::create(
+    SharedBuffer* buffer,
+    String& otsParseMessage) {
+  DCHECK(buffer);
+  WebFontDecoder decoder;
+  sk_sp<SkTypeface> typeface = decoder.decode(buffer);
+  if (!typeface) {
+    otsParseMessage = decoder.getErrorString();
+    return nullptr;
+  }
+  return WTF::wrapUnique(
+      new FontCustomPlatformData(std::move(typeface), decoder.decodedSize()));
 }
 
-} // namespace blink
+bool FontCustomPlatformData::supportsFormat(const String& format) {
+  return equalIgnoringCase(format, "truetype") ||
+         equalIgnoringCase(format, "opentype") ||
+         WebFontDecoder::supportsFormat(format);
+}
+
+}  // namespace blink

@@ -7,6 +7,8 @@
 
 #include "base/callback_forward.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/global_request_id.h"
+#include "content/public/common/previews_state.h"
 #include "content/public/common/resource_type.h"
 #include "third_party/WebKit/public/platform/WebPageVisibilityState.h"
 #include "third_party/WebKit/public/platform/WebReferrerPolicy.h"
@@ -17,6 +19,7 @@ class URLRequest;
 }
 
 namespace content {
+class NavigationUIData;
 class ResourceContext;
 class WebContents;
 
@@ -30,6 +33,12 @@ class ResourceRequestInfo {
 
   // Allocates a new, dummy ResourceRequestInfo and associates it with the
   // given URLRequest.
+  //
+  // The RenderView routing ID must correspond to the RenderView of the
+  // RenderFrame, both of which share the same RenderProcess. This may be a
+  // different RenderView than the WebContents' main RenderView. If the
+  // download is not associated with a frame, the IDs can be all -1.
+  //
   // NOTE: Add more parameters if you need to initialize other fields.
   CONTENT_EXPORT static void AllocateForTesting(net::URLRequest* request,
                                                 ResourceType resource_type,
@@ -41,7 +50,7 @@ class ResourceRequestInfo {
                                                 bool parent_is_main_frame,
                                                 bool allow_download,
                                                 bool is_async,
-                                                bool is_using_lofi);
+                                                PreviewsState previews_state);
 
   // Returns the associated RenderFrame for a given process. Returns false, if
   // there is no associated RenderFrame. This method does not rely on the
@@ -51,6 +60,10 @@ class ResourceRequestInfo {
       const net::URLRequest* request,
       int* render_process_id,
       int* render_frame_id);
+
+  // Returns true if the request originated from a Service Worker.
+  CONTENT_EXPORT static bool OriginatedFromServiceWorker(
+      const net::URLRequest* request);
 
   // A callback that returns a pointer to a WebContents. The callback can
   // always be used, but it may return nullptr: if the info used to
@@ -78,11 +91,19 @@ class ResourceRequestInfo {
   // The IPC route identifier for this request (this identifies the RenderView
   // or like-thing in the renderer that the request gets routed to).
   // To get a WebContents, use GetWebContentsGetterForRequest instead.
+  // Don't use this method for new code, as RenderViews are going away.
   virtual int GetRouteID() const = 0;
+
+  // The globally unique identifier for this request.
+  virtual GlobalRequestID GetGlobalRequestID() const = 0;
 
   // The pid of the originating process, if the request is sent on behalf of a
   // another process.  Otherwise it is 0.
   virtual int GetOriginPID() const = 0;
+
+  // Returns the FrameTreeNode ID for this frame. This ID is browser-global and
+  // uniquely identifies a frame that hosts content.
+  virtual int GetFrameTreeNodeId() const = 0;
 
   // The IPC route identifier of the RenderFrame.
   // To get a WebContents, use GetWebContentsGetterForRequest instead.
@@ -138,8 +159,13 @@ class ResourceRequestInfo {
   // Whether this is a download.
   virtual bool IsDownload() const = 0;
 
-  // Whether this request if using Lo-Fi mode.
-  virtual bool IsUsingLoFi() const = 0;
+  // Returns the current state of Previews.
+  virtual PreviewsState GetPreviewsState() const = 0;
+
+  // PlzNavigate
+  // Only used for navigations. Returns opaque data set by the embedder on the
+  // UI thread at the beginning of navigation.
+  virtual NavigationUIData* GetNavigationUIData() const = 0;
 
  protected:
   virtual ~ResourceRequestInfo() {}

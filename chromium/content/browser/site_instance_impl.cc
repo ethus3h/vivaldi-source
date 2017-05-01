@@ -27,8 +27,9 @@ SiteInstanceImpl::SiteInstanceImpl(BrowsingInstance* browsing_instance)
     : id_(next_site_instance_id_++),
       active_frame_count_(0),
       browsing_instance_(browsing_instance),
-      process_(NULL),
-      has_site_(false) {
+      process_(nullptr),
+      has_site_(false),
+      is_default_subframe_site_instance_(false) {
   DCHECK(browsing_instance);
 }
 
@@ -42,8 +43,22 @@ SiteInstanceImpl::~SiteInstanceImpl() {
   // the BrowsingInstance.  Any future visits to a page from this site
   // (within the same BrowsingInstance) can safely create a new SiteInstance.
   if (has_site_)
-    browsing_instance_->UnregisterSiteInstance(
-        static_cast<SiteInstance*>(this));
+    browsing_instance_->UnregisterSiteInstance(this);
+}
+
+scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::Create(
+    BrowserContext* browser_context) {
+  return make_scoped_refptr(
+      new SiteInstanceImpl(new BrowsingInstance(browser_context)));
+}
+
+scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForURL(
+    BrowserContext* browser_context,
+    const GURL& url) {
+  // This will create a new SiteInstance and BrowsingInstance.
+  scoped_refptr<BrowsingInstance> instance(
+      new BrowsingInstance(browser_context));
+  return instance->GetSiteInstanceForURL(url);
 }
 
 int32_t SiteInstanceImpl::GetId() {
@@ -67,6 +82,81 @@ bool SiteInstanceImpl::HasProcess() const {
   return false;
 }
 
+namespace {
+
+const void* const kDefaultSubframeProcessHostHolderKey =
+    &kDefaultSubframeProcessHostHolderKey;
+
+class DefaultSubframeProcessHostHolder : public base::SupportsUserData::Data,
+                                         public RenderProcessHostObserver {
+ public:
+  explicit DefaultSubframeProcessHostHolder(BrowserContext* browser_context)
+      : browser_context_(browser_context) {}
+  ~DefaultSubframeProcessHostHolder() override {}
+
+  // Gets the correct render process to use for this SiteInstance.
+  RenderProcessHost* GetProcessHost(SiteInstance* site_instance,
+                                    bool is_for_guests_only) {
+    StoragePartition* default_partition =
+        BrowserContext::GetDefaultStoragePartition(browser_context_);
+    StoragePartition* partition =
+        BrowserContext::GetStoragePartition(browser_context_, site_instance);
+
+    // Is this the default storage partition? If it isn't, then just give it its
+    // own non-shared process.
+    if (partition != default_partition || is_for_guests_only) {
+      RenderProcessHostImpl* host = new RenderProcessHostImpl(
+          browser_context_, static_cast<StoragePartitionImpl*>(partition),
+          is_for_guests_only);
+      host->SetIsNeverSuitableForReuse();
+      return host;
+    }
+
+    if (host_) {
+      // If we already have a shared host for the default storage partition, use
+      // it.
+      return host_;
+    }
+
+    host_ = new RenderProcessHostImpl(
+        browser_context_, static_cast<StoragePartitionImpl*>(partition),
+        false /* for guests only */);
+    host_->SetIsNeverSuitableForReuse();
+    host_->AddObserver(this);
+
+    return host_;
+  }
+
+  void RenderProcessHostDestroyed(RenderProcessHost* host) override {
+    DCHECK_EQ(host_, host);
+    host_->RemoveObserver(this);
+    host_ = nullptr;
+  }
+
+ private:
+  BrowserContext* browser_context_;
+
+  // The default subframe render process used for the default storage partition
+  // of this BrowserContext.
+  RenderProcessHostImpl* host_ = nullptr;
+};
+
+}  // namespace
+
+RenderProcessHost* SiteInstanceImpl::GetDefaultSubframeProcessHost(
+    BrowserContext* browser_context,
+    bool is_for_guests_only) {
+  DefaultSubframeProcessHostHolder* holder =
+      static_cast<DefaultSubframeProcessHostHolder*>(
+          browser_context->GetUserData(&kDefaultSubframeProcessHostHolderKey));
+  if (!holder) {
+    holder = new DefaultSubframeProcessHostHolder(browser_context);
+    browser_context->SetUserData(kDefaultSubframeProcessHostHolderKey, holder);
+  }
+
+  return holder->GetProcessHost(this, is_for_guests_only);
+}
+
 RenderProcessHost* SiteInstanceImpl::GetProcess() {
   // TODO(erikkay) It would be nice to ensure that the renderer type had been
   // properly set before we get here.  The default tab creation case winds up
@@ -78,6 +168,7 @@ RenderProcessHost* SiteInstanceImpl::GetProcess() {
   // Create a new process if ours went away or was reused.
   if (!process_) {
     BrowserContext* browser_context = browsing_instance_->browser_context();
+    bool is_for_guests_only = site_.SchemeIs(kGuestScheme);
 
     // If we should use process-per-site mode (either in general or for the
     // given site), then look for an existing RenderProcessHost for the site.
@@ -86,6 +177,12 @@ RenderProcessHost* SiteInstanceImpl::GetProcess() {
     if (use_process_per_site) {
       process_ = RenderProcessHostImpl::GetProcessHostForSite(browser_context,
                                                               site_);
+    }
+
+    if (!process_ && IsDefaultSubframeSiteInstance() &&
+        SiteIsolationPolicy::IsTopDocumentIsolationEnabled()) {
+      process_ =
+          GetDefaultSubframeProcessHost(browser_context, is_for_guests_only);
     }
 
     // If not (or if none found), see if we should reuse an existing process.
@@ -104,9 +201,8 @@ RenderProcessHost* SiteInstanceImpl::GetProcess() {
         StoragePartitionImpl* partition =
             static_cast<StoragePartitionImpl*>(
                 BrowserContext::GetStoragePartition(browser_context, this));
-        process_ = new RenderProcessHostImpl(browser_context,
-                                             partition,
-                                             site_.SchemeIs(kGuestScheme));
+        process_ = new RenderProcessHostImpl(browser_context, partition,
+                                             is_for_guests_only);
       }
     }
     CHECK(process_);
@@ -177,7 +273,8 @@ bool SiteInstanceImpl::HasRelatedSiteInstance(const GURL& url) {
   return browsing_instance_->HasSiteInstance(url);
 }
 
-SiteInstance* SiteInstanceImpl::GetRelatedSiteInstance(const GURL& url) {
+scoped_refptr<SiteInstance> SiteInstanceImpl::GetRelatedSiteInstance(
+    const GURL& url) {
   return browsing_instance_->GetSiteInstanceForURL(url);
 }
 
@@ -211,11 +308,20 @@ bool SiteInstanceImpl::HasWrongProcessForURL(const GURL& url) {
       GetProcess(), browsing_instance_->browser_context(), site_url);
 }
 
+scoped_refptr<SiteInstanceImpl>
+SiteInstanceImpl::GetDefaultSubframeSiteInstance() {
+  return browsing_instance_->GetDefaultSubframeSiteInstance();
+}
+
 bool SiteInstanceImpl::RequiresDedicatedProcess() {
   if (!has_site_)
     return false;
-  return SiteInstanceImpl::DoesSiteRequireDedicatedProcess(GetBrowserContext(),
-                                                           site_);
+
+  return DoesSiteRequireDedicatedProcess(GetBrowserContext(), site_);
+}
+
+bool SiteInstanceImpl::IsDefaultSubframeSiteInstance() const {
+  return is_default_subframe_site_instance_;
 }
 
 void SiteInstanceImpl::IncrementActiveFrameCount() {
@@ -223,8 +329,10 @@ void SiteInstanceImpl::IncrementActiveFrameCount() {
 }
 
 void SiteInstanceImpl::DecrementActiveFrameCount() {
-  if (--active_frame_count_ == 0)
-    FOR_EACH_OBSERVER(Observer, observers_, ActiveFrameCountIsZero(this));
+  if (--active_frame_count_ == 0) {
+    for (auto& observer : observers_)
+      observer.ActiveFrameCountIsZero(this);
+  }
 }
 
 void SiteInstanceImpl::IncrementRelatedActiveContentsCount() {
@@ -253,17 +361,16 @@ BrowserContext* SiteInstanceImpl::GetBrowserContext() const {
 }
 
 // static
-SiteInstance* SiteInstance::Create(BrowserContext* browser_context) {
-  return new SiteInstanceImpl(new BrowsingInstance(browser_context));
+scoped_refptr<SiteInstance> SiteInstance::Create(
+    BrowserContext* browser_context) {
+  return SiteInstanceImpl::Create(browser_context);
 }
 
 // static
-SiteInstance* SiteInstance::CreateForURL(BrowserContext* browser_context,
-                                         const GURL& url) {
-  // This will create a new SiteInstance and BrowsingInstance.
-  scoped_refptr<BrowsingInstance> instance(
-      new BrowsingInstance(browser_context));
-  return instance->GetSiteInstanceForURL(url);
+scoped_refptr<SiteInstance> SiteInstance::CreateForURL(
+    BrowserContext* browser_context,
+    const GURL& url) {
+  return SiteInstanceImpl::CreateForURL(browser_context, url);
 }
 
 // static
@@ -314,31 +421,18 @@ GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
     return real_url;
 
   GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin(url);
 
   // If the url has a host, then determine the site.
-  if (url.has_host()) {
-    // Only keep the scheme and registered domain as given by GetOrigin.  This
-    // may also include a port, which we need to drop.
-    GURL site = url.GetOrigin();
-
-    // Remove port, if any.
-    if (site.has_port()) {
-      GURL::Replacements rep;
-      rep.ClearPort();
-      site = site.ReplaceComponents(rep);
-    }
-
-    // If this URL has a registered domain, we only want to remember that part.
-    std::string domain =
-        net::registry_controlled_domains::GetDomainAndRegistry(
-            url,
-            net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-    if (!domain.empty()) {
-      GURL::Replacements rep;
-      rep.SetHostStr(domain);
-      site = site.ReplaceComponents(rep);
-    }
-    return site;
+  if (!origin.host().empty()) {
+    // Only keep the scheme and registered domain of |origin|.
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
   }
 
   // If there is no host but there is a scheme, return the scheme.
@@ -361,15 +455,18 @@ GURL SiteInstanceImpl::GetEffectiveURL(BrowserContext* browser_context,
 // static
 bool SiteInstanceImpl::DoesSiteRequireDedicatedProcess(
     BrowserContext* browser_context,
-    const GURL& effective_url) {
+    const GURL& url) {
   // If --site-per-process is enabled, site isolation is enabled everywhere.
   if (SiteIsolationPolicy::UseDedicatedProcessesForAllSites())
     return true;
 
-  // Let the content embedder enable site isolation for specific URLs.
+  // Let the content embedder enable site isolation for specific URLs. Use the
+  // canonical site url for this check, so that schemes with nested origins
+  // (blob and filesystem) work properly.
+  GURL site_url = GetSiteForURL(browser_context, url);
   if (GetContentClient()->IsSupplementarySiteIsolationModeEnabled() &&
       GetContentClient()->browser()->DoesSiteRequireDedicatedProcess(
-          browser_context, effective_url)) {
+          browser_context, site_url)) {
     return true;
   }
 
@@ -379,19 +476,21 @@ bool SiteInstanceImpl::DoesSiteRequireDedicatedProcess(
 void SiteInstanceImpl::RenderProcessHostDestroyed(RenderProcessHost* host) {
   DCHECK_EQ(process_, host);
   process_->RemoveObserver(this);
-  process_ = NULL;
+  process_ = nullptr;
 }
 
 void SiteInstanceImpl::RenderProcessWillExit(RenderProcessHost* host) {
   // TODO(nick): http://crbug.com/575400 - RenderProcessWillExit might not serve
   // any purpose here.
-  FOR_EACH_OBSERVER(Observer, observers_, RenderProcessGone(this));
+  for (auto& observer : observers_)
+    observer.RenderProcessGone(this);
 }
 
 void SiteInstanceImpl::RenderProcessExited(RenderProcessHost* host,
                                            base::TerminationStatus status,
                                            int exit_code) {
-  FOR_EACH_OBSERVER(Observer, observers_, RenderProcessGone(this));
+  for (auto& observer : observers_)
+    observer.RenderProcessGone(this);
 }
 
 void SiteInstanceImpl::LockToOrigin() {

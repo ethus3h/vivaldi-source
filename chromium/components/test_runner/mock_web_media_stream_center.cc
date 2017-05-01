@@ -16,8 +16,6 @@
 #include "third_party/WebKit/public/platform/WebMediaStreamCenterClient.h"
 #include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
 #include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrackSourcesRequest.h"
-#include "third_party/WebKit/public/platform/WebSourceInfo.h"
 #include "third_party/WebKit/public/platform/WebVector.h"
 
 namespace test_runner {
@@ -37,15 +35,6 @@ class MockWebAudioDestinationConsumer
 };
 
 }  // namespace
-
-MockWebMediaStreamCenter::MockWebMediaStreamCenter(
-    blink::WebMediaStreamCenterClient* client,
-    TestInterfaces* interfaces)
-    : interfaces_(interfaces) {
-}
-
-MockWebMediaStreamCenter::~MockWebMediaStreamCenter() {
-}
 
 void MockWebMediaStreamCenter::didEnableMediaStreamTrack(
     const blink::WebMediaStreamTrack& track) {

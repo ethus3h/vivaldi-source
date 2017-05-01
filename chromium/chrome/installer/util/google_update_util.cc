@@ -16,7 +16,6 @@
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/win_util.h"
-#include "base/win/windows_version.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/google_update_settings.h"
@@ -153,9 +152,8 @@ void ElevateIfNeededToReenableUpdates() {
     return;
   }
   installer::ProductState product_state;
-  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   const bool system_install = !InstallUtil::IsPerUserInstall(chrome_exe);
-  if (!product_state.Initialize(system_install, dist))
+  if (!product_state.Initialize(system_install))
     return;
   base::FilePath exe_path(product_state.GetSetupPath());
   if (exe_path.empty() || !base::PathExists(exe_path)) {
@@ -165,8 +163,7 @@ void ElevateIfNeededToReenableUpdates() {
 
   base::CommandLine cmd(exe_path);
   cmd.AppendSwitch(installer::switches::kReenableAutoupdates);
-  installer::Product product(dist);
-  product.InitializeFromUninstallCommand(product_state.uninstall_command());
+  installer::Product product(BrowserDistribution::GetDistribution());
   product.AppendProductFlags(&cmd);
   if (system_install)
     cmd.AppendSwitch(installer::switches::kSystemLevel);
@@ -178,12 +175,10 @@ void ElevateIfNeededToReenableUpdates() {
   base::LaunchOptions launch_options;
   launch_options.force_breakaway_from_job_ = true;
 
-  if (base::win::GetVersion() >= base::win::VERSION_VISTA &&
-      base::win::UserAccountControlIsEnabled()) {
+  if (base::win::UserAccountControlIsEnabled())
     base::LaunchElevatedProcess(cmd, launch_options);
-  } else {
+  else
     base::LaunchProcess(cmd, launch_options);
-  }
 }
 
 }  // namespace google_update

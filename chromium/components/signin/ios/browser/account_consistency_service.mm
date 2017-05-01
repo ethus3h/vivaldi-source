@@ -4,16 +4,16 @@
 
 #include "components/signin/ios/browser/account_consistency_service.h"
 
-#include <WebKit/WebKit.h>
+#import <WebKit/WebKit.h>
 
 #import "base/ios/weak_nsobject.h"
 #include "base/logging.h"
 #import "base/mac/foundation_util.h"
 #include "base/macros.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/strings/sys_string_conversions.h"
 #include "components/google/core/browser/google_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/browser/signin_header_helper.h"
@@ -390,7 +390,7 @@ WKWebView* AccountConsistencyService::GetWKWebView() {
     return nil;
   }
   if (!web_view_) {
-    web_view_.reset(CreateWKWebView());
+    web_view_.reset([BuildWKWebView() retain]);
     navigation_delegate_.reset([[AccountConsistencyNavigationDelegate alloc]
         initWithCallback:base::Bind(&AccountConsistencyService::
                                         FinishedApplyingCookieRequest,
@@ -400,8 +400,8 @@ WKWebView* AccountConsistencyService::GetWKWebView() {
   return web_view_.get();
 }
 
-WKWebView* AccountConsistencyService::CreateWKWebView() {
-  return web::CreateWKWebView(CGRectZero, browser_state_);
+WKWebView* AccountConsistencyService::BuildWKWebView() {
+  return web::BuildWKWebView(CGRectZero, browser_state_);
 }
 
 void AccountConsistencyService::ResetWKWebView() {
@@ -452,6 +452,7 @@ void AccountConsistencyService::OnAddAccountToCookieCompleted(
 
 void AccountConsistencyService::OnGaiaAccountsInCookieUpdated(
     const std::vector<gaia::ListedAccount>& accounts,
+    const std::vector<gaia::ListedAccount>& signed_out_accounts,
     const GoogleServiceAuthError& error) {
   AddChromeConnectedCookies();
 }

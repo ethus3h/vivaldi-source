@@ -35,111 +35,155 @@
 #include "core/CoreExport.h"
 #include "core/dom/DOMHighResTimeStamp.h"
 #include "core/events/EventTarget.h"
+#include "core/loader/FrameLoaderTypes.h"
 #include "core/timing/PerformanceEntry.h"
+#include "core/timing/PerformanceNavigationTiming.h"
+#include "core/timing/PerformancePaintTiming.h"
 #include "platform/Timer.h"
 #include "platform/heap/Handle.h"
-#include "wtf/RefCounted.h"
-#include "wtf/RefPtr.h"
-#include "wtf/text/WTFString.h"
+#include "wtf/Forward.h"
+#include "wtf/HashSet.h"
+#include "wtf/ListHashSet.h"
+#include "wtf/Vector.h"
 
 namespace blink {
 
-class Document;
 class ExceptionState;
+class LocalFrame;
 class PerformanceObserver;
 class PerformanceTiming;
+class ResourceResponse;
 class ResourceTimingInfo;
 class UserTiming;
 
 using PerformanceEntryVector = HeapVector<Member<PerformanceEntry>>;
 using PerformanceObservers = HeapListHashSet<Member<PerformanceObserver>>;
 
-class CORE_EXPORT PerformanceBase : public RefCountedGarbageCollectedEventTargetWithInlineData<PerformanceBase> {
-    REFCOUNTED_GARBAGE_COLLECTED_EVENT_TARGET(PerformanceBase);
-public:
-    ~PerformanceBase() override;
+class CORE_EXPORT PerformanceBase : public EventTargetWithInlineData {
+  friend class PerformanceBaseTest;
 
-    const AtomicString& interfaceName() const override;
+ public:
+  ~PerformanceBase() override;
 
-    virtual PerformanceTiming* timing() const;
+  const AtomicString& interfaceName() const override;
 
-    // Reduce the resolution to 5µs to prevent timing attacks. See:
-    // http://www.w3.org/TR/hr-time-2/#privacy-security
-    static double clampTimeResolution(double timeSeconds);
+  virtual PerformanceTiming* timing() const;
 
-    // Translate given platform monotonic time in seconds into a high resolution
-    // DOMHighResTimeStamp in milliseconds. The result timestamp is relative to
-    // document's time origin and has a time resolution that is safe for
-    // exposing to web.
-    DOMHighResTimeStamp monotonicTimeToDOMHighResTimeStamp(double) const;
-    DOMHighResTimeStamp now() const;
+  virtual void updateLongTaskInstrumentation() {}
 
-    double timeOrigin() const { return m_timeOrigin; }
+  // Reduce the resolution to 5µs to prevent timing attacks. See:
+  // http://www.w3.org/TR/hr-time-2/#privacy-security
+  static double clampTimeResolution(double timeSeconds);
 
-    PerformanceEntryVector getEntries() const;
-    PerformanceEntryVector getEntriesByType(const String& entryType);
-    PerformanceEntryVector getEntriesByName(const String& name, const String& entryType);
+  // monotonicTime needs to be no smaller than timeOrigin.
+  static DOMHighResTimeStamp monotonicTimeToDOMHighResTimeStamp(
+      double timeOrigin,
+      double monotonicTime);
 
-    void clearResourceTimings();
-    void setResourceTimingBufferSize(unsigned);
+  // Translate given platform monotonic time in seconds into a high resolution
+  // DOMHighResTimeStamp in milliseconds. The result timestamp is relative to
+  // document's time origin and has a time resolution that is safe for
+  // exposing to web. The monotonic time provided needs to be no smaller than
+  // document's time origin.
+  DOMHighResTimeStamp monotonicTimeToDOMHighResTimeStamp(double) const;
+  DOMHighResTimeStamp now() const;
 
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(webkitresourcetimingbufferfull);
+  double timeOrigin() const { return m_timeOrigin; }
 
-    void clearFrameTimings();
-    void setFrameTimingBufferSize(unsigned);
+  PerformanceEntryVector getEntries() const;
+  PerformanceEntryVector getEntriesByType(const String& entryType);
+  PerformanceEntryVector getEntriesByName(const String& name,
+                                          const String& entryType);
 
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(frametimingbufferfull);
+  void clearResourceTimings();
+  void setResourceTimingBufferSize(unsigned);
 
-    void addResourceTiming(const ResourceTimingInfo&);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull);
 
-    void addRenderTiming(Document*, unsigned, double, double);
+  void clearFrameTimings();
+  void setFrameTimingBufferSize(unsigned);
 
-    void addCompositeTiming(Document*, unsigned, double);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(frametimingbufferfull);
 
-    void mark(const String& markName, ExceptionState&);
-    void clearMarks(const String& markName);
+  void addLongTaskTiming(double startTime,
+                         double endTime,
+                         const String& name,
+                         const String& culpritFrameSrc,
+                         const String& culpritFrameId,
+                         const String& culpritFrameName);
 
-    void measure(const String& measureName, const String& startMark, const String& endMark, ExceptionState&);
-    void clearMeasures(const String& measureName);
+  void addResourceTiming(const ResourceTimingInfo&);
 
-    void unregisterPerformanceObserver(PerformanceObserver&);
-    void registerPerformanceObserver(PerformanceObserver&);
-    void updatePerformanceObserverFilterOptions();
-    void activateObserver(PerformanceObserver&);
-    void resumeSuspendedObservers();
+  void addNavigationTiming(LocalFrame*);
 
-    DECLARE_VIRTUAL_TRACE();
+  void addFirstPaintTiming(double startTime);
 
-protected:
+  void addFirstContentfulPaintTiming(double startTime);
 
-    explicit PerformanceBase(double timeOrigin);
-    bool isResourceTimingBufferFull();
-    void addResourceTimingBuffer(PerformanceEntry&);
+  void mark(const String& markName, ExceptionState&);
+  void clearMarks(const String& markName);
 
-    bool isFrameTimingBufferFull();
-    void addFrameTimingBuffer(PerformanceEntry&);
+  void measure(const String& measureName,
+               const String& startMark,
+               const String& endMark,
+               ExceptionState&);
+  void clearMeasures(const String& measureName);
 
-    void notifyObserversOfEntry(PerformanceEntry&);
-    bool hasObserverFor(PerformanceEntry::EntryType);
+  void unregisterPerformanceObserver(PerformanceObserver&);
+  void registerPerformanceObserver(PerformanceObserver&);
+  void updatePerformanceObserverFilterOptions();
+  void activateObserver(PerformanceObserver&);
+  void resumeSuspendedObservers();
 
-    void deliverObservationsTimerFired(Timer<PerformanceBase>*);
+  DECLARE_VIRTUAL_TRACE();
 
-    PerformanceEntryVector m_frameTimingBuffer;
-    unsigned m_frameTimingBufferSize;
-    PerformanceEntryVector m_resourceTimingBuffer;
-    unsigned m_resourceTimingBufferSize;
-    double m_timeOrigin;
+ private:
+  static PerformanceNavigationTiming::NavigationType getNavigationType(
+      NavigationType,
+      const Document*);
 
-    Member<UserTiming> m_userTiming;
+  static bool allowsTimingRedirect(const Vector<ResourceResponse>&,
+                                   const ResourceResponse&,
+                                   const SecurityOrigin&,
+                                   ExecutionContext*);
 
-    PerformanceEntryTypeMask m_observerFilterOptions;
-    PerformanceObservers m_observers;
-    PerformanceObservers m_activeObservers;
-    PerformanceObservers m_suspendedObservers;
-    Timer<PerformanceBase> m_deliverObservationsTimer;
+  static bool passesTimingAllowCheck(const ResourceResponse&,
+                                     const SecurityOrigin&,
+                                     const AtomicString&,
+                                     ExecutionContext*);
+
+  void addPaintTiming(PerformancePaintTiming::PaintType, double startTime);
+
+ protected:
+  explicit PerformanceBase(double timeOrigin);
+
+  bool isResourceTimingBufferFull();
+  void addResourceTimingBuffer(PerformanceEntry&);
+
+  bool isFrameTimingBufferFull();
+  void addFrameTimingBuffer(PerformanceEntry&);
+
+  void notifyObserversOfEntry(PerformanceEntry&);
+  bool hasObserverFor(PerformanceEntry::EntryType) const;
+
+  void deliverObservationsTimerFired(TimerBase*);
+
+  PerformanceEntryVector m_frameTimingBuffer;
+  unsigned m_frameTimingBufferSize;
+  PerformanceEntryVector m_resourceTimingBuffer;
+  unsigned m_resourceTimingBufferSize;
+  Member<PerformanceEntry> m_navigationTiming;
+  Member<UserTiming> m_userTiming;
+
+  double m_timeOrigin;
+
+  PerformanceEntryTypeMask m_observerFilterOptions;
+  PerformanceObservers m_observers;
+  PerformanceObservers m_activeObservers;
+  PerformanceObservers m_suspendedObservers;
+  Timer<PerformanceBase> m_deliverObservationsTimer;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // PerformanceBase_h
+#endif  // PerformanceBase_h

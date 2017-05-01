@@ -4,22 +4,12 @@
 
 #include "chrome/browser/ui/search/search_tab_helper_delegate.h"
 
-void SearchTabHelperDelegate::NavigateOnThumbnailClick(
-    const GURL& url,
-    WindowOpenDisposition disposition,
-    content::WebContents* source_contents) {
-}
-
 void SearchTabHelperDelegate::OnWebContentsInstantSupportDisabled(
     const content::WebContents* web_contents) {
 }
 
 OmniboxView* SearchTabHelperDelegate::GetOmniboxView() {
-  return NULL;
-}
-
-std::set<std::string> SearchTabHelperDelegate::GetOpenUrls() {
-  return std::set<std::string>();
+  return nullptr;
 }
 
 SearchTabHelperDelegate::~SearchTabHelperDelegate() {

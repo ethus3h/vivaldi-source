@@ -22,14 +22,16 @@ extern const char kReturnVariationInfo[];
 // Strings.
 // Must match the constants used in the resource files.
 extern const char kApplicationLabel[];
+extern const char kARC[];
 extern const char kBlinkVersion[];
-extern const char kBuildID[];
-extern const char kBuildIDName[];
 extern const char kCL[];
 extern const char kCommandLine[];
 extern const char kCommandLineName[];
 extern const char kCompany[];
 extern const char kCopyright[];
+#if defined(OS_CHROMEOS)
+extern const char kCustomizationId[];
+#endif
 extern const char kExecutablePath[];
 extern const char kExecutablePathName[];
 extern const char kFlashPlugin[];

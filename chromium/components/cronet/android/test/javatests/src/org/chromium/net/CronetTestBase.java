@@ -6,13 +6,18 @@ package org.chromium.net;
 
 import android.test.AndroidTestCase;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.PathUtils;
+import org.chromium.net.impl.CronetEngineBase;
+import org.chromium.net.impl.JavaCronetEngine;
+import org.chromium.net.impl.JavaCronetProvider;
+import org.chromium.net.impl.UserAgent;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
-import java.lang.reflect.Method;
+import java.lang.reflect.AnnotatedElement;
 import java.net.URL;
 
 /**
@@ -20,6 +25,7 @@ import java.net.URL;
  */
 public class CronetTestBase extends AndroidTestCase {
     private static final String PRIVATE_DATA_DIRECTORY_SUFFIX = "cronet_test";
+    private static final String LOOPBACK_ADDRESS = "127.0.0.1";
 
     private CronetTestFramework mCronetTestFramework;
     // {@code true} when test is being run against system HttpURLConnection implementation.
@@ -29,7 +35,10 @@ public class CronetTestBase extends AndroidTestCase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX, getContext());
+        System.loadLibrary("cronet_tests");
+        ContextUtils.initApplicationContext(getContext().getApplicationContext());
+        ContextUtils.initApplicationContextForNative();
+        PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
         CronetTestFramework.prepareTestStorage(getContext());
     }
 
@@ -53,7 +62,7 @@ public class CronetTestBase extends AndroidTestCase {
      * and loads the given URL. The URL can be null.
      */
     protected CronetTestFramework startCronetTestFrameworkWithUrlAndCronetEngineBuilder(
-            String url, CronetEngine.Builder builder) {
+            String url, ExperimentalCronetEngine.Builder builder) {
         mCronetTestFramework = new CronetTestFramework(url, null, getContext(), builder);
         return mCronetTestFramework;
     }
@@ -78,18 +87,6 @@ public class CronetTestBase extends AndroidTestCase {
     }
 
     /**
-     * Starts the CronetTest framework for the legacy API.
-     * @param url if non-null, a request will be made with that url.
-     */
-    protected CronetTestFramework startCronetTestFrameworkForLegacyApi(String url) {
-        String[] commandLineArgs = {
-                CronetTestFramework.LIBRARY_INIT_KEY, CronetTestFramework.LibraryInitType.LEGACY};
-        mCronetTestFramework =
-                startCronetTestFrameworkWithUrlAndCommandLineArgs(url, commandLineArgs);
-        return mCronetTestFramework;
-    }
-
-    /**
      * Returns {@code true} when test is being run against system HttpURLConnection implementation.
      */
     protected boolean testingSystemHttpURLConnection() {
@@ -110,7 +107,7 @@ public class CronetTestBase extends AndroidTestCase {
         String packageName = getClass().getPackage().getName();
         if (packageName.equals("org.chromium.net.urlconnection")) {
             try {
-                Method method = getClass().getMethod(getName(), (Class[]) null);
+                AnnotatedElement method = getClass().getMethod(getName(), (Class[]) null);
                 if (method.isAnnotationPresent(CompareDefaultWithCronet.class)) {
                     // Run with the default HttpURLConnection implementation first.
                     mTestingSystemHttpURLConnection = true;
@@ -132,12 +129,16 @@ public class CronetTestBase extends AndroidTestCase {
             }
         } else if (packageName.equals("org.chromium.net")) {
             try {
-                Method method = getClass().getMethod(getName(), (Class[]) null);
+                AnnotatedElement method = getClass().getMethod(getName(), (Class[]) null);
                 super.runTest();
                 if (!method.isAnnotationPresent(OnlyRunNativeCronet.class)) {
                     if (mCronetTestFramework != null) {
-                        mCronetTestFramework.mCronetEngine =
-                                new JavaCronetEngine(UserAgent.from(getContext()));
+                        ExperimentalCronetEngine.Builder builder = createJavaEngineBuilder();
+                        builder.setUserAgent(UserAgent.from(getContext()));
+                        mCronetTestFramework.mCronetEngine = (CronetEngineBase) builder.build();
+                        // Make sure that the instantiated engine is JavaCronetEngine.
+                        assert mCronetTestFramework.mCronetEngine.getClass()
+                                == JavaCronetEngine.class;
                     }
                     mTestingJavaImpl = true;
                     super.runTest();
@@ -151,28 +152,37 @@ public class CronetTestBase extends AndroidTestCase {
     }
 
     /**
-     * Registers test host resolver for testing with the new API.
+     * Creates and returns {@link ExperimentalCronetEngine.Builder} that creates
+     * Java (platform) based {@link CronetEngine.Builder}.
+     *
+     * @return the {@code CronetEngine.Builder} that builds Java-based {@code Cronet engine}.
      */
-    protected void registerHostResolver(CronetTestFramework framework) {
-        registerHostResolver(framework, false);
+    ExperimentalCronetEngine.Builder createJavaEngineBuilder() {
+        return (ExperimentalCronetEngine.Builder) new JavaCronetProvider(mContext).createBuilder();
     }
 
-    /**
-     * Registers test host resolver.
-     *
-     * @param isLegacyAPI true if the test should use the legacy API.
-     */
-    protected void registerHostResolver(CronetTestFramework framework, boolean isLegacyAPI) {
-        long urlRequestContextAdapter;
-        if (isLegacyAPI) {
-            urlRequestContextAdapter = ((ChromiumUrlRequestFactory) framework.mRequestFactory)
-                                               .getRequestContext()
-                                               .getUrlRequestContextAdapter();
-        } else {
-            urlRequestContextAdapter = ((CronetUrlRequestContext) framework.mCronetEngine)
-                                               .getUrlRequestContextAdapter();
+    public void assertResponseEquals(UrlResponseInfo expected, UrlResponseInfo actual) {
+        assertEquals(expected.getAllHeaders(), actual.getAllHeaders());
+        assertEquals(expected.getAllHeadersAsList(), actual.getAllHeadersAsList());
+        assertEquals(expected.getHttpStatusCode(), actual.getHttpStatusCode());
+        assertEquals(expected.getHttpStatusText(), actual.getHttpStatusText());
+        assertEquals(expected.getUrlChain(), actual.getUrlChain());
+        assertEquals(expected.getUrl(), actual.getUrl());
+        // Transferred bytes and proxy server are not supported in pure java
+        if (!(mCronetTestFramework.mCronetEngine instanceof JavaCronetEngine)) {
+            assertEquals(expected.getReceivedByteCount(), actual.getReceivedByteCount());
+            assertEquals(expected.getProxyServer(), actual.getProxyServer());
+            // This is a place where behavior intentionally differs between native and java
+            assertEquals(expected.getNegotiatedProtocol(), actual.getNegotiatedProtocol());
         }
-        NativeTestServer.registerHostResolverProc(urlRequestContextAdapter, isLegacyAPI);
+    }
+
+    public static void assertContains(String expectedSubstring, String actualString) {
+        assertNotNull(actualString);
+        if (!actualString.contains(expectedSubstring)) {
+            fail("String [" + actualString + "] doesn't contain substring [" + expectedSubstring
+                    + "]");
+        }
     }
 
     @Target(ElementType.METHOD)

@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.physicalweb;
 
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -23,23 +25,30 @@ import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
 
+import org.chromium.base.Log;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeApplication;
+import org.chromium.components.location.LocationUtils;
 
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
+import java.util.List;
 
 /**
  * This activity displays a list of nearby URLs as stored in the {@link UrlManager}.
  * This activity does not and should not rely directly or indirectly on the native library.
  */
-public class ListUrlsActivity extends AppCompatActivity
-        implements AdapterView.OnItemClickListener, SwipeRefreshWidget.OnRefreshListener {
+public class ListUrlsActivity extends AppCompatActivity implements AdapterView.OnItemClickListener,
+        SwipeRefreshWidget.OnRefreshListener, UrlManager.Listener {
     public static final String REFERER_KEY = "referer";
     public static final int NOTIFICATION_REFERER = 1;
     public static final int OPTIN_REFERER = 2;
+    public static final int PREFERENCE_REFERER = 3;
+    public static final int DIAGNOSTICS_REFERER = 4;
+    public static final int REFERER_BOUNDARY = 5;
     private static final String TAG = "PhysicalWeb";
+
+    private final List<PwsResult> mPwsResults = new ArrayList<>();
 
     private Context mContext;
     private NearbyUrlsAdapter mAdapter;
@@ -51,6 +60,7 @@ public class ListUrlsActivity extends AppCompatActivity
     private boolean mIsInitialDisplayRecorded;
     private boolean mIsRefreshing;
     private boolean mIsRefreshUserInitiated;
+    private NearbyForegroundSubscription mNearbyForegroundSubscription;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,52 +84,72 @@ public class ListUrlsActivity extends AppCompatActivity
                 (SwipeRefreshWidget) findViewById(R.id.physical_web_swipe_refresh_widget);
         mSwipeRefreshWidget.setOnRefreshListener(this);
 
-        mPwsClient = new PwsClientImpl();
+        mPwsClient = new PwsClientImpl(this);
         int referer = getIntent().getIntExtra(REFERER_KEY, 0);
-        if (savedInstanceState == null  // Ensure this is a newly-created activity.
-                && referer == NOTIFICATION_REFERER) {
-            PhysicalWebUma.onNotificationPressed(this);
+        if (savedInstanceState == null) {  // Ensure this is a newly-created activity.
+            PhysicalWebUma.onActivityReferral(referer);
         }
         mIsInitialDisplayRecorded = false;
         mIsRefreshing = false;
         mIsRefreshUserInitiated = false;
+        mNearbyForegroundSubscription = new NearbyForegroundSubscription(this);
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        Drawable tintedRefresh = ContextCompat.getDrawable(this, R.drawable.btn_toolbar_reload);
         int tintColor = ContextCompat.getColor(this, R.color.light_normal_color);
+
+        Drawable tintedRefresh = ContextCompat.getDrawable(this, R.drawable.btn_toolbar_reload);
         tintedRefresh.setColorFilter(tintColor, PorterDuff.Mode.SRC_IN);
+        menu.add(0, R.id.menu_id_refresh, 1, R.string.physical_web_refresh)
+                .setIcon(tintedRefresh)
+                .setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_ALWAYS);
 
-        MenuItem refreshItem = menu.add(R.string.physical_web_refresh);
-        refreshItem.setIcon(tintedRefresh);
-        refreshItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
-        refreshItem.setOnMenuItemClickListener(new MenuItem.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
-                startRefresh(true, false);
-                return true;
-            }
-        });
+        menu.add(0, R.id.menu_id_close, 2, R.string.close)
+                .setIcon(R.drawable.btn_close)
+                .setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_ALWAYS);
 
-        MenuItem closeItem = menu.add(R.string.close);
-        closeItem.setIcon(R.drawable.btn_close);
-        closeItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
-        closeItem.setOnMenuItemClickListener(new MenuItem.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
-                finish();
-                return true;
-            }
-        });
+        return super.onCreateOptionsMenu(menu);
+    }
 
-        return true;
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.menu_id_close) {
+            finish();
+            return true;
+        } else if (id == R.id.menu_id_refresh) {
+            startRefresh(true, false);
+            return true;
+        }
+
+        Log.e(TAG, "Unknown menu item selected");
+        return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        UrlManager.getInstance().addObserver(this);
+        // Only connect so that we can subscribe to Nearby if we have the location permission.
+        LocationUtils locationUtils = LocationUtils.getInstance();
+        if (locationUtils.hasAndroidLocationPermission()
+                && locationUtils.isSystemLocationSettingEnabled()) {
+            mNearbyForegroundSubscription.connect();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        mNearbyForegroundSubscription.subscribe();
         startRefresh(false, false);
+    }
+
+    @Override
+    protected void onPause() {
+        mNearbyForegroundSubscription.unsubscribe();
+        super.onPause();
     }
 
     @Override
@@ -127,26 +157,33 @@ public class ListUrlsActivity extends AppCompatActivity
         startRefresh(true, true);
     }
 
-    private void resolve(Collection<String> urls) {
+    @Override
+    protected void onStop() {
+        UrlManager.getInstance().removeObserver(this);
+        mNearbyForegroundSubscription.disconnect();
+        super.onStop();
+    }
+
+    private void resolve(Collection<UrlInfo> urls, final boolean isUserInitiated) {
         final long timestamp = SystemClock.elapsedRealtime();
         mPwsClient.resolve(urls, new PwsClient.ResolveScanCallback() {
             @Override
             public void onPwsResults(Collection<PwsResult> pwsResults) {
                 long duration = SystemClock.elapsedRealtime() - timestamp;
-                PhysicalWebUma.onForegroundPwsResolution(ListUrlsActivity.this, duration);
+                if (isUserInitiated) {
+                    PhysicalWebUma.onRefreshPwsResolution(duration);
+                } else {
+                    PhysicalWebUma.onForegroundPwsResolution(duration);
+                }
 
-                // filter out duplicate site URLs.
-                Collection<String> siteUrls = new HashSet<>();
+                // filter out duplicate groups.
                 for (PwsResult pwsResult : pwsResults) {
-                    String siteUrl = pwsResult.siteUrl;
-                    String iconUrl = pwsResult.iconUrl;
-
-                    if (siteUrl != null && !siteUrls.contains(siteUrl)) {
-                        siteUrls.add(siteUrl);
+                    mPwsResults.add(pwsResult);
+                    if (!mAdapter.hasGroupId(pwsResult.groupId)) {
                         mAdapter.add(pwsResult);
 
-                        if (iconUrl != null && !mAdapter.hasIcon(iconUrl)) {
-                            fetchIcon(iconUrl);
+                        if (pwsResult.iconUrl != null && !mAdapter.hasIcon(pwsResult.iconUrl)) {
+                            fetchIcon(pwsResult.iconUrl);
                         }
                     }
                 }
@@ -164,10 +201,35 @@ public class ListUrlsActivity extends AppCompatActivity
      */
     @Override
     public void onItemClick(AdapterView<?> adapterView, View view, int position, long id) {
-        PhysicalWebUma.onUrlSelected(this);
-        PwsResult pwsResult = mAdapter.getItem(position);
-        Intent intent = createNavigateToUrlIntent(pwsResult);
+        PhysicalWebUma.onUrlSelected();
+        UrlInfo nearestUrlInfo = null;
+        PwsResult nearestPwsResult = mAdapter.getItem(position);
+        String groupId = nearestPwsResult.groupId;
+
+        // Make sure the PwsResult corresponds to the closest UrlDevice in the group.
+        double minDistance = Double.MAX_VALUE;
+        for (PwsResult pwsResult : mPwsResults) {
+            if (pwsResult.groupId.equals(groupId)) {
+                UrlInfo urlInfo = UrlManager.getInstance().getUrlInfoByUrl(pwsResult.requestUrl);
+                double distance = urlInfo.getDistance();
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    nearestPwsResult = pwsResult;
+                    nearestUrlInfo = urlInfo;
+                }
+            }
+        }
+        Intent intent = createNavigateToUrlIntent(nearestPwsResult, nearestUrlInfo);
         mContext.startActivity(intent);
+    }
+
+    /**
+     * Called when new nearby URLs are found.
+     * @param urls The set of newly-found nearby URLs.
+     */
+    @Override
+    public void onDisplayableUrlsAdded(Collection<UrlInfo> urls) {
+        resolve(urls, false);
     }
 
     private void startRefresh(boolean isUserInitiated, boolean isSwipeInitiated) {
@@ -181,8 +243,13 @@ public class ListUrlsActivity extends AppCompatActivity
         // Clear the list adapter to trigger the empty list display.
         mAdapter.clear();
 
-        Collection<String> urls = UrlManager.getInstance(this).getUrls(true);
-        if (urls.isEmpty()) {
+        Collection<UrlInfo> urls = UrlManager.getInstance().getUrls(true);
+
+        // Check the Physical Web preference to ensure we do not resolve URLs when Physical Web is
+        // off or onboarding. Normally the user will not reach this activity unless the preference
+        // is explicitly enabled, but there is a button on the diagnostics page that launches into
+        // the activity without checking the preference state.
+        if (urls.isEmpty() || !PhysicalWeb.isPhysicalWebPreferenceEnabled()) {
             finishRefresh();
         } else {
             // Show the swipe-to-refresh busy indicator for refreshes initiated by a swipe.
@@ -200,11 +267,9 @@ public class ListUrlsActivity extends AppCompatActivity
                     (AnimationDrawable) mScanningImageView.getDrawable();
             animationDrawable.start();
 
-            resolve(urls);
+            mPwsResults.clear();
+            resolve(urls, isUserInitiated);
         }
-
-        // Clear stored URLs and resubscribe to Nearby.
-        PhysicalWeb.startPhysicalWeb((ChromeApplication) getApplicationContext());
     }
 
     private void finishRefresh() {
@@ -214,16 +279,16 @@ public class ListUrlsActivity extends AppCompatActivity
         // Stop the scanning animation, show a "nothing found" message.
         mEmptyListText.setText(R.string.physical_web_empty_list);
 
-        int tintColor = ContextCompat.getColor(this, R.color.physical_web_logo_gray_tint);
+        int tintColor = ContextCompat.getColor(this, R.color.light_grey);
         mScanningImageView.setImageResource(R.drawable.physical_web_logo);
         mScanningImageView.setColorFilter(tintColor, PorterDuff.Mode.SRC_IN);
 
         // Record refresh-related UMA.
         if (!mIsInitialDisplayRecorded) {
             mIsInitialDisplayRecorded = true;
-            PhysicalWebUma.onUrlsDisplayed(this, mAdapter.getCount());
+            PhysicalWebUma.onUrlsDisplayed(mAdapter.getCount());
         } else if (mIsRefreshUserInitiated) {
-            PhysicalWebUma.onUrlsRefreshed(this, mAdapter.getCount());
+            PhysicalWebUma.onUrlsRefreshed(mAdapter.getCount());
         }
 
         mIsRefreshing = false;
@@ -238,15 +303,27 @@ public class ListUrlsActivity extends AppCompatActivity
         });
     }
 
-    private static Intent createNavigateToUrlIntent(PwsResult pwsResult) {
+    private static Intent createNavigateToUrlIntent(PwsResult pwsResult, UrlInfo urlInfo) {
         String url = pwsResult.siteUrl;
         if (url == null) {
             url = pwsResult.requestUrl;
         }
 
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.addCategory(Intent.CATEGORY_BROWSABLE);
-        intent.setData(Uri.parse(url));
+        Intent intent = new Intent(Intent.ACTION_VIEW)
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .setData(Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (urlInfo != null && urlInfo.getDeviceAddress() != null) {
+            BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+            if (bluetoothAdapter != null) {
+                try {
+                    intent.putExtra(BluetoothDevice.EXTRA_DEVICE,
+                            bluetoothAdapter.getRemoteDevice(urlInfo.getDeviceAddress()));
+                } catch (IllegalArgumentException e) {
+                    Log.e(TAG, "Invalid device address: " + urlInfo.getDeviceAddress(), e);
+                }
+            }
+        }
         return intent;
     }
 

@@ -4,12 +4,13 @@
 
 package org.chromium.net.urlconnection;
 
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.base.test.util.Feature;
 import org.chromium.net.CronetTestBase;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -116,5 +117,21 @@ public class MessageLoopTest extends CronetTestBase {
                 }
             }
         }).get();
+    }
+
+    @SmallTest
+    @Feature({"Cronet"})
+    public void testLoopWithTimeout() throws Exception {
+        final MessageLoop loop = new MessageLoop();
+        assertFalse(loop.isRunning());
+        // The MessageLoop queue is empty. Use a timeout of 100ms to check that
+        // it doesn't block forever.
+        try {
+            loop.loop(100);
+            fail();
+        } catch (SocketTimeoutException e) {
+            // Expected.
+        }
+        assertFalse(loop.isRunning());
     }
 }

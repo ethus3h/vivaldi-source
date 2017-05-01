@@ -6,12 +6,12 @@
 cr.define('extension_manager_tests', function() {
   /** @enum {string} */
   var TestNames = {
-    SplitSections: 'split sections',
     ItemOrder: 'item order',
-    ExtensionSectionVisibility: 'extension section visibility',
-    AppSectionVisibility: 'app section visibility',
-    WebsiteSectionVisibility: 'website section visibility',
-    Scrolling: 'scrolling',
+    ItemListVisibility: 'item list visibility',
+    ShowItems: 'show items',
+    ChangePages: 'change pages',
+    UrlNavigationToDetails: 'url navigation to details',
+    UpdateItemData: 'update item data',
   };
 
   function getDataByName(list, name) {
@@ -25,34 +25,6 @@ cr.define('extension_manager_tests', function() {
 
       setup(function() {
         manager = document.querySelector('extensions-manager');
-      });
-
-      test(assert(TestNames.SplitSections), function() {
-        var testManagerElementVisible =
-            extension_test_util.testVisible.bind(null, manager);
-        // All sections should be visible.
-        testManagerElementVisible('#extensions-list', true);
-        testManagerElementVisible('#apps-list', true);
-        testManagerElementVisible('#websites-list', true);
-
-        var sectionHasItemWithName = function(section, name) {
-          return !!manager[section].find(function(el) {
-            return el.name == name;
-          });
-        };
-
-        expectEquals(manager.extensions, manager.$['extensions-list'].items);
-        expectEquals(manager.apps, manager.$['apps-list'].items);
-        expectEquals(manager.websites, manager.$['websites-list'].items);
-
-        // We really just have to test for existence of the items within the
-        // given subsection of the manager, since they are bound to the iron
-        // list with Polymer (and we kind of have to trust that Polymer works).
-        expectTrue(sectionHasItemWithName('extensions', 'My extension 1'));
-        expectTrue(sectionHasItemWithName(
-            'apps', 'Platform App Test: minimal platform app'));
-        expectTrue(sectionHasItemWithName('websites', 'hosted_app'));
-        expectTrue(sectionHasItemWithName('websites', 'Packaged App Test'));
       });
 
       test(assert(TestNames.ItemOrder), function() {
@@ -105,82 +77,129 @@ cr.define('extension_manager_tests', function() {
         expectEquals(alphaFromStore.id, manager.extensions[5].id);
       });
 
-      test(assert(TestNames.ExtensionSectionVisibility), function() {
+      test(assert(TestNames.ItemListVisibility), function() {
         var testVisible = extension_test_util.testVisible.bind(null, manager);
-        var testSidebarVisible =
-             extension_test_util.testVisible.bind(null, manager.sidebar);
-
         var extension = getDataByName(manager.extensions, 'My extension 1');
 
-        testVisible('#extensions-list', true);
-        testSidebarVisible('#sections-extensions', true);
+        var listHasItemWithName = function(name) {
+          return !!manager.$['items-list'].items.find(function(el) {
+            return el.name == name;
+          });
+        };
+
+        expectEquals(manager.extensions, manager.$['items-list'].items);
+        testVisible('#items-list', true);
+        expectTrue(listHasItemWithName('My extension 1'));
+
         manager.removeItem(extension);
         Polymer.dom.flush();
-        testVisible('#extensions-list', false);
-        testSidebarVisible('#sections-extensions', false);
+        testVisible('#items-list', false);
+        expectFalse(listHasItemWithName('My extension 1'));
 
         manager.addItem(extension);
         Polymer.dom.flush();
-        testVisible('#extensions-list', true);
-        testSidebarVisible('#sections-extensions', true);
+        testVisible('#items-list', true);
+        expectTrue(listHasItemWithName('My extension 1'));
       });
 
-      test(assert(TestNames.AppSectionVisibility), function() {
-        var testVisible = extension_test_util.testVisible.bind(null, manager);
-        var testSidebarVisible =
-             extension_test_util.testVisible.bind(null, manager.sidebar);
-        var platformApp =
-            getDataByName(manager.apps,
-                          'Platform App Test: minimal platform app');
+      test(assert(TestNames.ShowItems), function() {
+        var sectionHasItemWithName = function(section, name) {
+          return !!manager[section].find(function(el) {
+            return el.name == name;
+          });
+        };
 
-        testVisible('#apps-list', true);
-        testSidebarVisible('#sections-apps', true);
-        manager.removeItem(platformApp);
-        Polymer.dom.flush();
-        testVisible('#apps-list', false);
-        testSidebarVisible('#sections-apps', false);
+        // Test that we properly split up the items into two sections.
+        expectTrue(sectionHasItemWithName('extensions', 'My extension 1'));
+        expectTrue(sectionHasItemWithName(
+            'apps', 'Platform App Test: minimal platform app'));
+        expectTrue(sectionHasItemWithName('apps', 'hosted_app'));
+        expectTrue(sectionHasItemWithName('apps', 'Packaged App Test'));
 
-        manager.addItem(platformApp);
-        Polymer.dom.flush();
-        testVisible('#apps-list', true);
-        testSidebarVisible('#sections-apps', true);
+        // Toggle between extensions and apps and back again.
+        expectEquals(manager.extensions, manager.$['items-list'].items);
+        manager.listHelper_.showType(extensions.ShowingType.APPS);
+        expectEquals(manager.apps, manager.$['items-list'].items);
+        manager.listHelper_.showType(extensions.ShowingType.EXTENSIONS);
+        expectEquals(manager.extensions, manager.$['items-list'].items);
+        // Repeating a selection should have no change.
+        manager.listHelper_.showType(extensions.ShowingType.EXTENSIONS);
+        expectEquals(manager.extensions, manager.$['items-list'].items);
       });
 
-      test(assert(TestNames.WebsiteSectionVisibility), function() {
-        var testVisible = extension_test_util.testVisible.bind(null, manager);
-        var testSidebarVisible =
-             extension_test_util.testVisible.bind(null, manager.sidebar);
+      test(assert(TestNames.ChangePages), function() {
+        // We start on the item list.
+        var pages = manager.$.pages;
+        expectEquals(Page.ITEM_LIST, pages.selected);
 
-        var hostedApp = getDataByName(manager.websites, 'hosted_app');
-        var packagedApp = getDataByName(manager.websites, 'Packaged App Test');
+        // Switch: item list -> keyboard shortcuts.
+        MockInteractions.tap(manager.sidebar.$['sections-shortcuts']);
+        Polymer.dom.flush();
+        expectEquals(Page.KEYBOARD_SHORTCUTS, pages.selected);
 
-        testVisible('#websites-list', true);
-        testSidebarVisible('#sections-websites', true);
-        expectEquals(2, manager.websites.length);
-        manager.removeItem(hostedApp);
+        // Switch: keyboard shortcuts -> item list.
+        MockInteractions.tap(manager.sidebar.$['sections-apps']);
         Polymer.dom.flush();
-        expectEquals(1, manager.websites.length);
-        testVisible('#websites-list', true);
-        testSidebarVisible('#sections-websites', true);
-        manager.removeItem(packagedApp);
-        Polymer.dom.flush();
-        testVisible('#websites-list', false);
-        testSidebarVisible('#sections-websites', false);
+        expectEquals(Page.ITEM_LIST, pages.selected);
 
-        manager.addItem(hostedApp);
+        // Switch: item list -> detail view.
+        var item = manager.$['items-list'].$$('extensions-item');
+        assert(item);
+        item.onDetailsTap_();
         Polymer.dom.flush();
-        testVisible('#websites-list', true);
-        testSidebarVisible('#sections-websites', true);
+        expectEquals(Page.DETAIL_VIEW, pages.selected);
+
+        // Switch: detail view -> keyboard shortcuts.
+        MockInteractions.tap(manager.sidebar.$['sections-shortcuts']);
+        Polymer.dom.flush();
+        expectEquals(Page.KEYBOARD_SHORTCUTS, pages.selected);
       });
 
-      test(assert(TestNames.Scrolling), function() {
-        // TODO(devlin): This doesn't really test anything, because scrolling is
-        // so heavily dependent on viewport size (which is very unpredictable in
-        // browser tests). But we can at least exercise the code path and check
-        // for errors.
-        manager.scrollHelper_.scrollToExtensions();
-        manager.scrollHelper_.scrollToApps();
-        manager.scrollHelper_.scrollToWebsites();
+      test(assert(TestNames.UrlNavigationToDetails), function() {
+        expectEquals(Page.DETAIL_VIEW, manager.$.pages.selected);
+        var detailsView = manager.$['details-view'];
+        expectEquals('ldnnhddmnhbkjipkidpdiheffobcpfmf', detailsView.data.id);
+      });
+
+      test(assert(TestNames.UpdateItemData), function() {
+        var oldDescription = 'old description';
+        var newDescription = 'new description';
+        var extension = extension_test_util.createExtensionInfo(
+            {description: oldDescription});
+        var secondExtension = extension_test_util.createExtensionInfo({
+            description: 'irrelevant',
+            id: 'b'.repeat(32),
+        });
+        manager.addItem(extension);
+        manager.addItem(secondExtension);
+        var data = manager.extensions[0];
+        manager.showItemDetails(extension);
+        var detailsView = manager.$['details-view'];
+        expectEquals(extension.id, detailsView.data.id);
+        expectEquals(oldDescription, detailsView.data.description);
+        expectEquals(
+            oldDescription,
+            detailsView.$$('.section .section-content').textContent.trim());
+
+        var extensionCopy = Object.assign({}, extension);
+        extensionCopy.description = newDescription;
+        manager.updateItem(extensionCopy);
+        expectEquals(extension.id, detailsView.data.id);
+        expectEquals(newDescription, detailsView.data.description);
+        expectEquals(
+            newDescription,
+            detailsView.$$('.section .section-content').textContent.trim());
+
+        // Updating a different extension shouldn't have any impact.
+        var secondExtensionCopy = Object.assign({}, secondExtension);
+        secondExtensionCopy.description = 'something else';
+        manager.updateItem(secondExtensionCopy);
+        expectEquals(extension.id, detailsView.data.id);
+        expectEquals(newDescription, detailsView.data.description);
+        expectEquals(
+            newDescription,
+            detailsView.$$('.section .section-content').textContent.trim());
+
       });
     });
   }

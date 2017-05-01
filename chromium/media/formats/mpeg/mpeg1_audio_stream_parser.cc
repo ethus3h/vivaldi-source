@@ -4,6 +4,8 @@
 
 #include "media/formats/mpeg/mpeg1_audio_stream_parser.h"
 
+#include "media/base/media_log.h"
+
 namespace media {
 
 static const uint32_t kMPEG1StartCodeMask = 0xffe00000;
@@ -221,13 +223,15 @@ MPEG1AudioStreamParser::MPEG1AudioStreamParser()
 
 MPEG1AudioStreamParser::~MPEG1AudioStreamParser() {}
 
-int MPEG1AudioStreamParser::ParseFrameHeader(const uint8_t* data,
-                                             int size,
-                                             int* frame_size,
-                                             int* sample_rate,
-                                             ChannelLayout* channel_layout,
-                                             int* sample_count,
-                                             bool* metadata_frame) const {
+int MPEG1AudioStreamParser::ParseFrameHeader(
+    const uint8_t* data,
+    int size,
+    int* frame_size,
+    int* sample_rate,
+    ChannelLayout* channel_layout,
+    int* sample_count,
+    bool* metadata_frame,
+    std::vector<uint8_t>* extra_data) const {
   DCHECK(data);
   DCHECK_GE(size, 0);
   DCHECK(frame_size);

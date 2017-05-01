@@ -6,14 +6,15 @@
 
 #include <utility>
 
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/profiles/avatar_button_delegate.h"
 #include "chrome/browser/ui/views/profiles/profile_chooser_view.h"
-#include "grit/theme_resources.h"
+#include "chrome/grit/theme_resources.h"
+#include "components/signin/core/common/profile_management_switches.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -24,12 +25,16 @@
 #include "ui/views/controls/button/label_button_border.h"
 #include "ui/views/painter.h"
 
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif
+
 namespace {
 
-scoped_ptr<views::Border> CreateBorder(const int normal_image_set[],
-                                       const int hot_image_set[],
-                                       const int pushed_image_set[]) {
-  scoped_ptr<views::LabelButtonAssetBorder> border(
+std::unique_ptr<views::Border> CreateBorder(const int normal_image_set[],
+                                            const int hot_image_set[],
+                                            const int pushed_image_set[]) {
+  std::unique_ptr<views::LabelButtonAssetBorder> border(
       new views::LabelButtonAssetBorder(views::Button::STYLE_TEXTBUTTON));
   border->SetPainter(false, views::Button::STATE_NORMAL,
       views::Painter::CreateImageGridPainter(normal_image_set));
@@ -49,19 +54,18 @@ scoped_ptr<views::Border> CreateBorder(const int normal_image_set[],
 
 }  // namespace
 
-NewAvatarButton::NewAvatarButton(views::ButtonListener* listener,
+NewAvatarButton::NewAvatarButton(AvatarButtonDelegate* delegate,
                                  AvatarButtonStyle button_style,
-                                 Browser* browser)
-    : LabelButton(listener, base::string16()),
-      browser_(browser),
-      has_auth_error_(false),
+                                 Profile* profile)
+    : LabelButton(delegate, base::string16()),
+      delegate_(delegate),
+      error_controller_(this, profile),
+      profile_(profile),
       suppress_mouse_released_action_(false) {
   set_triggerable_event_flags(
       ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON);
   set_animate_on_state_change(false);
-  SetTextColor(views::Button::STATE_NORMAL, SK_ColorWHITE);
-  SetTextColor(views::Button::STATE_HOVERED, SK_ColorWHITE);
-  SetTextColor(views::Button::STATE_PRESSED, SK_ColorWHITE);
+  SetEnabledTextColors(SK_ColorWHITE);
   SetTextSubpixelRenderingEnabled(false);
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
 
@@ -69,10 +73,11 @@ NewAvatarButton::NewAvatarButton(views::ButtonListener* listener,
   // is larger than this, it will be shrunk to match it.
   // TODO(noms): Calculate this constant algorithmically from the button's size.
   const int kDisplayFontHeight = 16;
-  SetFontList(GetFontList().DeriveWithHeightUpperBound(kDisplayFontHeight));
+  SetFontList(
+      label()->font_list().DeriveWithHeightUpperBound(kDisplayFontHeight));
 
   ui::ResourceBundle* rb = &ui::ResourceBundle::GetSharedInstance();
-  if (button_style == THEMED_BUTTON) {
+  if (button_style == AvatarButtonStyle::THEMED) {
     const int kNormalImageSet[] = IMAGE_GRID(IDR_AVATAR_THEMED_BUTTON_NORMAL);
     const int kHotImageSet[] = IMAGE_GRID(IDR_AVATAR_THEMED_BUTTON_HOVER);
     const int kPushedImageSet[] = IMAGE_GRID(IDR_AVATAR_THEMED_BUTTON_PRESSED);
@@ -81,17 +86,7 @@ NewAvatarButton::NewAvatarButton(views::ButtonListener* listener,
     generic_avatar_ =
         *rb->GetImageNamed(IDR_AVATAR_THEMED_BUTTON_AVATAR).ToImageSkia();
 #if defined(OS_WIN)
-  } else if (base::win::GetVersion() >= base::win::VERSION_WIN8 ||
-             browser->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH) {
-    const int kNormalImageSet[] = IMAGE_GRID(IDR_AVATAR_METRO_BUTTON_NORMAL);
-    const int kHotImageSet[] = IMAGE_GRID(IDR_AVATAR_METRO_BUTTON_HOVER);
-    const int kPushedImageSet[] = IMAGE_GRID(IDR_AVATAR_METRO_BUTTON_PRESSED);
-
-    SetBorder(CreateBorder(kNormalImageSet, kHotImageSet, kPushedImageSet));
-    generic_avatar_ =
-        *rb->GetImageNamed(IDR_AVATAR_METRO_BUTTON_AVATAR).ToImageSkia();
-#endif
-  } else {
+  } else if (base::win::GetVersion() < base::win::VERSION_WIN8) {
     const int kNormalImageSet[] = IMAGE_GRID(IDR_AVATAR_GLASS_BUTTON_NORMAL);
     const int kHotImageSet[] = IMAGE_GRID(IDR_AVATAR_GLASS_BUTTON_HOVER);
     const int kPushedImageSet[] = IMAGE_GRID(IDR_AVATAR_GLASS_BUTTON_PRESSED);
@@ -99,30 +94,26 @@ NewAvatarButton::NewAvatarButton(views::ButtonListener* listener,
     SetBorder(CreateBorder(kNormalImageSet, kHotImageSet, kPushedImageSet));
     generic_avatar_ =
         *rb->GetImageNamed(IDR_AVATAR_GLASS_BUTTON_AVATAR).ToImageSkia();
-  }
-
-  g_browser_process->profile_manager()->GetProfileInfoCache().AddObserver(this);
-
-  // Subscribe to authentication error changes so that the avatar button can
-  // update itself.  Note that guest mode profiles won't have a token service.
-  SigninErrorController* error =
-      profiles::GetSigninErrorController(browser_->profile());
-  if (error) {
-    error->AddObserver(this);
-    OnErrorChanged();  // This calls Update().
+#endif
   } else {
-    Update();
+    const int kNormalImageSet[] = IMAGE_GRID(IDR_AVATAR_NATIVE_BUTTON_NORMAL);
+    const int kHotImageSet[] = IMAGE_GRID(IDR_AVATAR_NATIVE_BUTTON_HOVER);
+    const int kPushedImageSet[] = IMAGE_GRID(IDR_AVATAR_NATIVE_BUTTON_PRESSED);
+
+    SetBorder(CreateBorder(kNormalImageSet, kHotImageSet, kPushedImageSet));
+    generic_avatar_ =
+        *rb->GetImageNamed(IDR_AVATAR_NATIVE_BUTTON_AVATAR).ToImageSkia();
   }
+
+  g_browser_process->profile_manager()->
+      GetProfileAttributesStorage().AddObserver(this);
+  Update();
   SchedulePaint();
 }
 
 NewAvatarButton::~NewAvatarButton() {
   g_browser_process->profile_manager()->
-      GetProfileInfoCache().RemoveObserver(this);
-  SigninErrorController* error =
-      profiles::GetSigninErrorController(browser_->profile());
-  if (error)
-    error->RemoveObserver(this);
+      GetProfileAttributesStorage().RemoveObserver(this);
 }
 
 bool NewAvatarButton::OnMousePressed(const ui::MouseEvent& event) {
@@ -149,6 +140,10 @@ void NewAvatarButton::OnGestureEvent(ui::GestureEvent* event) {
     LabelButton::OnGestureEvent(event);
 }
 
+void NewAvatarButton::OnAvatarErrorChanged() {
+  Update();
+}
+
 void NewAvatarButton::OnProfileAdded(const base::FilePath& profile_path) {
   Update();
 }
@@ -158,45 +153,38 @@ void NewAvatarButton::OnProfileWasRemoved(
       const base::string16& profile_name) {
   // If deleting the active profile, don't bother updating the avatar
   // button, as the browser window is being closed anyway.
-  if (browser_->profile()->GetPath() != profile_path)
+  if (profile_->GetPath() != profile_path)
     Update();
 }
 
 void NewAvatarButton::OnProfileNameChanged(
       const base::FilePath& profile_path,
       const base::string16& old_profile_name) {
-  if (browser_->profile()->GetPath() == profile_path)
+  if (profile_->GetPath() == profile_path)
     Update();
 }
 
 void NewAvatarButton::OnProfileSupervisedUserIdChanged(
       const base::FilePath& profile_path) {
-  if (browser_->profile()->GetPath() == profile_path)
+  if (profile_->GetPath() == profile_path)
     Update();
 }
 
-void NewAvatarButton::OnErrorChanged() {
-  // If there is an error, show an warning icon.
-  const SigninErrorController* error =
-      profiles::GetSigninErrorController(browser_->profile());
-  has_auth_error_ = error && error->HasError();
-
-  Update();
-}
-
 void NewAvatarButton::Update() {
-  const ProfileInfoCache& cache =
-      g_browser_process->profile_manager()->GetProfileInfoCache();
+  ProfileAttributesStorage& storage =
+      g_browser_process->profile_manager()->GetProfileAttributesStorage();
 
   // If we have a single local profile, then use the generic avatar
   // button instead of the profile name. Never use the generic button if
   // the active profile is Guest.
-  bool use_generic_button = (!browser_->profile()->IsGuestSession() &&
-                             cache.GetNumberOfProfiles() == 1 &&
-                             !cache.ProfileIsAuthenticatedAtIndex(0));
+  const bool use_generic_button =
+      !profile_->IsGuestSession() &&
+      storage.GetNumberOfProfiles() == 1 &&
+      !storage.GetAllProfilesAttributes().front()->IsAuthenticated();
 
-  SetText(use_generic_button ? base::string16() :
-      profiles::GetAvatarButtonTextForProfile(browser_->profile()));
+  SetText(use_generic_button
+              ? base::string16()
+              : profiles::GetAvatarButtonTextForProfile(profile_));
 
   // If the button has no text, clear the text shadows to make sure the
   // image is centered correctly.
@@ -211,10 +199,16 @@ void NewAvatarButton::Update() {
 
   if (use_generic_button) {
     SetImage(views::Button::STATE_NORMAL, generic_avatar_);
-  } else if (has_auth_error_) {
-    SetImage(views::Button::STATE_NORMAL,
-             gfx::CreateVectorIcon(gfx::VectorIconId::WARNING, 13,
-                                   gfx::kGoogleYellow700));
+  } else if (error_controller_.HasAvatarError()) {
+    if (switches::IsMaterialDesignUserMenu()) {
+      SetImage(views::Button::STATE_NORMAL,
+               gfx::CreateVectorIcon(gfx::VectorIconId::SYNC_PROBLEM, 16,
+                                     gfx::kGoogleRed700));
+    } else {
+      SetImage(views::Button::STATE_NORMAL,
+               gfx::CreateVectorIcon(gfx::VectorIconId::WARNING, 13,
+                                     gfx::kGoogleYellow700));
+    }
   } else {
     SetImage(views::Button::STATE_NORMAL, gfx::ImageSkia());
   }
@@ -225,4 +219,5 @@ void NewAvatarButton::Update() {
   SetImageLabelSpacing(use_generic_button ? 0 : kDefaultImageTextSpacing);
 
   PreferredSizeChanged();
+  delegate_->ButtonPreferredSizeChanged();
 }

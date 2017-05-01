@@ -54,7 +54,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // "foo.jpg" to "foo.jpeg".
   std::vector<base::FilePath::StringType> all_mime_extensions;
   GetExtensionsForMimeType(mime_type, &all_mime_extensions);
-  if (ContainsValue(all_mime_extensions, extension))
+  if (base::ContainsValue(all_mime_extensions, extension))
     return extension;
 
   // Get the "final" extension. In most cases, this is the same as the
@@ -68,7 +68,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // If there's a double extension, and the second extension is in the
   // list of valid extensions for the given type, keep the double extension.
   // This avoids renaming things like "foo.tar.gz" to "foo.gz".
-  if (ContainsValue(all_mime_extensions, final_extension))
+  if (base::ContainsValue(all_mime_extensions, final_extension))
     return extension;
   return preferred_mime_extension;
 }
@@ -124,7 +124,8 @@ std::string GetFileNameFromURL(const GURL& url,
 
   const std::string unescaped_url_filename = UnescapeURLComponent(
       url.ExtractFileName(),
-      UnescapeRule::SPACES | UnescapeRule::URL_SPECIAL_CHARS);
+      UnescapeRule::SPACES |
+          UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS);
 
   // The URL's path should be escaped UTF-8, but may not be.
   std::string decoded_filename = unescaped_url_filename;
@@ -162,8 +163,8 @@ bool IsShellIntegratedExtension(const base::FilePath::StringType& extension) {
   // http://www.juniper.net/security/auto/vulnerabilities/vuln2612.html
   // Files become magical if they end in a CLSID, so block such extensions.
   if (!extension_lower.empty() &&
-      (extension_lower[0] == FILE_PATH_LITERAL('{')) &&
-      (extension_lower[extension_lower.length() - 1] == FILE_PATH_LITERAL('}')))
+      (extension_lower.front() == FILE_PATH_LITERAL('{')) &&
+      (extension_lower.back() == FILE_PATH_LITERAL('}')))
     return true;
   return false;
 }

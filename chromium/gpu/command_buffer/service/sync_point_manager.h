@@ -8,19 +8,20 @@
 #include <stdint.h>
 
 #include <functional>
+#include <memory>
 #include <queue>
+#include <unordered_map>
 #include <vector>
 
 #include "base/atomic_sequence_num.h"
 #include "base/callback.h"
-#include "base/containers/hash_tables.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/gpu_export.h"
 
@@ -72,11 +73,14 @@ class GPU_EXPORT SyncPointOrderData
   struct OrderFence {
     uint32_t order_num;
     uint64_t fence_release;
+    base::Closure release_callback;
     scoped_refptr<SyncPointClientState> client_state;
 
     OrderFence(uint32_t order,
                uint64_t release,
+               const base::Closure& release_callback,
                scoped_refptr<SyncPointClientState> state);
+    OrderFence(const OrderFence& other);
     ~OrderFence();
 
     bool operator>(const OrderFence& rhs) const {
@@ -95,7 +99,8 @@ class GPU_EXPORT SyncPointOrderData
   bool ValidateReleaseOrderNumber(
       scoped_refptr<SyncPointClientState> client_state,
       uint32_t wait_order_num,
-      uint64_t fence_release);
+      uint64_t fence_release,
+      const base::Closure& release_callback);
 
   // Non thread-safe functions need to be called from a single thread.
   base::ThreadChecker processing_thread_checker_;
@@ -156,6 +161,7 @@ class GPU_EXPORT SyncPointClientState
     base::Closure callback_closure;
 
     ReleaseCallback(uint64_t release, const base::Closure& callback);
+    ReleaseCallback(const ReleaseCallback& other);
     ~ReleaseCallback();
 
     bool operator>(const ReleaseCallback& rhs) const {
@@ -173,14 +179,22 @@ class GPU_EXPORT SyncPointClientState
   // Queues the callback to be called if the release is valid. If the release
   // is invalid this function will return False and the callback will never
   // be called.
-  bool WaitForRelease(uint32_t wait_order_num,
+  bool WaitForRelease(CommandBufferNamespace namespace_id,
+                      CommandBufferId client_id,
+                      uint32_t wait_order_num,
                       uint64_t release,
                       const base::Closure& callback);
 
+  // Releases a fence sync and all fence syncs below.
   void ReleaseFenceSync(uint64_t release);
-  void EnsureReleased(uint64_t release);
-  void ReleaseFenceSyncLocked(uint64_t release,
-                              std::vector<base::Closure>* callback_list);
+
+  // Does not release the fence sync, but releases callbacks waiting on that
+  // fence sync.
+  void EnsureWaitReleased(uint64_t release, const base::Closure& callback);
+
+  typedef base::Callback<void(CommandBufferNamespace, CommandBufferId)>
+      OnWaitCallback;
+  void SetOnWaitCallback(const OnWaitCallback& callback);
 
   // Global order data where releases will originate from.
   scoped_refptr<SyncPointOrderData> order_data_;
@@ -194,6 +208,9 @@ class GPU_EXPORT SyncPointClientState
   // In well defined fence sync operations, fence syncs are released in order
   // so simply having a priority queue for callbacks is enough.
   ReleaseCallbackQueue release_callback_queue_;
+
+  // Called when a release callback is queued.
+  OnWaitCallback on_wait_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncPointClientState);
 };
@@ -241,6 +258,14 @@ class GPU_EXPORT SyncPointClient {
 
   void ReleaseFenceSync(uint64_t release);
 
+  // This callback is called with the namespace and id of the waiting client
+  // when a release callback is queued. The callback is called on the thread
+  // where the Wait... happens and synchronization is the responsibility of the
+  // caller.
+  typedef base::Callback<void(CommandBufferNamespace, CommandBufferId)>
+      OnWaitCallback;
+  void SetOnWaitCallback(const OnWaitCallback& callback);
+
  private:
   friend class SyncPointManager;
 
@@ -248,7 +273,7 @@ class GPU_EXPORT SyncPointClient {
   SyncPointClient(SyncPointManager* sync_point_manager,
                   scoped_refptr<SyncPointOrderData> order_data,
                   CommandBufferNamespace namespace_id,
-                  uint64_t client_id);
+                  CommandBufferId client_id);
 
   // Sync point manager is guaranteed to exist in the lifetime of the client.
   SyncPointManager* sync_point_manager_;
@@ -258,7 +283,7 @@ class GPU_EXPORT SyncPointClient {
 
   // Unique namespace/client id pair for this sync point client.
   const CommandBufferNamespace namespace_id_;
-  const uint64_t client_id_;
+  const CommandBufferId client_id_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncPointClient);
 };
@@ -271,53 +296,31 @@ class GPU_EXPORT SyncPointManager {
   ~SyncPointManager();
 
   // Creates/Destroy a sync point client which message processors should hold.
-  scoped_ptr<SyncPointClient> CreateSyncPointClient(
+  std::unique_ptr<SyncPointClient> CreateSyncPointClient(
       scoped_refptr<SyncPointOrderData> order_data,
       CommandBufferNamespace namespace_id,
-      uint64_t client_id);
+      CommandBufferId client_id);
 
   // Creates a sync point client which cannot process order numbers but can only
   // Wait out of order.
-  scoped_ptr<SyncPointClient> CreateSyncPointClientWaiter();
+  std::unique_ptr<SyncPointClient> CreateSyncPointClientWaiter();
 
   // Finds the state of an already created sync point client.
   scoped_refptr<SyncPointClientState> GetSyncPointClientState(
-    CommandBufferNamespace namespace_id, uint64_t client_id);
-
-  // Generates a sync point, returning its ID. This can me called on any thread.
-  // IDs start at a random number. Never return 0.
-  uint32_t GenerateSyncPoint();
-
-  // Retires a sync point. This will call all the registered callbacks for this
-  // sync point. This can only be called on the main thread.
-  void RetireSyncPoint(uint32_t sync_point);
-
-  // Adds a callback to the sync point. The callback will be called when the
-  // sync point is retired, or immediately (from within that function) if the
-  // sync point was already retired (or not created yet). This can only be
-  // called on the main thread.
-  void AddSyncPointCallback(uint32_t sync_point, const base::Closure& callback);
-
-  bool IsSyncPointRetired(uint32_t sync_point);
-
-  // Block and wait until a sync point is signaled. This is only useful when
-  // the sync point is signaled on another thread.
-  void WaitSyncPoint(uint32_t sync_point);
+      CommandBufferNamespace namespace_id,
+      CommandBufferId client_id);
 
  private:
   friend class SyncPointClient;
   friend class SyncPointOrderData;
 
-  typedef std::vector<base::Closure> ClosureList;
-  typedef base::hash_map<uint32_t, ClosureList> SyncPointMap;
-  typedef base::hash_map<uint64_t, SyncPointClient*> ClientMap;
+  using ClientMap = std::unordered_map<CommandBufferId,
+                                       SyncPointClient*,
+                                       CommandBufferId::Hasher>;
 
-  bool IsSyncPointRetiredLocked(uint32_t sync_point);
   uint32_t GenerateOrderNumber();
   void DestroySyncPointClient(CommandBufferNamespace namespace_id,
-                              uint64_t client_id);
-
-  const bool allow_threaded_wait_;
+                              CommandBufferId client_id);
 
   // Order number is global for all clients.
   base::AtomicSequenceNumber global_order_num_;
@@ -325,13 +328,6 @@ class GPU_EXPORT SyncPointManager {
   // Client map holds a map of clients id to client for each namespace.
   base::Lock client_maps_lock_;
   ClientMap client_maps_[NUM_COMMAND_BUFFER_NAMESPACES];
-
-  // Protects the 2 fields below. Note: callbacks shouldn't be called with this
-  // held.
-  base::Lock lock_;
-  SyncPointMap sync_point_map_;
-  uint32_t next_sync_point_;
-  base::ConditionVariable retire_cond_var_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncPointManager);
 };

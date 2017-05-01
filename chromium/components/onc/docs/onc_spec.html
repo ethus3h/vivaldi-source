@@ -408,7 +408,7 @@
         <span class="rule_id"></span>
         Allowed values are <span class="value">Cellular</span>,
         <span class="value">Ethernet</span>, <span class="value">WiFi</span>,
-        <span class="value">Cellular</span> and <span class="value">VPN</span>.
+        <span class="value">WiMAX</span> and <span class="value">VPN</span>.
       </span>
       Indicates which kind of connection this is.
     </dd>
@@ -2395,6 +2395,17 @@
       </span>
       Description of the operator on whose network the modem is currently
       registered
+    </dd>
+
+    <dt class="field">SignalStrength</dt>
+    <dd>
+      <span class="field_meta">
+        (optional, read-only)
+        <span class="type">integer</span>
+      </span>
+      The current signal strength for this network in the range [0, 100],
+      provided by the system. If the network is not in range this field will
+      be set to '0' or not present.
     </dd>
 
     <dt class="field">SIMLockStatus</dt>

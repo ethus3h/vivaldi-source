@@ -2,50 +2,144 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/formats/mp4/track_run_iterator.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_split.h"
 #include "media/base/mock_media_log.h"
 #include "media/formats/mp4/box_definitions.h"
 #include "media/formats/mp4/rcheck.h"
-#include "media/formats/mp4/track_run_iterator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::StrictMock;
 
+namespace {
+
 // The sum of the elements in a vector initialized with SumAscending,
 // less the value of the last element.
-static const int kSumAscending1 = 45;
+const int kSumAscending1 = 45;
 
-static const int kAudioScale = 48000;
-static const int kVideoScale = 25;
+const int kAudioScale = 48000;
+const int kVideoScale = 25;
 
-static const uint8_t kAuxInfo[] = {
+const uint8_t kAuxInfo[] = {
     0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x31, 0x41, 0x54,
     0x65, 0x73, 0x74, 0x49, 0x76, 0x32, 0x00, 0x02, 0x00, 0x01,
-    0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04};
-
-static const char kIv1[] = {
-  0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x31,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04,
 };
 
-static const uint8_t kKeyId[] = {0x41, 0x47, 0x6f, 0x6f, 0x67, 0x6c,
-                                 0x65, 0x54, 0x65, 0x73, 0x74, 0x4b,
-                                 0x65, 0x79, 0x49, 0x44};
+// Sample encryption data for two samples, one with 8 byte IV, one with 16 byte
+// IV. This data is generated for testing. It should be very unlikely to see
+// IV of mixed size in actual media files, though it is permitted by spec.
+const uint8_t kSampleEncryptionDataWithSubsamples[] = {
+    // Sample count.
+    0x00, 0x00, 0x00, 0x02,
+    // Sample 1: IV (8 Bytes).
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x31,
+    // Sample 1: Subsample count.
+    0x00, 0x01,
+    // Sample 1: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 2: IV (16 bytes).
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x32, 0x41, 0x42, 0x43, 0x44,
+    0x45, 0x46, 0x47, 0x48,
+    // Sample 2: Subsample count.
+    0x00, 0x02,
+    // Sample 2: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 2: Subsample 2.
+    0x00, 0x03, 0x00, 0x00, 0x00, 0x04,
+};
 
-static const uint8_t kTrackCencSampleGroupKeyId[] = {
+const uint8_t kSampleEncryptionDataWithoutSubsamples[] = {
+    // Sample count.
+    0x00, 0x00, 0x00, 0x02,
+    // Sample 1: IV.
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x31,
+    // Sample 2: IV.
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x32,
+};
+
+// Size of these two IVs are 8 bytes. They are padded with 0 to 16 bytes.
+const char kIv1[] = {
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x31,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+const char kIv2[] = {
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x32,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+// Size of this IV is 16 bytes.
+const char kIv3[] = {
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x32,
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+};
+
+const uint8_t kKeyId[] = {
+    0x41, 0x47, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x54,
+    0x65, 0x73, 0x74, 0x4b, 0x65, 0x79, 0x49, 0x44,
+};
+
+const uint8_t kTrackCencSampleGroupKeyId[] = {
     0x46, 0x72, 0x61, 0x67, 0x53, 0x61, 0x6d, 0x70,
-    0x6c, 0x65, 0x47, 0x72, 0x6f, 0x75, 0x70, 0x4b};
+    0x6c, 0x65, 0x47, 0x72, 0x6f, 0x75, 0x70, 0x4b,
+};
 
-static const uint8_t kFragmentCencSampleGroupKeyId[] = {
+const uint8_t kFragmentCencSampleGroupKeyId[] = {
     0x6b, 0x46, 0x72, 0x61, 0x67, 0x6d, 0x65, 0x6e,
-    0x74, 0x43, 0x65, 0x6e, 0x63, 0x53, 0x61, 0x6d};
+    0x74, 0x43, 0x65, 0x6e, 0x63, 0x53, 0x61, 0x6d,
+};
+
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+// Sample encryption data for two samples, using constant IV (defined by 'tenc'
+// or sample group entry).
+const uint8_t kSampleEncryptionDataWithSubsamplesAndConstantIv[] = {
+    // Sample count.
+    0x00, 0x00, 0x00, 0x05,
+    // Sample 1: Subsample count.
+    0x00, 0x01,
+    // Sample 1: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 2: Subsample count.
+    0x00, 0x02,
+    // Sample 2: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 2: Subsample 2.
+    0x00, 0x03, 0x00, 0x00, 0x00, 0x04,
+    // Sample 3: Subsample count.
+    0x00, 0x01,
+    // Sample 3: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 4: Subsample count.
+    0x00, 0x01,
+    // Sample 4: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+    // Sample 5: Subsample count.
+    0x00, 0x01,
+    // Sample 5: Subsample 1.
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+};
+
+// Size of these IVs are 16 bytes.
+const char kIv4[] = {
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x34,
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+};
+
+const char kIv5[] = {
+    0x41, 0x54, 0x65, 0x73, 0x74, 0x49, 0x76, 0x35,
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+};
+#endif
+
+}  // namespace
 
 namespace media {
 namespace mp4 {
@@ -63,7 +157,7 @@ class TrackRunIteratorTest : public testing::Test {
  protected:
   Movie moov_;
   scoped_refptr<StrictMock<MockMediaLog>> media_log_;
-  scoped_ptr<TrackRunIterator> iter_;
+  std::unique_ptr<TrackRunIterator> iter_;
 
   void CreateMovie() {
     moov_.header.timescale = 1000;
@@ -206,8 +300,7 @@ class TrackRunIteratorTest : public testing::Test {
     return moof;
   }
 
-  // Update the first sample description of a Track to indicate encryption
-  void AddEncryption(Track* track) {
+  ProtectionSchemeInfo* GetProtectionSchemeInfoForTrack(Track* track) {
     SampleDescription* stsd =
         &track->media.information.sample_table.description;
     ProtectionSchemeInfo* sinf;
@@ -216,7 +309,12 @@ class TrackRunIteratorTest : public testing::Test {
     } else {
        sinf = &stsd->audio_entries[0].sinf;
     }
+    return sinf;
+  }
 
+  // Update the first sample description of a Track to indicate CENC encryption
+  void AddEncryption(Track* track) {
+    ProtectionSchemeInfo* sinf = GetProtectionSchemeInfoForTrack(track);
     sinf->type.type = FOURCC_CENC;
     sinf->info.track_encryption.is_encrypted = true;
     sinf->info.track_encryption.default_iv_size = 8;
@@ -241,7 +339,7 @@ class TrackRunIteratorTest : public testing::Test {
         kTrackCencSampleGroupKeyId + arraysize(kTrackCencSampleGroupKeyId));
 
     frag->sample_group_description.grouping_type = FOURCC_SEIG;
-    frag->sample_group_description.entries.resize(2);
+    frag->sample_group_description.entries.resize(3);
     frag->sample_group_description.entries[0].is_encrypted = false;
     frag->sample_group_description.entries[0].iv_size = 0;
     frag->sample_group_description.entries[1].is_encrypted = true;
@@ -250,6 +348,10 @@ class TrackRunIteratorTest : public testing::Test {
         kFragmentCencSampleGroupKeyId,
         kFragmentCencSampleGroupKeyId +
             arraysize(kFragmentCencSampleGroupKeyId));
+    frag->sample_group_description.entries[2].is_encrypted = true;
+    frag->sample_group_description.entries[2].iv_size = 16;
+    frag->sample_group_description.entries[2].key_id.assign(
+        kKeyId, kKeyId + arraysize(kKeyId));
 
     frag->sample_to_group.grouping_type = FOURCC_SEIG;
     frag->sample_to_group.entries.assign(sample_to_group_entries,
@@ -266,6 +368,101 @@ class TrackRunIteratorTest : public testing::Test {
     frag->runs[0].sample_count = 2;
     frag->runs[0].sample_sizes[1] = 10;
   }
+
+  void AddSampleEncryption(uint8_t use_subsample_flag, TrackFragment* frag) {
+    frag->sample_encryption.use_subsample_encryption = use_subsample_flag;
+    if (use_subsample_flag) {
+      frag->sample_encryption.sample_encryption_data.assign(
+          kSampleEncryptionDataWithSubsamples,
+          kSampleEncryptionDataWithSubsamples +
+              arraysize(kSampleEncryptionDataWithSubsamples));
+    } else {
+      frag->sample_encryption.sample_encryption_data.assign(
+          kSampleEncryptionDataWithoutSubsamples,
+          kSampleEncryptionDataWithoutSubsamples +
+              arraysize(kSampleEncryptionDataWithoutSubsamples));
+    }
+
+    // Update sample sizes and aux info header.
+    frag->runs.resize(1);
+    frag->runs[0].sample_count = 2;
+    frag->auxiliary_offset.offsets.push_back(0);
+    frag->auxiliary_size.sample_count = 2;
+    if (use_subsample_flag) {
+      // Update sample sizes to match with subsample entries above.
+      frag->runs[0].sample_sizes[0] = 3;
+      frag->runs[0].sample_sizes[1] = 10;
+      // Set aux info header.
+      frag->auxiliary_size.sample_info_sizes.push_back(16);
+      frag->auxiliary_size.sample_info_sizes.push_back(30);
+    } else {
+      frag->auxiliary_size.default_sample_info_size = 8;
+    }
+  }
+
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  // Update the first sample description of a Track to indicate CBCS encryption
+  // with a constant IV and pattern.
+  void AddEncryptionCbcs(Track* track) {
+    ProtectionSchemeInfo* sinf = GetProtectionSchemeInfoForTrack(track);
+    sinf->type.type = FOURCC_CBCS;
+    sinf->info.track_encryption.is_encrypted = true;
+    sinf->info.track_encryption.default_iv_size = 0;
+    sinf->info.track_encryption.default_crypt_byte_block = 1;
+    sinf->info.track_encryption.default_skip_byte_block = 9;
+    sinf->info.track_encryption.default_constant_iv_size = 16;
+    memcpy(sinf->info.track_encryption.default_constant_iv, kIv3, 16);
+    sinf->info.track_encryption.default_kid.assign(kKeyId,
+                                                   kKeyId + arraysize(kKeyId));
+  }
+
+  void AddConstantIvsToCencSampleGroup(Track* track, TrackFragment* frag) {
+    auto& track_cenc_group =
+        track->media.information.sample_table.sample_group_description;
+    track_cenc_group.entries[0].iv_size = 0;
+    track_cenc_group.entries[0].crypt_byte_block = 1;
+    track_cenc_group.entries[0].skip_byte_block = 9;
+    track_cenc_group.entries[0].constant_iv_size = 16;
+    memcpy(track_cenc_group.entries[0].constant_iv, kIv4, 16);
+
+    frag->sample_group_description.entries[1].iv_size = 0;
+    frag->sample_group_description.entries[1].crypt_byte_block = 1;
+    frag->sample_group_description.entries[1].skip_byte_block = 9;
+    frag->sample_group_description.entries[1].constant_iv_size = 16;
+    memcpy(frag->sample_group_description.entries[1].constant_iv, kIv5, 16);
+    frag->sample_group_description.entries[2].iv_size = 0;
+    frag->sample_group_description.entries[2].crypt_byte_block = 1;
+    frag->sample_group_description.entries[2].skip_byte_block = 9;
+    frag->sample_group_description.entries[2].constant_iv_size = 16;
+    memcpy(frag->sample_group_description.entries[2].constant_iv, kIv5, 16);
+  }
+
+  void AddSampleEncryptionCbcs(TrackFragment* frag) {
+    frag->sample_encryption.use_subsample_encryption = true;
+    frag->sample_encryption.sample_encryption_data.assign(
+        kSampleEncryptionDataWithSubsamplesAndConstantIv,
+        kSampleEncryptionDataWithSubsamplesAndConstantIv +
+            arraysize(kSampleEncryptionDataWithSubsamplesAndConstantIv));
+
+    // Update sample sizes and aux info header.
+    frag->runs.resize(1);
+    frag->runs[0].sample_count = 5;
+    frag->auxiliary_offset.offsets.push_back(0);
+    frag->auxiliary_size.sample_count = 5;
+    // Update sample sizes to match with subsample entries above.
+    frag->runs[0].sample_sizes[0] = 3;
+    frag->runs[0].sample_sizes[1] = 10;
+    frag->runs[0].sample_sizes[2] = 3;
+    frag->runs[0].sample_sizes[3] = 3;
+    frag->runs[0].sample_sizes[4] = 3;
+    // Set aux info header.
+    frag->auxiliary_size.sample_info_sizes.push_back(16);
+    frag->auxiliary_size.sample_info_sizes.push_back(30);
+    frag->auxiliary_size.sample_info_sizes.push_back(16);
+    frag->auxiliary_size.sample_info_sizes.push_back(16);
+    frag->auxiliary_size.sample_info_sizes.push_back(16);
+  }
+#endif
 
   bool InitMoofWithArbitraryAuxInfo(MovieFragment* moof) {
     // Add aux info header (equal sized aux info for every sample).
@@ -470,7 +667,89 @@ TEST_F(TrackRunIteratorTest, IgnoreUnknownAuxInfoTest) {
   EXPECT_FALSE(iter_->AuxInfoNeedsToBeCached());
 }
 
-TEST_F(TrackRunIteratorTest, DecryptConfigTest) {
+TEST_F(TrackRunIteratorTest,
+       DecryptConfigTestWithSampleEncryptionAndNoSubsample) {
+  AddEncryption(&moov_.tracks[1]);
+  iter_.reset(new TrackRunIterator(&moov_, media_log_));
+
+  MovieFragment moof = CreateFragment();
+  AddSampleEncryption(!SampleEncryption::kUseSubsampleEncryption,
+                      &moof.tracks[1]);
+
+  ASSERT_TRUE(iter_->Init(moof));
+  // The run for track 2 will be the second, which is parsed according to
+  // data_offset.
+  iter_->AdvanceRun();
+  EXPECT_EQ(iter_->track_id(), 2u);
+
+  EXPECT_TRUE(iter_->is_encrypted());
+  // No need to cache aux info as it is already available in SampleEncryption.
+  EXPECT_FALSE(iter_->AuxInfoNeedsToBeCached());
+  EXPECT_EQ(iter_->aux_info_size(), 0);
+  EXPECT_EQ(iter_->sample_offset(), 200);
+  EXPECT_EQ(iter_->GetMaxClearOffset(), moof.tracks[1].runs[0].data_offset);
+  std::unique_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
+  EXPECT_EQ(
+      std::string(reinterpret_cast<const char*>(kKeyId), arraysize(kKeyId)),
+      config->key_id());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv1), arraysize(kIv1)),
+            config->iv());
+  EXPECT_EQ(config->subsamples().size(), 0u);
+  iter_->AdvanceSample();
+  config = iter_->GetDecryptConfig();
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv2), arraysize(kIv2)),
+            config->iv());
+  EXPECT_EQ(config->subsamples().size(), 0u);
+}
+
+TEST_F(TrackRunIteratorTest,
+       DecryptConfigTestWithSampleEncryptionAndSubsample) {
+  AddEncryption(&moov_.tracks[1]);
+  iter_.reset(new TrackRunIterator(&moov_, media_log_));
+
+  MovieFragment moof = CreateFragment();
+  AddSampleEncryption(SampleEncryption::kUseSubsampleEncryption,
+                      &moof.tracks[1]);
+  const SampleToGroupEntry kSampleToGroupTable[] = {
+      // Associated with the second entry in SampleGroupDescription Box.
+      // With Iv size 8 bytes.
+      {1, SampleToGroupEntry::kFragmentGroupDescriptionIndexBase + 2},
+      // Associated with the third entry in SampleGroupDescription Box.
+      // With Iv size 16 bytes.
+      {1, SampleToGroupEntry::kFragmentGroupDescriptionIndexBase + 3}};
+  AddCencSampleGroup(&moov_.tracks[1], &moof.tracks[1], kSampleToGroupTable,
+                     arraysize(kSampleToGroupTable));
+
+  ASSERT_TRUE(iter_->Init(moof));
+  // The run for track 2 will be the second, which is parsed according to
+  // data_offset.
+  iter_->AdvanceRun();
+  EXPECT_EQ(iter_->track_id(), 2u);
+
+  EXPECT_TRUE(iter_->is_encrypted());
+  // No need to cache aux info as it is already available in SampleEncryption.
+  EXPECT_FALSE(iter_->AuxInfoNeedsToBeCached());
+  EXPECT_EQ(iter_->aux_info_size(), 0);
+  EXPECT_EQ(iter_->sample_offset(), 200);
+  EXPECT_EQ(iter_->GetMaxClearOffset(), moof.tracks[1].runs[0].data_offset);
+  std::unique_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv1), arraysize(kIv1)),
+            config->iv());
+  EXPECT_EQ(config->subsamples().size(), 1u);
+  EXPECT_EQ(config->subsamples()[0].clear_bytes, 1u);
+  EXPECT_EQ(config->subsamples()[0].cypher_bytes, 2u);
+  iter_->AdvanceSample();
+  config = iter_->GetDecryptConfig();
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv3), arraysize(kIv3)),
+            config->iv());
+  EXPECT_EQ(config->subsamples().size(), 2u);
+  EXPECT_EQ(config->subsamples()[0].clear_bytes, 1u);
+  EXPECT_EQ(config->subsamples()[0].cypher_bytes, 2u);
+  EXPECT_EQ(config->subsamples()[1].clear_bytes, 3u);
+  EXPECT_EQ(config->subsamples()[1].cypher_bytes, 4u);
+}
+
+TEST_F(TrackRunIteratorTest, DecryptConfigTestWithAuxInfo) {
   AddEncryption(&moov_.tracks[1]);
   iter_.reset(new TrackRunIterator(&moov_, media_log_));
 
@@ -483,7 +762,7 @@ TEST_F(TrackRunIteratorTest, DecryptConfigTest) {
   // element in the file.
   EXPECT_EQ(iter_->track_id(), 2u);
   EXPECT_TRUE(iter_->is_encrypted());
-  EXPECT_TRUE(iter_->AuxInfoNeedsToBeCached());
+  ASSERT_TRUE(iter_->AuxInfoNeedsToBeCached());
   EXPECT_EQ(static_cast<uint32_t>(iter_->aux_info_size()), arraysize(kAuxInfo));
   EXPECT_EQ(iter_->aux_info_offset(), 50);
   EXPECT_EQ(iter_->GetMaxClearOffset(), 50);
@@ -494,12 +773,12 @@ TEST_F(TrackRunIteratorTest, DecryptConfigTest) {
   EXPECT_FALSE(iter_->AuxInfoNeedsToBeCached());
   EXPECT_EQ(iter_->sample_offset(), 200);
   EXPECT_EQ(iter_->GetMaxClearOffset(), moof.tracks[0].runs[0].data_offset);
-  scoped_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
-  ASSERT_EQ(arraysize(kKeyId), config->key_id().size());
-  EXPECT_TRUE(!memcmp(kKeyId, config->key_id().data(),
-                      config->key_id().size()));
-  ASSERT_EQ(arraysize(kIv1), config->iv().size());
-  EXPECT_TRUE(!memcmp(kIv1, config->iv().data(), config->iv().size()));
+  std::unique_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
+  EXPECT_EQ(
+      std::string(reinterpret_cast<const char*>(kKeyId), arraysize(kKeyId)),
+      config->key_id());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv1), arraysize(kIv1)),
+            config->iv());
   EXPECT_TRUE(config->subsamples().empty());
   iter_->AdvanceSample();
   config = iter_->GetDecryptConfig();
@@ -608,7 +887,7 @@ TEST_F(TrackRunIteratorTest, SharedAuxInfoTest) {
   EXPECT_EQ(iter_->track_id(), 1u);
   EXPECT_EQ(iter_->aux_info_offset(), 50);
   EXPECT_TRUE(iter_->CacheAuxInfo(kAuxInfo, arraysize(kAuxInfo)));
-  scoped_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
+  std::unique_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
   ASSERT_EQ(arraysize(kIv1), config->iv().size());
   EXPECT_TRUE(!memcmp(kIv1, config->iv().data(), config->iv().size()));
   iter_->AdvanceSample();
@@ -709,6 +988,98 @@ TEST_F(TrackRunIteratorTest, KeyFrameFlagCombinations) {
   // insertion.
   EXPECT_EQ("2 K P P P K P", KeyframeAndRAPInfo(iter_.get()));
 }
+
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+TEST_F(TrackRunIteratorTest, DecryptConfigTestWithConstantIvNoAuxInfo) {
+  AddEncryptionCbcs(&moov_.tracks[1]);
+  iter_.reset(new TrackRunIterator(&moov_, media_log_));
+
+  MovieFragment moof = CreateFragment();
+
+  ASSERT_TRUE(iter_->Init(moof));
+
+  // The run for track 2 will be the second.
+  iter_->AdvanceRun();
+  EXPECT_EQ(iter_->track_id(), 2u);
+  EXPECT_TRUE(iter_->is_encrypted());
+  ASSERT_FALSE(iter_->AuxInfoNeedsToBeCached());
+  EXPECT_EQ(iter_->sample_offset(), 200);
+  std::unique_ptr<DecryptConfig> config = iter_->GetDecryptConfig();
+  EXPECT_EQ(
+      std::string(reinterpret_cast<const char*>(kKeyId), arraysize(kKeyId)),
+      config->key_id());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv3), arraysize(kIv3)),
+            config->iv());
+  EXPECT_TRUE(config->subsamples().empty());
+  iter_->AdvanceSample();
+  config = iter_->GetDecryptConfig();
+  EXPECT_EQ(
+      std::string(reinterpret_cast<const char*>(kKeyId), arraysize(kKeyId)),
+      config->key_id());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(kIv3), arraysize(kIv3)),
+            config->iv());
+  EXPECT_TRUE(config->subsamples().empty());
+}
+
+TEST_F(TrackRunIteratorTest, DecryptConfigTestWithSampleGroupsAndConstantIv) {
+  // Add TrackEncryption Box.
+  AddEncryptionCbcs(&moov_.tracks[1]);
+
+  MovieFragment moof = CreateFragment();
+  AddSampleEncryptionCbcs(&moof.tracks[1]);
+
+  const SampleToGroupEntry kSampleToGroupTable[] = {
+      // Associated with the 2nd entry in fragment SampleGroupDescription Box.
+      {1, SampleToGroupEntry::kFragmentGroupDescriptionIndexBase + 2},
+      // Associated with the default values specified in TrackEncryption Box.
+      {1, 0},
+      // Associated with the 1st entry in fragment SampleGroupDescription Box.
+      {1, SampleToGroupEntry::kFragmentGroupDescriptionIndexBase + 1},
+      // Associated with the 1st entry in track SampleGroupDescription Box.
+      {1, 1}};
+  AddCencSampleGroup(&moov_.tracks[1], &moof.tracks[1], kSampleToGroupTable,
+                     arraysize(kSampleToGroupTable));
+  AddConstantIvsToCencSampleGroup(&moov_.tracks[1], &moof.tracks[1]);
+  iter_.reset(new TrackRunIterator(&moov_, media_log_));
+  ASSERT_TRUE(iter_->Init(moof));
+
+  // The run for track 2 will be the second.
+  iter_->AdvanceRun();
+
+  std::string track_encryption_iv(kIv3, kIv3 + arraysize(kIv3));
+  std::string track_cenc_sample_group_iv(kIv4, kIv4 + arraysize(kIv4));
+  std::string fragment_cenc_sample_group_iv(kIv5, kIv5 + arraysize(kIv5));
+
+  for (size_t i = 0; i < kSampleToGroupTable[0].sample_count; ++i) {
+    EXPECT_TRUE(iter_->is_encrypted());
+    EXPECT_EQ(fragment_cenc_sample_group_iv, iter_->GetDecryptConfig()->iv());
+    iter_->AdvanceSample();
+  }
+
+  for (size_t i = 0; i < kSampleToGroupTable[1].sample_count; ++i) {
+    EXPECT_TRUE(iter_->is_encrypted());
+    EXPECT_EQ(track_encryption_iv, iter_->GetDecryptConfig()->iv());
+    iter_->AdvanceSample();
+  }
+
+  for (size_t i = 0; i < kSampleToGroupTable[2].sample_count; ++i) {
+    EXPECT_FALSE(iter_->is_encrypted());
+    iter_->AdvanceSample();
+  }
+
+  for (size_t i = 0; i < kSampleToGroupTable[3].sample_count; ++i) {
+    EXPECT_TRUE(iter_->is_encrypted());
+    EXPECT_EQ(track_cenc_sample_group_iv, iter_->GetDecryptConfig()->iv());
+    iter_->AdvanceSample();
+  }
+
+  // The remaining samples should be associated with the default values
+  // specified in TrackEncryption Box.
+  EXPECT_TRUE(iter_->is_encrypted());
+  EXPECT_EQ(track_encryption_iv, iter_->GetDecryptConfig()->iv());
+}
+
+#endif
 
 }  // namespace mp4
 }  // namespace media

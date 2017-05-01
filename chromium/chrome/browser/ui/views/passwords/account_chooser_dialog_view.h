@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_PASSWORDS_ACCOUNT_CHOOSER_DIALOG_VIEW_H_
 
 #include "base/macros.h"
-#include "chrome/browser/ui/passwords/account_chooser_prompt.h"
+#include "chrome/browser/ui/passwords/password_dialog_prompts.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/styled_label_listener.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -27,7 +27,7 @@ class AccountChooserDialogView : public views::DialogDelegateView,
   ~AccountChooserDialogView() override;
 
   // AccountChooserPrompt:
-  void Show() override;
+  void ShowAccountChooser() override;
   void ControllerGone() override;
 
  private:
@@ -36,9 +36,12 @@ class AccountChooserDialogView : public views::DialogDelegateView,
   base::string16 GetWindowTitle() const override;
   bool ShouldShowWindowTitle() const override;
   bool ShouldShowCloseButton() const override;
+  void WindowClosing() override;
 
   // DialogDelegate:
+  bool Accept() override;
   int GetDialogButtons() const override;
+  bool ShouldDefaultButtonBeBlue() const override;
   base::string16 GetDialogButtonLabel(ui::DialogButton button) const override;
 
   // views::View
@@ -58,6 +61,10 @@ class AccountChooserDialogView : public views::DialogDelegateView,
   // A weak pointer to the controller.
   PasswordDialogController* controller_;
   content::WebContents* web_contents_;
+  // The "Sign in" button is shown for one credential only. The variable is
+  // cached because the framework can call GetDialogButtons() after the
+  // controller is gone.
+  bool show_signin_button_;
 
   DISALLOW_COPY_AND_ASSIGN(AccountChooserDialogView);
 };

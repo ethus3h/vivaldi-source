@@ -5,10 +5,10 @@
 #ifndef CHROME_BROWSER_UI_WEBSITE_SETTINGS_WEBSITE_SETTINGS_UI_H_
 #define CHROME_BROWSER_UI_WEBSITE_SETTINGS_WEBSITE_SETTINGS_UI_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "chrome/browser/ui/website_settings/website_settings.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -16,16 +16,15 @@
 #include "content/public/browser/permission_type.h"
 #include "ui/gfx/native_widget_types.h"
 
-class GURL;
 class Profile;
 class WebsiteSettings;
 
-namespace base {
-class Value;
-};
-
 namespace gfx {
 class Image;
+}
+
+namespace net {
+class X509Certificate;
 }
 
 // The class |WebsiteSettingsUI| specifies the platform independent
@@ -44,13 +43,24 @@ class WebsiteSettingsUI {
     NUM_TAB_IDS,
   };
 
+  // The security summary is styled depending on the security state. At the
+  // moment, the only styling we apply is color, but it could also include e.g.
+  // bolding.
+  enum SecuritySummaryStyle { STYLE_UNSTYLED = 0, STYLE_COLOR = 1 << 1 };
+
+  struct SecurityDescription {
+    // A one-line summary of the security state.
+    base::string16 summary;
+    // A short paragraph with more details about the state, and how
+    // the user should treat it.
+    base::string16 details;
+  };
+
   // |CookieInfo| contains information about the cookies from a specific source.
   // A source can for example be a specific origin or an entire wildcard domain.
   struct CookieInfo {
     CookieInfo();
 
-    // String describing the cookie source.
-    std::string cookie_source;
     // The number of allowed cookies.
     int allowed;
     // The number of blocked cookies.
@@ -81,12 +91,12 @@ class WebsiteSettingsUI {
   // chooser |type| that the current website has been granted access to.
   struct ChosenObjectInfo {
     ChosenObjectInfo(const WebsiteSettings::ChooserUIInfo& ui_info,
-                     scoped_ptr<base::DictionaryValue> object);
+                     std::unique_ptr<base::DictionaryValue> object);
     ~ChosenObjectInfo();
     // |ui_info| for this chosen object type.
     const WebsiteSettings::ChooserUIInfo& ui_info;
     // The opaque |object| representing the thing the user selected.
-    scoped_ptr<base::DictionaryValue> object;
+    std::unique_ptr<base::DictionaryValue> object;
   };
 
   // |IdentityInfo| contains information about the site's identity and
@@ -101,13 +111,13 @@ class WebsiteSettingsUI {
     std::string site_identity;
     // Status of the site's identity.
     WebsiteSettings::SiteIdentityStatus identity_status;
-    // Helper to get the status text to display to the user.
-    base::string16 GetSecuritySummary() const;
+    // Helper to get security description info to display to the user.
+    std::unique_ptr<SecurityDescription> GetSecurityDescription() const;
     // Textual description of the site's identity status that is displayed to
     // the user.
     std::string identity_status_description;
-    // The ID is the server certificate of a secure connection or 0.
-    int cert_id;
+    // The server certificate if a secure connection.
+    scoped_refptr<net::X509Certificate> certificate;
     // Status of the site's connection.
     WebsiteSettings::SiteConnectionStatus connection_status;
     // Textual description of the site's connection status that is displayed to
@@ -123,7 +133,7 @@ class WebsiteSettingsUI {
 
   using CookieInfoList = std::vector<CookieInfo>;
   using PermissionInfoList = std::vector<PermissionInfo>;
-  using ChosenObjectInfoList = std::vector<ChosenObjectInfo*>;
+  using ChosenObjectInfoList = std::vector<std::unique_ptr<ChosenObjectInfo>>;
 
   virtual ~WebsiteSettingsUI();
 
@@ -139,6 +149,7 @@ class WebsiteSettingsUI {
   // including why that action was taken. E.g. "Allowed by you",
   // "Blocked by default".
   static base::string16 PermissionActionToUIString(
+      Profile* profile,
       ContentSettingsType type,
       ContentSetting setting,
       ContentSetting default_setting,
@@ -178,17 +189,13 @@ class WebsiteSettingsUI {
   // Sets cookie information.
   virtual void SetCookieInfo(const CookieInfoList& cookie_info_list) = 0;
 
-  // Sets permission information. The callee is expected to take ownership of
-  // the objects in |chosen_object_info_list|.
+  // Sets permission information.
   virtual void SetPermissionInfo(
       const PermissionInfoList& permission_info_list,
-      const ChosenObjectInfoList& chosen_object_info_list) = 0;
+      ChosenObjectInfoList chosen_object_info_list) = 0;
 
   // Sets site identity information.
   virtual void SetIdentityInfo(const IdentityInfo& identity_info) = 0;
-
-  // Selects the tab with the given |tab_id|.
-  virtual void SetSelectedTab(TabId tab_id) = 0;
 };
 
 typedef WebsiteSettingsUI::CookieInfoList CookieInfoList;

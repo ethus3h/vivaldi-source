@@ -5,12 +5,13 @@
 package org.chromium.android_webview.test;
 
 import android.graphics.Bitmap;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.test.util.CommonResources;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.content.browser.test.util.HistoryUtils;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;
 import org.chromium.content_public.browser.WebContents;
@@ -258,8 +259,8 @@ public class LoadDataWithBaseUrlTest extends AwTestBase {
             assertEquals(page2Title, getTitleOnUiThread(mAwContents));
 
             HistoryUtils.goBackSync(getInstrumentation(), mWebContents, onPageFinishedHelper);
-            // The title of the 'about.html' specified via historyUrl.
-            assertEquals(CommonResources.ABOUT_TITLE, getTitleOnUiThread(mAwContents));
+            // The title of first page loaded with loadDataWithBaseUrl.
+            assertEquals(page1Title, getTitleOnUiThread(mAwContents));
         } finally {
             webServer.shutdown();
         }
@@ -280,7 +281,7 @@ public class LoadDataWithBaseUrlTest extends AwTestBase {
 
         loadDataWithBaseUrlSync(data, "text/html", false, baseUrl, null);
 
-        poll(new Callable<Boolean>() {
+        pollInstrumentationThread(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 String title = getTitleOnUiThread(mAwContents);
@@ -300,8 +301,11 @@ public class LoadDataWithBaseUrlTest extends AwTestBase {
         File tempImage = File.createTempFile("test_image", ".png", cacheDir);
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.RGB_565);
         FileOutputStream fos = new FileOutputStream(tempImage);
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
-        fos.close();
+        try {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+        } finally {
+            fos.close();
+        }
         String imagePath = tempImage.getAbsolutePath();
 
         AwSettings contentSettings = getAwSettingsOnUiThread(mAwContents);
@@ -354,8 +358,12 @@ public class LoadDataWithBaseUrlTest extends AwTestBase {
         }
     }
 
+    /**
+     * Disallowed from running on Svelte devices due to OOM errors: crbug.com/598013
+     */
     @SmallTest
     @Feature({"AndroidWebView"})
+    @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testLoadLargeData() throws Throwable {
         // Chrome only allows URLs up to 2MB in IPC. Test something larger than this.
         // Note that the real URI may be significantly large if it gets encoded into

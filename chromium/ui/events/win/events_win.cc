@@ -13,16 +13,18 @@
 #include "ui/events/keycodes/keyboard_code_conversion_win.h"
 #include "ui/events/win/system_event_state_lookup.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/win/dpi.h"
 
 namespace ui {
 
 namespace {
 
 // From MSDN: "Mouse" events are flagged with 0xFF515700 if they come
-// from a touch or stylus device.  In Vista or later, they are also flagged
-// with 0x80 if they come from touch.
-#define MOUSEEVENTF_FROMTOUCH (0xFF515700 | 0x80)
+// from a touch or stylus device.  In Vista or later, the eighth bit,
+// masked by 0x80, is used to differentiate touch input from pen input
+// (0 = pen, 1 = touch).
+#define MOUSEEVENTF_FROMTOUCHPEN 0xFF515700
+#define MOUSEEVENTF_FROMTOUCH (MOUSEEVENTF_FROMTOUCHPEN | 0x80)
+#define SIGNATURE_MASK 0xFFFFFF00
 
 // Get the native mouse key state from the native event message type.
 int GetNativeMouseKey(const base::NativeEvent& native_event) {
@@ -140,10 +142,6 @@ int MouseStateFlagsFromNative(const base::NativeEvent& native_event) {
 
 }  // namespace
 
-void UpdateDeviceList() {
-  NOTIMPLEMENTED();
-}
-
 EventType EventTypeFromNative(const base::NativeEvent& native_event) {
   switch (native_event.message) {
     case WM_KEYDOWN:
@@ -217,7 +215,7 @@ int EventFlagsFromNative(const base::NativeEvent& native_event) {
   return flags;
 }
 
-base::TimeDelta EventTimeFromNative(const base::NativeEvent& native_event) {
+base::TimeTicks EventTimeFromNative(const base::NativeEvent& native_event) {
   // On Windows, the native input event timestamp (|native_event.time|) is
   // coming from |GetTickCount()| clock [1], while in platform independent code
   // path we get timestamps by calling |TimeTicks::Now()|, which, if using high-
@@ -226,6 +224,7 @@ base::TimeDelta EventTimeFromNative(const base::NativeEvent& native_event) {
   // |TimeTicks::Now()| for event timestamp instead of the native timestamp to
   // ensure computed input latency and web exposed timestamp is consistent with
   // other components.
+  // It is unnecessary to invoke |ValidateEventTimeClock| here because of above.
   // [1] http://blogs.msdn.com/b/oldnewthing/archive/2014/01/22/10491576.aspx
   return EventTimeForNow();
 }
@@ -256,11 +255,17 @@ gfx::Point EventLocationFromNative(const base::NativeEvent& native_event) {
   return gfx::Point(native_point);
 }
 
+gfx::PointF EventLocationFromNativeF(const base::NativeEvent& native_event) {
+  return gfx::PointF(EventLocationFromNative(native_event));
+}
+
 gfx::Point EventSystemLocationFromNative(
     const base::NativeEvent& native_event) {
   POINT global_point = { static_cast<short>(LOWORD(native_event.lParam)),
                          static_cast<short>(HIWORD(native_event.lParam)) };
-  ClientToScreen(native_event.hwnd, &global_point);
+  // Wheel events have position in screen coordinates.
+  if (!IsMouseWheelEvent(native_event))
+    ClientToScreen(native_event.hwnd, &global_point);
   return gfx::Point(global_point);
 }
 
@@ -295,7 +300,12 @@ int GetChangedMouseButtonFlagsFromNative(
 
 PointerDetails GetMousePointerDetailsFromNative(
     const base::NativeEvent& native_event) {
-  return PointerDetails(EventPointerType::POINTER_TYPE_MOUSE);
+  // We should filter out all the mouse events Synthesized from touch events.
+  // TODO(lanwei): Will set the pointer ID, see https://crbug.com/616771.
+  if ((GetMessageExtraInfo() & SIGNATURE_MASK) != MOUSEEVENTF_FROMTOUCHPEN)
+    return PointerDetails(EventPointerType::POINTER_TYPE_MOUSE);
+
+  return PointerDetails(EventPointerType::POINTER_TYPE_PEN);
 }
 
 gfx::Vector2d GetMouseWheelOffset(const base::NativeEvent& native_event) {
@@ -322,24 +332,20 @@ int GetTouchId(const base::NativeEvent& xev) {
   return 0;
 }
 
-float GetTouchRadiusX(const base::NativeEvent& native_event) {
-  NOTIMPLEMENTED();
-  return 1.0;
-}
-
-float GetTouchRadiusY(const base::NativeEvent& native_event) {
-  NOTIMPLEMENTED();
-  return 1.0;
-}
-
 float GetTouchAngle(const base::NativeEvent& native_event) {
   NOTIMPLEMENTED();
   return 0.0;
 }
 
-float GetTouchForce(const base::NativeEvent& native_event) {
+PointerDetails GetTouchPointerDetailsFromNative(
+    const base::NativeEvent& native_event) {
   NOTIMPLEMENTED();
-  return 0.0;
+  return PointerDetails(EventPointerType::POINTER_TYPE_TOUCH,
+                        /* radius_x */ 1.0,
+                        /* radius_y */ 1.0,
+                        /* force */ 0.f,
+                        /* tilt_x */ 0.f,
+                        /* tilt_y */ 0.f);
 }
 
 bool GetScrollOffsets(const base::NativeEvent& native_event,
@@ -347,7 +353,8 @@ bool GetScrollOffsets(const base::NativeEvent& native_event,
                       float* y_offset,
                       float* x_offset_ordinal,
                       float* y_offset_ordinal,
-                      int* finger_count) {
+                      int* finger_count,
+                      EventMomentumPhase* momentum_phase) {
   // TODO(ananta)
   // Support retrieving the scroll offsets from the scroll event.
   if (native_event.message == WM_VSCROLL || native_event.message == WM_HSCROLL)

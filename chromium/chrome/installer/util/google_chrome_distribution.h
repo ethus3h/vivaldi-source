@@ -8,6 +8,8 @@
 #ifndef CHROME_INSTALLER_UTIL_GOOGLE_CHROME_DISTRIBUTION_H_
 #define CHROME_INSTALLER_UTIL_GOOGLE_CHROME_DISTRIBUTION_H_
 
+#include <memory>
+
 #include "base/strings/string16.h"
 #include "chrome/installer/util/browser_distribution.h"
 
@@ -29,17 +31,17 @@ class GoogleChromeDistribution : public BrowserDistribution {
   //   concatenated to the survey url if the file in local_data_path indicates
   //   the user has opted in to providing anonymous usage data.
   void DoPostUninstallOperations(
-      const Version& version,
+      const base::Version& version,
       const base::FilePath& local_data_path,
       const base::string16& distribution_data) override;
 
   base::string16 GetActiveSetupGuid() override;
 
-  base::string16 GetShortcutName(ShortcutType shortcut_type) override;
+  base::string16 GetShortcutName() override;
 
   base::string16 GetIconFilename() override;
 
-  int GetIconIndex(ShortcutType shortcut_type) override;
+  int GetIconIndex() override;
 
   base::string16 GetBaseAppName() override;
 
@@ -80,7 +82,7 @@ class GoogleChromeDistribution : public BrowserDistribution {
   GoogleChromeDistribution();
 
   explicit GoogleChromeDistribution(
-      scoped_ptr<AppRegistrationData> app_reg_data);
+      std::unique_ptr<AppRegistrationData> app_reg_data);
 
  private:
   friend class BrowserDistribution;

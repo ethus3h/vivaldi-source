@@ -4,17 +4,17 @@
 # found in the LICENSE file.
 
 """Prints the lowest locally available SDK version greater than or equal to a
-given minimum sdk version to standard output.
+given minimum sdk version to standard output. If --developer_dir is passed, then
+the script will use the Xcode toolchain located at DEVELOPER_DIR.
 
 Usage:
-  python find_sdk.py 10.6  # Ignores SDKs < 10.6
+  python find_sdk.py [--developer_dir DEVELOPER_DIR] 10.6  # Ignores SDKs < 10.6
 """
 
 import os
 import re
 import subprocess
 import sys
-
 
 from optparse import OptionParser
 
@@ -35,10 +35,15 @@ def main():
   parser.add_option("--print_sdk_path",
                     action="store_true", dest="print_sdk_path", default=False,
                     help="Additionaly print the path the SDK (appears first).")
+  parser.add_option("--developer_dir", help='Path to Xcode.')
+  parser.add_option("--use-sdk", dest="use_sdk")
   options, args = parser.parse_args()
   if len(args) != 1:
     parser.error('Please specify a minimum SDK version')
   min_sdk_version = args[0]
+
+  if options.developer_dir:
+    os.environ['DEVELOPER_DIR'] = options.developer_dir
 
   job = subprocess.Popen(['xcode-select', '-print-path'],
                          stdout=subprocess.PIPE,
@@ -47,25 +52,23 @@ def main():
   if job.returncode != 0:
     print >> sys.stderr, out
     print >> sys.stderr, err
-    raise Exception(('Error %d running xcode-select, you might have to run '
-      '|sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer| '
-      'if you are using Xcode 4.') % job.returncode)
-  # The Developer folder moved in Xcode 4.3.
-  xcode43_sdk_path = os.path.join(
+    raise Exception('Error %d running xcode-select' % job.returncode)
+  sdk_dir = os.path.join(
       out.rstrip(), 'Platforms/MacOSX.platform/Developer/SDKs')
-  if os.path.isdir(xcode43_sdk_path):
-    sdk_dir = xcode43_sdk_path
-  else:
-    sdk_dir = os.path.join(out.rstrip(), 'SDKs')
   sdks = [re.findall('^MacOSX(10\.\d+)\.sdk$', s) for s in os.listdir(sdk_dir)]
   sdks = [s[0] for s in sdks if s]  # [['10.5'], ['10.6']] => ['10.5', '10.6']
   sdks = [s for s in sdks  # ['10.5', '10.6'] => ['10.6']
           if parse_version(s) >= parse_version(min_sdk_version)]
   if not sdks:
     raise Exception('No %s+ SDK found' % min_sdk_version)
-  best_sdk = sorted(sdks, key=parse_version)[0]
+  if options.use_sdk:
+    best_sdk = options.use_sdk
+    if best_sdk not in sdks:
+      raise Exception('SDK %s not found' % best_sdk)
+  else:
+    best_sdk = sorted(sdks, key=parse_version)[-1]
 
-  if options.verify and best_sdk != min_sdk_version and not options.sdk_path:
+  if options.verify and best_sdk < min_sdk_version and not options.sdk_path:
     print >> sys.stderr, ''
     print >> sys.stderr, '                                           vvvvvvv'
     print >> sys.stderr, ''
@@ -77,11 +80,11 @@ def main():
     print >> sys.stderr, ''
     print >> sys.stderr, '                                           ^^^^^^^'
     print >> sys.stderr, ''
-    return min_sdk_version
+    sys.exit(1)
 
   if options.print_sdk_path:
-    print subprocess.check_output(['xcodebuild', '-version', '-sdk',
-                                   'macosx' + best_sdk, 'Path']).strip()
+    print subprocess.check_output(
+        ['xcrun', '-sdk', 'macosx' + best_sdk, '--show-sdk-path']).strip()
 
   return best_sdk
 

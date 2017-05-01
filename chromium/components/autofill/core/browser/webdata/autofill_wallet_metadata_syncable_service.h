@@ -5,29 +5,24 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WALLET_METADATA_SYNCABLE_SERVICE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WALLET_METADATA_SYNCABLE_SERVICE_H_
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/scoped_observer.h"
 #include "base/supports_user_data.h"
 #include "base/threading/thread_checker.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
-#include "sync/api/sync_error.h"
-#include "sync/api/sync_merge_result.h"
-#include "sync/api/syncable_service.h"
-#include "sync/protocol/autofill_specifics.pb.h"
-
-namespace base {
-template <typename, typename>
-class ScopedPtrHashMap;
-}
+#include "components/sync/model/sync_error.h"
+#include "components/sync/model/sync_merge_result.h"
+#include "components/sync/model/syncable_service.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 
 namespace syncer {
 class SyncChangeProcessor;
-class SyncData;
 class SyncErrorFactory;
 }
 
@@ -37,7 +32,6 @@ class Location;
 
 namespace autofill {
 
-class AutofillDataModel;
 class AutofillProfile;
 class AutofillWebDataBackend;
 class AutofillWebDataService;
@@ -61,8 +55,8 @@ class AutofillWalletMetadataSyncableService
   syncer::SyncMergeResult MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
-      scoped_ptr<syncer::SyncChangeProcessor> sync_processor,
-      scoped_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
+      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
+      std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
   void StopSyncing(syncer::ModelType type) override;
   syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
   syncer::SyncError ProcessSyncChanges(
@@ -97,9 +91,10 @@ class AutofillWalletMetadataSyncableService
   // to server profiles and server cards read from disk. This data contains the
   // usage stats. Returns true on success.
   virtual bool GetLocalData(
-      base::ScopedPtrHashMap<std::string, scoped_ptr<AutofillProfile>>*
+      std::unordered_map<std::string, std::unique_ptr<AutofillProfile>>*
           profiles,
-      base::ScopedPtrHashMap<std::string, scoped_ptr<CreditCard>>* cards) const;
+      std::unordered_map<std::string, std::unique_ptr<CreditCard>>* cards)
+      const;
 
   // Updates the stats for |profile| stored on disk. Does not trigger
   // notifications that this profile was updated.
@@ -127,18 +122,20 @@ class AutofillWalletMetadataSyncableService
   // is not present locally.
   syncer::SyncMergeResult MergeData(const syncer::SyncDataList& sync_data);
 
-  // Sends updates to the sync server.
+  // Sends the autofill data model updates to the sync server if the local
+  // version is more recent. Used for both profiles and credit cards.
+  template <class DataType>
   void AutofillDataModelChanged(
       const std::string& server_id,
       const sync_pb::WalletMetadataSpecifics::Type& type,
-      const AutofillDataModel& local);
+      const DataType& local);
 
   base::ThreadChecker thread_checker_;
   AutofillWebDataBackend* web_data_backend_;  // Weak ref.
   ScopedObserver<AutofillWebDataBackend, AutofillWalletMetadataSyncableService>
       scoped_observer_;
-  scoped_ptr<syncer::SyncChangeProcessor> sync_processor_;
-  scoped_ptr<syncer::SyncErrorFactory> sync_error_factory_;
+  std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
+  std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory_;
 
   // Local metadata plus metadata for the data that hasn't synced down yet.
   syncer::SyncDataList cache_;

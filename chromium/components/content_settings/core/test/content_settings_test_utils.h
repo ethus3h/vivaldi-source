@@ -5,10 +5,12 @@
 #ifndef COMPONENTS_CONTENT_SETTINGS_CORE_TEST_CONTENT_SETTINGS_TEST_UTILS_H_
 #define COMPONENTS_CONTENT_SETTINGS_CORE_TEST_CONTENT_SETTINGS_TEST_UTILS_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 
 namespace content_settings {
 
@@ -38,12 +40,18 @@ class TestUtils {
   // This wrapper exists only to make
   // HostContentSettingsMap::GetContentSettingValueAndPatterns public for use in
   // tests.
-  static scoped_ptr<base::Value> GetContentSettingValueAndPatterns(
+  static std::unique_ptr<base::Value> GetContentSettingValueAndPatterns(
       content_settings::RuleIterator* rule_iterator,
       const GURL& primary_url,
       const GURL& secondary_url,
       ContentSettingsPattern* primary_pattern,
       ContentSettingsPattern* secondary_pattern);
+
+  // Replace a provider with a different instance for testing purposes
+  static void OverrideProvider(
+      HostContentSettingsMap* map,
+      std::unique_ptr<content_settings::ObservableProvider> provider,
+      HostContentSettingsMap::ProviderType type);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(TestUtils);

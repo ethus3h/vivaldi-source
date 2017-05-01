@@ -7,17 +7,18 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/callback_forward.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/compiler_specific.h"
 #include "net/base/net_export.h"
 
 namespace net {
 
-class BoundNetLog;
 class DnsResponse;
 class DnsSession;
+class NetLogWithSource;
 
 // DnsTransaction implements a stub DNS resolver as defined in RFC 1034.
 // The DnsTransaction takes care of retransmissions, name server fallback (or
@@ -61,19 +62,18 @@ class NET_EXPORT_PRIVATE DnsTransactionFactory {
   //
   // The transaction will run |callback| upon asynchronous completion.
   // The |net_log| is used as the parent log.
-  virtual scoped_ptr<DnsTransaction> CreateTransaction(
+  virtual std::unique_ptr<DnsTransaction> CreateTransaction(
       const std::string& hostname,
       uint16_t qtype,
       const CallbackType& callback,
-      const BoundNetLog& net_log) WARN_UNUSED_RESULT = 0;
+      const NetLogWithSource& net_log) WARN_UNUSED_RESULT = 0;
 
   // Creates a DnsTransactionFactory which creates DnsTransactionImpl using the
   // |session|.
-  static scoped_ptr<DnsTransactionFactory> CreateFactory(
+  static std::unique_ptr<DnsTransactionFactory> CreateFactory(
       DnsSession* session) WARN_UNUSED_RESULT;
 };
 
 }  // namespace net
 
 #endif  // NET_DNS_DNS_TRANSACTION_H_
-

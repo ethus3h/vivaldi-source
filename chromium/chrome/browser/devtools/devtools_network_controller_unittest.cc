@@ -5,12 +5,13 @@
 #include "chrome/browser/devtools/devtools_network_controller.h"
 
 #include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "chrome/browser/devtools/devtools_network_conditions.h"
@@ -19,6 +20,7 @@
 #include "chrome/browser/devtools/devtools_network_upload_data_stream.h"
 #include "net/base/chunked_upload_data_stream.h"
 #include "net/http/http_transaction_test_util.h"
+#include "net/log/net_log_with_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -63,7 +65,7 @@ class DevToolsNetworkControllerHelper {
         "X-DevTools-Emulate-Network-Conditions-Client-Id: 42\r\n";
     AddMockTransaction(&mock_transaction_);
 
-    scoped_ptr<net::HttpTransaction> network_transaction;
+    std::unique_ptr<net::HttpTransaction> network_transaction;
     network_layer_.CreateTransaction(
         net::DEFAULT_PRIORITY, &network_transaction);
     transaction_.reset(new DevToolsNetworkTransaction(
@@ -71,13 +73,13 @@ class DevToolsNetworkControllerHelper {
   }
 
   void SetNetworkState(bool offline, double download, double upload) {
-    scoped_ptr<DevToolsNetworkConditions> conditions(
+    std::unique_ptr<DevToolsNetworkConditions> conditions(
         new DevToolsNetworkConditions(offline, 0, download, upload));
     controller_.SetNetworkState(kClientId, std::move(conditions));
   }
 
   void SetNetworkState(const std::string& id, bool offline) {
-    scoped_ptr<DevToolsNetworkConditions> conditions(
+    std::unique_ptr<DevToolsNetworkConditions> conditions(
         new DevToolsNetworkConditions(offline));
     controller_.SetNetworkState(id, std::move(conditions));
   }
@@ -93,8 +95,8 @@ class DevToolsNetworkControllerHelper {
       request_->upload_data_stream = upload_data_stream_.get();
     }
 
-    int rv = transaction_->Start(
-        request_.get(), completion_callback_, net::BoundNetLog());
+    int rv = transaction_->Start(request_.get(), completion_callback_,
+                                 net::NetLogWithSource());
     EXPECT_EQ(with_upload, !!transaction_->custom_upload_data_stream_);
     return rv;
   }
@@ -125,8 +127,8 @@ class DevToolsNetworkControllerHelper {
   }
 
   int ReadUploadData() {
-    EXPECT_EQ(net::OK,
-        transaction_->custom_upload_data_stream_->Init(completion_callback_));
+    EXPECT_EQ(net::OK, transaction_->custom_upload_data_stream_->Init(
+                           completion_callback_, net::NetLogWithSource()));
     return transaction_->custom_upload_data_stream_->Read(
         buffer_.get(), 64, completion_callback_);
   }
@@ -146,10 +148,10 @@ class DevToolsNetworkControllerHelper {
   net::CompletionCallback completion_callback_;
   MockTransaction mock_transaction_;
   DevToolsNetworkController controller_;
-  scoped_ptr<DevToolsNetworkTransaction> transaction_;
+  std::unique_ptr<DevToolsNetworkTransaction> transaction_;
   scoped_refptr<net::IOBuffer> buffer_;
-  scoped_ptr<net::ChunkedUploadDataStream> upload_data_stream_;
-  scoped_ptr<MockHttpRequest> request_;
+  std::unique_ptr<net::ChunkedUploadDataStream> upload_data_stream_;
+  std::unique_ptr<MockHttpRequest> request_;
 };
 
 TEST(DevToolsNetworkControllerTest, SingleDisableEnable) {

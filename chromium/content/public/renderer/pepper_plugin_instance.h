@@ -13,6 +13,7 @@
 #include "ppapi/c/pp_resource.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/c/private/ppb_instance_private.h"
+#include "ppapi/c/private/ppb_pdf.h"
 #include "ui/base/ime/text_input_type.h"
 
 class GURL;
@@ -45,7 +46,7 @@ class Isolate;
 }
 
 namespace content {
-class RenderView;
+class RenderFrame;
 
 class PepperPluginInstance {
  public:
@@ -55,7 +56,7 @@ class PepperPluginInstance {
 
   virtual ~PepperPluginInstance() {}
 
-  virtual content::RenderView* GetRenderView() = 0;
+  virtual content::RenderFrame* GetRenderFrame() = 0;
 
   virtual blink::WebPluginContainer* GetContainer() = 0;
 

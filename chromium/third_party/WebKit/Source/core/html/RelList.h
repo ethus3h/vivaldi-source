@@ -9,46 +9,39 @@
 #include "core/dom/DOMTokenList.h"
 #include "core/dom/Element.h"
 #include "core/dom/SpaceSplitString.h"
-#include "wtf/PassOwnPtr.h"
 
 namespace blink {
 
 class RelList final : public DOMTokenList {
-public:
-    static PassOwnPtrWillBeRawPtr<RelList> create(Element* element)
-    {
-        return adoptPtrWillBeNoop(new RelList(element));
-    }
+ public:
+  static RelList* create(Element* element) { return new RelList(element); }
 
-#if !ENABLE(OILPAN)
-    void ref() override;
-    void deref() override;
-#endif
+  unsigned length() const override;
+  const AtomicString item(unsigned index) const override;
 
-    unsigned length() const override;
-    const AtomicString item(unsigned index) const override;
+  Element* element() override { return m_element; }
+  void setRelValues(const AtomicString&);
 
-    Element* element() override { return m_element; }
-    void setRelValues(const AtomicString&);
+  DECLARE_VIRTUAL_TRACE();
 
-    DECLARE_VIRTUAL_TRACE();
+ private:
+  explicit RelList(Element*);
 
-    using SupportedTokens = HashSet<AtomicString>;
+  bool containsInternal(const AtomicString&) const override;
 
-private:
-    explicit RelList(Element*);
+  const AtomicString& value() const override {
+    return m_element->getAttribute(HTMLNames::relAttr);
+  }
+  void setValue(const AtomicString& value) override {
+    m_element->setAttribute(HTMLNames::relAttr, value);
+  }
 
-    bool containsInternal(const AtomicString&) const override;
+  bool validateTokenValue(const AtomicString&, ExceptionState&) const override;
 
-    const AtomicString& value() const override { return m_element->getAttribute(HTMLNames::relAttr); }
-    void setValue(const AtomicString& value) override { m_element->setAttribute(HTMLNames::relAttr, value); }
-
-    bool validateTokenValue(const AtomicString&, ExceptionState&) const override;
-
-    RawPtrWillBeMember<Element> m_element;
-    SpaceSplitString m_relValues;
+  Member<Element> m_element;
+  SpaceSplitString m_relValues;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // RelList_h
+#endif  // RelList_h

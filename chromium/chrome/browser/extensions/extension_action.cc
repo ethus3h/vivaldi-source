@@ -10,21 +10,19 @@
 #include "base/base64.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/grit/theme_resources.h"
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/browser/extension_icon_placeholder.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_icon_set.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
-#include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_utils.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
-#include "ui/base/resource/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/canvas.h"
@@ -34,17 +32,13 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_source.h"
-#include "ui/gfx/ipc/gfx_param_traits.h"
+#include "ui/gfx/ipc/skia/gfx_skia_param_traits.h"
 #include "ui/gfx/skbitmap_operations.h"
 #include "url/gurl.h"
 
-namespace {
+#include "app/vivaldi_apptools.h"
 
-// Returns the default icon image for extensions.
-gfx::Image GetDefaultIcon() {
-  return ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-      IDR_EXTENSIONS_FAVICON);
-}
+namespace {
 
 class GetAttentionImageSource : public gfx::ImageSkiaSource {
  public:
@@ -79,10 +73,18 @@ bool HasValue(const std::map<int, T>& map, int tab_id) {
 
 }  // namespace
 
+// static
 extension_misc::ExtensionIcons ExtensionAction::ActionIconSize() {
-  return ui::MaterialDesignController::IsModeMaterial()
-             ? extension_misc::EXTENSION_ICON_BITTY
-             : extension_misc::EXTENSION_ICON_ACTION;
+  if (vivaldi::IsVivaldiRunning()) {
+    return extension_misc::EXTENSION_ICON_MEDIUM;
+  }
+  return extension_misc::EXTENSION_ICON_BITTY;
+}
+
+// static
+gfx::Image ExtensionAction::FallbackIcon() {
+  return ui::ResourceBundle::GetSharedInstance().GetImageNamed(
+      IDR_EXTENSIONS_FAVICON);
 }
 
 const int ExtensionAction::kDefaultTabId = -1;
@@ -149,12 +151,11 @@ bool ExtensionAction::ParseIconFromCanvasDictionary(
     CHECK(!bitmap.isNull());
 
     // Chrome helpfully scales the provided icon(s), but let's not go overboard.
-    const int kActionIconMaxSize = 10 * extension_misc::EXTENSION_ICON_ACTION;
+    const int kActionIconMaxSize = 10 * ActionIconSize();
     if (bitmap.drawsNothing() || bitmap.width() > kActionIconMaxSize)
       continue;
 
-    float scale =
-        static_cast<float>(bitmap.width()) / ExtensionAction::ActionIconSize();
+    float scale = static_cast<float>(bitmap.width()) / ActionIconSize();
     icon->AddRepresentation(gfx::ImageSkiaRep(bitmap, scale));
   }
   return true;
@@ -229,15 +230,9 @@ void ExtensionAction::ClearAllValuesForTab(int tab_id) {
   // which prevents me from cleaning everything up now.
 }
 
-extensions::IconImage* ExtensionAction::LoadDefaultIconImage(
-    const extensions::Extension& extension,
-    content::BrowserContext* browser_context) {
-  if (default_icon_ && !default_icon_image_) {
-    default_icon_image_.reset(new extensions::IconImage(
-        browser_context, &extension, *default_icon(), ActionIconSize(),
-        *GetDefaultIcon().ToImageSkia(), nullptr));
-  }
-  return default_icon_image_.get();
+void ExtensionAction::SetDefaultIconImage(
+    std::unique_ptr<extensions::IconImage> icon_image) {
+  default_icon_image_ = std::move(icon_image);
 }
 
 gfx::Image ExtensionAction::GetDefaultIconImage() const {
@@ -255,7 +250,7 @@ gfx::Image ExtensionAction::GetDefaultIconImage() const {
           extensions::ExtensionIconPlaceholder::CreateImage(ActionIconSize(),
                                                             extension_name_);
     } else {
-      placeholder_icon_image_ = GetDefaultIcon();
+      placeholder_icon_image_ = FallbackIcon();
     }
   }
 
@@ -291,7 +286,7 @@ bool ExtensionAction::HasIcon(int tab_id) const {
 }
 
 void ExtensionAction::SetDefaultIconForTest(
-    scoped_ptr<ExtensionIconSet> default_icon) {
+    std::unique_ptr<ExtensionIconSet> default_icon) {
   default_icon_ = std::move(default_icon);
 }
 

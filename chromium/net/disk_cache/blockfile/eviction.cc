@@ -36,9 +36,10 @@
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "net/disk_cache/blockfile/backend_impl.h"
 #include "net/disk_cache/blockfile/disk_format.h"
@@ -274,12 +275,10 @@ void Eviction::ReportTrimTimes(EntryImpl* entry) {
       backend_->FirstEviction();
     } else {
       // This is an old file, but we may want more reports from this user so
-      // lets save some create_time.
-      Time::Exploded old = {0};
-      old.year = 2009;
-      old.month = 3;
-      old.day_of_month = 1;
-      header_->create_time = Time::FromLocalExploded(old).ToInternalValue();
+      // lets save some create_time. Conversion cannot fail here.
+      const base::Time time_2009_3_1 =
+          base::Time::FromInternalValue(12985574400000000);
+      header_->create_time = time_2009_3_1.ToInternalValue();
     }
   }
 }

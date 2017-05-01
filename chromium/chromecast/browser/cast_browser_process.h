@@ -5,16 +5,13 @@
 #ifndef CHROMECAST_BROWSER_CAST_BROWSER_PROCESS_H_
 #define CHROMECAST_BROWSER_CAST_BROWSER_PROCESS_H_
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 
 class PrefService;
-
-namespace breakpad {
-class CrashDumpManager;
-}  // namespace breakpad
 
 namespace net {
 class NetLog;
@@ -45,24 +42,22 @@ class CastBrowserProcess {
   CastBrowserProcess();
   virtual ~CastBrowserProcess();
 
-  void SetBrowserContext(scoped_ptr<CastBrowserContext> browser_context);
+  void SetBrowserContext(std::unique_ptr<CastBrowserContext> browser_context);
   void SetCastContentBrowserClient(CastContentBrowserClient* browser_client);
-  void SetCastService(scoped_ptr<CastService> cast_service);
+  void SetCastService(std::unique_ptr<CastService> cast_service);
 #if defined(USE_AURA)
-  void SetCastScreen(scoped_ptr<CastScreen> cast_screen);
+  void SetCastScreen(std::unique_ptr<CastScreen> cast_screen);
 #endif  // defined(USE_AURA)
-  void SetMetricsHelper(scoped_ptr<metrics::CastMetricsHelper> metrics_helper);
+  void SetMetricsHelper(
+      std::unique_ptr<metrics::CastMetricsHelper> metrics_helper);
   void SetMetricsServiceClient(
-      scoped_ptr<metrics::CastMetricsServiceClient> metrics_service_client);
-  void SetPrefService(scoped_ptr<PrefService> pref_service);
+      std::unique_ptr<metrics::CastMetricsServiceClient>
+          metrics_service_client);
+  void SetPrefService(std::unique_ptr<PrefService> pref_service);
   void SetRemoteDebuggingServer(
-      scoped_ptr<RemoteDebuggingServer> remote_debugging_server);
+      std::unique_ptr<RemoteDebuggingServer> remote_debugging_server);
   void SetResourceDispatcherHostDelegate(
-      scoped_ptr<CastResourceDispatcherHostDelegate> delegate);
-#if defined(OS_ANDROID)
-  void SetCrashDumpManager(
-      scoped_ptr<breakpad::CrashDumpManager> crash_dump_manager);
-#endif  // defined(OS_ANDROID)
+      std::unique_ptr<CastResourceDispatcherHostDelegate> delegate);
   void SetConnectivityChecker(
       scoped_refptr<ConnectivityChecker> connectivity_checker);
   void SetNetLog(net::NetLog* net_log);
@@ -91,26 +86,23 @@ class CastBrowserProcess {
  private:
   // Note: The following order should match the order they are set in
   // CastBrowserMainParts.
-  scoped_ptr<metrics::CastMetricsHelper> metrics_helper_;
+  std::unique_ptr<metrics::CastMetricsHelper> metrics_helper_;
 #if defined(USE_AURA)
-  scoped_ptr<CastScreen> cast_screen_;
+  std::unique_ptr<CastScreen> cast_screen_;
 #endif  // defined(USE_AURA)
-  scoped_ptr<PrefService> pref_service_;
+  std::unique_ptr<PrefService> pref_service_;
   scoped_refptr<ConnectivityChecker> connectivity_checker_;
-  scoped_ptr<CastBrowserContext> browser_context_;
-  scoped_ptr<metrics::CastMetricsServiceClient> metrics_service_client_;
-  scoped_ptr<CastResourceDispatcherHostDelegate>
+  std::unique_ptr<CastBrowserContext> browser_context_;
+  std::unique_ptr<metrics::CastMetricsServiceClient> metrics_service_client_;
+  std::unique_ptr<CastResourceDispatcherHostDelegate>
       resource_dispatcher_host_delegate_;
-#if defined(OS_ANDROID)
-  scoped_ptr<breakpad::CrashDumpManager> crash_dump_manager_;
-#endif  // defined(OS_ANDROID)
-  scoped_ptr<RemoteDebuggingServer> remote_debugging_server_;
+  std::unique_ptr<RemoteDebuggingServer> remote_debugging_server_;
 
   CastContentBrowserClient* cast_content_browser_client_;
   net::NetLog* net_log_;
 
   // Note: CastService must be destroyed before others.
-  scoped_ptr<CastService> cast_service_;
+  std::unique_ptr<CastService> cast_service_;
 
   DISALLOW_COPY_AND_ASSIGN(CastBrowserProcess);
 };

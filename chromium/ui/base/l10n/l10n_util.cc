@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iterator>
+#include <memory>
 #include <string>
 
 #include "base/command_line.h"
@@ -14,11 +15,11 @@
 #include "base/files/file_util.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/message_formatter.h"
+#include "base/i18n/number_formatting.h"
 #include "base/i18n/rtl.h"
 #include "base/i18n/string_compare.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -31,6 +32,8 @@
 #include "ui/base/l10n/l10n_util_collator.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
+
+#include "app/vivaldi_apptools.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/locale_utils.h"
@@ -50,7 +53,9 @@ namespace {
 static const char* const kAcceptLanguageList[] = {
   "af",     // Afrikaans
   "am",     // Amharic
+  "an",     // Aragonese
   "ar",     // Arabic
+  "ast",    // Asturian
   "az",     // Azerbaijani
   "be",     // Belarusian
   "bg",     // Bulgarian
@@ -74,6 +79,7 @@ static const char* const kAcceptLanguageList[] = {
   "en-AU",  // English (Australia)
   "en-CA",  // English (Canada)
   "en-GB",  // English (UK)
+  "en-IN",  // English (India)
   "en-NZ",  // English (New Zealand)
   "en-US",  // English (US)
   "en-ZA",  // English (South Africa)
@@ -82,6 +88,10 @@ static const char* const kAcceptLanguageList[] = {
   // Spanish speaking countries?
   "es",     // Spanish
   "es-419", // Spanish (Latin America)
+  "es-AR",  // Spanish (Argentina)
+  "es-ES",  // Spanish (Spain)
+  "es-MX",  // Spanish (Mexico)
+  "es-US",  // Spanish (US)
   "et",     // Estonian
   "eu",     // Basque
   "fa",     // Persian
@@ -178,12 +188,14 @@ static const char* const kAcceptLanguageList[] = {
   "ur",     // Urdu
   "uz",     // Uzbek
   "vi",     // Vietnamese
+  "wa",     // Walloon
   "xh",     // Xhosa
   "yi",     // Yiddish
   "yo",     // Yoruba
   "zh",     // Chinese
-  "zh-CN",  // Chinese (Simplified)
-  "zh-TW",  // Chinese (Traditional)
+  "zh-CN",  // Chinese (China)
+  "zh-HK",  // Chinese (Hong Kong)
+  "zh-TW",  // Chinese (Taiwan)
   "zu",     // Zulu
 };
 
@@ -205,9 +217,8 @@ bool IsDuplicateName(const std::string& locale_name) {
   if (base::StartsWith(locale_name, "es_",
                        base::CompareCase::INSENSITIVE_ASCII))
     return !base::EndsWith(locale_name, "419", base::CompareCase::SENSITIVE);
-
-  for (size_t i = 0; i < arraysize(kDuplicateNames); ++i) {
-    if (base::EqualsCaseInsensitiveASCII(kDuplicateNames[i], locale_name))
+  for (const char* duplicate_name : kDuplicateNames) {
+    if (base::EqualsCaseInsensitiveASCII(duplicate_name, locale_name))
       return true;
   }
   return false;
@@ -314,6 +325,8 @@ std::string GetLanguage(const std::string& locale) {
   return std::string(locale, 0, hyphen_pos);
 }
 
+// TOOD(jshin): revamp this function completely to use a more sytematic
+// and generic locale fallback based on ICU/CLDR.
 bool CheckAndResolveLocale(const std::string& locale,
                            std::string* resolved_locale) {
 #if defined(OS_MACOSX)
@@ -346,6 +359,10 @@ bool CheckAndResolveLocale(const std::string& locale,
     if (base::LowerCaseEqualsASCII(lang, "es") &&
         !base::LowerCaseEqualsASCII(region, "es")) {
       tmp_locale.append("-419");
+    } else if (base::LowerCaseEqualsASCII(lang, "pt")) {
+      // Map pt-RR other than pt-BR to pt-PT. Note that "pt" by itself maps to
+      // pt-BR (logic below).
+      tmp_locale.append("-PT");
     } else if (base::LowerCaseEqualsASCII(lang, "zh")) {
       // Map zh-HK and zh-MO to zh-TW. Otherwise, zh-FOO is mapped to zh-CN.
       if (base::LowerCaseEqualsASCII(region, "hk") ||
@@ -355,12 +372,13 @@ bool CheckAndResolveLocale(const std::string& locale,
         tmp_locale.append("-CN");
       }
     } else if (base::LowerCaseEqualsASCII(lang, "en")) {
-      // Map Australian, Canadian, New Zealand and South African English
-      // to British English for now.
+      // Map Australian, Canadian, Indian, New Zealand and South African
+      // English to British English for now.
       // TODO(jungshik): en-CA may have to change sides once
       // we have OS locale separate from app locale (Chrome's UI language).
       if (base::LowerCaseEqualsASCII(region, "au") ||
           base::LowerCaseEqualsASCII(region, "ca") ||
+          base::LowerCaseEqualsASCII(region, "in") ||
           base::LowerCaseEqualsASCII(region, "nz") ||
           base::LowerCaseEqualsASCII(region, "za")) {
         tmp_locale.append("-GB");
@@ -375,19 +393,17 @@ bool CheckAndResolveLocale(const std::string& locale,
   }
 
   // Google updater uses no, tl, iw and en for our nb, fil, he, and en-US.
+  // Note that pt-RR is mapped to pt-PT above, but we want pt -> pt-BR here.
   struct {
     const char* source;
     const char* dest;
   } alias_map[] = {
-      {"no", "nb"},
-      {"tl", "fil"},
-      {"iw", "he"},
-      {"en", "en-US"},
+      {"en", "en-US"}, {"iw", "he"},  {"no", "nb"},
+      {"pt", "pt-BR"}, {"tl", "fil"}, {"zh", "zh-CN"},
   };
-
-  for (size_t i = 0; i < arraysize(alias_map); ++i) {
-    if (base::LowerCaseEqualsASCII(lang, alias_map[i].source)) {
-      std::string tmp_locale(alias_map[i].dest);
+  for (const auto& alias : alias_map) {
+    if (base::LowerCaseEqualsASCII(lang, alias.source)) {
+      std::string tmp_locale(alias.dest);
       if (IsLocaleAvailable(tmp_locale)) {
         resolved_locale->swap(tmp_locale);
         return true;
@@ -401,6 +417,13 @@ bool CheckAndResolveLocale(const std::string& locale,
 
 std::string GetApplicationLocaleInternal(const std::string& pref_locale) {
 #if defined(OS_MACOSX)
+  if (vivaldi::IsVivaldiRunning()) {
+    if (!pref_locale.empty()) {
+      std::string app_locale = base::i18n::GetCanonicalLocale(pref_locale);
+      if (!app_locale.empty())
+        return app_locale;
+    }
+  }
 
   // Use any override (Cocoa for the browser), otherwise use the preference
   // passed to the function.
@@ -446,9 +469,13 @@ std::string GetApplicationLocaleInternal(const std::string& pref_locale) {
 #elif defined(OS_ANDROID)
 
   // On Android, query java.util.Locale for the default locale.
-  candidates.push_back(base::android::GetDefaultLocale());
+  candidates.push_back(base::android::GetDefaultLocaleString());
 
 #elif defined(USE_GLIB) && !defined(OS_CHROMEOS)
+  if (vivaldi::IsVivaldiRunning()) {
+    if (!pref_locale.empty())
+      candidates.push_back(base::i18n::GetCanonicalLocale(pref_locale));
+  }
 
   // GLib implements correct environment variable parsing with
   // the precedence order: LANGUAGE, LC_ALL, LC_MESSAGES and LANG.
@@ -687,23 +714,21 @@ base::string16 GetStringFUTF16(int message_id,
   // check as the code may simply want to find the placeholders rather than
   // actually replacing them.
   if (!offsets) {
-    std::string utf8_string = base::UTF16ToUTF8(format_string);
-
     // $9 is the highest allowed placeholder.
     for (size_t i = 0; i < 9; ++i) {
       bool placeholder_should_exist = replacements.size() > i;
 
-      std::string placeholder =
-          base::StringPrintf("$%d", static_cast<int>(i + 1));
-      size_t pos = utf8_string.find(placeholder.c_str());
+      base::string16 placeholder = base::ASCIIToUTF16("$");
+      placeholder += (L'1' + i);
+      size_t pos = format_string.find(placeholder);
       if (placeholder_should_exist) {
-        DCHECK_NE(std::string::npos, pos) <<
-            " Didn't find a " << placeholder << " placeholder in " <<
-            utf8_string;
+        DCHECK_NE(std::string::npos, pos) << " Didn't find a " << placeholder
+                                          << " placeholder in "
+                                          << format_string;
       } else {
-        DCHECK_EQ(std::string::npos, pos) <<
-            " Unexpectedly found a " << placeholder << " placeholder in " <<
-            utf8_string;
+        DCHECK_EQ(std::string::npos, pos) << " Unexpectedly found a "
+                                          << placeholder << " placeholder in "
+                                          << format_string;
       }
     }
   }
@@ -818,11 +843,11 @@ base::string16 GetStringFUTF16(int message_id,
 }
 
 base::string16 GetStringFUTF16Int(int message_id, int a) {
-  return GetStringFUTF16(message_id, base::UTF8ToUTF16(base::IntToString(a)));
+  return GetStringFUTF16(message_id, base::FormatNumber(a));
 }
 
 base::string16 GetStringFUTF16Int(int message_id, int64_t a) {
-  return GetStringFUTF16(message_id, base::UTF8ToUTF16(base::Int64ToString(a)));
+  return GetStringFUTF16(message_id, base::FormatNumber(a));
 }
 
 base::string16 GetPluralStringFUTF16(int message_id, int number) {
@@ -851,13 +876,13 @@ const std::vector<std::string>& GetAvailableLocales() {
 
 void GetAcceptLanguagesForLocale(const std::string& display_locale,
                                  std::vector<std::string>* locale_codes) {
-  for (size_t i = 0; i < arraysize(kAcceptLanguageList); ++i) {
-    if (!l10n_util::IsLocaleNameTranslated(kAcceptLanguageList[i],
-                                           display_locale))
-      // TODO(jungshik) : Put them at the of the list with language codes
+  for (const char* accept_language : kAcceptLanguageList) {
+    if (!l10n_util::IsLocaleNameTranslated(accept_language, display_locale)) {
+      // TODO(jungshik) : Put them at the end of the list with language codes
       // enclosed by brackets instead of skipping.
-        continue;
-    locale_codes->push_back(kAcceptLanguageList[i]);
+      continue;
+    }
+    locale_codes->push_back(accept_language);
   }
 }
 

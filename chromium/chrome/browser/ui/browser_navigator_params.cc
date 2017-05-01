@@ -9,9 +9,8 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/page_navigator.h"
 
-#if !defined(OS_ANDROID) || defined(USE_AURA)
+#if !defined(OS_ANDROID)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/host_desktop.h"
 #endif
 
 using content::GlobalRequestID;
@@ -20,25 +19,13 @@ using content::WebContents;
 
 namespace chrome {
 
-#if !defined(OS_ANDROID) || defined(USE_AURA)
-namespace {
-
-HostDesktopType GetHostDesktop(Browser* browser) {
-  if (browser)
-    return browser->host_desktop_type();
-  return GetActiveDesktop();
-}
-
-}  // namespace
-#endif
-
 #if defined(OS_ANDROID)
 NavigateParams::NavigateParams(WebContents* a_target_contents)
     : frame_tree_node_id(-1),
       uses_post(false),
       target_contents(a_target_contents),
       source_contents(nullptr),
-      disposition(CURRENT_TAB),
+      disposition(WindowOpenDisposition::CURRENT_TAB),
       trusted_source(false),
       transition(ui::PAGE_TRANSITION_LINK),
       is_renderer_initiated(false),
@@ -49,13 +36,10 @@ NavigateParams::NavigateParams(WebContents* a_target_contents)
       path_behavior(RESPECT),
       ref_behavior(IGNORE_REF),
       initiating_profile(nullptr),
-      host_desktop_type(GetActiveDesktop()),
       should_replace_current_entry(false),
-      created_with_opener(false) {
-}
-#endif  // defined(OS_ANDROID)
-
-#if !defined(OS_ANDROID) || defined(USE_AURA)
+      created_with_opener(false),
+      started_from_context_menu(false) {}
+#else
 NavigateParams::NavigateParams(Browser* a_browser,
                                const GURL& a_url,
                                ui::PageTransition a_transition)
@@ -64,7 +48,7 @@ NavigateParams::NavigateParams(Browser* a_browser,
       uses_post(false),
       target_contents(NULL),
       source_contents(NULL),
-      disposition(CURRENT_TAB),
+      disposition(WindowOpenDisposition::CURRENT_TAB),
       trusted_source(false),
       transition(a_transition),
       is_renderer_initiated(false),
@@ -76,10 +60,9 @@ NavigateParams::NavigateParams(Browser* a_browser,
       ref_behavior(IGNORE_REF),
       browser(a_browser),
       initiating_profile(NULL),
-      host_desktop_type(GetHostDesktop(a_browser)),
       should_replace_current_entry(false),
-      created_with_opener(false) {
-}
+      created_with_opener(false),
+      started_from_context_menu(false) {}
 
 NavigateParams::NavigateParams(Browser* a_browser,
                                WebContents* a_target_contents)
@@ -87,7 +70,7 @@ NavigateParams::NavigateParams(Browser* a_browser,
       uses_post(false),
       target_contents(a_target_contents),
       source_contents(NULL),
-      disposition(CURRENT_TAB),
+      disposition(WindowOpenDisposition::CURRENT_TAB),
       trusted_source(false),
       transition(ui::PAGE_TRANSITION_LINK),
       is_renderer_initiated(false),
@@ -99,11 +82,10 @@ NavigateParams::NavigateParams(Browser* a_browser,
       ref_behavior(IGNORE_REF),
       browser(a_browser),
       initiating_profile(NULL),
-      host_desktop_type(GetHostDesktop(a_browser)),
       should_replace_current_entry(false),
-      created_with_opener(false) {
-}
-#endif  // !defined(OS_ANDROID) || defined(USE_AURA)
+      created_with_opener(false),
+      started_from_context_menu(false) {}
+#endif  // !defined(OS_ANDROID)
 
 NavigateParams::NavigateParams(Profile* a_profile,
                                const GURL& a_url,
@@ -113,7 +95,7 @@ NavigateParams::NavigateParams(Profile* a_profile,
       uses_post(false),
       target_contents(NULL),
       source_contents(NULL),
-      disposition(NEW_FOREGROUND_TAB),
+      disposition(WindowOpenDisposition::NEW_FOREGROUND_TAB),
       trusted_source(false),
       transition(a_transition),
       is_renderer_initiated(false),
@@ -123,14 +105,16 @@ NavigateParams::NavigateParams(Profile* a_profile,
       user_gesture(true),
       path_behavior(RESPECT),
       ref_behavior(IGNORE_REF),
-#if !defined(OS_ANDROID) || defined(USE_AURA)
+#if !defined(OS_ANDROID)
       browser(NULL),
 #endif
       initiating_profile(a_profile),
-      host_desktop_type(GetActiveDesktop()),
       should_replace_current_entry(false),
-      created_with_opener(false) {
+      created_with_opener(false),
+      started_from_context_menu(false) {
 }
+
+NavigateParams::NavigateParams(const NavigateParams& other) = default;
 
 NavigateParams::~NavigateParams() {}
 
@@ -147,7 +131,8 @@ void FillNavigateParamsFromOpenURLParams(NavigateParams* nav_params,
   nav_params->should_replace_current_entry =
       params.should_replace_current_entry;
   nav_params->uses_post = params.uses_post;
-  nav_params->browser_initiated_post_data = params.browser_initiated_post_data;
+  nav_params->post_data = params.post_data;
+  nav_params->started_from_context_menu = params.started_from_context_menu;
 }
 
 }  // namespace chrome

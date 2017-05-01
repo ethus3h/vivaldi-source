@@ -22,7 +22,6 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.ParcelUuid;
-import android.os.Process;
 
 import org.chromium.base.Log;
 import org.chromium.base.annotations.CalledByNative;
@@ -46,13 +45,15 @@ import java.util.UUID;
 class Wrappers {
     private static final String TAG = "Bluetooth";
 
+    public static final int DEVICE_CLASS_UNSPECIFIED = 0x1F00;
+
     /**
      * Wraps android.bluetooth.BluetoothAdapter.
      */
     static class BluetoothAdapterWrapper {
         private final BluetoothAdapter mAdapter;
-        protected final ContextWrapper mContext;
-        protected final BluetoothLeScannerWrapper mScanner;
+        protected final Context mContext;
+        protected BluetoothLeScannerWrapper mScannerWrapper;
 
         /**
          * Creates a BluetoothAdapterWrapper using the default
@@ -94,32 +95,40 @@ class Wrappers {
                 Log.i(TAG, "BluetoothAdapterWrapper.create failed: Default adapter not found.");
                 return null;
             } else {
-                return new BluetoothAdapterWrapper(adapter, new ContextWrapper(context),
-                        new BluetoothLeScannerWrapper(adapter.getBluetoothLeScanner()));
+                return new BluetoothAdapterWrapper(adapter, context);
             }
         }
 
-        public BluetoothAdapterWrapper(BluetoothAdapter adapter, ContextWrapper context,
-                BluetoothLeScannerWrapper scanner) {
+        public BluetoothAdapterWrapper(BluetoothAdapter adapter, Context context) {
             mAdapter = adapter;
             mContext = context;
-            mScanner = scanner;
         }
 
-        public ContextWrapper getContext() {
-            return mContext;
+        public boolean disable() {
+            return mAdapter.disable();
         }
 
-        public BluetoothLeScannerWrapper getBluetoothLeScanner() {
-            return mScanner;
-        }
-
-        public boolean isEnabled() {
-            return mAdapter.isEnabled();
+        public boolean enable() {
+            return mAdapter.enable();
         }
 
         public String getAddress() {
             return mAdapter.getAddress();
+        }
+
+        public BluetoothLeScannerWrapper getBluetoothLeScanner() {
+            BluetoothLeScanner scanner = mAdapter.getBluetoothLeScanner();
+            if (scanner == null) {
+                return null;
+            }
+            if (mScannerWrapper == null) {
+                mScannerWrapper = new BluetoothLeScannerWrapper(scanner);
+            }
+            return mScannerWrapper;
+        }
+
+        public Context getContext() {
+            return mContext;
         }
 
         public String getName() {
@@ -133,21 +142,9 @@ class Wrappers {
         public boolean isDiscovering() {
             return mAdapter.isDiscovering();
         }
-    }
 
-    /**
-     * Wraps android.content.Context.
-     */
-    static class ContextWrapper {
-        private final Context mContext;
-
-        public ContextWrapper(Context context) {
-            mContext = context;
-        }
-
-        public boolean checkPermission(String permission) {
-            return mContext.checkPermission(permission, Process.myPid(), Process.myUid())
-                    == PackageManager.PERMISSION_GRANTED;
+        public boolean isEnabled() {
+            return mAdapter.isEnabled();
         }
     }
 
@@ -155,7 +152,7 @@ class Wrappers {
      * Wraps android.bluetooth.BluetoothLeScanner.
      */
     static class BluetoothLeScannerWrapper {
-        private final BluetoothLeScanner mScanner;
+        protected final BluetoothLeScanner mScanner;
         private final HashMap<ScanCallbackWrapper, ForwardScanCallbackToWrapper> mCallbacks;
 
         public BluetoothLeScannerWrapper(BluetoothLeScanner scanner) {
@@ -240,8 +237,16 @@ class Wrappers {
             return new BluetoothDeviceWrapper(mScanResult.getDevice());
         }
 
+        public int getRssi() {
+            return mScanResult.getRssi();
+        }
+
         public List<ParcelUuid> getScanRecord_getServiceUuids() {
             return mScanResult.getScanRecord().getServiceUuids();
+        }
+
+        public int getScanRecord_getTxPowerLevel() {
+            return mScanResult.getScanRecord().getTxPowerLevel();
         }
     }
 
@@ -276,6 +281,11 @@ class Wrappers {
         }
 
         public int getBluetoothClass_getDeviceClass() {
+            if (mDevice == null || mDevice.getBluetoothClass() == null) {
+                // BluetoothDevice.getBluetoothClass() returns null if adapter has been powered off.
+                // Return DEVICE_CLASS_UNSPECIFIED in these cases.
+                return DEVICE_CLASS_UNSPECIFIED;
+            }
             return mDevice.getBluetoothClass().getDeviceClass();
         }
 
@@ -304,6 +314,10 @@ class Wrappers {
             mGatt.disconnect();
         }
 
+        public void close() {
+            mGatt.close();
+        }
+
         public void discoverServices() {
             mGatt.discoverServices();
         }
@@ -329,6 +343,10 @@ class Wrappers {
 
         boolean writeCharacteristic(BluetoothGattCharacteristicWrapper characteristic) {
             return mGatt.writeCharacteristic(characteristic.mCharacteristic);
+        }
+
+        boolean readDescriptor(BluetoothGattDescriptorWrapper descriptor) {
+            return mGatt.readDescriptor(descriptor.mDescriptor);
         }
 
         boolean writeDescriptor(BluetoothGattDescriptorWrapper descriptor) {
@@ -377,6 +395,20 @@ class Wrappers {
         }
 
         @Override
+        public void onDescriptorRead(
+                BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            mWrapperCallback.onDescriptorRead(
+                    mDeviceWrapper.mDescriptorsToWrappers.get(descriptor), status);
+        }
+
+        @Override
+        public void onDescriptorWrite(
+                BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            mWrapperCallback.onDescriptorWrite(
+                    mDeviceWrapper.mDescriptorsToWrappers.get(descriptor), status);
+        }
+
+        @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             mWrapperCallback.onConnectionStateChange(status, newState);
         }
@@ -404,6 +436,10 @@ class Wrappers {
                 BluetoothGattCharacteristicWrapper characteristic, int status);
         public abstract void onCharacteristicWrite(
                 BluetoothGattCharacteristicWrapper characteristic, int status);
+        public abstract void onDescriptorRead(
+                BluetoothGattDescriptorWrapper descriptor, int status);
+        public abstract void onDescriptorWrite(
+                BluetoothGattDescriptorWrapper descriptor, int status);
         public abstract void onConnectionStateChange(int status, int newState);
         public abstract void onServicesDiscovered(int status);
     }
@@ -461,22 +497,6 @@ class Wrappers {
             mDeviceWrapper = deviceWrapper;
         }
 
-        public BluetoothGattDescriptorWrapper getDescriptor(UUID uuid) {
-            BluetoothGattDescriptor descriptor = mCharacteristic.getDescriptor(uuid);
-            if (descriptor == null) {
-                return null;
-            }
-
-            BluetoothGattDescriptorWrapper descriptorWrapper =
-                    mDeviceWrapper.mDescriptorsToWrappers.get(descriptor);
-
-            if (descriptorWrapper == null) {
-                descriptorWrapper = new BluetoothGattDescriptorWrapper(descriptor);
-                mDeviceWrapper.mDescriptorsToWrappers.put(descriptor, descriptorWrapper);
-            }
-            return descriptorWrapper;
-        }
-
         public List<BluetoothGattDescriptorWrapper> getDescriptors() {
             List<BluetoothGattDescriptor> descriptors = mCharacteristic.getDescriptors();
 
@@ -487,7 +507,8 @@ class Wrappers {
                 BluetoothGattDescriptorWrapper descriptorWrapper =
                         mDeviceWrapper.mDescriptorsToWrappers.get(descriptor);
                 if (descriptorWrapper == null) {
-                    descriptorWrapper = new BluetoothGattDescriptorWrapper(descriptor);
+                    descriptorWrapper =
+                            new BluetoothGattDescriptorWrapper(descriptor, mDeviceWrapper);
                     mDeviceWrapper.mDescriptorsToWrappers.put(descriptor, descriptorWrapper);
                 }
                 descriptorsWrapped.add(descriptorWrapper);
@@ -521,9 +542,16 @@ class Wrappers {
      */
     static class BluetoothGattDescriptorWrapper {
         private final BluetoothGattDescriptor mDescriptor;
+        final BluetoothDeviceWrapper mDeviceWrapper;
 
-        public BluetoothGattDescriptorWrapper(BluetoothGattDescriptor descriptor) {
+        public BluetoothGattDescriptorWrapper(
+                BluetoothGattDescriptor descriptor, BluetoothDeviceWrapper deviceWrapper) {
             mDescriptor = descriptor;
+            mDeviceWrapper = deviceWrapper;
+        }
+
+        public BluetoothGattCharacteristicWrapper getCharacteristic() {
+            return mDeviceWrapper.mCharacteristicsToWrappers.get(mDescriptor.getCharacteristic());
         }
 
         public UUID getUuid() {

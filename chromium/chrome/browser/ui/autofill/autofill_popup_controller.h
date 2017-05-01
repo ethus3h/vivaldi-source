@@ -13,15 +13,12 @@
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view_delegate.h"
-
-namespace gfx {
-class FontList;
-class Point;
-class Rect;
-}
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/native_theme/native_theme.h"
 
 namespace autofill {
 
+class AutofillPopupLayoutModel;
 struct Suggestion;
 
 // This interface provides data to an AutofillPopupView.
@@ -32,18 +29,6 @@ class AutofillPopupController : public AutofillPopupViewDelegate {
 
   // Accepts the suggestion at |index|.
   virtual void AcceptSuggestion(size_t index) = 0;
-
-  // Gets the resource value for the given resource, returning -1 if the
-  // resource isn't recognized.
-  virtual int GetIconResourceID(const base::string16& resource_name) const = 0;
-
-  // Returns true if the given index refers to an element that is a warning
-  // rather than an Autofill suggestion.
-  virtual bool IsWarning(size_t index) const = 0;
-
-  // Returns the bounds of the item at |index| in the popup, relative to
-  // the top left of the popup.
-  virtual gfx::Rect GetRowBounds(size_t index) = 0;
 
   // Returns the number of lines of data that there are.
   virtual size_t GetLineCount() const = 0;
@@ -62,16 +47,16 @@ class AutofillPopupController : public AutofillPopupViewDelegate {
   // Removes the suggestion at the given index.
   virtual bool RemoveSuggestion(int index) = 0;
 
-#if !defined(OS_ANDROID)
-  // The same font can vary based on the type of data it is showing,
-  // so we need to know the row.
-  virtual const gfx::FontList& GetValueFontListForRow(size_t index) const = 0;
-  virtual const gfx::FontList& GetLabelFontList() const = 0;
-#endif
+  // Returns the background color ID of the row item according to its |index|,
+  // or default popup background otherwise.
+  virtual ui::NativeTheme::ColorId GetBackgroundColorIDForRow(
+      int index) const = 0;
 
   // Returns the index of the selected line. A line is "selected" when it is
   // hovered or has keyboard focus.
   virtual int selected_line() const = 0;
+
+  virtual const AutofillPopupLayoutModel& layout_model() const = 0;
 
  protected:
   ~AutofillPopupController() override {}

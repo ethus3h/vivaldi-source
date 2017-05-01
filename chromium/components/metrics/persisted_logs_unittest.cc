@@ -8,12 +8,13 @@
 
 #include "base/base64.h"
 #include "base/macros.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/scoped_user_pref_update.h"
-#include "base/prefs/testing_pref_service.h"
 #include "base/rand_util.h"
 #include "base/sha1.h"
 #include "base/values.h"
+#include "components/metrics/persisted_logs_metrics_impl.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/zlib/google/compression_utils.h"
 
@@ -63,9 +64,13 @@ class PersistedLogsTest : public testing::Test {
 class TestPersistedLogs : public PersistedLogs {
  public:
   TestPersistedLogs(PrefService* service, size_t min_log_bytes)
-      : PersistedLogs(service, kTestPrefName, kLogCountLimit, min_log_bytes,
-                      0) {
-  }
+      : PersistedLogs(std::unique_ptr<PersistedLogsMetricsImpl>(
+                             new PersistedLogsMetricsImpl()),
+                      service,
+                      kTestPrefName,
+                      kLogCountLimit,
+                      min_log_bytes,
+                      0) {}
 
   // Stages and removes the next log, while testing it's value.
   void ExpectNextLog(const std::string& expected_log) {
@@ -111,6 +116,8 @@ TEST_F(PersistedLogsTest, SingleElementLogList) {
   EXPECT_EQ(persisted_logs.staged_log(), result_persisted_logs.staged_log());
   EXPECT_EQ(persisted_logs.staged_log_hash(),
             result_persisted_logs.staged_log_hash());
+  EXPECT_EQ(persisted_logs.staged_log_timestamp(),
+            result_persisted_logs.staged_log_timestamp());
 }
 
 // Store a set of logs over the length limit, but smaller than the min number of

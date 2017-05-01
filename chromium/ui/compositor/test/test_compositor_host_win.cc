@@ -4,10 +4,11 @@
 
 #include "ui/compositor/test/test_compositor_host.h"
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/win/window_impl.h"
 
@@ -17,10 +18,12 @@ class TestCompositorHostWin : public TestCompositorHost,
                               public gfx::WindowImpl {
  public:
   TestCompositorHostWin(const gfx::Rect& bounds,
-                        ui::ContextFactory* context_factory) {
+                        ui::ContextFactory* context_factory,
+                        ui::ContextFactoryPrivate* context_factory_private) {
     Init(NULL, bounds);
-    compositor_.reset(new ui::Compositor(context_factory,
-                                         base::ThreadTaskRunnerHandle::Get()));
+    compositor_.reset(new ui::Compositor(
+        context_factory_private->AllocateFrameSinkId(), context_factory,
+        context_factory_private, base::ThreadTaskRunnerHandle::Get()));
     compositor_->SetAcceleratedWidget(hwnd());
     compositor_->SetScaleAndSize(1.0f, GetSize());
   }
@@ -28,7 +31,10 @@ class TestCompositorHostWin : public TestCompositorHost,
   ~TestCompositorHostWin() override { DestroyWindow(hwnd()); }
 
   // Overridden from TestCompositorHost:
-  void Show() override { ShowWindow(hwnd(), SW_SHOWNORMAL); }
+  void Show() override {
+    ShowWindow(hwnd(), SW_SHOWNORMAL);
+    compositor_->SetVisible(true);
+  }
   ui::Compositor* GetCompositor() override { return compositor_.get(); }
 
  private:
@@ -47,15 +53,17 @@ class TestCompositorHostWin : public TestCompositorHost,
     return gfx::Rect(r).size();
   }
 
-  scoped_ptr<ui::Compositor> compositor_;
+  std::unique_ptr<ui::Compositor> compositor_;
 
   DISALLOW_COPY_AND_ASSIGN(TestCompositorHostWin);
 };
 
 TestCompositorHost* TestCompositorHost::Create(
     const gfx::Rect& bounds,
-    ui::ContextFactory* context_factory) {
-  return new TestCompositorHostWin(bounds, context_factory);
+    ui::ContextFactory* context_factory,
+    ui::ContextFactoryPrivate* context_factory_private) {
+  return new TestCompositorHostWin(bounds, context_factory,
+                                   context_factory_private);
 }
 
 }  // namespace ui

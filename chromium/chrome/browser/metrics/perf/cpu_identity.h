@@ -12,11 +12,14 @@
 // makes things testable.
 struct CPUIdentity {
   CPUIdentity();
+  CPUIdentity(const CPUIdentity& other);
   ~CPUIdentity();
 
   // The system architecture based on uname().
   // (Technically, not a property of the CPU.)
   std::string arch;
+  // The kernel release version.
+  std::string release;
   // CUID fields:
   std::string vendor;  // e.g. "GenuineIntel"
   int family;

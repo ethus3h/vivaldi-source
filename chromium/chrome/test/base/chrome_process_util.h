@@ -7,15 +7,15 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/process/process_handle.h"
 #include "base/process/process_metrics.h"
 #include "build/build_config.h"
 
-typedef std::vector<base::ProcessId> ChromeProcessList;
+using ChromeProcessList = std::vector<base::ProcessId>;
 
 // Returns a vector of PIDs of all chrome processes (main and renderers etc)
 // based on |browser_pid|, the PID of the main browser process.
@@ -41,17 +41,11 @@ class ChromeTestProcessMetrics {
 
   size_t GetWorkingSetSize();
 
-  size_t GetPeakPagefileUsage() {
-    return process_metrics_->GetPeakPagefileUsage();
-  }
+  size_t GetPeakPagefileUsage();
 
-  size_t GetPeakWorkingSetSize() {
-    return process_metrics_->GetPeakWorkingSetSize();
-  }
+  size_t GetPeakWorkingSetSize();
 
-  bool GetIOCounters(base::IoCounters* io_counters) {
-    return process_metrics_->GetIOCounters(io_counters);
-  }
+  bool GetIOCounters(base::IoCounters* io_counters);
 
   base::ProcessHandle process_handle_;
 
@@ -60,7 +54,7 @@ class ChromeTestProcessMetrics {
  private:
   explicit ChromeTestProcessMetrics(base::ProcessHandle process);
 
-  scoped_ptr<base::ProcessMetrics> process_metrics_;
+  std::unique_ptr<base::ProcessMetrics> process_metrics_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeTestProcessMetrics);
 };
@@ -82,11 +76,11 @@ struct MacChromeProcessInfo {
   int vsz_in_kb;
 };
 
-typedef std::vector<MacChromeProcessInfo> MacChromeProcessInfoList;
+using MacChromeProcessInfoList = std::vector<MacChromeProcessInfo>;
 
 // Any ProcessId that info can't be found for will be left out.
 MacChromeProcessInfoList GetRunningMacProcessInfo(
-                                        const ChromeProcessList& process_list);
+    const ChromeProcessList& process_list);
 
 #endif  // defined(OS_MACOSX)
 

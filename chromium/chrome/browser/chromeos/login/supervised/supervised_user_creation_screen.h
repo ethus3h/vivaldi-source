@@ -75,10 +75,8 @@ class SupervisedUserCreationScreen
   void OnSupervisedUsersChanged() override;
 
   // BaseScreen implementation:
-  void PrepareToShow() override;
   void Show() override;
   void Hide() override;
-  std::string GetName() const override;
 
   // SupervisedUserCreationScreenHandler::Delegate implementation:
   void OnActorDestroyed(SupervisedUserCreationScreenHandler* actor) override;
@@ -127,8 +125,8 @@ class SupervisedUserCreationScreen
 
   SupervisedUserCreationScreenHandler* actor_;
 
-  scoped_ptr<SupervisedUserCreationController> controller_;
-  scoped_ptr<base::DictionaryValue> existing_users_;
+  std::unique_ptr<SupervisedUserCreationController> controller_;
+  std::unique_ptr<base::DictionaryValue> existing_users_;
 
   bool on_error_screen_;
   bool manager_signin_in_progress_;
@@ -140,7 +138,7 @@ class SupervisedUserCreationScreen
   bool apply_photo_after_decoding_;
   int selected_image_;
 
-  scoped_ptr<ErrorScreensHistogramHelper> histogram_helper_;
+  std::unique_ptr<ErrorScreensHistogramHelper> histogram_helper_;
 
   base::WeakPtrFactory<SupervisedUserCreationScreen> weak_factory_;
 

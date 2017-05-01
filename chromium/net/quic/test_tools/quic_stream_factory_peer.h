@@ -12,17 +12,19 @@
 #include "base/task_runner.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/privacy_mode.h"
-#include "net/quic/quic_protocol.h"
-#include "net/quic/quic_server_id.h"
-#include "net/quic/quic_time.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/core/quic_server_id.h"
+#include "net/quic/core/quic_time.h"
 
 namespace net {
 
+class NetLogWithSource;
 class QuicConfig;
 class QuicCryptoClientConfig;
 class QuicHttpStream;
 class QuicStreamFactory;
 class QuicChromiumClientSession;
+class QuicClientPushPromiseIndex;
 
 namespace test {
 
@@ -33,13 +35,16 @@ class QuicStreamFactoryPeer {
   static QuicCryptoClientConfig* GetCryptoConfig(QuicStreamFactory* factory);
 
   static bool HasActiveSession(QuicStreamFactory* factory,
-                               const HostPortPair& host_port_pair);
+                               const QuicServerId& server_id);
+
+  static bool HasActiveCertVerifierJob(QuicStreamFactory* factory,
+                                       const QuicServerId& server_id);
 
   static QuicChromiumClientSession* GetActiveSession(
       QuicStreamFactory* factory,
-      const HostPortPair& host_port_pair);
+      const QuicServerId& server_id);
 
-  static scoped_ptr<QuicHttpStream> CreateFromSession(
+  static std::unique_ptr<QuicHttpStream> CreateFromSession(
       QuicStreamFactory* factory,
       QuicChromiumClientSession* session);
 
@@ -49,14 +54,23 @@ class QuicStreamFactoryPeer {
   static void SetTaskRunner(QuicStreamFactory* factory,
                             base::TaskRunner* task_runner);
 
-  static int GetNumberOfLossyConnections(QuicStreamFactory* factory,
-                                         uint16_t port);
+  static QuicTime::Delta GetPingTimeout(QuicStreamFactory* factory);
 
-  static bool IsQuicDisabled(QuicStreamFactory* factory, uint16_t port);
+  static bool IsQuicDisabled(QuicStreamFactory* factory);
 
   static bool GetDelayTcpRace(QuicStreamFactory* factory);
 
   static void SetDelayTcpRace(QuicStreamFactory* factory, bool delay_tcp_race);
+
+  static bool GetRaceCertVerification(QuicStreamFactory* factory);
+
+  static void SetRaceCertVerification(QuicStreamFactory* factory,
+                                      bool race_cert_verification);
+
+  static QuicAsyncStatus StartCertVerifyJob(QuicStreamFactory* factory,
+                                            const QuicServerId& server_id,
+                                            int cert_verify_flags,
+                                            const NetLogWithSource& net_log);
 
   static void SetYieldAfterPackets(QuicStreamFactory* factory,
                                    int yield_after_packets);
@@ -67,10 +81,6 @@ class QuicStreamFactoryPeer {
   static size_t GetNumberOfActiveJobs(QuicStreamFactory* factory,
                                       const QuicServerId& server_id);
 
-  static int GetNumTimeoutsWithOpenStreams(QuicStreamFactory* factory);
-
-  static int GetNumPublicResetsPostHandshake(QuicStreamFactory* factory);
-
   static void MaybeInitialize(QuicStreamFactory* factory);
 
   static bool HasInitializedData(QuicStreamFactory* factory);
@@ -79,11 +89,16 @@ class QuicStreamFactoryPeer {
                                     HostPortPair host_port_pair);
 
   static bool CryptoConfigCacheIsEmpty(QuicStreamFactory* factory,
-                                       QuicServerId& quic_server_id);
+                                       const QuicServerId& quic_server_id);
 
   // Creates a dummy QUIC server config and caches it.
   static void CacheDummyServerConfig(QuicStreamFactory* factory,
                                      const QuicServerId& quic_server_id);
+
+  static QuicClientPushPromiseIndex* GetPushPromiseIndex(
+      QuicStreamFactory* factory);
+
+  static int GetNumPushStreamsCreated(QuicStreamFactory* factory);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuicStreamFactoryPeer);

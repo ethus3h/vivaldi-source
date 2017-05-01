@@ -13,6 +13,10 @@
 #include "ppapi/c/ppb_graphics_3d.h"
 #include "ppapi/thunk/ppapi_thunk_export.h"
 
+namespace gfx {
+class Size;
+}
+
 namespace gpu {
 struct SyncToken;
 }
@@ -32,8 +36,11 @@ class PPAPI_THUNK_EXPORT PPB_Graphics3D_API {
   virtual int32_t SetAttribs(const int32_t attrib_list[]) = 0;
   virtual int32_t GetError() = 0;
   virtual int32_t ResizeBuffers(int32_t width, int32_t height) = 0;
-  virtual int32_t SwapBuffers(scoped_refptr<TrackedCallback> callback,
-                              const gpu::SyncToken& sync_token) = 0;
+  virtual int32_t SwapBuffers(scoped_refptr<TrackedCallback> callback) = 0;
+  virtual int32_t SwapBuffersWithSyncToken(
+      scoped_refptr<TrackedCallback> callback,
+      const gpu::SyncToken& sync_token,
+      const gfx::Size& size) = 0;
   virtual int32_t GetAttribMaxValue(int32_t attribute, int32_t* value) = 0;
 
   // Graphics3DTrusted API.
@@ -59,10 +66,8 @@ class PPAPI_THUNK_EXPORT PPB_Graphics3D_API {
                                          GLenum access) = 0;
   virtual void UnmapTexSubImage2DCHROMIUM(const void* mem) = 0;
 
-  virtual uint32_t InsertSyncPoint() = 0;
-  virtual uint32_t InsertFutureSyncPoint() = 0;
-  virtual void RetireSyncPoint(uint32_t sync_point) = 0;
   virtual void EnsureWorkVisible() = 0;
+  virtual void TakeFrontBuffer() = 0;
 };
 
 }  // namespace thunk

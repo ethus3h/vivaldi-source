@@ -13,12 +13,10 @@
 #include "url/gurl.h"
 
 namespace extensions {
-
 namespace api {
 namespace dial {
+
 struct DialDevice;
-}  // namespace api
-}  // namespace dial
 
 // Dial device information that is used within the DialService and Registry on
 // the IO thread. It is updated as new information arrives and a list of
@@ -29,6 +27,7 @@ class DialDeviceData {
   DialDeviceData(const std::string& device_id,
                  const GURL& device_description_url,
                  const base::Time& response_time);
+  DialDeviceData(const DialDeviceData& other);
   ~DialDeviceData();
 
   bool operator==(const DialDeviceData& other_data) const {
@@ -93,6 +92,18 @@ class DialDeviceData {
   int config_id_;
 };
 
+struct DialDeviceDescriptionData {
+ public:
+  DialDeviceDescriptionData() = default;
+  DialDeviceDescriptionData(const std::string& device_description,
+                            const GURL& app_url);
+
+  std::string device_description;
+  GURL app_url;
+};
+
+}  // namespace dial
+}  // namespace api
 }  // namespace extensions
 
 #endif  // CHROME_BROWSER_EXTENSIONS_API_DIAL_DIAL_DEVICE_DATA_H_

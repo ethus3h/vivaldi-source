@@ -8,33 +8,35 @@
 #include "base/macros.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/engagement/site_engagement_metrics.h"
+#include "chrome/browser/engagement/site_engagement_service.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-
-namespace content {
-class WebContents;
-}
+#include "third_party/WebKit/public/platform/site_engagement.mojom.h"
 
 class GURL;
 
+namespace content {
+class NavigationHandle;
+}
+
+namespace url {
+class Origin;
+}
+
 // Per-WebContents class to handle updating the site engagement scores for
 // origins.
-class SiteEngagementHelper
+class SiteEngagementService::Helper
     : public content::WebContentsObserver,
-      public content::WebContentsUserData<SiteEngagementHelper> {
+      public content::WebContentsUserData<SiteEngagementService::Helper> {
  public:
-  ~SiteEngagementHelper() override;
-
   static void SetSecondsBetweenUserInputCheck(int seconds);
   static void SetSecondsTrackingDelayAfterNavigation(int seconds);
   static void SetSecondsTrackingDelayAfterShow(int seconds);
 
-  // content::WebContentsObserver overrides.
-  void DidNavigateMainFrame(
-      const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) override;
-  void WasShown() override;
-  void WasHidden() override;
+  ~Helper() override;
+
+  void OnEngagementLevelChanged(const GURL& url,
+                                blink::mojom::EngagementLevel level);
 
  private:
   // Class to encapsulate the periodic detection of site engagement.
@@ -48,7 +50,7 @@ class SiteEngagementHelper
   // 2. continual engagement over a non-trivial duration of time
   class PeriodicTracker {
    public:
-    explicit PeriodicTracker(SiteEngagementHelper* helper);
+    explicit PeriodicTracker(SiteEngagementService::Helper* helper);
     virtual ~PeriodicTracker();
 
     // Begin tracking after |initial_delay|.
@@ -64,9 +66,9 @@ class SiteEngagementHelper
     bool IsTimerRunning();
 
     // Set the timer object for testing.
-    void SetPauseTimerForTesting(scoped_ptr<base::Timer> timer);
+    void SetPauseTimerForTesting(std::unique_ptr<base::Timer> timer);
 
-    SiteEngagementHelper* helper() { return helper_; }
+    SiteEngagementService::Helper* helper() { return helper_; }
 
    protected:
     friend class SiteEngagementHelperTest;
@@ -82,8 +84,10 @@ class SiteEngagementHelper
     virtual void TrackingStopped() {}
 
    private:
-    SiteEngagementHelper* helper_;
-    scoped_ptr<base::Timer> pause_timer_;
+    SiteEngagementService::Helper* helper_;
+    std::unique_ptr<base::Timer> pause_timer_;
+
+    DISALLOW_COPY_AND_ASSIGN(PeriodicTracker);
   };
 
   // Class to encapsulate time-on-site engagement detection. Time-on-site is
@@ -96,7 +100,7 @@ class SiteEngagementHelper
   class InputTracker : public PeriodicTracker,
                        public content::WebContentsObserver {
    public:
-    InputTracker(SiteEngagementHelper* helper,
+    InputTracker(SiteEngagementService::Helper* helper,
                  content::WebContents* web_contents);
 
     bool is_tracking() const { return is_tracking_; }
@@ -113,6 +117,8 @@ class SiteEngagementHelper
 
     // content::WebContentsObserver overrides.
     void DidGetUserInteraction(const blink::WebInputEvent::Type type) override;
+
+    DISALLOW_COPY_AND_ASSIGN(InputTracker);
   };
 
   // Class to encapsulate media detection. Any media playing in a WebContents
@@ -128,7 +134,7 @@ class SiteEngagementHelper
   class MediaTracker : public PeriodicTracker,
                        public content::WebContentsObserver {
    public:
-    MediaTracker(SiteEngagementHelper* helper,
+    MediaTracker(SiteEngagementService::Helper* helper,
                  content::WebContents* web_contents);
     ~MediaTracker() override;
 
@@ -138,17 +144,21 @@ class SiteEngagementHelper
     void TrackingStarted() override;
 
     // content::WebContentsObserver overrides.
-    void MediaStartedPlaying(const MediaPlayerId& id) override;
-    void MediaStoppedPlaying(const MediaPlayerId& id) override;
+    void MediaStartedPlaying(const MediaPlayerInfo& media_info,
+                             const MediaPlayerId& id) override;
+    void MediaStoppedPlaying(const MediaPlayerInfo& media_info,
+                             const MediaPlayerId& id) override;
     void WasShown() override;
     void WasHidden() override;
 
     bool is_hidden_;
     std::vector<MediaPlayerId> active_media_players_;
+
+    DISALLOW_COPY_AND_ASSIGN(MediaTracker);
   };
 
-  explicit SiteEngagementHelper(content::WebContents* web_contents);
-  friend class content::WebContentsUserData<SiteEngagementHelper>;
+  explicit Helper(content::WebContents* web_contents);
+  friend class content::WebContentsUserData<SiteEngagementService::Helper>;
   friend class SiteEngagementHelperTest;
 
   // Ask the SiteEngagementService to record engagement via user input at the
@@ -159,11 +169,25 @@ class SiteEngagementHelper
   // current WebContents URL.
   void RecordMediaPlaying(bool is_hidden);
 
+  void SendEngagementLevelToFramesMatchingOrigin(
+      const url::Origin& origin,
+      blink::mojom::EngagementLevel level,
+      content::RenderFrameHost* render_frame_host);
+  void SendEngagementLevelToFrame(const url::Origin& origin,
+                                  blink::mojom::EngagementLevel level,
+                                  content::RenderFrameHost* render_frame_host);
+
+  // content::WebContentsObserver overrides.
+  void DidFinishNavigation(content::NavigationHandle* handle) override;
+  void ReadyToCommitNavigation(content::NavigationHandle* handle) override;
+  void WasShown() override;
+  void WasHidden() override;
+
   InputTracker input_tracker_;
   MediaTracker media_tracker_;
-  bool record_engagement_;
+  SiteEngagementService* service_;
 
-  DISALLOW_COPY_AND_ASSIGN(SiteEngagementHelper);
+  DISALLOW_COPY_AND_ASSIGN(Helper);
 };
 
 #endif  // CHROME_BROWSER_ENGAGEMENT_SITE_ENGAGEMENT_HELPER_H_

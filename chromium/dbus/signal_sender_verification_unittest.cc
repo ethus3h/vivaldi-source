@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/bind.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
@@ -116,7 +118,7 @@ class SignalSenderVerificationTest : public testing::Test {
   void OnOwnership(bool expected, bool success) {
     ASSERT_EQ(expected, success);
     // PostTask to quit the MessageLoop as this is called from D-Bus thread.
-    message_loop_.PostTask(
+    message_loop_.task_runner()->PostTask(
         FROM_HERE,
         base::Bind(&SignalSenderVerificationTest::OnOwnershipInternal,
                    base::Unretained(this)));
@@ -168,12 +170,12 @@ class SignalSenderVerificationTest : public testing::Test {
   }
 
   base::MessageLoop message_loop_;
-  scoped_ptr<base::RunLoop> run_loop_;
-  scoped_ptr<base::Thread> dbus_thread_;
+  std::unique_ptr<base::RunLoop> run_loop_;
+  std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
   ObjectProxy* object_proxy_;
-  scoped_ptr<TestService> test_service_;
-  scoped_ptr<TestService> test_service2_;
+  std::unique_ptr<TestService> test_service_;
+  std::unique_ptr<TestService> test_service2_;
   // Text message from "Test" signal.
   std::string test_signal_string_;
 
@@ -201,7 +203,7 @@ TEST_F(SignalSenderVerificationTest, DISABLED_TestSignalRejected) {
   UMA_HISTOGRAM_COUNTS("DBus.RejectedSignalCount", 0);
   base::HistogramBase* reject_signal_histogram =
         base::StatisticsRecorder::FindHistogram("DBus.RejectedSignalCount");
-  scoped_ptr<base::HistogramSamples> samples1(
+  std::unique_ptr<base::HistogramSamples> samples1(
       reject_signal_histogram->SnapshotSamples());
 
   const char kNewMessage[] = "hello, new world";
@@ -211,7 +213,7 @@ TEST_F(SignalSenderVerificationTest, DISABLED_TestSignalRejected) {
   // Sleep to have message delivered to the client via the D-Bus service.
   base::PlatformThread::Sleep(TestTimeouts::action_timeout());
 
-  scoped_ptr<base::HistogramSamples> samples2(
+  std::unique_ptr<base::HistogramSamples> samples2(
       reject_signal_histogram->SnapshotSamples());
 
   ASSERT_EQ("", test_signal_string_);

@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_DEVTOOLS_DEVTOOLS_NETWORK_CONTROLLER_H_
 #define CHROME_BROWSER_DEVTOOLS_DEVTOOLS_NETWORK_CONTROLLER_H_
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread_checker.h"
 
 class DevToolsNetworkConditions;
@@ -23,19 +23,18 @@ class DevToolsNetworkController {
   virtual ~DevToolsNetworkController();
 
   // Applies network emulation configuration.
-  void SetNetworkState(
-      const std::string& client_id,
-      scoped_ptr<DevToolsNetworkConditions> conditions);
+  void SetNetworkState(const std::string& client_id,
+                       std::unique_ptr<DevToolsNetworkConditions> conditions);
 
   DevToolsNetworkInterceptor* GetInterceptor(
       const std::string& client_id);
 
  private:
   using InterceptorMap =
-      base::ScopedPtrHashMap<std::string,
-                             scoped_ptr<DevToolsNetworkInterceptor>>;
+      std::unordered_map<std::string,
+                         std::unique_ptr<DevToolsNetworkInterceptor>>;
 
-  scoped_ptr<DevToolsNetworkInterceptor> appcache_interceptor_;
+  std::unique_ptr<DevToolsNetworkInterceptor> appcache_interceptor_;
   InterceptorMap interceptors_;
   base::ThreadChecker thread_checker_;
 

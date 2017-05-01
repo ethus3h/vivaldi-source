@@ -38,7 +38,7 @@ base::FilePath VirtualPath::BaseName(const base::FilePath& virtual_path) {
 
   // Keep everything after the final separator, but if the pathname is only
   // one character and it's a separator, leave it alone.
-  while (path.size() > 1 && base::FilePath::IsSeparator(path[path.size() - 1]))
+  while (path.size() > 1 && base::FilePath::IsSeparator(path.back()))
     path.resize(path.size() - 1);
   base::FilePath::StringType::size_type last_separator =
       path.find_last_of(base::FilePath::kSeparators);
@@ -57,7 +57,7 @@ base::FilePath VirtualPath::DirName(const base::FilePath& virtual_path) {
   // that this version never cares about '//' or drive-letters even on win32.
 
   // Strip trailing separators.
-  while (path.size() > 1 && base::FilePath::IsSeparator(path[path.size() - 1]))
+  while (path.size() > 1 && base::FilePath::IsSeparator(path.back()))
     path.resize(path.size() - 1);
 
   StringType::size_type last_separator =
@@ -74,7 +74,7 @@ base::FilePath VirtualPath::DirName(const base::FilePath& virtual_path) {
   path.resize(last_separator);
 
   // Strip trailing separators.
-  while (path.size() > 1 && base::FilePath::IsSeparator(path[path.size() - 1]))
+  while (path.size() > 1 && base::FilePath::IsSeparator(path.back()))
     path.resize(path.size() - 1);
 
   if (path.empty())
@@ -138,7 +138,7 @@ base::FilePath::StringType VirtualPath::GetNormalizedFilePath(
 }
 
 bool VirtualPath::IsAbsolute(const base::FilePath::StringType& path) {
-  return path.find(kRoot) == 0;
+  return base::StartsWith(path, kRoot, base::CompareCase::SENSITIVE);
 }
 
 bool VirtualPath::IsRootPath(const base::FilePath& path) {
@@ -184,7 +184,8 @@ bool ParseFileSystemSchemeURL(const GURL& url,
     return false;
 
   std::string path = net::UnescapeURLComponent(url.path(),
-      net::UnescapeRule::SPACES | net::UnescapeRule::URL_SPECIAL_CHARS |
+      net::UnescapeRule::SPACES | net::UnescapeRule::PATH_SEPARATORS |
+      net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
       net::UnescapeRule::SPOOFING_AND_CONTROL_CHARS);
 
   // Ensure the path is relative.
@@ -303,8 +304,6 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "Picasa";
     case kFileSystemTypeItunes:
       return "Itunes";
-    case kFileSystemTypeIphoto:
-      return "Iphoto";
     case kFileSystemTypeDrive:
       return "Drive";
     case kFileSystemTypeSyncable:
@@ -322,6 +321,10 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "Provided";
     case kFileSystemTypeDeviceMediaAsFileStorage:
       return "DeviceMediaStorage";
+    case kFileSystemTypeArcContent:
+      return "ArcContent";
+    case kFileSystemTypeArcDocumentsProvider:
+      return "ArcDocumentsProvider";
     case kFileSystemInternalTypeEnumStart:
     case kFileSystemInternalTypeEnumEnd:
       NOTREACHED();

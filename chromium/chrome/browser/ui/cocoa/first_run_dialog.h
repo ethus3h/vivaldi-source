@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_FIRST_RUN_DIALOG_H_
-#define CHROME_BROWSER_FIRST_RUN_DIALOG_H_
+#ifndef CHROME_BROWSER_UI_COCOA_FIRST_RUN_DIALOG_H_
+#define CHROME_BROWSER_UI_COCOA_FIRST_RUN_DIALOG_H_
 
 #import <Cocoa/Cocoa.h>
 
@@ -12,6 +12,7 @@
 // us improve Chromium.
 @interface FirstRunDialogController : NSWindowController {
  @private
+  // Bound to the value of the checkbox in FirstRunDialog.xib.
   BOOL statsEnabled_;
   BOOL makeDefaultBrowser_;
 
@@ -33,4 +34,4 @@
 
 @end
 
-#endif  // CHROME_BROWSER_FIRST_RUN_DIALOG_H_
+#endif  // CHROME_BROWSER_UI_COCOA_FIRST_RUN_DIALOG_H_

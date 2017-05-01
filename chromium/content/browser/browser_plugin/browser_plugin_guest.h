@@ -21,43 +21,37 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <queue>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/linked_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "content/common/edit_command.h"
-#include "content/common/webplugin_geometry.h"
 #include "content/common/input/input_event_ack_state.h"
 #include "content/public/browser/browser_plugin_guest_delegate.h"
 #include "content/public/browser/guest_host.h"
 #include "content/public/browser/readback_types.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/WebKit/public/platform/WebDragOperation.h"
 #include "third_party/WebKit/public/platform/WebFocusType.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
 #include "third_party/WebKit/public/web/WebCompositionUnderline.h"
-#include "third_party/WebKit/public/web/WebDragOperation.h"
 #include "third_party/WebKit/public/web/WebDragStatus.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "ui/base/ime/text_input_mode.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/gfx/geometry/rect.h"
 
 struct BrowserPluginHostMsg_Attach_Params;
-struct FrameHostMsg_CompositorFrameSwappedACK_Params;
-struct FrameHostMsg_ReclaimCompositorResources_Params;
-struct FrameMsg_CompositorFrameSwapped_Params;
-struct ViewHostMsg_TextInputState_Params;
 
 #if defined(OS_MACOSX)
 struct FrameHostMsg_ShowPopup_Params;
 #endif
 
 namespace cc {
-class CompositorFrame;
-struct SurfaceId;
+class SurfaceId;
 struct SurfaceSequence;
 }  // namespace cc
 
@@ -70,11 +64,13 @@ namespace content {
 class BrowserPluginGuestManager;
 class RenderViewHostImpl;
 class RenderWidgetHost;
+class RenderWidgetHostImpl;
 class RenderWidgetHostView;
 class RenderWidgetHostViewBase;
 class SiteInstance;
 class WebContentsView;
 struct DropData;
+struct TextInputState;
 
 // A browser plugin guest provides functionality for WebContents to operate in
 // the guest role and implements guest-specific overrides for ViewHostMsg_*
@@ -212,7 +208,7 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
 
   // Helper to send messages to embedder. If this guest is not yet attached,
   // then IPCs will be queued until attachment.
-  void SendMessageToEmbedder(IPC::Message* msg);
+  void SendMessageToEmbedder(std::unique_ptr<IPC::Message> msg);
 
   // Returns whether the guest is attached to an embedder.
   bool attached() const { return attached_; }
@@ -260,11 +256,7 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
 
   gfx::Rect guest_window_rect(){return guest_window_rect_;}
 
-  // The next two functions are virtual for test purposes.
-  virtual void SwapCompositorFrame(uint32_t output_surface_id,
-                                   int host_process_id,
-                                   int host_routing_id,
-                                   scoped_ptr<cc::CompositorFrame> frame);
+  // The next function is virtual for test purposes.
   virtual void SetChildFrameSurface(const cc::SurfaceId& surface_id,
                                     const gfx::Size& frame_size,
                                     float scale_factor,
@@ -278,6 +270,14 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   bool HandleStopFindingForEmbedder(StopFindAction action);
 
   void ResendEventToEmbedder(const blink::WebInputEvent& event);
+
+  // TODO(ekaramad): Remove this once https://crbug.com/642826 is resolved.
+  bool can_use_cross_process_frames() const {
+    return can_use_cross_process_frames_;
+  }
+
+  gfx::Point GetCoordinatesInEmbedderWebContents(
+      const gfx::Point& relative_point);
 
  protected:
 
@@ -300,6 +300,9 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
  private:
   class EmbedderVisibilityObserver;
 
+  // The RenderWidgetHostImpl corresponding to the owner frame of BrowserPlugin.
+  RenderWidgetHostImpl* GetOwnerRenderWidgetHost() const;
+
   void InitInternal(const BrowserPluginHostMsg_Attach_Params& params,
                     WebContentsImpl* owner_web_contents);
 
@@ -308,9 +311,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
                          const cc::SurfaceId& id,
                          const cc::SurfaceSequence& sequence);
   // Message handlers for messages from embedder.
-  void OnCompositorFrameSwappedACK(
-      int instance_id,
-      const FrameHostMsg_CompositorFrameSwappedACK_Params& params);
   void OnDetach(int instance_id);
   // Handles drag events from the embedder.
   // When dragging, the drag events go to the embedder first, and if the drag
@@ -325,11 +325,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // Instructs the guest to execute an edit command decoded in the embedder.
   void OnExecuteEditCommand(int instance_id,
                             const std::string& command);
-
-  // Returns compositor resources reclaimed in the embedder to the guest.
-  void OnReclaimCompositorResources(
-      int instance_id,
-      const FrameHostMsg_ReclaimCompositorResources_Params& params);
 
   void OnLockMouse(bool user_gesture,
                    bool last_unlocked_by_target,
@@ -366,18 +361,19 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   void OnUnlockMouseAck(int instance_id);
   void OnUpdateGeometry(int instance_id, const gfx::Rect& view_rect);
 
-  void OnTextInputStateChanged(
-      const ViewHostMsg_TextInputState_Params& params);
+  void OnTextInputStateChanged(const TextInputState& params);
   void OnImeSetComposition(
       int instance_id,
       const std::string& text,
       const std::vector<blink::WebCompositionUnderline>& underlines,
       int selection_start,
       int selection_end);
-  void OnImeConfirmComposition(
+  void OnImeCommitText(
       int instance_id,
       const std::string& text,
-      bool keep_selection);
+      const std::vector<blink::WebCompositionUnderline>& underlines,
+      int relative_cursor_pos);
+  void OnImeFinishComposingText(bool keep_selection);
   void OnExtendSelectionAndDelete(int instance_id, int before, int after);
   void OnImeCancelComposition();
 #if defined(OS_MACOSX) || defined(USE_AURA)
@@ -411,22 +407,18 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // the input was created with browser_plugin::kInstanceIdNone, else it returns
   // the input message unmodified. If no current browser_plugin_instance_id()
   // is set, or anything goes wrong, the input message is returned.
-  IPC::Message* UpdateInstanceIdIfNecessary(IPC::Message* msg) const;
+  std::unique_ptr<IPC::Message> UpdateInstanceIdIfNecessary(
+      std::unique_ptr<IPC::Message> msg) const;
 
   // Forwards all messages from the |pending_messages_| queue to the embedder.
   void SendQueuedMessages();
 
   void SendTextInputTypeChangedToView(RenderWidgetHostViewBase* guest_rwhv);
 
-  // gisli@vivaldi.com:  For handling interstitial pages within guest views.
-  RenderViewHost* GetRenderViewHost() const;
-  RenderWidgetHostView* GetRenderWidgetHostView() const;
-  WebContentsView* GetView() const;
-
   // The last tooltip that was set with SetTooltipText().
   base::string16 current_tooltip_text_;
 
-  scoped_ptr<EmbedderVisibilityObserver> embedder_visibility_observer_;
+  std::unique_ptr<EmbedderVisibilityObserver> embedder_visibility_observer_;
   WebContentsImpl* owner_web_contents_;
 
   // Indicates whether this guest has been attached to a container.
@@ -454,12 +446,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // maintains a JavaScript reference to its opener.
   bool has_render_view_;
 
-  // Note(andre@vivaldi.com):
-  // If BrowserPluginGuest::Init specified |has_render_view| true use this. This
-  // will never happen for webviews that share WebContents with a tabstrip.
-  // This fixes setting visibility hidden on <webviews>
-  bool got_renderview_on_init_;
-
   // Last seen size of guest contents (by SwapCompositorFrame).
   gfx::Size last_seen_view_size_;
 
@@ -471,7 +457,7 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
 
   // Text input type states.
   // Using scoped_ptr to avoid including the header file: view_messages.h.
-  scoped_ptr<const ViewHostMsg_TextInputState_Params> last_text_input_state_;
+  std::unique_ptr<const TextInputState> last_text_input_state_;
 
   // The is the routing ID for a swapped out RenderView for the guest
   // WebContents in the embedder's process.
@@ -483,29 +469,25 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // Whether or not our embedder has seen a DragSourceEndedAt() call.
   bool seen_embedder_drag_source_ended_at_;
 
-  // Indicates the URL dragged into the guest if any.
-  GURL dragged_url_;
-
-  // Guests generate frames and send a CompositorFrameSwapped (CFS) message
-  // indicating the next frame is ready to be positioned and composited.
-  // Subsequent frames are not generated until the IPC is ACKed. We would like
-  // to ensure that the guest generates frames on attachment so we directly ACK
-  // an unACKed CFS. ACKs could get lost between the time a guest is detached
-  // from a container and the time it is attached elsewhere. This mitigates this
-  // race by ensuring the guest is ACKed on attachment.
-  scoped_ptr<FrameMsg_CompositorFrameSwapped_Params> last_pending_frame_;
+  // Ignore the URL dragged into guest that is coming from guest.
+  bool ignore_dragged_url_;
 
   // This is a queue of messages that are destined to be sent to the embedder
   // once the guest is attached to a particular embedder.
-  std::deque<linked_ptr<IPC::Message> > pending_messages_;
+  std::deque<std::unique_ptr<IPC::Message>> pending_messages_;
 
   BrowserPluginGuestDelegate* delegate_;
 
-  // Keep a copy of the last moved plugin windows so we can move them in
-  // OnUpdateGeometry().
-  std::vector<content::WebPluginGeometry> plugin_moves_;
-
   int guest_routing_id_;
+
+  // Whether or not this BrowserPluginGuest can use cross process frames. This
+  // means when we have --use-cross-process-frames-for-guests on, the
+  // WebContents associated with this BrowserPluginGuest has OOPIF structure.
+  bool can_use_cross_process_frames_;
+
+  // Vivaldi specific; we need to limit focus messages sent to one per change
+  // per RenderWidgetHost.
+  std::pair<RenderWidgetHost*, bool> focus_state_;
 
   // Weak pointer used to ask GeolocationPermissionContext about geolocation
   // permission.

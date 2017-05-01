@@ -4,7 +4,6 @@
 
 #include "chrome/browser/extensions/extension_apitest.h"
 
-#include "base/prefs/pref_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -13,6 +12,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "components/prefs/pref_service.h"
 #include "net/dns/mock_host_resolver.h"
 
 #if defined(OS_WIN)
@@ -28,13 +28,6 @@
 #else
 #define MAYBE_UpdateWindowShowState UpdateWindowShowState
 #endif  // defined(USE_AURA) || defined(OS_MACOSX)
-
-// http://crbug.com/145639
-#if defined(OS_LINUX) || defined(OS_WIN)
-#define MAYBE_TabEvents DISABLED_TabEvents
-#else
-#define MAYBE_TabEvents TabEvents
-#endif
 
 class ExtensionApiNewTabTest : public ExtensionApiTest {
  public:
@@ -86,13 +79,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabSize) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "tab_size.html")) << message_;
 }
 
-// Flaky on linux: http://crbug.com/396364
-#if defined(OS_LINUX)
-#define MAYBE_TabUpdate DISABLED_TabUpdate
-#else
-#define MAYBE_TabUpdate TabUpdate
-#endif
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabUpdate) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabUpdate) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "update.html")) << message_;
 }
 
@@ -110,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabMove) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "move.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabEvents) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabEvents) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "events.html")) << message_;
 }
 
@@ -227,10 +214,23 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabsOnUpdated) {
   ASSERT_TRUE(RunExtensionTest("tabs/on_updated")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabsNoPermissions) {
+// Flaky on Linux. http://crbug.com/657376.
+#if defined(OS_LINUX)
+#define MAYBE_TabsNoPermissions DISABLED_TabsNoPermissions
+#else
+#define MAYBE_TabsNoPermissions TabsNoPermissions
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabsNoPermissions) {
   host_resolver()->AddRule("a.com", "127.0.0.1");
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("tabs/no_permissions")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, HostPermission) {
+  host_resolver()->AddRule("a.com", "127.0.0.1");
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  ASSERT_TRUE(RunExtensionTest("tabs/host_permission")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, UpdateWindowResize) {
@@ -267,6 +267,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_GetViewsOfCreatedPopup) {
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_GetViewsOfCreatedWindow) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "get_views_window.html"))
       << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OnUpdatedDiscardedState) {
+  ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "discarded.html")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabOpenerCraziness) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  ASSERT_TRUE(RunExtensionTest("tabs/tab_opener_id"));
 }
 
 // Adding a new test? Awesome. But API tests are the old hotness. The new

@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/callback.h"
 #include "base/macros.h"
 #include "gpu/command_buffer/common/command_buffer.h"
@@ -21,6 +23,9 @@ class GPU_EXPORT CommandBufferServiceBase : public CommandBuffer {
  public:
   // Sets the current get offset. This can be called from any thread.
   virtual void SetGetOffset(int32_t get_offset) = 0;
+
+  // Set the release count for the last fence sync seen in the command stream.
+  virtual void SetReleaseCount(uint64_t release_count) = 0;
 
   // Get the transfer buffer associated with an ID. Returns a null buffer for
   // ID 0.
@@ -51,19 +56,18 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
   ~CommandBufferService() override;
 
   // CommandBuffer implementation:
-  bool Initialize() override;
   State GetLastState() override;
-  int32_t GetLastToken() override;
   void Flush(int32_t put_offset) override;
   void OrderingBarrier(int32_t put_offset) override;
-  void WaitForTokenInRange(int32_t start, int32_t end) override;
-  void WaitForGetOffsetInRange(int32_t start, int32_t end) override;
+  State WaitForTokenInRange(int32_t start, int32_t end) override;
+  State WaitForGetOffsetInRange(int32_t start, int32_t end) override;
   void SetGetBuffer(int32_t transfer_buffer_id) override;
   scoped_refptr<Buffer> CreateTransferBuffer(size_t size, int32_t* id) override;
   void DestroyTransferBuffer(int32_t id) override;
 
   // CommandBufferServiceBase implementation:
   void SetGetOffset(int32_t get_offset) override;
+  void SetReleaseCount(uint64_t release_count) override;
   scoped_refptr<Buffer> GetTransferBuffer(int32_t id) override;
   void SetToken(int32_t token) override;
   void SetParseError(error::Error error) override;
@@ -85,19 +89,21 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
   virtual void SetParseErrorCallback(const base::Closure& callback);
 
   // Setup the shared memory that shared state should be copied into.
-  void SetSharedStateBuffer(scoped_ptr<BufferBacking> shared_state_buffer);
+  void SetSharedStateBuffer(std::unique_ptr<BufferBacking> shared_state_buffer);
 
   // Copy the current state into the shared state transfer buffer.
   void UpdateState();
 
   // Registers an existing shared memory object and get an ID that can be used
   // to identify it in the command buffer.
-  bool RegisterTransferBuffer(int32_t id, scoped_ptr<BufferBacking> buffer);
+  bool RegisterTransferBuffer(int32_t id,
+                              std::unique_ptr<BufferBacking> buffer);
+  scoped_refptr<Buffer> CreateTransferBufferWithId(size_t size, int32_t id);
 
  private:
   int32_t ring_buffer_id_;
   scoped_refptr<Buffer> ring_buffer_;
-  scoped_ptr<BufferBacking> shared_state_buffer_;
+  std::unique_ptr<BufferBacking> shared_state_buffer_;
   CommandBufferSharedState* shared_state_;
   int32_t num_entries_;
   int32_t get_offset_;
@@ -107,6 +113,7 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
   base::Closure parse_error_callback_;
   scoped_refptr<TransferBufferManagerInterface> transfer_buffer_manager_;
   int32_t token_;
+  uint64_t release_count_;
   uint32_t generation_;
   error::Error error_;
   error::ContextLostReason context_lost_reason_;

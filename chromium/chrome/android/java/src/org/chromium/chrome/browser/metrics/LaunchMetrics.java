@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.metrics;
 import android.util.Pair;
 
 import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.metrics.CachedMetrics;
 import org.chromium.content_public.browser.WebContents;
 
 import java.util.ArrayList;
@@ -20,69 +20,6 @@ import java.util.List;
  */
 @JNINamespace("metrics")
 public class LaunchMetrics {
-
-    /**
-     * Creating an instance of a subclass of this class automatically adds it to a list of objects
-     * that are committed when the native library is available.
-     */
-    private abstract static class CachedHistogram {
-        private static final List<CachedHistogram> sEvents = new ArrayList<CachedHistogram>();
-
-        protected String mHistogramName;
-
-        /**
-         * @param histogramName Name of the histogram to record.
-         */
-        protected CachedHistogram(String histogramName) {
-            mHistogramName = histogramName;
-            sEvents.add(this);
-        }
-
-        /** Commits the histogram. Expects the native library to be loaded. */
-        protected abstract void commitAndClear();
-    }
-
-    /** Caches whether an event happened. */
-    public static class BooleanEvent extends CachedHistogram {
-        private boolean mIsHit;
-
-        public BooleanEvent(String histogramName) {
-            super(histogramName);
-        }
-
-        /** Records that the histogram condition occurred. */
-        public void recordHit() {
-            mIsHit = true;
-        }
-
-        @Override
-        protected void commitAndClear() {
-            RecordHistogram.recordBooleanHistogram(mHistogramName, mIsHit);
-            mIsHit = false;
-        }
-    }
-
-    /** Caches a set of integer histogram samples. */
-    public static class SparseHistogramSample extends CachedHistogram {
-        private final List<Integer> mSamples = new ArrayList<Integer>();
-
-        public SparseHistogramSample(String histogramName) {
-            super(histogramName);
-        }
-
-        public void record(int sample) {
-            mSamples.add(sample);
-        }
-
-        @Override
-        protected void commitAndClear() {
-            for (Integer sample : mSamples) {
-                RecordHistogram.recordSparseSlowlyHistogram(mHistogramName, sample);
-            }
-            mSamples.clear();
-        }
-    }
-
     // Each list item is a pair of the url and where it was added from e.g. from the add to
     // homescreen menu item, an app banner, or unknown. The mapping of int source values to
     // their string names is found in the C++ ShortcutInfo struct.
@@ -90,6 +27,8 @@ public class LaunchMetrics {
             new ArrayList<Pair<String, Integer>>();
     private static final List<Pair<String, Integer>> sTabUrls =
             new ArrayList<Pair<String, Integer>>();
+
+    private static final List<Long> sWebappHistogramTimes = new ArrayList<Long>();
 
     /**
      * Records the launch of a standalone Activity for a URL (i.e. a WebappActivity)
@@ -111,6 +50,14 @@ public class LaunchMetrics {
     }
 
     /**
+     * Records the time it took to look up from disk whether a MAC is valid during webapp startup.
+     * @param time the number of milliseconds it took to finish.
+     */
+    public static void recordWebappHistogramTimes(long time) {
+        sWebappHistogramTimes.add(time);
+    }
+
+    /**
      * Calls out to native code to record URLs that have been launched via the Home screen.
      * This intermediate step is necessary because Activity.onCreate() may be called when
      * the native library has not yet been loaded.
@@ -128,9 +75,26 @@ public class LaunchMetrics {
         sTabUrls.clear();
 
         // Record generic cached events.
-        for (CachedHistogram event : CachedHistogram.sEvents) event.commitAndClear();
+        CachedMetrics.commitCachedMetrics();
+    }
+
+    /**
+     * Records metrics about the state of the homepage on launch.
+     * @param showHomeButton Whether the home button is shown.
+     * @param homepageIsNtp Whether the homepage is set to the NTP.
+     * @param homepageUrl The value of the homepage URL.
+     */
+    public static void recordHomePageLaunchMetrics(
+            boolean showHomeButton, boolean homepageIsNtp, String homepageUrl) {
+        if (homepageUrl == null) {
+            homepageUrl = "";
+            assert !showHomeButton : "Homepage should be disabled for a null URL";
+        }
+        nativeRecordHomePageLaunchMetrics(showHomeButton, homepageIsNtp, homepageUrl);
     }
 
     private static native void nativeRecordLaunch(
             boolean standalone, String url, int source, WebContents webContents);
+    private static native void nativeRecordHomePageLaunchMetrics(
+            boolean showHomeButton, boolean homepageIsNtp, String homepageUrl);
 }

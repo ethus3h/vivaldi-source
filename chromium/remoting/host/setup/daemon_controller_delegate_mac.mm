@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <CoreFoundation/CoreFoundation.h>
-
 #include "remoting/host/setup/daemon_controller_delegate_mac.h"
 
+#import <AppKit/AppKit.h>
+
+#include <CoreFoundation/CoreFoundation.h>
 #include <launch.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -21,10 +22,12 @@
 #include "base/mac/mac_logging.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_launch_data.h"
+#include "base/memory/ptr_util.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "remoting/host/constants_mac.h"
 #include "remoting/host/host_config.h"
+#include "remoting/host/mac/constants_mac.h"
 #include "remoting/host/usage_stats_consent.h"
 
 namespace remoting {
@@ -48,14 +51,15 @@ DaemonController::State DaemonControllerDelegateMac::GetState() {
   }
 }
 
-scoped_ptr<base::DictionaryValue> DaemonControllerDelegateMac::GetConfig() {
+std::unique_ptr<base::DictionaryValue>
+DaemonControllerDelegateMac::GetConfig() {
   base::FilePath config_path(kHostConfigFilePath);
-  scoped_ptr<base::DictionaryValue> host_config(
+  std::unique_ptr<base::DictionaryValue> host_config(
       HostConfigFromJsonFile(config_path));
   if (!host_config)
     return nullptr;
 
-  scoped_ptr<base::DictionaryValue> config(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> config(new base::DictionaryValue);
   std::string value;
   if (host_config->GetString(kHostIdConfigPath, &value))
     config->SetString(kHostIdConfigPath, value);
@@ -65,7 +69,7 @@ scoped_ptr<base::DictionaryValue> DaemonControllerDelegateMac::GetConfig() {
 }
 
 void DaemonControllerDelegateMac::SetConfigAndStart(
-    scoped_ptr<base::DictionaryValue> config,
+    std::unique_ptr<base::DictionaryValue> config,
     bool consent,
     const DaemonController::CompletionCallback& done) {
   config->SetBoolean(kUsageStatsConsentConfigPath, consent);
@@ -73,10 +77,10 @@ void DaemonControllerDelegateMac::SetConfigAndStart(
 }
 
 void DaemonControllerDelegateMac::UpdateConfig(
-    scoped_ptr<base::DictionaryValue> config,
+    std::unique_ptr<base::DictionaryValue> config,
     const DaemonController::CompletionCallback& done) {
   base::FilePath config_file_path(kHostConfigFilePath);
-  scoped_ptr<base::DictionaryValue> host_config(
+  std::unique_ptr<base::DictionaryValue> host_config(
       HostConfigFromJsonFile(config_file_path));
   if (!host_config) {
     done.Run(DaemonController::RESULT_FAILED);
@@ -101,7 +105,7 @@ DaemonControllerDelegateMac::GetUsageStatsConsent() {
   consent.set_by_policy = false;
 
   base::FilePath config_file_path(kHostConfigFilePath);
-  scoped_ptr<base::DictionaryValue> host_config(
+  std::unique_ptr<base::DictionaryValue> host_config(
       HostConfigFromJsonFile(config_file_path));
   if (host_config) {
     host_config->GetBoolean(kUsageStatsConsentConfigPath, &consent.allowed);
@@ -210,15 +214,10 @@ bool DaemonControllerDelegateMac::DoShowPreferencePane(
   }
   pane_path = pane_path.Append("PreferencePanes").Append(kPrefPaneFileName);
 
-  FSRef pane_path_ref;
-  if (!base::mac::FSRefFromPath(pane_path.value(), &pane_path_ref)) {
-    LOG(ERROR) << "Failed to create FSRef";
-    return false;
-  }
-  OSStatus status = LSOpenFSRef(&pane_path_ref, nullptr);
-  if (status != noErr) {
-    OSSTATUS_LOG(ERROR, status) << "LSOpenFSRef failed for path: "
-                                << pane_path.value();
+  bool success = [[NSWorkspace sharedWorkspace]
+      openFile:base::SysUTF8ToNSString(pane_path.value())];
+  if (!success) {
+    LOG(ERROR) << "Failed to open preferences pane: " << pane_path.value();
     return false;
   }
 
@@ -250,7 +249,7 @@ void DaemonControllerDelegateMac::PreferencePaneCallback(
 
 scoped_refptr<DaemonController> DaemonController::Create() {
   return new DaemonController(
-      make_scoped_ptr(new DaemonControllerDelegateMac()));
+      base::WrapUnique(new DaemonControllerDelegateMac()));
 }
 
 }  // namespace remoting

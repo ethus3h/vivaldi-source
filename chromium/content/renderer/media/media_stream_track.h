@@ -5,11 +5,13 @@
 #ifndef CONTENT_RENDERER_MEDIA_MEDIA_STREAM_TRACK_H_
 #define CONTENT_RENDERER_MEDIA_MEDIA_STREAM_TRACK_H_
 
+#include <string>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/threading/thread_checker.h"
 #include "content/common/content_export.h"
-#include "media/audio/audio_parameters.h"
+#include "media/base/audio_parameters.h"
 #include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
 
 namespace content {
@@ -18,7 +20,7 @@ namespace content {
 // It is owned by blink::WebMediaStreamTrack as
 // blink::WebMediaStreamTrack::ExtraData.
 class CONTENT_EXPORT MediaStreamTrack
-    : NON_EXPORTED_BASE(public blink::WebMediaStreamTrack::ExtraData) {
+    : NON_EXPORTED_BASE(public blink::WebMediaStreamTrack::TrackData) {
  public:
   explicit MediaStreamTrack(bool is_local_track);
   ~MediaStreamTrack() override;
@@ -27,7 +29,13 @@ class CONTENT_EXPORT MediaStreamTrack
 
   virtual void SetEnabled(bool enabled) = 0;
 
+  virtual void SetContentHint(
+      blink::WebMediaStreamTrack::ContentHintType content_hint) = 0;
+
   virtual void Stop() = 0;
+
+  // TODO(hta): Make method pure virtual when all tracks have the method.
+  void getSettings(blink::WebMediaStreamTrack::Settings& settings) override {}
 
   bool is_local_track() const { return is_local_track_; }
 

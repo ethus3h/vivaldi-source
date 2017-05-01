@@ -7,17 +7,14 @@
 #include <stddef.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/auto_reset.h"
 #include "base/bind.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/prefs/pref_registry.h"
-#include "base/prefs/pref_service.h"
-#include "base/prefs/scoped_user_pref_update.h"
-#include "base/strings/string_split.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "components/content_settings/core/browser/content_settings_pref.h"
@@ -30,20 +27,25 @@
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+
+namespace content_settings {
 
 namespace {
 
-// Obsolete prefs.
-// TODO(msramek): Remove the cleanup code after two releases (i.e. in M50).
-const char kObsoleteMetroSwitchToDesktopExceptions[] =
-    "profile.content_settings.exceptions.metro_switch_to_desktop";
-
-const char kObsoleteMediaStreamExceptions[] =
-    "profile.content_settings.exceptions.media_stream";
+// These settings are no longer used, and should be deleted on profile startup.
+#if !defined(OS_IOS)
+const char kObsoleteFullscreenExceptionsPref[] =
+    "profile.content_settings.exceptions.fullscreen";
+#if !defined(OS_ANDROID)
+const char kObsoleteMouseLockExceptionsPref[] =
+    "profile.content_settings.exceptions.mouselock";
+#endif  // !defined(OS_ANDROID)
+#endif  // !defined(OS_IOS)
 
 }  // namespace
-
-namespace content_settings {
 
 // ////////////////////////////////////////////////////////////////////////////
 // PrefProvider:
@@ -65,11 +67,18 @@ void PrefProvider::RegisterProfilePrefs(
 
   // Obsolete prefs ----------------------------------------------------------
 
+  // These prefs have been removed, but need to be registered so they can
+  // be deleted on startup.
+#if !defined(OS_IOS)
   registry->RegisterDictionaryPref(
-      kObsoleteMetroSwitchToDesktopExceptions,
+      kObsoleteFullscreenExceptionsPref,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-
-  registry->RegisterDictionaryPref(kObsoleteMediaStreamExceptions);
+#if !defined(OS_ANDROID)
+  registry->RegisterDictionaryPref(
+      kObsoleteMouseLockExceptionsPref,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+#endif  // !defined(OS_ANDROID)
+#endif  // !defined(OS_IOS)
 }
 
 PrefProvider::PrefProvider(PrefService* prefs, bool incognito)
@@ -87,6 +96,8 @@ PrefProvider::PrefProvider(PrefService* prefs, bool incognito)
     return;
   }
 
+  DiscardObsoletePreferences();
+
   pref_change_registrar_.Init(prefs_);
 
   WebsiteSettingsRegistry* website_settings =
@@ -94,10 +105,10 @@ PrefProvider::PrefProvider(PrefService* prefs, bool incognito)
   for (const WebsiteSettingsInfo* info : *website_settings) {
     content_settings_prefs_.insert(std::make_pair(
         info->type(),
-        make_scoped_ptr(new ContentSettingsPref(
+        base::MakeUnique<ContentSettingsPref>(
             info->type(), prefs_, &pref_change_registrar_, info->pref_name(),
             is_incognito_,
-            base::Bind(&PrefProvider::Notify, base::Unretained(this))))));
+            base::Bind(&PrefProvider::Notify, base::Unretained(this)))));
   }
 
   if (!is_incognito_) {
@@ -108,15 +119,13 @@ PrefProvider::PrefProvider(PrefService* prefs, bool incognito)
     UMA_HISTOGRAM_COUNTS("ContentSettings.NumberOfExceptions",
                          num_exceptions);
   }
-
-  DiscardObsoletePreferences();
 }
 
 PrefProvider::~PrefProvider() {
   DCHECK(!prefs_);
 }
 
-scoped_ptr<RuleIterator> PrefProvider::GetRuleIterator(
+std::unique_ptr<RuleIterator> PrefProvider::GetRuleIterator(
     ContentSettingsType content_type,
     const ResourceIdentifier& resource_identifier,
     bool incognito) const {
@@ -164,6 +173,14 @@ void PrefProvider::ShutdownOnUIThread() {
   prefs_ = NULL;
 }
 
+void PrefProvider::ClearPrefs() {
+  DCHECK(CalledOnValidThread());
+  DCHECK(prefs_);
+
+  for (const auto& pref : content_settings_prefs_)
+    pref.second->ClearPref();
+}
+
 void PrefProvider::UpdateLastUsage(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
@@ -186,7 +203,7 @@ ContentSettingsPref* PrefProvider::GetPref(ContentSettingsType type) const {
   return it->second.get();
 }
 
-void PrefProvider::SetClockForTesting(scoped_ptr<base::Clock> clock) {
+void PrefProvider::SetClockForTesting(std::unique_ptr<base::Clock> clock) {
   clock_ = std::move(clock);
 }
 
@@ -202,8 +219,14 @@ void PrefProvider::Notify(
 }
 
 void PrefProvider::DiscardObsoletePreferences() {
-  prefs_->ClearPref(kObsoleteMetroSwitchToDesktopExceptions);
-  prefs_->ClearPref(kObsoleteMediaStreamExceptions);
+  // These prefs were never stored on iOS/Android so they don't need to be
+  // deleted.
+#if !defined(OS_IOS)
+  prefs_->ClearPref(kObsoleteFullscreenExceptionsPref);
+#if !defined(OS_ANDROID)
+  prefs_->ClearPref(kObsoleteMouseLockExceptionsPref);
+#endif  // !defined(OS_ANDROID)
+#endif  // !defined(OS_IOS)
 }
 
 }  // namespace content_settings

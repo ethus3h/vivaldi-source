@@ -27,7 +27,7 @@
 
 static void AccumulateLSIM(const uint8_t* src, int src_stride,
                            const uint8_t* ref, int ref_stride,
-                           int w, int h, DistoStats* stats) {
+                           int w, int h, VP8DistoStats* stats) {
   int x, y;
   double total_sse = 0.;
   for (y = 0; y < h; ++y) {
@@ -71,10 +71,12 @@ static float GetPSNR(const double v) {
 
 int WebPPictureDistortion(const WebPPicture* src, const WebPPicture* ref,
                           int type, float result[5]) {
-  DistoStats stats[5];
+  VP8DistoStats stats[5];
   int w, h;
 
   memset(stats, 0, sizeof(stats));
+
+  VP8SSIMDspInit();
 
   if (src == NULL || ref == NULL ||
       src->width != ref->width || src->height != ref->height ||
@@ -108,7 +110,7 @@ int WebPPictureDistortion(const WebPPicture* src, const WebPPicture* ref,
           VP8SSIMAccumulatePlane(tmp1, w, tmp2, w, w, h, &stats[c]);
         }
       }
-      free(tmp_plane);
+      WebPSafeFree(tmp_plane);
     }
   } else {
     int has_alpha, uv_w, uv_h;

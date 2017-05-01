@@ -137,7 +137,8 @@ Chrome extensions. There are three kinds of worlds: a main world,
 an isolated world and a worker world.
 A main world is a world where a normal JavaScript downloaded from the web
 is executed.
-An isolated world is a world where a content script of a Chrome extension.
+An isolated world is a world where a content script of a Chrome extension is
+executed.
 An isolate of the main thread has 1 main world and N isolated worlds.
 An isolate of a worker thread has 1 worker world and 0 isolated world.
 [This diagram](https://drive.google.com/file/d/0B1obCOyvTnPKQmJEWkVtOEN2TmM/view?usp=sharing)
@@ -259,6 +260,6 @@ iframe.contentDocument.addEventListener("click",
 
 To make sure that a DOM wrapper is created in a correct context, you need to
 make sure that the current context must be set to the correct context
-whenever you call toV8(). If you're not sure what context to use,
+whenever you call ToV8(). If you're not sure what context to use,
 ask haraken@chromium.org.
 

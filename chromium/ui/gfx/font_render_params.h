@@ -9,7 +9,8 @@
 #include <vector>
 
 #include "build/build_config.h"
-#include "third_party/skia/include/core/SkFontHost.h"
+#include "third_party/skia/include/core/SkFontLCDConfig.h"
+#include "ui/gfx/font.h"
 #include "ui/gfx/gfx_export.h"
 
 namespace gfx {
@@ -17,6 +18,7 @@ namespace gfx {
 // A collection of parameters describing how text should be rendered on Linux.
 struct GFX_EXPORT FontRenderParams {
   FontRenderParams();
+  FontRenderParams(const FontRenderParams& other);
   ~FontRenderParams();
 
   // Level of hinting to be applied.
@@ -64,15 +66,16 @@ struct GFX_EXPORT FontRenderParams {
   // subpixel order.
   SubpixelRendering subpixel_rendering;
 
-  static SkFontHost::LCDOrder SubpixelRenderingToSkiaLCDOrder(
+  static SkFontLCDConfig::LCDOrder SubpixelRenderingToSkiaLCDOrder(
       SubpixelRendering subpixel_rendering);
-  static SkFontHost::LCDOrientation SubpixelRenderingToSkiaLCDOrientation(
+  static SkFontLCDConfig::LCDOrientation SubpixelRenderingToSkiaLCDOrientation(
       SubpixelRendering subpixel_rendering);
 };
 
 // A query used to determine the appropriate FontRenderParams.
 struct GFX_EXPORT FontRenderParamsQuery {
   FontRenderParamsQuery();
+  FontRenderParamsQuery(const FontRenderParamsQuery& other);
   ~FontRenderParamsQuery();
 
   bool is_empty() const {
@@ -86,8 +89,11 @@ struct GFX_EXPORT FontRenderParamsQuery {
   int pixel_size;
   int point_size;
 
-  // gfx::Font::FontStyle bit field, or -1 if unset.
+  // Font::FontStyle bit field, or -1 if unset.
   int style;
+
+  // Weight of the font. Weight::NORMAL by default.
+  Font::Weight weight;
 
   // The device scale factor of the display, or 0 if unset.
   float device_scale_factor;
@@ -106,9 +112,9 @@ GFX_EXPORT FontRenderParams GetFontRenderParams(
 GFX_EXPORT void ClearFontRenderParamsCacheForTest();
 #endif
 
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) || defined(OS_LINUX)
 // Gets the device scale factor to query the FontRenderParams.
-float GetFontRenderParamsDeviceScaleFactor();
+GFX_EXPORT float GetFontRenderParamsDeviceScaleFactor();
 
 // Sets the device scale factor for FontRenderParams to decide
 // if it should enable subpixel positioning.

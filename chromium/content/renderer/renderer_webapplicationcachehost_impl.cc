@@ -8,6 +8,7 @@
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
 #include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebView.h"
 
 using blink::WebApplicationCacheHostClient;
@@ -18,10 +19,10 @@ namespace content {
 RendererWebApplicationCacheHostImpl::RendererWebApplicationCacheHostImpl(
     RenderViewImpl* render_view,
     WebApplicationCacheHostClient* client,
-    AppCacheBackend* backend)
-    : WebApplicationCacheHostImpl(client, backend),
-      routing_id_(render_view->routing_id()) {
-}
+    AppCacheBackend* backend,
+    int appcache_host_id)
+    : WebApplicationCacheHostImpl(client, backend, appcache_host_id),
+      routing_id_(render_view->GetRoutingID()) {}
 
 void RendererWebApplicationCacheHostImpl::OnLogMessage(
     AppCacheLogLevel log_level, const std::string& message) {
@@ -34,9 +35,13 @@ void RendererWebApplicationCacheHostImpl::OnLogMessage(
     return;
 
   blink::WebFrame* frame = render_view->webview()->mainFrame();
-  frame->addMessageToConsole(WebConsoleMessage(
-        static_cast<WebConsoleMessage::Level>(log_level),
-        blink::WebString::fromUTF8(message.c_str())));
+  if (!frame->isWebLocalFrame())
+    return;
+  // TODO(michaeln): Make app cache host per-frame and correctly report to the
+  // involved frame.
+  frame->toWebLocalFrame()->addMessageToConsole(
+      WebConsoleMessage(static_cast<WebConsoleMessage::Level>(log_level),
+                        blink::WebString::fromUTF8(message.c_str())));
 }
 
 void RendererWebApplicationCacheHostImpl::OnContentBlocked(

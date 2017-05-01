@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_delegate.h"
@@ -69,7 +70,7 @@ class TextInputClientMacTest : public testing::Test {
   void PostTask(const tracked_objects::Location& from_here,
                 const base::Closure& task,
                 const base::TimeDelta delay) {
-    thread_.message_loop()->PostDelayedTask(from_here, task, delay);
+    thread_.task_runner()->PostDelayedTask(from_here, task, delay);
   }
 
   RenderWidgetHostImpl* widget() { return widget_.get(); }
@@ -87,7 +88,7 @@ class TextInputClientMacTest : public testing::Test {
   // Gets deleted when the last RWH in the "process" gets destroyed.
   MockRenderProcessHostFactory process_factory_;
   MockRenderWidgetHostDelegate delegate_;
-  scoped_ptr<RenderWidgetHostImpl> widget_;
+  std::unique_ptr<RenderWidgetHostImpl> widget_;
 
   base::Thread thread_;
 };
@@ -148,7 +149,6 @@ TEST_F(TextInputClientMacTest, TimeoutCharacterIndex) {
 TEST_F(TextInputClientMacTest, NotFoundCharacterIndex) {
   ScopedTestingThread thread(this);
   const NSUInteger kPreviousValue = 42;
-  const size_t kNotFoundValue = static_cast<size_t>(-1);
 
   // Set an arbitrary value to ensure the index is not |NSNotFound|.
   PostTask(FROM_HERE,
@@ -156,10 +156,10 @@ TEST_F(TextInputClientMacTest, NotFoundCharacterIndex) {
                       base::Unretained(service()), kPreviousValue));
 
   scoped_refptr<TextInputClientMessageFilter> filter(
-      new TextInputClientMessageFilter(widget()->GetProcess()->GetID()));
-  scoped_ptr<IPC::Message> message(
+      new TextInputClientMessageFilter());
+  std::unique_ptr<IPC::Message> message(
       new TextInputClientReplyMsg_GotCharacterIndexForPoint(
-          widget()->GetRoutingID(), kNotFoundValue));
+          widget()->GetRoutingID(), UINT32_MAX));
   // Set |WTF::notFound| to the index |kTaskDelayMs| after the previous
   // setting.
   PostTask(FROM_HERE,

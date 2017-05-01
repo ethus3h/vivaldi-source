@@ -89,7 +89,7 @@ void EasyUnlockAppManagerImpl::LaunchSetup() {
 
   OpenApplication(AppLaunchParams(extension_service->profile(), extension,
                                   extensions::LAUNCH_CONTAINER_WINDOW,
-                                  NEW_WINDOW,
+                                  WindowOpenDisposition::NEW_WINDOW,
                                   extensions::SOURCE_CHROME_INTERNAL));
 }
 
@@ -165,10 +165,10 @@ bool EasyUnlockAppManagerImpl::SendUserUpdatedEvent(const std::string& user_id,
   info.logged_in = is_logged_in;
   info.data_ready = data_ready;
 
-  scoped_ptr<base::ListValue> args(new base::ListValue());
-  args->Append(info.ToValue().release());
+  std::unique_ptr<base::ListValue> args(new base::ListValue());
+  args->Append(info.ToValue());
 
-  scoped_ptr<extensions::Event> event(
+  std::unique_ptr<extensions::Event> event(
       new extensions::Event(histogram_value, event_name, std::move(args)));
 
   event_router->DispatchEventToExtension(app_id_, std::move(event));
@@ -194,10 +194,10 @@ EasyUnlockAppManager::~EasyUnlockAppManager() {
 }
 
 // static
-scoped_ptr<EasyUnlockAppManager> EasyUnlockAppManager::Create(
+std::unique_ptr<EasyUnlockAppManager> EasyUnlockAppManager::Create(
     extensions::ExtensionSystem* extension_system,
     int manifest_id,
     const base::FilePath& app_path) {
-  return scoped_ptr<EasyUnlockAppManager>(
+  return std::unique_ptr<EasyUnlockAppManager>(
       new EasyUnlockAppManagerImpl(extension_system, manifest_id, app_path));
 }

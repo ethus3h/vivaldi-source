@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/prefs/pref_member.h"
-#include "base/prefs/pref_service.h"
+#include "base/time/clock.h"
+#include "base/time/default_clock.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_compression_stats.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_io_data.h"
@@ -18,6 +18,8 @@
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
+#include "components/prefs/pref_member.h"
+#include "components/prefs/pref_service.h"
 #include "net/base/network_change_notifier.h"
 
 namespace {
@@ -33,23 +35,30 @@ void RecordSettingsEnabledState(
       data_reduction_proxy::DATA_REDUCTION_SETTINGS_ACTION_BOUNDARY);
 }
 
+// Record the number of days since data reduction proxy was enabled by the
+// user.
+void RecordDaysSinceEnabledMetric(int days_since_enabled) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS("DataReductionProxy.DaysSinceEnabled",
+                              days_since_enabled, 0, 365 * 10, 100);
+}
+
 }  // namespace
 
 namespace data_reduction_proxy {
 
 const char kDataReductionPassThroughHeader[] =
-    "Chrome-Proxy: pass-through\nCache-Control: no-cache";
+    "Chrome-Proxy-Accept-Transform: identity\nCache-Control: no-cache";
 
 DataReductionProxySettings::DataReductionProxySettings()
     : unreachable_(false),
       deferred_initialization_(false),
-      allowed_(false),
       promo_allowed_(false),
       lo_fi_mode_active_(false),
       lo_fi_load_image_requested_(false),
       data_reduction_proxy_enabled_pref_name_(),
       prefs_(NULL),
-      config_(nullptr) {
+      config_(nullptr),
+      clock_(new base::DefaultClock()) {
   lo_fi_user_requests_for_images_per_session_ =
       params::GetFieldTrialParameterAsInteger(
           params::GetLoFiFieldTrialName(), "load_images_requests_per_session",
@@ -59,8 +68,7 @@ DataReductionProxySettings::DataReductionProxySettings()
 }
 
 DataReductionProxySettings::~DataReductionProxySettings() {
-  if (allowed_)
-    spdy_proxy_auth_enabled_.Destroy();
+  spdy_proxy_auth_enabled_.Destroy();
 }
 
 void DataReductionProxySettings::InitPrefMembers() {
@@ -73,7 +81,6 @@ void DataReductionProxySettings::InitPrefMembers() {
 
 void DataReductionProxySettings::UpdateConfigValues() {
   DCHECK(config_);
-  allowed_ = config_->allowed();
   promo_allowed_ = config_->promo_allowed();
 }
 
@@ -81,7 +88,7 @@ void DataReductionProxySettings::InitDataReductionProxySettings(
     const std::string& data_reduction_proxy_enabled_pref_name,
     PrefService* prefs,
     DataReductionProxyIOData* io_data,
-    scoped_ptr<DataReductionProxyService> data_reduction_proxy_service) {
+    std::unique_ptr<DataReductionProxyService> data_reduction_proxy_service) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(!data_reduction_proxy_enabled_pref_name.empty());
   DCHECK(prefs);
@@ -115,7 +122,6 @@ void DataReductionProxySettings::SetCallbackToRegisterSyntheticFieldTrial(
         on_data_reduction_proxy_enabled) {
   register_synthetic_field_trial_ = on_data_reduction_proxy_enabled;
   RegisterDataReductionProxyFieldTrial();
-  RegisterLoFiFieldTrial();
 }
 
 bool DataReductionProxySettings::IsDataReductionProxyEnabled() const {
@@ -135,10 +141,6 @@ bool DataReductionProxySettings::IsDataReductionProxyManaged() {
 
 void DataReductionProxySettings::SetDataReductionProxyEnabled(bool enabled) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  // Prevent configuring the proxy when it is not allowed to be used.
-  if (!allowed_)
-    return;
-
   if (spdy_proxy_auth_enabled_.GetValue() != enabled) {
     spdy_proxy_auth_enabled_.SetValue(enabled);
     OnProxyEnabledPrefChange();
@@ -150,6 +152,14 @@ int64_t DataReductionProxySettings::GetDataReductionLastUpdateTime() {
   DCHECK(data_reduction_proxy_service_->compression_stats());
   return
       data_reduction_proxy_service_->compression_stats()->GetLastUpdateTime();
+}
+
+int64_t DataReductionProxySettings::GetTotalHttpContentLengthSaved() {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  return data_reduction_proxy_service_->compression_stats()
+             ->GetHttpOriginalContentLength() -
+         data_reduction_proxy_service_->compression_stats()
+             ->GetHttpReceivedContentLength();
 }
 
 void DataReductionProxySettings::SetUnreachable(bool unreachable) {
@@ -172,13 +182,11 @@ void DataReductionProxySettings::SetLoFiModeActiveOnMainFrame(
     prefs_->SetBoolean(prefs::kLoFiWasUsedThisSession, true);
   lo_fi_load_image_requested_ = false;
   lo_fi_mode_active_ = lo_fi_mode_active;
-  if (!register_synthetic_field_trial_.is_null()) {
-    RegisterLoFiFieldTrial();
-  }
 }
 
 bool DataReductionProxySettings::WasLoFiModeActiveOnMainFrame() const {
-  return lo_fi_mode_active_;
+  return lo_fi_mode_active_ && !params::AreLitePagesEnabledViaFlags() &&
+         !params::IsIncludedInLitePageFieldTrial();
 }
 
 bool DataReductionProxySettings::WasLoFiLoadImageRequestedBefore() {
@@ -189,10 +197,9 @@ void DataReductionProxySettings::SetLoFiLoadImageRequested() {
   lo_fi_load_image_requested_ = true;
 }
 
-void DataReductionProxySettings::IncrementLoFiSnackbarShown() {
-  prefs_->SetInteger(
-      prefs::kLoFiSnackbarsShownPerSession,
-      prefs_->GetInteger(prefs::kLoFiSnackbarsShownPerSession) + 1);
+void DataReductionProxySettings::IncrementLoFiUIShown() {
+  prefs_->SetInteger(prefs::kLoFiUIShownPerSession,
+                     prefs_->GetInteger(prefs::kLoFiUIShownPerSession) + 1);
 }
 
 void DataReductionProxySettings::IncrementLoFiUserRequestsForImages() {
@@ -221,22 +228,11 @@ void DataReductionProxySettings::RegisterDataReductionProxyFieldTrial() {
       IsDataReductionProxyEnabled() ? "Enabled" : "Disabled");
 }
 
-void DataReductionProxySettings::RegisterLoFiFieldTrial() {
-  register_synthetic_field_trial_.Run(
-      "SyntheticDataReductionProxyLoFiSetting",
-      IsDataReductionProxyEnabled() && WasLoFiModeActiveOnMainFrame()
-          ? "Enabled"
-          : "Disabled");
-}
-
 void DataReductionProxySettings::OnProxyEnabledPrefChange() {
   DCHECK(thread_checker_.CalledOnValidThread());
   if (!register_synthetic_field_trial_.is_null()) {
     RegisterDataReductionProxyFieldTrial();
-    RegisterLoFiFieldTrial();
   }
-  if (!allowed_)
-    return;
   MaybeActivateDataReductionProxy(false);
 }
 
@@ -260,16 +256,54 @@ void DataReductionProxySettings::MaybeActivateDataReductionProxy(
   // related prefs.
   if (!prefs)
     return;
+
+  if (spdy_proxy_auth_enabled_.GetValue() && at_startup) {
+    // Record the number of days since data reduction proxy has been enabled.
+    int64_t last_enabled_time =
+        prefs->GetInt64(prefs::kDataReductionProxyLastEnabledTime);
+    if (last_enabled_time != 0) {
+      // Record the metric only if the time when data reduction proxy was
+      // enabled is available.
+      RecordDaysSinceEnabledMetric(
+          (clock_->Now() - base::Time::FromInternalValue(last_enabled_time))
+              .InDays());
+    }
+
+    int64_t last_savings_cleared_time = prefs->GetInt64(
+        prefs::kDataReductionProxySavingsClearedNegativeSystemClock);
+    if (last_savings_cleared_time != 0) {
+      int32_t days_since_savings_cleared =
+          (clock_->Now() -
+           base::Time::FromInternalValue(last_savings_cleared_time))
+              .InDays();
+
+      // Sample in the UMA histograms must be at least 1.
+      if (days_since_savings_cleared == 0)
+        days_since_savings_cleared = 1;
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
+          "DataReductionProxy.DaysSinceSavingsCleared.NegativeSystemClock",
+          days_since_savings_cleared, 1, 365, 50);
+    }
+  }
+
   if (spdy_proxy_auth_enabled_.GetValue() &&
       !prefs->GetBoolean(prefs::kDataReductionProxyWasEnabledBefore)) {
     prefs->SetBoolean(prefs::kDataReductionProxyWasEnabledBefore, true);
     ResetDataReductionStatistics();
   }
   if (!at_startup) {
-    if (IsDataReductionProxyEnabled())
+    if (IsDataReductionProxyEnabled()) {
       RecordSettingsEnabledState(DATA_REDUCTION_SETTINGS_ACTION_OFF_TO_ON);
-    else
+
+      // Data reduction proxy has been enabled by the user. Record the number of
+      // days since the data reduction proxy has been enabled as zero, and
+      // store the current time in the pref.
+      prefs->SetInt64(prefs::kDataReductionProxyLastEnabledTime,
+                      clock_->Now().ToInternalValue());
+      RecordDaysSinceEnabledMetric(0);
+    } else {
       RecordSettingsEnabledState(DATA_REDUCTION_SETTINGS_ACTION_ON_TO_OFF);
+    }
   }
   // Configure use of the data reduction proxy if it is enabled.
   if (at_startup && !data_reduction_proxy_service_->Initialized())
@@ -287,20 +321,14 @@ DataReductionProxyEventStore* DataReductionProxySettings::GetEventStore()
 }
 
 // Metrics methods
-void DataReductionProxySettings::RecordDataReductionInit() {
+void DataReductionProxySettings::RecordDataReductionInit() const {
   DCHECK(thread_checker_.CalledOnValidThread());
-  ProxyStartupState state = PROXY_NOT_AVAILABLE;
-  if (allowed_) {
-    if (IsDataReductionProxyEnabled())
-      state = PROXY_ENABLED;
-    else
-      state = PROXY_DISABLED;
-  }
-
-  RecordStartupState(state);
+  RecordStartupState(IsDataReductionProxyEnabled() ? PROXY_ENABLED
+                                                   : PROXY_DISABLED);
 }
 
-void DataReductionProxySettings::RecordStartupState(ProxyStartupState state) {
+void DataReductionProxySettings::RecordStartupState(
+    ProxyStartupState state) const {
   UMA_HISTOGRAM_ENUMERATION(kUMAProxyStartupStateHistogram,
                             state,
                             PROXY_STARTUP_STATE_COUNT);
@@ -376,6 +404,17 @@ void DataReductionProxySettings::GetContentLengths(
 
   data_reduction_proxy_service_->compression_stats()->GetContentLengths(
       days, original_content_length, received_content_length, last_update_time);
+}
+
+bool DataReductionProxySettings::UpdateDataSavings(
+    const std::string& data_usage_host,
+    int64_t data_used,
+    int64_t original_size) {
+  if (!IsDataReductionProxyEnabled())
+    return false;
+  data_reduction_proxy_service_->compression_stats()->UpdateDataSavings(
+      data_usage_host, data_used, original_size);
+  return true;
 }
 
 }  // namespace data_reduction_proxy

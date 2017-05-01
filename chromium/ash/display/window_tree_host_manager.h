@@ -2,20 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef ASH_DISPLAY_DISPLAY_CONTROLLER_H_
-#define ASH_DISPLAY_DISPLAY_CONTROLLER_H_
+#ifndef ASH_DISPLAY_WINDOW_TREE_HOST_MANAGER_H_
+#define ASH_DISPLAY_WINDOW_TREE_HOST_MANAGER_H_
 
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "ash/ash_export.h"
-#include "ash/display/display_manager.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -23,22 +22,15 @@
 #include "ui/aura/window_tree_host_observer.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/input_method_delegate.h"
-#include "ui/gfx/display_observer.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/gfx/geometry/point.h"
 
 namespace aura {
-class Display;
 class WindowTreeHost;
 }
 
-namespace base {
-class Value;
-template <typename T>
-class JSONValueConverter;
-}
-
 namespace gfx {
-class Display;
 class Insets;
 }
 
@@ -46,8 +38,6 @@ namespace ash {
 class AshWindowTreeHost;
 struct AshWindowTreeHostInitParams;
 class CursorWindowController;
-class DisplayInfo;
-class DisplayManager;
 class FocusActivationStore;
 class InputMethodEventHandler;
 class MirrorWindowController;
@@ -56,12 +46,12 @@ class RootWindowController;
 // WindowTreeHostManager owns and maintains RootWindows for each attached
 // display, keeping them in sync with display configuration changes.
 class ASH_EXPORT WindowTreeHostManager
-    : public gfx::DisplayObserver,
+    : public display::DisplayObserver,
       public aura::WindowTreeHostObserver,
-      public DisplayManager::Delegate,
+      public display::DisplayManager::Delegate,
       public ui::internal::InputMethodDelegate {
  public:
-  // TODO(oshima): Consider moving this to gfx::DisplayObserver.
+  // TODO(oshima): Consider moving this to display::DisplayObserver.
   class ASH_EXPORT Observer {
    public:
     // Invoked only once after all displays are initialized
@@ -122,22 +112,9 @@ class ASH_EXPORT WindowTreeHostManager
   // if the WTH does not exist.
   AshWindowTreeHost* GetAshWindowTreeHostForDisplayId(int64_t id);
 
-  // Toggle mirror mode.
-  void ToggleMirrorMode();
-
-  // Swap primary and secondary display.
-  void SwapPrimaryDisplay();
-
-  // Sets the ID of the primary display.  If the display is not connected, it
-  // will switch the primary display when connected.
+  // Sets the primary display by display id. This re-assigns the current primary
+  // root window host to to new primary display.
   void SetPrimaryDisplayId(int64_t id);
-
-  // Sets primary display. This re-assigns the current root
-  // window to given |display|.
-  void SetPrimaryDisplay(const gfx::Display& display);
-
-  // Closes all child windows in the all root windows.
-  void CloseChildWindows();
 
   // Returns all root windows. In non extended desktop mode, this
   // returns the primary root window only.
@@ -162,21 +139,22 @@ class ASH_EXPORT WindowTreeHostManager
 
   ui::InputMethod* input_method() { return input_method_.get(); }
 
-  // gfx::DisplayObserver overrides:
-  void OnDisplayAdded(const gfx::Display& display) override;
-  void OnDisplayRemoved(const gfx::Display& display) override;
-  void OnDisplayMetricsChanged(const gfx::Display& display,
+  // display::DisplayObserver overrides:
+  void OnDisplayAdded(const display::Display& display) override;
+  void OnDisplayRemoved(const display::Display& display) override;
+  void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t metrics) override;
 
   // aura::WindowTreeHostObserver overrides:
   void OnHostResized(const aura::WindowTreeHost* host) override;
 
-  // aura::DisplayManager::Delegate overrides:
+  // display::DisplayManager::Delegate overrides:
   void CreateOrUpdateMirroringDisplay(
-      const DisplayInfoList& info_list) override;
+      const display::DisplayInfoList& info_list) override;
   void CloseMirroringDisplayIfNotNecessary() override;
   void PreDisplayConfigurationChange(bool clear_focus) override;
-  void PostDisplayConfigurationChange() override;
+  void PostDisplayConfigurationChange(bool must_clear_window) override;
+  display::DisplayConfigurator* display_configurator() override;
 
   // ui::internal::InputMethodDelegate overrides:
   ui::EventDispatchDetails DispatchKeyEventPostIME(
@@ -189,42 +167,17 @@ class ASH_EXPORT WindowTreeHostManager
  private:
   FRIEND_TEST_ALL_PREFIXES(WindowTreeHostManagerTest, BoundsUpdated);
   FRIEND_TEST_ALL_PREFIXES(WindowTreeHostManagerTest, SecondaryDisplayLayout);
-  friend class DisplayManager;
   friend class MirrorWindowController;
 
   // Creates a WindowTreeHost for |display| and stores it in the
   // |window_tree_hosts_| map.
   AshWindowTreeHost* AddWindowTreeHostForDisplay(
-      const gfx::Display& display,
+      const display::Display& display,
       const AshWindowTreeHostInitParams& params);
-
-  void OnFadeOutForSwapDisplayFinished();
-
-  void SetMirrorModeAfterAnimation(bool mirror);
 
   // Delete the AsWindowTreeHost. This does not remove the entry from
   // |window_tree_hosts_|. Caller has to explicitly remove it.
   void DeleteHost(AshWindowTreeHost* host_to_delete);
-
-  class DisplayChangeLimiter {
-   public:
-    DisplayChangeLimiter();
-
-    // Sets how long the throttling should last.
-    void SetThrottleTimeout(int64_t throttle_ms);
-
-    bool IsThrottled() const;
-
-   private:
-    // The time when the throttling ends.
-    base::Time throttle_timeout_;
-
-    DISALLOW_COPY_AND_ASSIGN(DisplayChangeLimiter);
-  };
-
-  // The limiter to throttle how fast a user can
-  // change the display configuration.
-  scoped_ptr<DisplayChangeLimiter> limiter_;
 
   typedef std::map<int64_t, AshWindowTreeHost*> WindowTreeHostMap;
   // The mapping from display ID to its window tree host.
@@ -236,13 +189,13 @@ class ASH_EXPORT WindowTreeHostManager
   // display.
   AshWindowTreeHost* primary_tree_host_for_replace_;
 
-  scoped_ptr<FocusActivationStore> focus_activation_store_;
+  std::unique_ptr<FocusActivationStore> focus_activation_store_;
 
-  scoped_ptr<CursorWindowController> cursor_window_controller_;
-  scoped_ptr<MirrorWindowController> mirror_window_controller_;
+  std::unique_ptr<CursorWindowController> cursor_window_controller_;
+  std::unique_ptr<MirrorWindowController> mirror_window_controller_;
 
-  scoped_ptr<ui::InputMethod> input_method_;
-  scoped_ptr<InputMethodEventHandler> input_method_event_handler_;
+  std::unique_ptr<ui::InputMethod> input_method_;
+  std::unique_ptr<InputMethodEventHandler> input_method_event_handler_;
 
   // Stores the current cursor location (in native coordinates and screen
   // coordinates respectively). The locations are used to restore the cursor
@@ -262,4 +215,4 @@ class ASH_EXPORT WindowTreeHostManager
 
 }  // namespace ash
 
-#endif  // ASH_DISPLAY_DISPLAY_CONTROLLER_H_
+#endif  // ASH_DISPLAY_WINDOW_TREE_HOST_MANAGER_H_

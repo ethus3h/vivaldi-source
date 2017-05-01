@@ -13,6 +13,7 @@
 #include "third_party/kasko/kasko_features.h"
 
 class DidRunUpdater;
+class ModuleWatcher;
 
 namespace base {
 class CommandLine;
@@ -71,12 +72,14 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
 
  private:
 #if defined(GOOGLE_CHROME_BUILD)
-  scoped_ptr<DidRunUpdater> did_run_updater_;
+  std::unique_ptr<DidRunUpdater> did_run_updater_;
 #endif
 #if BUILDFLAG(ENABLE_KASKO)
   // Cleans up Kasko crash reports that exceeded the maximum upload attempts.
   base::FilePathWatcher failed_kasko_crash_report_watcher_;
 #endif
+
+  std::unique_ptr<ModuleWatcher> module_watcher_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainPartsWin);
 };

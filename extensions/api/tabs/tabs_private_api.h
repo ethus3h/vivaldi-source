@@ -3,26 +3,137 @@
 #ifndef EXTENSIONS_API_TABS_TABS_PRIVATE_API_H_
 #define EXTENSIONS_API_TABS_TABS_PRIVATE_API_H_
 
+#include <map>
+#include <string>
+#include <vector>
+#include "base/memory/shared_memory_handle.h"
 #include "base/scoped_observer.h"
 #include "chrome/browser/extensions/chrome_extension_function.h"
 #include "chrome/browser/extensions/api/tabs/tabs_api.h"
 #include "components/favicon/core/favicon_driver_observer.h"
-#include "components/ui/zoom/zoom_observer.h"
+#include "components/zoom/zoom_observer.h"
+#include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_event_histogram_value.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
+#include "third_party/WebKit/public/platform/WebDragOperation.h"
+
+typedef std::map<base::string16, base::string16> TabDragDataCollection;
+typedef base::Callback<void(base::SharedMemoryHandle handle,
+                            const gfx::Size image_size,
+                            int callback_id,
+                            bool success)> CaptureTabDoneCallback;
 
 namespace favicon {
-  class FaviconDriver;
+class FaviconDriver;
 }
 
 namespace extensions {
 
 class VivaldiTabsPrivateApiNotification;
 
+class TabsPrivateEventRouter;
+
+// Interface for forwarding tab drag and drop to extensions.
+class TabDragDelegate {
+ public:
+  virtual void OnDragEnter(const TabDragDataCollection& data) = 0;
+  virtual void OnDragOver(const TabDragDataCollection& data) = 0;
+  virtual void OnDragLeave(const TabDragDataCollection& data) = 0;
+  virtual void OnDrop(const TabDragDataCollection& data) = 0;
+  virtual blink::WebDragOperationsMask
+  OnDragEnd(int screen_x, int screen_y, blink::WebDragOperationsMask ops,
+            const TabDragDataCollection& data, bool cancelled) = 0;
+  virtual blink::WebDragOperationsMask
+  OnDragCursorUpdating(int screen_x, int screen_y,
+                       blink::WebDragOperationsMask ops) = 0;
+
+protected:
+  virtual ~TabDragDelegate() { }
+};
+
+// Class that handles the drag and drop related vivaldi events.
+class TabsPrivateEventRouter : public TabDragDelegate {
+ public:
+  TabsPrivateEventRouter(Profile* profile);
+  ~TabsPrivateEventRouter() override;
+
+  // TabDragDelegate interface
+  void OnDragEnter(const TabDragDataCollection& data) override;
+  void OnDragOver(const TabDragDataCollection& data) override;
+  void OnDragLeave(const TabDragDataCollection& data) override;
+  void OnDrop(const TabDragDataCollection& data) override;
+  blink::WebDragOperationsMask OnDragEnd(int screen_x, int screen_y,
+                                         blink::WebDragOperationsMask ops,
+                                         const TabDragDataCollection &data,
+                                         bool cancelled) override;
+  blink::WebDragOperationsMask
+  OnDragCursorUpdating(int screen_x, int screen_y,
+                       blink::WebDragOperationsMask ops) override;
+
+private:
+  // Helper to actually dispatch an event to extension listeners.
+  void DispatchEvent(events::HistogramValue histogram_value,
+                     const std::string& event_name,
+                     std::unique_ptr<base::ListValue>& args);
+
+  Profile* profile_ = nullptr;
+  const std::vector<std::string> tab_drag_data_;
+
+  DISALLOW_COPY_AND_ASSIGN(TabsPrivateEventRouter);
+};
+
+class TabsPrivateAPI : public BrowserContextKeyedAPI,
+                       public EventRouter::Observer {
+ public:
+  explicit TabsPrivateAPI(content::BrowserContext* context);
+  ~TabsPrivateAPI() override;
+
+  // KeyedService implementation.
+  void Shutdown() override;
+
+  // BrowserContextKeyedAPI implementation.
+  static BrowserContextKeyedAPIFactory<TabsPrivateAPI>* GetFactoryInstance();
+
+  // EventRouter::Observer implementation.
+  void OnListenerAdded(const EventListenerInfo& details) override;
+
+  TabDragDelegate* tab_drag_delegate() { return event_router_.get(); }
+
+  void SetDropDataBackup(TabDragDataCollection& drop_data) {
+    drop_data_backup_ = drop_data;
+  }
+
+  TabDragDataCollection& GetDropDataBackup() {
+    return drop_data_backup_;
+  }
+
+ private:
+  friend class BrowserContextKeyedAPIFactory<TabsPrivateAPI>;
+
+  content::BrowserContext* browser_context_;
+
+  // BrowserContextKeyedAPI implementation.
+  static const char* service_name() {
+    return "TabsPrivateAPI";
+  }
+  static const bool kServiceIsNULLWhileTesting = true;
+
+  std::unique_ptr<TabsPrivateEventRouter> event_router_;
+
+  // This is only used in the case where no dragenter event is fired internally
+  // due to a drag starting outside a WebContents and never entering the
+  // WebContents again before a drop is performed. On drop, no drop data is then
+  // available and we will use this data instead.
+  TabDragDataCollection drop_data_backup_;
+};
+
 // Tab contents observer that forward private settings to any new renderer.
 // This class holds the Tab-specific settings for the lifetime of the tab's
 // WebContents.
 class VivaldiPrivateTabObserver
     : public content::WebContentsObserver,
-      public ui_zoom::ZoomObserver,
+      public zoom::ZoomObserver,
       public content::WebContentsUserData<VivaldiPrivateTabObserver>,
       public favicon::FaviconDriverObserver {
  public:
@@ -34,6 +145,7 @@ class VivaldiPrivateTabObserver
   void RenderViewHostChanged(content::RenderViewHost* old_host,
                              content::RenderViewHost* new_host) override;
   void WebContentsDestroyed() override;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   void SetShowImages(bool show_images);
   void SetLoadFromCacheOnly(bool load_from_cache_only);
@@ -48,10 +160,9 @@ class VivaldiPrivateTabObserver
 
   // ZoomObserver implementation.
   void OnZoomChanged(
-    const ui_zoom::ZoomController::ZoomChangedEventData& data) override;
+    const zoom::ZoomController::ZoomChangedEventData& data) override;
 
   void SetZoomLevelForTab(double level);
-  bool IsVivaldiTabZoomEnabled();
 
   // favicon::FaviconDriverObserver:
   void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
@@ -60,12 +171,25 @@ class VivaldiPrivateTabObserver
                         bool icon_url_changed,
                         const gfx::Image& image) override;
 
+  void CaptureTab(gfx::Size size,
+                  bool full_page,
+                  const CaptureTabDoneCallback& callback);
+
+  // Message handlers
+  void OnRequestThumbnailForFrameResponse(base::SharedMemoryHandle handle,
+                                          const gfx::Size image_size,
+                                          int callback_id,
+                                          bool success);
+
+  // Returns true if a capture is already underway for this WebContents.
+  bool IsCapturing();
+
  private:
   explicit VivaldiPrivateTabObserver(content::WebContents* web_contents);
   friend class content::WebContentsUserData<VivaldiPrivateTabObserver>;
 
   static void BroadcastEvent(const std::string& eventname,
-                             scoped_ptr<base::ListValue>& args,
+                             std::unique_ptr<base::ListValue>& args,
                              content::BrowserContext* context);
 
   void SaveZoomLevelToExtData(double zoom_level);
@@ -81,6 +205,9 @@ class VivaldiPrivateTabObserver
 
   // Vivaldi tab zoom level
   double tab_zoom_level_ = 0;
+
+  // Callback to call when we get an capture response message from the renderer.
+  CaptureTabDoneCallback capture_callback_;
 
   ScopedObserver<favicon::FaviconDriver, VivaldiPrivateTabObserver>
       favicon_scoped_observer_;
@@ -119,6 +246,53 @@ class TabsPrivateGetFunction: public ChromeAsyncExtensionFunction {
   bool RunAsync() override;
 
   DISALLOW_COPY_AND_ASSIGN(TabsPrivateGetFunction);
+};
+
+class TabsPrivateDiscardFunction: public ChromeAsyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("tabsPrivate.discard", TABSSPRIVATE_DISCARD);
+
+  TabsPrivateDiscardFunction();
+
+ protected:
+  ~TabsPrivateDiscardFunction() override;
+
+ private:
+  // BookmarksFunction:
+  bool RunAsync() override;
+
+  DISALLOW_COPY_AND_ASSIGN(TabsPrivateDiscardFunction);
+};
+
+class TabsPrivateInsertTextFunction : public ChromeAsyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("tabsPrivate.insertText",
+                             TABSSPRIVATE_INSERTTEXT);
+
+  TabsPrivateInsertTextFunction();
+
+ protected:
+  ~TabsPrivateInsertTextFunction() override;
+
+ private:
+  bool RunAsync() override;
+
+  DISALLOW_COPY_AND_ASSIGN(TabsPrivateInsertTextFunction);
+};
+
+class TabsPrivateStartDragFunction : public ChromeAsyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("tabsPrivate.startDrag", TABSSPRIVATE_STARTDRAG);
+
+  TabsPrivateStartDragFunction();
+
+ protected:
+  ~TabsPrivateStartDragFunction() override;
+
+ private:
+  bool RunAsync() override;
+
+  DISALLOW_COPY_AND_ASSIGN(TabsPrivateStartDragFunction);
 };
 
 }  // namespace extensions

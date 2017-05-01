@@ -10,7 +10,6 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.PendingIntent;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -24,10 +23,14 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityManager;
 
+import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.Callback;
+import org.chromium.base.ObserverList;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
 import org.chromium.ui.VSyncMonitor;
+import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.widget.Toast;
 
 import java.lang.ref.WeakReference;
@@ -67,8 +70,9 @@ public class WindowAndroid {
     }
 
     // Native pointer to the c++ WindowAndroid object.
-    private long mNativeWindowAndroid = 0;
+    private long mNativeWindowAndroid;
     private final VSyncMonitor mVSyncMonitor;
+    private final DisplayAndroid mDisplayAndroid;
 
     // A string used as a key to store intent errors in a bundle
     static final String WINDOW_CALLBACK_ERRORS = "window_callback_errors";
@@ -87,12 +91,12 @@ public class WindowAndroid {
     protected HashMap<Integer, String> mIntentErrors;
 
     // We track all animations over content and provide a drawing placeholder for them.
-    private HashSet<Animator> mAnimationsOverContent = new HashSet<Animator>();
+    private HashSet<Animator> mAnimationsOverContent = new HashSet<>();
     private View mAnimationPlaceholderView;
 
     private ViewGroup mKeyboardAccessoryView;
 
-    protected boolean mIsKeyboardShowing = false;
+    protected boolean mIsKeyboardShowing;
 
     // System accessibility service.
     private final AccessibilityManager mAccessibilityManager;
@@ -112,7 +116,20 @@ public class WindowAndroid {
         public void keyboardVisibilityChanged(boolean isShowing);
     }
     private LinkedList<KeyboardVisibilityListener> mKeyboardVisibilityListeners =
-            new LinkedList<KeyboardVisibilityListener>();
+            new LinkedList<>();
+
+    /**
+     * An interface to notify listeners that a context menu is closed.
+     */
+    public interface OnCloseContextMenuListener {
+        /**
+         * Called when a context menu has been closed.
+         */
+        void onContextMenuClosed();
+    }
+
+    private final ObserverList<OnCloseContextMenuListener> mContextMenuCloseListeners =
+            new ObserverList<>();
 
     private final VSyncMonitor.Listener mVSyncListener = new VSyncMonitor.Listener() {
         @Override
@@ -153,24 +170,49 @@ public class WindowAndroid {
     }
 
     /**
+     * @return The time interval between two consecutive vsync pulses in milliseconds.
+     */
+    public long getVsyncPeriodInMillis() {
+        return mVSyncMonitor.getVSyncPeriodInMicroseconds() / 1000;
+    }
+
+    /**
      * @param context The application context.
      */
-    @SuppressLint("UseSparseArrays")
     public WindowAndroid(Context context) {
+        this(context, DisplayAndroid.getNonMultiDisplay(context));
+    }
+
+    /**
+     * @param context The application context.
+     * @param display
+     */
+    @SuppressLint("UseSparseArrays")
+    protected WindowAndroid(Context context, DisplayAndroid display) {
         mApplicationContext = context.getApplicationContext();
         // context does not have the same lifetime guarantees as an application context so we can't
         // hold a strong reference to it.
-        mContextRef = new WeakReference<Context>(context);
-        mOutstandingIntents = new SparseArray<IntentCallback>();
-        mIntentErrors = new HashMap<Integer, String>();
+        mContextRef = new WeakReference<>(context);
+        mOutstandingIntents = new SparseArray<>();
+        mIntentErrors = new HashMap<>();
         mVSyncMonitor = new VSyncMonitor(context, mVSyncListener);
         mAccessibilityManager = (AccessibilityManager) mApplicationContext.getSystemService(
                 Context.ACCESSIBILITY_SERVICE);
+        mDisplayAndroid = display;
     }
 
     @CalledByNative
-    private static WindowAndroid createForTesting(Context context) {
-        return new WindowAndroid(context);
+    private static long createForTesting(Context context) {
+        WindowAndroid windowAndroid = new WindowAndroid(context);
+        // |windowAndroid.getNativePointer()| creates native WindowAndroid object
+        // which stores a global ref to |windowAndroid|. Therefore |windowAndroid|
+        // is not immediately eligible for gc.
+        return windowAndroid.getNativePointer();
+    }
+
+    @CalledByNative
+    private void clearNativePointer() {
+        mNativeWindowAndroid = 0;
     }
 
     /**
@@ -185,7 +227,7 @@ public class WindowAndroid {
      * Shows an intent and returns the results to the callback object.
      * @param intent   The PendingIntent that needs to be shown.
      * @param callback The object that will receive the results for the intent.
-     * @param errorId  The ID of error string to be show if activity is paused before intent
+     * @param errorId  The ID of error string to be shown if activity is paused before intent
      *                 results, or null if no message is required.
      * @return Whether the intent was shown.
      */
@@ -197,7 +239,7 @@ public class WindowAndroid {
      * Shows an intent and returns the results to the callback object.
      * @param intent   The intent that needs to be shown.
      * @param callback The object that will receive the results for the intent.
-     * @param errorId  The ID of error string to be show if activity is paused before intent
+     * @param errorId  The ID of error string to be shown if activity is paused before intent
      *                 results, or null if no message is required.
      * @return Whether the intent was shown.
      */
@@ -209,7 +251,7 @@ public class WindowAndroid {
      * Shows an intent that could be canceled and returns the results to the callback object.
      * @param  intent   The PendingIntent that needs to be shown.
      * @param  callback The object that will receive the results for the intent.
-     * @param  errorId  The ID of error string to be show if activity is paused before intent
+     * @param  errorId  The ID of error string to be shown if activity is paused before intent
      *                  results, or null if no message is required.
      * @return A non-negative request code that could be used for finishActivity, or
      *         START_INTENT_FAILURE if failed.
@@ -222,15 +264,31 @@ public class WindowAndroid {
 
     /**
      * Shows an intent that could be canceled and returns the results to the callback object.
-     * @param  intent   The intent that needs to be showed.
+     * @param  intent   The intent that needs to be shown.
      * @param  callback The object that will receive the results for the intent.
-     * @param  errorId  The ID of error string to be show if activity is paused before intent
+     * @param  errorId  The ID of error string to be shown if activity is paused before intent
      *                  results, or null if no message is required.
      * @return A non-negative request code that could be used for finishActivity, or
      *         START_INTENT_FAILURE if failed.
      */
     public int showCancelableIntent(Intent intent, IntentCallback callback, Integer errorId) {
         Log.d(TAG, "Can't show intent as context is not an Activity: " + intent);
+        return START_INTENT_FAILURE;
+    }
+
+    /**
+     * Shows an intent that could be canceled and returns the results to the callback object.
+     * @param  intentTrigger The callback that triggers the intent that needs to be shown. The value
+     *                       passed to the trigger is the request code used for issuing the intent.
+     * @param  callback      The object that will receive the results for the intent.
+     * @param  errorId       The ID of error string to be shown if activity is paused before intent
+     *                       results, or null if no message is required.
+     * @return A non-negative request code that could be used for finishActivity, or
+     *         START_INTENT_FAILURE if failed.
+     */
+    public int showCancelableIntent(Callback<Integer> intentTrigger, IntentCallback callback,
+            Integer errorId) {
+        Log.d(TAG, "Can't show intent as context is not an Activity");
         return START_INTENT_FAILURE;
     }
 
@@ -265,7 +323,8 @@ public class WindowAndroid {
     public final boolean hasPermission(String permission) {
         if (mPermissionDelegate != null) return mPermissionDelegate.hasPermission(permission);
 
-        return mApplicationContext.checkPermission(permission, Process.myPid(), Process.myUid())
+        return ApiCompatibilityUtils.checkPermission(
+                mApplicationContext, permission, Process.myPid(), Process.myUid())
                 == PackageManager.PERMISSION_GRANTED;
     }
 
@@ -361,12 +420,19 @@ public class WindowAndroid {
     }
 
     /**
+     * @return DisplayAndroid instance belong to this window.
+     */
+    public DisplayAndroid getDisplay() {
+        return mDisplayAndroid;
+    }
+
+    /**
      * @return A reference to owning Activity.  The returned WeakReference will never be null, but
      *         the contained Activity can be null (either if it has been garbage collected or if
      *         this is in the context of a WebView that was not created using an Activity).
      */
     public WeakReference<Activity> getActivity() {
-        return new WeakReference<Activity>(null);
+        return new WeakReference<>(null);
     }
 
     /**
@@ -442,11 +508,9 @@ public class WindowAndroid {
          * Handles the data returned by the requested intent.
          * @param window A window reference.
          * @param resultCode Result code of the requested intent.
-         * @param contentResolver An instance of ContentResolver class for accessing returned data.
          * @param data The data returned by the intent.
          */
-        void onIntentCompleted(WindowAndroid window, int resultCode,
-                ContentResolver contentResolver, Intent data);
+        void onIntentCompleted(WindowAndroid window, int resultCode, Intent data);
     }
 
     /**
@@ -476,8 +540,8 @@ public class WindowAndroid {
      */
     public void destroy() {
         if (mNativeWindowAndroid != 0) {
+            // Native code clears |mNativeWindowAndroid|.
             nativeDestroy(mNativeWindowAndroid);
-            mNativeWindowAndroid = 0;
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -492,7 +556,7 @@ public class WindowAndroid {
      */
     public long getNativePointer() {
         if (mNativeWindowAndroid == 0) {
-            mNativeWindowAndroid = nativeInit();
+            mNativeWindowAndroid = nativeInit(mDisplayAndroid.getDisplayId());
         }
         return mNativeWindowAndroid;
     }
@@ -559,6 +623,32 @@ public class WindowAndroid {
     }
 
     /**
+     * Adds a listener that will be notified whenever a ContextMenu is closed.
+     */
+    public void addContextMenuCloseListener(OnCloseContextMenuListener listener) {
+        mContextMenuCloseListeners.addObserver(listener);
+    }
+
+    /**
+     * Removes a listener from the list of listeners that will be notified when a
+     * ContextMenu is closed.
+     */
+    public void removeContextMenuCloseListener(OnCloseContextMenuListener listener) {
+        mContextMenuCloseListeners.removeObserver(listener);
+    }
+
+    /**
+     * This hook is called whenever the context menu is being closed (either by
+     * the user canceling the menu with the back/menu button, or when an item is
+     * selected).
+     */
+    public void onContextMenuClosed() {
+        for (OnCloseContextMenuListener listener : mContextMenuCloseListeners) {
+            listener.onContextMenuClosed();
+        }
+    }
+
+    /**
      * To be called when the keyboard visibility state might have changed. Informs listeners of the
      * state change IFF there actually was a change.
      * @param isShowing The current (guesstimated) state of the keyboard.
@@ -569,7 +659,7 @@ public class WindowAndroid {
 
         // Clone the list in case a listener tries to remove itself during the callback.
         LinkedList<KeyboardVisibilityListener> listeners =
-                new LinkedList<KeyboardVisibilityListener>(mKeyboardVisibilityListeners);
+                new LinkedList<>(mKeyboardVisibilityListeners);
         for (KeyboardVisibilityListener listener : listeners) {
             listener.keyboardVisibilityChanged(isShowing);
         }
@@ -618,7 +708,7 @@ public class WindowAndroid {
      */
     public WeakReference<Context> getContext() {
         // Return a new WeakReference to prevent clients from releasing our internal WeakReference.
-        return new WeakReference<Context>(mContextRef.get());
+        return new WeakReference<>(mContextRef.get());
     }
 
     /**
@@ -634,7 +724,7 @@ public class WindowAndroid {
         }
     }
 
-    private native long nativeInit();
+    private native long nativeInit(int displayId);
     private native void nativeOnVSync(long nativeWindowAndroid,
                                       long vsyncTimeMicros,
                                       long vsyncPeriodMicros);

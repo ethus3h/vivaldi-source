@@ -4,6 +4,7 @@
 
 #include "ui/gfx/interpolated_transform.h"
 
+#include "base/memory/ptr_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -90,8 +91,7 @@ TEST(InterpolatedTransformTest, InterpolatedRotationAboutPivot) {
   gfx::Point above_pivot(100, 200);
   ui::InterpolatedRotation rot(0, 90);
   ui::InterpolatedTransformAboutPivot interpolated_xform(
-      pivot,
-      new ui::InterpolatedRotation(0, 90));
+      pivot, base::MakeUnique<ui::InterpolatedRotation>(0, 90));
   gfx::Transform result = interpolated_xform.Interpolate(0.0f);
   CheckApproximatelyEqual(gfx::Transform(), result);
   result = interpolated_xform.Interpolate(1.0f);
@@ -107,8 +107,8 @@ TEST(InterpolatedTransformTest, InterpolatedScaleAboutPivot) {
   gfx::Point pivot(100, 100);
   gfx::Point above_pivot(100, 200);
   ui::InterpolatedTransformAboutPivot interpolated_xform(
-      pivot,
-      new ui::InterpolatedScale(gfx::Point3F(1, 1, 1), gfx::Point3F(2, 2, 2)));
+      pivot, base::MakeUnique<ui::InterpolatedScale>(gfx::Point3F(1, 1, 1),
+                                                     gfx::Point3F(2, 2, 2)));
   gfx::Transform result = interpolated_xform.Interpolate(0.0f);
   CheckApproximatelyEqual(gfx::Transform(), result);
   result = interpolated_xform.Interpolate(1.0f);
@@ -140,31 +140,31 @@ ui::InterpolatedTransform* GetScreenRotation(int degrees, bool reversed) {
       break;
   }
 
-  scoped_ptr<ui::InterpolatedTransform> rotation(
-      new ui::InterpolatedTransformAboutPivot(
-          old_pivot,
-          new ui::InterpolatedRotation(reversed ? degrees : 0,
-                                       reversed ? 0 : degrees)));
+  std::unique_ptr<ui::InterpolatedTransform> rotation =
+      base::MakeUnique<ui::InterpolatedTransformAboutPivot>(
+          old_pivot, base::MakeUnique<ui::InterpolatedRotation>(
+                         reversed ? degrees : 0, reversed ? 0 : degrees));
 
-  scoped_ptr<ui::InterpolatedTransform> translation(
-      new ui::InterpolatedTranslation(
+  std::unique_ptr<ui::InterpolatedTransform> translation =
+      base::MakeUnique<ui::InterpolatedTranslation>(
           gfx::PointF(), gfx::PointF(new_pivot.x() - old_pivot.x(),
-                                     new_pivot.y() - old_pivot.y())));
+                                     new_pivot.y() - old_pivot.y()));
 
   float scale_factor = 0.9f;
-  scoped_ptr<ui::InterpolatedTransform> scale_down(
-      new ui::InterpolatedScale(1.0f, scale_factor, 0.0f, 0.5f));
+  std::unique_ptr<ui::InterpolatedTransform> scale_down =
+      base::MakeUnique<ui::InterpolatedScale>(1.0f, scale_factor, 0.0f, 0.5f);
 
-  scoped_ptr<ui::InterpolatedTransform> scale_up(
-      new ui::InterpolatedScale(1.0f, 1.0f / scale_factor, 0.5f, 1.0f));
+  std::unique_ptr<ui::InterpolatedTransform> scale_up =
+      base::MakeUnique<ui::InterpolatedScale>(1.0f, 1.0f / scale_factor, 0.5f,
+                                              1.0f);
 
-  scoped_ptr<ui::InterpolatedTransform> to_return(
-      new ui::InterpolatedConstantTransform(gfx::Transform()));
+  std::unique_ptr<ui::InterpolatedTransform> to_return =
+      base::MakeUnique<ui::InterpolatedConstantTransform>(gfx::Transform());
 
-  scale_up->SetChild(scale_down.release());
-  translation->SetChild(scale_up.release());
-  rotation->SetChild(translation.release());
-  to_return->SetChild(rotation.release());
+  scale_up->SetChild(std::move(scale_down));
+  translation->SetChild(std::move(scale_up));
+  rotation->SetChild(std::move(translation));
+  to_return->SetChild(std::move(rotation));
   to_return->SetReversed(reversed);
 
   return to_return.release();
@@ -174,7 +174,7 @@ TEST(InterpolatedTransformTest, ScreenRotationEndsCleanly) {
   for (int i = 0; i < 2; ++i) {
     for (int degrees = -360; degrees <= 360; degrees += 90) {
       const bool reversed = i == 1;
-      scoped_ptr<ui::InterpolatedTransform> screen_rotation(
+      std::unique_ptr<ui::InterpolatedTransform> screen_rotation(
           GetScreenRotation(degrees, reversed));
       gfx::Transform interpolated = screen_rotation->Interpolate(1.0f);
       SkMatrix44& m = interpolated.matrix();
@@ -198,26 +198,26 @@ ui::InterpolatedTransform* GetMaximize() {
   float scale_y = static_cast<float>(
       target_bounds.width()) / initial_bounds.height();
 
-  scoped_ptr<ui::InterpolatedTransform> scale(
-      new ui::InterpolatedScale(gfx::Point3F(1, 1, 1),
-                                gfx::Point3F(scale_x, scale_y, 1)));
+  std::unique_ptr<ui::InterpolatedTransform> scale =
+      base::MakeUnique<ui::InterpolatedScale>(
+          gfx::Point3F(1, 1, 1), gfx::Point3F(scale_x, scale_y, 1));
 
-  scoped_ptr<ui::InterpolatedTransform> translation(
-      new ui::InterpolatedTranslation(
+  std::unique_ptr<ui::InterpolatedTransform> translation =
+      base::MakeUnique<ui::InterpolatedTranslation>(
           gfx::PointF(), gfx::PointF(target_bounds.x() - initial_bounds.x(),
-                                     target_bounds.y() - initial_bounds.y())));
+                                     target_bounds.y() - initial_bounds.y()));
 
-  scoped_ptr<ui::InterpolatedTransform> rotation(
-      new ui::InterpolatedRotation(0, 4.0f));
+  std::unique_ptr<ui::InterpolatedTransform> rotation =
+      base::MakeUnique<ui::InterpolatedRotation>(0, 4.0f);
 
-  scoped_ptr<ui::InterpolatedTransform> rotation_about_pivot(
-      new ui::InterpolatedTransformAboutPivot(
+  std::unique_ptr<ui::InterpolatedTransform> rotation_about_pivot(
+      base::MakeUnique<ui::InterpolatedTransformAboutPivot>(
           gfx::Point(initial_bounds.width() * 0.5,
                      initial_bounds.height() * 0.5),
-          rotation.release()));
+          std::move(rotation)));
 
-  scale->SetChild(translation.release());
-  rotation_about_pivot->SetChild(scale.release());
+  scale->SetChild(std::move(translation));
+  rotation_about_pivot->SetChild(std::move(scale));
 
   rotation_about_pivot->SetReversed(true);
 
@@ -225,7 +225,7 @@ ui::InterpolatedTransform* GetMaximize() {
 }
 
 TEST(InterpolatedTransformTest, MaximizeEndsCleanly) {
-  scoped_ptr<ui::InterpolatedTransform> maximize(GetMaximize());
+  std::unique_ptr<ui::InterpolatedTransform> maximize(GetMaximize());
   gfx::Transform interpolated = maximize->Interpolate(1.0f);
   SkMatrix44& m = interpolated.matrix();
   // Upper-left 3x3 matrix should all be 0, 1 or -1.

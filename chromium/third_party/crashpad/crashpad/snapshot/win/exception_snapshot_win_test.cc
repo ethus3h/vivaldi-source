@@ -91,8 +91,8 @@ class CrashingDelegate : public ExceptionHandlerServer::Delegate {
     ProcessSnapshotWin snapshot;
     snapshot.Initialize(process,
                         ProcessSuspensionState::kSuspended,
+                        exception_information_address,
                         debug_critical_section_address);
-    snapshot.InitializeException(exception_information_address);
 
     // Confirm the exception record was read correctly.
     EXPECT_NE(snapshot.Exception()->ThreadID(), 0u);
@@ -126,7 +126,8 @@ void TestCrashingChild(const base::string16& directory_modification) {
   CrashingDelegate delegate(server_ready.get(), completed.get());
 
   ExceptionHandlerServer exception_handler_server(true);
-  std::wstring pipe_name = exception_handler_server.CreatePipe();
+  std::wstring pipe_name(L"\\\\.\\pipe\\test_name");
+  exception_handler_server.SetPipeName(pipe_name);
   RunServerThread server_thread(&exception_handler_server, &delegate);
   server_thread.Start();
   ScopedStopServerAndJoinThread scoped_stop_server_and_join_thread(
@@ -190,8 +191,8 @@ class SimulateDelegate : public ExceptionHandlerServer::Delegate {
     ProcessSnapshotWin snapshot;
     snapshot.Initialize(process,
                         ProcessSuspensionState::kSuspended,
+                        exception_information_address,
                         debug_critical_section_address);
-    snapshot.InitializeException(exception_information_address);
     EXPECT_TRUE(snapshot.Exception());
     EXPECT_EQ(0x517a7ed, snapshot.Exception()->Exception());
 
@@ -227,7 +228,8 @@ void TestDumpWithoutCrashingChild(
   SimulateDelegate delegate(server_ready.get(), completed.get());
 
   ExceptionHandlerServer exception_handler_server(true);
-  std::wstring pipe_name = exception_handler_server.CreatePipe();
+  std::wstring pipe_name(L"\\\\.\\pipe\\test_name");
+  exception_handler_server.SetPipeName(pipe_name);
   RunServerThread server_thread(&exception_handler_server, &delegate);
   server_thread.Start();
   ScopedStopServerAndJoinThread scoped_stop_server_and_join_thread(

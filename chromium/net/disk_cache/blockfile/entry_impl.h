@@ -7,13 +7,20 @@
 
 #include <stdint.h>
 
+#include <memory>
+#include <string>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "net/base/net_export.h"
 #include "net/disk_cache/blockfile/disk_format.h"
 #include "net/disk_cache/blockfile/storage_block-inl.h"
 #include "net/disk_cache/blockfile/storage_block.h"
 #include "net/disk_cache/disk_cache.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
+
+namespace net {
+class NetLog;
+}
 
 namespace disk_cache {
 
@@ -148,7 +155,7 @@ class NET_EXPORT_PRIVATE EntryImpl
   // created rather than opened.
   void BeginLogging(net::NetLog* net_log, bool created);
 
-  const net::BoundNetLog& net_log() const;
+  const net::NetLogWithSource& net_log() const;
 
   // Returns the number of blocks needed to store an EntryStore.
   static int NumBlocksForEntry(int key_size);
@@ -277,7 +284,7 @@ class NET_EXPORT_PRIVATE EntryImpl
   CacheRankingsBlock node_;   // Rankings related information for this entry.
   base::WeakPtr<BackendImpl> backend_;  // Back pointer to the cache.
   base::WeakPtr<InFlightBackendIO> background_queue_;  // In-progress queue.
-  scoped_ptr<UserBuffer> user_buffers_[kNumStreams];  // Stores user data.
+  std::unique_ptr<UserBuffer> user_buffers_[kNumStreams];  // Stores user data.
   // Files to store external user data and key.
   scoped_refptr<File> files_[kNumStreams + 1];
   mutable std::string key_;           // Copy of the key.
@@ -285,9 +292,9 @@ class NET_EXPORT_PRIVATE EntryImpl
   bool doomed_;               // True if this entry was removed from the cache.
   bool read_only_;            // True if not yet writing.
   bool dirty_;                // True if we detected that this is a dirty entry.
-  scoped_ptr<SparseControl> sparse_;  // Support for sparse entries.
+  std::unique_ptr<SparseControl> sparse_;  // Support for sparse entries.
 
-  net::BoundNetLog net_log_;
+  net::NetLogWithSource net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(EntryImpl);
 };

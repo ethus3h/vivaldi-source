@@ -4,25 +4,29 @@
 
 package org.chromium.chrome.browser.sync;
 
-import android.test.suitebuilder.annotation.LargeTest;
+import android.support.test.filters.LargeTest;
 import android.util.Pair;
 
-import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.test.util.browser.sync.SyncTestUtil;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.sync.ModelType;
-import org.chromium.sync.protocol.AutofillProfileSpecifics;
-import org.chromium.sync.protocol.EntitySpecifics;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
+import org.chromium.chrome.test.util.browser.sync.SyncTestUtil;
+import org.chromium.components.sync.ModelType;
+import org.chromium.components.sync.protocol.AutofillProfileSpecifics;
+import org.chromium.components.sync.protocol.EntitySpecifics;
+import org.chromium.content.browser.test.util.Criteria;
+import org.chromium.content.browser.test.util.CriteriaHelper;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 
 /**
  * Test suite for the autofill profile sync data type.
  */
+@RetryOnFailure  // crbug.com/637448
 public class AutofillTest extends SyncTestBase {
     private static final String TAG = "AutofillTest";
 
@@ -64,7 +68,7 @@ public class AutofillTest extends SyncTestBase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        setUpTestAccountAndSignInToSync();
+        setUpTestAccountAndSignIn();
         // Make sure the initial state is clean.
         assertClientAutofillProfileCount(0);
         assertServerAutofillProfileCountWithName(0, STREET);
@@ -103,7 +107,7 @@ public class AutofillTest extends SyncTestBase {
         specifics.autofillProfile.addressHomeCity = MODIFIED_CITY;
         mFakeServerHelper.modifyEntitySpecifics(autofill.id, specifics);
         SyncTestUtil.triggerSync();
-        pollForCriteria(new ClientAutofillCriteria() {
+        pollInstrumentationThread(new ClientAutofillCriteria() {
             @Override
             public boolean isSatisfied(List<Autofill> autofills) {
                 Autofill modifiedAutofill = autofills.get(0);
@@ -181,37 +185,12 @@ public class AutofillTest extends SyncTestBase {
                         count, ModelType.AUTOFILL_PROFILE, name));
     }
 
-    private void waitForClientAutofillProfileCount(final int count) throws InterruptedException {
-        CriteriaHelper.pollForCriteria(new Criteria(
-                "Expected " + count + " local autofill profiles.") {
+    private void waitForClientAutofillProfileCount(int count) {
+        CriteriaHelper.pollInstrumentationThread(Criteria.equals(count, new Callable<Integer>() {
             @Override
-            public boolean isSatisfied() {
-                try {
-                    return SyncTestUtil.getLocalData(mContext, AUTOFILL_TYPE).size() == count;
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
+            public Integer call() throws Exception {
+                return SyncTestUtil.getLocalData(mContext, AUTOFILL_TYPE).size();
             }
-        }, SyncTestUtil.TIMEOUT_MS, SyncTestUtil.INTERVAL_MS);
-    }
-
-    private void waitForServerAutofillProfileCountWithName(final int count, final String name)
-            throws InterruptedException {
-        CriteriaHelper.pollForCriteria(new Criteria(
-                "Expected " + count + " server autofill profiles with name " + name + ".") {
-            @Override
-            public boolean isSatisfied() {
-                try {
-                    return mFakeServerHelper.verifyEntityCountByTypeAndName(
-                            count, ModelType.AUTOFILL, name);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        }, SyncTestUtil.TIMEOUT_MS, SyncTestUtil.INTERVAL_MS);
-    }
-
-    private interface AutofillCriteria {
-        boolean isSatisfied(List<Autofill> autofills);
+        }), SyncTestUtil.TIMEOUT_MS, SyncTestUtil.INTERVAL_MS);
     }
 }

@@ -4,6 +4,7 @@
 
 #include "net/log/write_to_file_net_log_observer.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/files/file_path.h"
@@ -11,9 +12,12 @@
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_reader.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "net/log/net_log.h"
+#include "net/log/net_log_entry.h"
+#include "net/log/net_log_event_type.h"
+#include "net/log/net_log_source.h"
+#include "net/log/net_log_source_type.h"
 #include "net/log/net_log_util.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
@@ -28,7 +32,7 @@ class WriteToFileNetLogObserverTest : public testing::Test {
  public:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    log_path_ = temp_dir_.path().AppendASCII("NetLogFile");
+    log_path_ = temp_dir_.GetPath().AppendASCII("NetLogFile");
   }
 
  protected:
@@ -41,7 +45,8 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONForNoEvents) {
   // Create and destroy a logger.
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), nullptr, nullptr);
   logger->StopObserving(nullptr);
   logger.reset();
@@ -50,7 +55,7 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONForNoEvents) {
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;
@@ -83,15 +88,16 @@ TEST_F(WriteToFileNetLogObserverTest, CaptureMode) {
 TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithOneEvent) {
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), nullptr, nullptr);
 
   const int kDummyId = 1;
-  NetLog::Source source(NetLog::SOURCE_HTTP2_SESSION, kDummyId);
-  NetLog::EntryData entry_data(NetLog::TYPE_PROXY_SERVICE, source,
-                               NetLog::PHASE_BEGIN, base::TimeTicks::Now(),
-                               NULL);
-  NetLog::Entry entry(&entry_data, NetLogCaptureMode::IncludeSocketBytes());
+  NetLogSource source(NetLogSourceType::HTTP2_SESSION, kDummyId);
+  NetLogEntryData entry_data(NetLogEventType::PROXY_SERVICE, source,
+                             NetLogEventPhase::BEGIN, base::TimeTicks::Now(),
+                             NULL);
+  NetLogEntry entry(&entry_data, NetLogCaptureMode::IncludeSocketBytes());
   logger->OnAddEntry(entry);
   logger->StopObserving(nullptr);
   logger.reset();
@@ -100,7 +106,7 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithOneEvent) {
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;
@@ -113,15 +119,16 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithOneEvent) {
 TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithMultipleEvents) {
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), nullptr, nullptr);
 
   const int kDummyId = 1;
-  NetLog::Source source(NetLog::SOURCE_HTTP2_SESSION, kDummyId);
-  NetLog::EntryData entry_data(NetLog::TYPE_PROXY_SERVICE, source,
-                               NetLog::PHASE_BEGIN, base::TimeTicks::Now(),
-                               NULL);
-  NetLog::Entry entry(&entry_data, NetLogCaptureMode::IncludeSocketBytes());
+  NetLogSource source(NetLogSourceType::HTTP2_SESSION, kDummyId);
+  NetLogEntryData entry_data(NetLogEventType::PROXY_SERVICE, source,
+                             NetLogEventPhase::BEGIN, base::TimeTicks::Now(),
+                             NULL);
+  NetLogEntry entry(&entry_data, NetLogCaptureMode::IncludeSocketBytes());
 
   // Add the entry multiple times.
   logger->OnAddEntry(entry);
@@ -133,7 +140,7 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithMultipleEvents) {
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;
@@ -145,10 +152,12 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithMultipleEvents) {
 
 TEST_F(WriteToFileNetLogObserverTest, CustomConstants) {
   const char kConstantString[] = "awesome constant";
-  scoped_ptr<base::Value> constants(new base::StringValue(kConstantString));
+  std::unique_ptr<base::Value> constants(
+      new base::StringValue(kConstantString));
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), constants.get(), nullptr);
   logger->StopObserving(nullptr);
   logger.reset();
@@ -157,7 +166,7 @@ TEST_F(WriteToFileNetLogObserverTest, CustomConstants) {
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;
@@ -176,7 +185,8 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithContext) {
   // Create and destroy a logger.
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), nullptr, &context);
   logger->StopObserving(&context);
   logger.reset();
@@ -185,7 +195,7 @@ TEST_F(WriteToFileNetLogObserverTest, GeneratesValidJSONWithContext) {
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;
@@ -208,14 +218,15 @@ TEST_F(WriteToFileNetLogObserverTest,
   TestDelegate delegate;
 
   // URL doesn't matter.  Requests can't fail synchronously.
-  scoped_ptr<URLRequest> request(
+  std::unique_ptr<URLRequest> request(
       context.CreateRequest(GURL("blah:blah"), IDLE, &delegate));
   request->Start();
 
   // Create and destroy a logger.
   base::ScopedFILE file(base::OpenFile(log_path_, "w"));
   ASSERT_TRUE(file);
-  scoped_ptr<WriteToFileNetLogObserver> logger(new WriteToFileNetLogObserver());
+  std::unique_ptr<WriteToFileNetLogObserver> logger(
+      new WriteToFileNetLogObserver());
   logger->StartObserving(&net_log_, std::move(file), nullptr, &context);
   logger->StopObserving(&context);
   logger.reset();
@@ -224,7 +235,7 @@ TEST_F(WriteToFileNetLogObserverTest,
   ASSERT_TRUE(base::ReadFileToString(log_path_, &input));
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
   ASSERT_TRUE(root) << reader.GetErrorMessage();
 
   base::DictionaryValue* dict;

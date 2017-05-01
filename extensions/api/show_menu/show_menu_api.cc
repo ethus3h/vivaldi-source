@@ -11,6 +11,7 @@
 #include "apps/app_load_service.h"
 #include "base/lazy_instance.h"
 #include "base/base64.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -30,6 +31,8 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/manifest_constants.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/vivaldi_context_menu.h"
 #include "ui/vivaldi_main_menu.h"
 
@@ -63,11 +66,11 @@ int TranslateCommandIdToMenuId(int command_id) {
 }
 
 const show_menu::MenuItem* GetMenuItemById(
-  const std::vector<linked_ptr<show_menu::MenuItem>>* menuItems,
+  const std::vector<show_menu::MenuItem>* menuItems,
   int id) {
-  for (std::vector<linked_ptr<show_menu::MenuItem>>::const_iterator it =
+  for (std::vector<show_menu::MenuItem>::const_iterator it =
        menuItems->begin(); it != menuItems->end(); ++it) {
-    const show_menu::MenuItem& menuitem = **it;
+    const show_menu::MenuItem& menuitem = *it;
     if (menuitem.id == id)
       return &menuitem;
     if (menuitem.items.get() && !menuitem.items->empty()) {
@@ -211,10 +214,10 @@ CommandEventRouter::~CommandEventRouter() {
 }
 
 void CommandEventRouter::DispatchEvent(const std::string& event_name,
-                                       scoped_ptr<base::ListValue> event_args) {
+                                       std::unique_ptr<base::ListValue> event_args) {
   EventRouter* event_router = EventRouter::Get(browser_context_);
   if (event_router) {
-    event_router->BroadcastEvent(make_scoped_ptr(
+    event_router->BroadcastEvent(base::WrapUnique(
         new extensions::Event(extensions::events::VIVALDI_EXTENSION_EVENT,
                               event_name, std::move(event_args))));
   }
@@ -276,7 +279,7 @@ void ShowMenuAPI::OnListenerAdded(const EventListenerInfo& details) {
 }
 
 VivaldiMenuController::VivaldiMenuController(Delegate* delegate,
-    std::vector<linked_ptr<show_menu::MenuItem>>* menu_items)
+    std::vector<show_menu::MenuItem>* menu_items)
   :favicon_service_(nullptr),
   delegate_(delegate),
   menu_items_(menu_items),
@@ -301,12 +304,13 @@ void VivaldiMenuController::Show(content::WebContents* web_contents,
   profile_ = Profile::FromBrowserContext(browser_context);
 
   // Populate menu
-  for (std::vector<linked_ptr<show_menu::MenuItem>>::const_iterator it =
+  for (std::vector<show_menu::MenuItem>::const_iterator it =
        menu_items_->begin();
        it != menu_items_->end(); ++it) {
-    const show_menu::MenuItem& menuitem = **it;
+    const show_menu::MenuItem& menuitem = *it;
     PopulateModel(&menuitem, &menu_model_);
   }
+
   if (HasDeveloperTools()) {
     menu_model_.AddSeparator(ui::NORMAL_SEPARATOR);
     menu_model_.AddItemWithStringId(IDC_CONTENT_CONTEXT_RELOAD_PACKAGED_APP,
@@ -319,6 +323,8 @@ void VivaldiMenuController::Show(content::WebContents* web_contents,
     menu_model_.AddItemWithStringId(IDC_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE,
                                     IDS_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE);
   }
+
+  SanitizeModel(&menu_model_);
 
   menu_.reset(::vivaldi::CreateVivaldiContextMenu(
       web_contents->GetFocusedFrame(), &menu_model_, menu_params));
@@ -421,20 +427,21 @@ void VivaldiMenuController::PopulateModel(const show_menu::MenuItem* item,
       initial_selected_id_ = id;
     }
     bool load_image = false;
-    if (item->items) {
-      ui::SimpleMenuModel* child_menu_model = new ui::SimpleMenuModel(this);
-      models_.push_back(child_menu_model);
-      for (std::vector<linked_ptr<show_menu::MenuItem>>::const_iterator it =
-              item->items->begin();
-          it != item->items->end(); ++it) {
-        const show_menu::MenuItem& child = **it;
-        PopulateModel(&child, child_menu_model);
-      }
-      menu_model->AddSubMenu(id, label, child_menu_model);
-      load_image = true;
-    } else {
-      bool visible = item->visible ? *item->visible : true;
-      if (visible) {
+    bool visible = item->visible ? *item->visible : true;
+    if (visible) {
+      if (item->items) {
+        ui::SimpleMenuModel* child_menu_model = new ui::SimpleMenuModel(this);
+        models_.push_back(child_menu_model);
+        for (std::vector<show_menu::MenuItem>::const_iterator it =
+                item->items->begin();
+            it != item->items->end(); ++it) {
+          const show_menu::MenuItem& child = *it;
+          PopulateModel(&child, child_menu_model);
+        }
+        SanitizeModel(child_menu_model);
+        menu_model->AddSubMenu(id, label, child_menu_model);
+        load_image = true;
+      } else {
         if (item->type.get() && item->type->compare("checkbox") == 0) {
           menu_model->AddCheckItem(id, label);
         } else {
@@ -461,6 +468,16 @@ void VivaldiMenuController::PopulateModel(const show_menu::MenuItem* item,
   }
 }
 
+void VivaldiMenuController::SanitizeModel(ui::SimpleMenuModel* menu_model) {
+  for (int i = menu_model->GetItemCount()-1; i >= 0; i--) {
+    if (menu_model->GetTypeAt(i) == ui::MenuModel::TYPE_SEPARATOR) {
+      menu_model->RemoveItemAt(i);
+    } else {
+      break;
+    }
+  }
+}
+
 void VivaldiMenuController::LoadFavicon(int command_id,
     const std::string& url) {
   if (!favicon_service_) {
@@ -474,8 +491,7 @@ void VivaldiMenuController::LoadFavicon(int command_id,
     base::Bind(&VivaldiMenuController::OnFaviconDataAvailable,
         base::Unretained(this), command_id);
 
-  base::CancelableTaskTracker::TaskId taskId =
-    favicon_service_->GetFaviconImageForPageURL(
+  favicon_service_->GetFaviconImageForPageURL(
         GURL(url),
         callback,
         &cancelable_task_tracker_);
@@ -512,7 +528,7 @@ base::string16 VivaldiMenuController::GetLabelForCommandId(
 }
 
 bool VivaldiMenuController::GetAcceleratorForCommandId(
-    int command_id, ui::Accelerator* accelerator) {
+    int command_id, ui::Accelerator* accelerator) const {
   const show_menu::MenuItem* item = getItemByCommandId(command_id);
   if (item && item->shortcut) {
     //printf("shortcut: %s\n", item->shortcut->c_str());
@@ -567,7 +583,7 @@ const show_menu::MenuItem* VivaldiMenuController::getItemByCommandId(
 namespace Create = vivaldi::show_menu::Create;
 
 bool ShowMenuCreateFunction::RunAsync() {
-  scoped_ptr<Create::Params> params(Create::Params::Create(*args_));
+  std::unique_ptr<Create::Params> params(Create::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
 
   if (params->create_properties.mode == "context") {
@@ -579,7 +595,9 @@ bool ShowMenuCreateFunction::RunAsync() {
     VivaldiMenuController* menu = new VivaldiMenuController(
         this, &params->create_properties.items);
     menu->Show(GetAssociatedWebContents(), menu_params);
-  } else {
+  }
+#if defined(OS_MACOSX)
+  else {
     // Mac needs to update the menu even with no open windows. So we allow
     // a nullptr profile when calling the api.
     Profile* profile = nullptr;
@@ -591,7 +609,7 @@ bool ShowMenuCreateFunction::RunAsync() {
     ::vivaldi::CreateVivaldiMainMenu(profile, params->create_properties.items,
         params->create_properties.mode);
   }
-
+#endif
   return true;
 }
 
@@ -609,7 +627,6 @@ void ShowMenuCreateFunction::OnMenuItemActivated(int command_id,
   response.right = event_flags & ui::EF_RIGHT_MOUSE_BUTTON ? true : false;
   response.center = event_flags & ui::EF_MIDDLE_MOUSE_BUTTON ? true : false;
   results_ = vivaldi::show_menu::Create::Results::Create(response);
-  SendResponse(true);
   menu_cancelled_ = false;
 }
 
@@ -624,8 +641,8 @@ ShowMenuCreateFunction::~ShowMenuCreateFunction() {
     response.ctrl = response.shift = response.alt = response.command = false;
     response.left = response.right = response.center = false;
     results_ = vivaldi::show_menu::Create::Results::Create(response);
-    SendResponse(true);
   }
+  Respond(ArgumentList(std::move(results_)));
 }
 
 }  // namespace extensions

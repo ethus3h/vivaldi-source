@@ -5,8 +5,9 @@
 #ifndef UI_GFX_INTERPOLATED_TRANSFORM_H_
 #define UI_GFX_INTERPOLATED_TRANSFORM_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point3_f.h"
 #include "ui/gfx/geometry/vector3d_f.h"
@@ -41,7 +42,7 @@ class GFX_EXPORT InterpolatedTransform {
   // and our child's transform at time t (if we have one).
   //
   // This function takes ownership of the passed InterpolatedTransform.
-  void SetChild(InterpolatedTransform* child);
+  void SetChild(std::unique_ptr<InterpolatedTransform> child);
 
   // If the interpolated transform is reversed, Interpolate(t) will return
   // Interpolate(1 - t)
@@ -71,7 +72,7 @@ class GFX_EXPORT InterpolatedTransform {
   // function of t. If, without a child, we are f(t), and our child is
   // g(t), then with a child we become f'(t) = f(t) * g(t). Using a child
   // transform, we can chain collections of transforms together.
-  scoped_ptr<InterpolatedTransform> child_;
+  std::unique_ptr<InterpolatedTransform> child_;
 
   bool reversed_;
 
@@ -222,23 +223,26 @@ class GFX_EXPORT InterpolatedTransformAboutPivot
     : public InterpolatedTransform {
  public:
   // Takes ownership of the passed transform.
-  InterpolatedTransformAboutPivot(const gfx::Point& pivot,
-                                  InterpolatedTransform* transform);
+  InterpolatedTransformAboutPivot(
+      const gfx::Point& pivot,
+      std::unique_ptr<InterpolatedTransform> transform);
 
   // Takes ownership of the passed transform.
-  InterpolatedTransformAboutPivot(const gfx::Point& pivot,
-                                  InterpolatedTransform* transform,
-                                  float start_time,
-                                  float end_time);
+  InterpolatedTransformAboutPivot(
+      const gfx::Point& pivot,
+      std::unique_ptr<InterpolatedTransform> transform,
+      float start_time,
+      float end_time);
   ~InterpolatedTransformAboutPivot() override;
 
  protected:
   gfx::Transform InterpolateButDoNotCompose(float t) const override;
 
  private:
-  void Init(const gfx::Point& pivot, InterpolatedTransform* transform);
+  void Init(const gfx::Point& pivot,
+            std::unique_ptr<InterpolatedTransform> transform);
 
-  scoped_ptr<InterpolatedTransform> transform_;
+  std::unique_ptr<InterpolatedTransform> transform_;
 
   DISALLOW_COPY_AND_ASSIGN(InterpolatedTransformAboutPivot);
 };

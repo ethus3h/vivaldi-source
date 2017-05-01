@@ -17,6 +17,7 @@
 #include "google_apis/gcm/protocol/android_checkin.pb.h"
 #include "google_apis/gcm/protocol/checkin.pb.h"
 #include "net/base/backoff_entry.h"
+#include "net/http/http_status_code.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "url/gurl.h"
 
@@ -36,8 +37,10 @@ class GCM_EXPORT CheckinRequest : public net::URLFetcherDelegate {
  public:
   // A callback function for the checkin request, accepting |checkin_response|
   // protobuf.
-  typedef base::Callback<void(const checkin_proto::AndroidCheckinResponse&
-                                  checkin_response)> CheckinRequestCallback;
+  typedef base::Callback<void(
+      net::HttpStatusCode response_code,
+      const checkin_proto::AndroidCheckinResponse& checkin_response)>
+      CheckinRequestCallback;
 
   // Checkin request details.
   struct GCM_EXPORT RequestInfo {
@@ -46,6 +49,7 @@ class GCM_EXPORT CheckinRequest : public net::URLFetcherDelegate {
                 const std::map<std::string, std::string>& account_tokens,
                 const std::string& settings_digest,
                 const checkin_proto::ChromeBuildProto& chrome_build_proto);
+    RequestInfo(const RequestInfo& other);
     ~RequestInfo();
 
     // Android ID of the device.
@@ -82,7 +86,7 @@ class GCM_EXPORT CheckinRequest : public net::URLFetcherDelegate {
 
   net::BackoffEntry backoff_entry_;
   GURL checkin_url_;
-  scoped_ptr<net::URLFetcher> url_fetcher_;
+  std::unique_ptr<net::URLFetcher> url_fetcher_;
   const RequestInfo request_info_;
   base::TimeTicks request_start_time_;
 

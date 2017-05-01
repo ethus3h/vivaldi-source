@@ -9,40 +9,38 @@
 #include "base/command_line.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/time_formatting.h"
 #include "base/macros.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/task_management/task_manager_interface.h"
+#include "chrome/browser/task_manager/task_manager_interface.h"
 #include "chrome/browser/ui/task_manager/task_manager_columns.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/nacl/browser/nacl_browser.h"
 #include "components/nacl/common/nacl_switches.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/common/result_codes.h"
 #include "third_party/WebKit/public/web/WebCache.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/table_model_observer.h"
 #include "ui/base/text/bytes_formatting.h"
 
-namespace task_management {
+namespace task_manager {
 
 namespace {
+
+const char kCpuTextFormatString[] = "%.1f";
 
 #if defined(OS_MACOSX)
 // Match Activity Monitor's default refresh rate.
 const int64_t kRefreshTimeMS = 2000;
-
-// Activity Monitor shows %cpu with one decimal digit -- be consistent with
-// that.
-const char kCpuTextFormatString[] = "%.1f";
 #else
 const int64_t kRefreshTimeMS = 1000;
-const char kCpuTextFormatString[] = "%.0f";
 #endif  // defined(OS_MACOSX)
 
 // The columns that are shared by a group will show the value of the column
@@ -52,7 +50,10 @@ bool IsSharedByGroup(int column_id) {
     case IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN:
     case IDS_TASK_MANAGER_SHARED_MEM_COLUMN:
     case IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN:
+    case IDS_TASK_MANAGER_SWAPPED_MEM_COLUMN:
     case IDS_TASK_MANAGER_CPU_COLUMN:
+    case IDS_TASK_MANAGER_START_TIME_COLUMN:
+    case IDS_TASK_MANAGER_CPU_TIME_COLUMN:
     case IDS_TASK_MANAGER_NET_COLUMN:
     case IDS_TASK_MANAGER_PROCESS_ID_COLUMN:
     case IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN:
@@ -65,6 +66,7 @@ bool IsSharedByGroup(int column_id) {
     case IDS_TASK_MANAGER_IDLE_WAKEUPS_COLUMN:
     case IDS_TASK_MANAGER_OPEN_FD_COUNT_COLUMN:
     case IDS_TASK_MANAGER_PROCESS_PRIORITY_COLUMN:
+    case IDS_TASK_MANAGER_MEMORY_STATE_COLUMN:
       return true;
     default:
       return false;
@@ -112,7 +114,13 @@ class TaskManagerValuesStringifier {
         unknown_string_(l10n_util::GetStringUTF16(
             IDS_TASK_MANAGER_UNKNOWN_VALUE_TEXT)),
         disabled_nacl_debugging_string_(l10n_util::GetStringUTF16(
-            IDS_TASK_MANAGER_DISABLED_NACL_DBG_TEXT)) {
+            IDS_TASK_MANAGER_DISABLED_NACL_DBG_TEXT)),
+        memory_state_normal_string_(l10n_util::GetStringUTF16(
+            IDS_TASK_MANAGER_MEMORY_STATE_NORMAL_TEXT)),
+        memory_state_throttled_string_(l10n_util::GetStringUTF16(
+            IDS_TASK_MANAGER_MEMORY_STATE_THROTTLED_TEXT)),
+        memory_state_suspended_string_(l10n_util::GetStringUTF16(
+            IDS_TASK_MANAGER_MEMORY_STATE_SUSPENDED_TEXT)) {
   }
 
   ~TaskManagerValuesStringifier() {}
@@ -120,6 +128,24 @@ class TaskManagerValuesStringifier {
   base::string16 GetCpuUsageText(double cpu_usage) {
     return base::UTF8ToUTF16(base::StringPrintf(kCpuTextFormatString,
                                                 cpu_usage));
+  }
+
+  base::string16 GetStartTimeText(base::Time start_time) {
+    if (start_time.is_null())
+      return n_a_string_;
+
+    return base::TimeFormatShortDateAndTime(start_time);
+  }
+
+  base::string16 GetCpuTimeText(base::TimeDelta cpu_time) {
+    if (cpu_time.is_zero())
+      return n_a_string_;
+
+    base::string16 duration;
+    return base::TimeDurationFormatWithSeconds(
+               cpu_time, base::DURATION_WIDTH_NARROW, &duration)
+               ? duration
+               : n_a_string_;
   }
 
   base::string16 GetMemoryUsageText(int64_t memory_usage, bool has_duplicates) {
@@ -143,6 +169,21 @@ class TaskManagerValuesStringifier {
       memory_text += asterisk_string_;
 
     return memory_text;
+  }
+
+  base::string16 GetMemoryStateText(base::MemoryState state) {
+    switch (state) {
+      case base::MemoryState::NORMAL:
+        return memory_state_normal_string_;
+      case base::MemoryState::THROTTLED:
+        return memory_state_throttled_string_;
+      case base::MemoryState::SUSPENDED:
+        return memory_state_suspended_string_;
+      case base::MemoryState::UNKNOWN:
+        return n_a_string_;
+    }
+    NOTREACHED();
+    return n_a_string_;
   }
 
   base::string16 GetIdleWakeupsText(int idle_wakeups) {
@@ -193,7 +234,7 @@ class TaskManagerValuesStringifier {
 
   base::string16 GetWebCacheStatText(
       const blink::WebCache::ResourceTypeStat& stat) {
-    return FormatAllocatedAndUsedMemory(stat.size, stat.liveSize);
+    return GetMemoryUsageText(stat.size, false);
   }
 
   const base::string16& n_a_string() const { return n_a_string_; }
@@ -234,6 +275,11 @@ class TaskManagerValuesStringifier {
   // #enable-nacl-debug is disabled.
   const base::string16 disabled_nacl_debugging_string_;
 
+  // Localized strings for memory states.
+  const base::string16 memory_state_normal_string_;
+  const base::string16 memory_state_throttled_string_;
+  const base::string16 memory_state_suspended_string_;
+
   DISALLOW_COPY_AND_ASSIGN(TaskManagerValuesStringifier);
 };
 
@@ -270,9 +316,11 @@ TaskManagerTableModel::TaskManagerTableModel(int64_t refresh_flags,
       is_nacl_debugging_flag_enabled_(false) {
 #endif  // !defined(DISABLE_NACL)
   DCHECK(delegate);
+  StartUpdating();
 }
 
 TaskManagerTableModel::~TaskManagerTableModel() {
+  StopUpdating();
 }
 
 int TaskManagerTableModel::RowCount() {
@@ -298,6 +346,14 @@ base::string16 TaskManagerTableModel::GetText(int row, int column) {
       return stringifier_->GetCpuUsageText(
           observed_task_manager()->GetCpuUsage(tasks_[row]));
 
+    case IDS_TASK_MANAGER_CPU_TIME_COLUMN:
+      return stringifier_->GetCpuTimeText(
+          observed_task_manager()->GetCpuTime(tasks_[row]));
+
+    case IDS_TASK_MANAGER_START_TIME_COLUMN:
+      return stringifier_->GetStartTimeText(
+          observed_task_manager()->GetStartTime(tasks_[row]));
+
     case IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN:
       return stringifier_->GetMemoryUsageText(
           observed_task_manager()->GetPrivateMemoryUsage(tasks_[row]), false);
@@ -309,6 +365,10 @@ base::string16 TaskManagerTableModel::GetText(int row, int column) {
     case IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN:
       return stringifier_->GetMemoryUsageText(
           observed_task_manager()->GetPhysicalMemoryUsage(tasks_[row]), false);
+
+    case IDS_TASK_MANAGER_SWAPPED_MEM_COLUMN:
+      return stringifier_->GetMemoryUsageText(
+          observed_task_manager()->GetSwappedMemoryUsage(tasks_[row]), false);
 
     case IDS_TASK_MANAGER_PROCESS_ID_COLUMN:
       return stringifier_->GetProcessIdText(
@@ -394,6 +454,11 @@ base::string16 TaskManagerTableModel::GetText(int row, int column) {
     }
 #endif  // defined(OS_LINUX)
 
+    case IDS_TASK_MANAGER_MEMORY_STATE_COLUMN: {
+      return stringifier_->GetMemoryStateText(
+          observed_task_manager()->GetMemoryState(tasks_[row]));
+    }
+
     default:
       NOTREACHED();
       return base::string16();
@@ -415,6 +480,7 @@ int TaskManagerTableModel::CompareValues(int row1,
   switch (column_id) {
     case IDS_TASK_MANAGER_TASK_COLUMN:
     case IDS_TASK_MANAGER_PROFILE_NAME_COLUMN:
+    case IDS_TASK_MANAGER_MEMORY_STATE_COLUMN:
       return ui::TableModel::CompareValues(row1, row2, column_id);
 
     case IDS_TASK_MANAGER_NET_COLUMN:
@@ -425,6 +491,14 @@ int TaskManagerTableModel::CompareValues(int row1,
     case IDS_TASK_MANAGER_CPU_COLUMN:
       return ValueCompare(observed_task_manager()->GetCpuUsage(tasks_[row1]),
                           observed_task_manager()->GetCpuUsage(tasks_[row2]));
+
+    case IDS_TASK_MANAGER_CPU_TIME_COLUMN:
+      return ValueCompare(observed_task_manager()->GetCpuTime(tasks_[row1]),
+                          observed_task_manager()->GetCpuTime(tasks_[row2]));
+
+    case IDS_TASK_MANAGER_START_TIME_COLUMN:
+      return ValueCompare(observed_task_manager()->GetStartTime(tasks_[row1]),
+                          observed_task_manager()->GetStartTime(tasks_[row2]));
 
     case IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN:
       return ValueCompare(
@@ -440,6 +514,11 @@ int TaskManagerTableModel::CompareValues(int row1,
       return ValueCompare(
           observed_task_manager()->GetPhysicalMemoryUsage(tasks_[row1]),
           observed_task_manager()->GetPhysicalMemoryUsage(tasks_[row2]));
+
+    case IDS_TASK_MANAGER_SWAPPED_MEM_COLUMN:
+      return ValueCompare(
+          observed_task_manager()->GetSwappedMemoryUsage(tasks_[row1]),
+          observed_task_manager()->GetSwappedMemoryUsage(tasks_[row2]));
 
     case IDS_TASK_MANAGER_NACL_DEBUG_STUB_PORT_COLUMN:
       return ValueCompare(
@@ -506,8 +585,15 @@ int TaskManagerTableModel::CompareValues(int row1,
 
     case IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN: {
       int64_t allocated1, allocated2, used1, used2;
-      observed_task_manager()->GetV8Memory(tasks_[row1], &allocated1, &used1);
-      observed_task_manager()->GetV8Memory(tasks_[row2], &allocated2, &used2);
+      bool row1_valid = observed_task_manager()->GetV8Memory(tasks_[row1],
+                                                             &allocated1,
+                                                             &used1);
+      bool row2_valid = observed_task_manager()->GetV8Memory(tasks_[row2],
+                                                             &allocated2,
+                                                             &used2);
+      if (!row1_valid || !row2_valid)
+        return OrderUnavailableValue(row1_valid, row2_valid);
+
       return ValueCompare(allocated1, allocated2);
     }
 
@@ -543,17 +629,20 @@ int TaskManagerTableModel::CompareValues(int row1,
 void TaskManagerTableModel::GetRowsGroupRange(int row_index,
                                               int* out_start,
                                               int* out_length) {
+  const base::ProcessId process_id =
+      observed_task_manager()->GetProcessId(tasks_[row_index]);
   int i = row_index;
-  for ( ; i >= 0; --i) {
-    if (IsTaskFirstInGroup(i))
-      break;
+  int limit = row_index + 1;
+  while (i > 0 &&
+         observed_task_manager()->GetProcessId(tasks_[i - 1]) == process_id) {
+    --i;
   }
-
-  CHECK_GE(i, 0);
-
+  while (limit < RowCount() &&
+         observed_task_manager()->GetProcessId(tasks_[limit]) == process_id) {
+    ++limit;
+  }
   *out_start = i;
-  *out_length = observed_task_manager()->GetNumberOfTasksOnSameProcess(
-      tasks_[row_index]);
+  *out_length = limit - i;
 }
 
 void TaskManagerTableModel::OnTaskAdded(TaskId id) {
@@ -564,8 +653,12 @@ void TaskManagerTableModel::OnTaskAdded(TaskId id) {
   // adding |id| to |tasks_| because we want to keep |tasks_| sorted by proc IDs
   // and then by Task IDs.
   tasks_ = observed_task_manager()->GetTaskIdsList();
-  if (table_model_observer_)
-    table_model_observer_->OnItemsAdded(RowCount() - 1, 1);
+
+  if (table_model_observer_) {
+    std::vector<TaskId>::difference_type index =
+        std::find(tasks_.begin(), tasks_.end(), id) - tasks_.begin();
+    table_model_observer_->OnItemsAdded(static_cast<int>(index), 1);
+  }
 }
 
 void TaskManagerTableModel::OnTaskToBeRemoved(TaskId id) {
@@ -582,23 +675,6 @@ void TaskManagerTableModel::OnTasksRefreshed(
     const TaskIdList& task_ids) {
   tasks_ = task_ids;
   OnRefresh();
-}
-
-void TaskManagerTableModel::StartUpdating() {
-  TaskManagerInterface::GetTaskManager()->AddObserver(this);
-  tasks_ = observed_task_manager()->GetTaskIdsList();
-  OnRefresh();
-
-  // In order for the scrollbar of the TableView to work properly on startup of
-  // the task manager, we must invoke TableModelObserver::OnModelChanged() which
-  // in turn will invoke TableView::NumRowsChanged(). This will adjust the
-  // vertical scrollbar correctly. crbug.com/570966.
-  if (table_model_observer_)
-    table_model_observer_->OnModelChanged();
-}
-
-void TaskManagerTableModel::StopUpdating() {
-  observed_task_manager()->RemoveObserver(this);
 }
 
 void TaskManagerTableModel::ActivateTask(int row_index) {
@@ -626,16 +702,28 @@ void TaskManagerTableModel::UpdateRefreshTypes(int column_id, bool visibility) {
       type = REFRESH_TYPE_CPU;
       break;
 
+    case IDS_TASK_MANAGER_START_TIME_COLUMN:
+      type = REFRESH_TYPE_START_TIME;
+      break;
+
+    case IDS_TASK_MANAGER_CPU_TIME_COLUMN:
+      type = REFRESH_TYPE_CPU_TIME;
+      break;
+
     case IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN:
+      type = REFRESH_TYPE_PHYSICAL_MEMORY;
+      break;
+
     case IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN:
     case IDS_TASK_MANAGER_SHARED_MEM_COLUMN:
-      type = REFRESH_TYPE_MEMORY;
+    case IDS_TASK_MANAGER_SWAPPED_MEM_COLUMN:
+      type = REFRESH_TYPE_MEMORY_DETAILS;
       if (table_view_delegate_->IsColumnVisible(
-              IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN) ||
-          table_view_delegate_->IsColumnVisible(
               IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN) ||
           table_view_delegate_->IsColumnVisible(
-              IDS_TASK_MANAGER_SHARED_MEM_COLUMN)) {
+              IDS_TASK_MANAGER_SHARED_MEM_COLUMN) ||
+          table_view_delegate_->IsColumnVisible(
+              IDS_TASK_MANAGER_SWAPPED_MEM_COLUMN)) {
         new_visibility = true;
       }
       break;
@@ -689,6 +777,10 @@ void TaskManagerTableModel::UpdateRefreshTypes(int column_id, bool visibility) {
       type = REFRESH_TYPE_PRIORITY;
       break;
 
+    case IDS_TASK_MANAGER_MEMORY_STATE_COLUMN:
+      type = REFRESH_TYPE_MEMORY_STATE;
+      break;
+
 #if defined(OS_LINUX)
     case IDS_TASK_MANAGER_OPEN_FD_COUNT_COLUMN:
       type = REFRESH_TYPE_FD_COUNT;
@@ -706,9 +798,8 @@ void TaskManagerTableModel::UpdateRefreshTypes(int column_id, bool visibility) {
     RemoveRefreshType(type);
 }
 
-bool TaskManagerTableModel::IsBrowserProcess(int row_index) const {
-  return observed_task_manager()->GetProcessId(tasks_[row_index]) ==
-      base::GetCurrentProcId();
+bool TaskManagerTableModel::IsTaskKillable(int row_index) const {
+  return observed_task_manager()->IsTaskKillable(tasks_[row_index]);
 }
 
 void TaskManagerTableModel::RetrieveSavedColumnsSettingsAndUpdateTable() {
@@ -747,18 +838,8 @@ void TaskManagerTableModel::RetrieveSavedColumnsSettingsAndUpdateTable() {
 
     if (col_visibility) {
       if (sorted_col_id == col_id_key) {
-        if (sort_is_ascending == kColumns[i].initial_sort_is_ascending) {
-          table_view_delegate_->ToggleSortOrder(current_visible_column_index);
-        } else {
-          // Unfortunately the API of ui::TableView doesn't provide a clean way
-          // to sort by a particular column ID and a sort direction. If the
-          // retrieved sort direction is different than the initial one, we have
-          // to toggle the sort order twice!
-          // Note that the function takes the visible_column_index rather than
-          // a column ID.
-          table_view_delegate_->ToggleSortOrder(current_visible_column_index);
-          table_view_delegate_->ToggleSortOrder(current_visible_column_index);
-        }
+        table_view_delegate_->SetSortDescriptor(
+            TableSortDescriptor(col_id, sort_is_ascending));
       }
 
       ++current_visible_column_index;
@@ -799,6 +880,33 @@ void TaskManagerTableModel::ToggleColumnVisibility(int column_id) {
   UpdateRefreshTypes(column_id, new_visibility);
 }
 
+int TaskManagerTableModel::GetRowForWebContents(
+    content::WebContents* web_contents) {
+  TaskId task_id =
+      observed_task_manager()->GetTaskIdForWebContents(web_contents);
+  auto index = std::find(tasks_.begin(), tasks_.end(), task_id);
+  if (index == tasks_.end())
+    return -1;
+  return static_cast<int>(index - tasks_.begin());
+}
+
+void TaskManagerTableModel::StartUpdating() {
+  TaskManagerInterface::GetTaskManager()->AddObserver(this);
+  tasks_ = observed_task_manager()->GetTaskIdsList();
+  OnRefresh();
+
+  // In order for the scrollbar of the TableView to work properly on startup of
+  // the task manager, we must invoke TableModelObserver::OnModelChanged() which
+  // in turn will invoke TableView::NumRowsChanged(). This will adjust the
+  // vertical scrollbar correctly. crbug.com/570966.
+  if (table_model_observer_)
+    table_model_observer_->OnModelChanged();
+}
+
+void TaskManagerTableModel::StopUpdating() {
+  observed_task_manager()->RemoveObserver(this);
+}
+
 void TaskManagerTableModel::OnRefresh() {
   if (table_model_observer_)
     table_model_observer_->OnItemsChanged(0, RowCount());
@@ -812,5 +920,4 @@ bool TaskManagerTableModel::IsTaskFirstInGroup(int row_index) const {
       observed_task_manager()->GetProcessId(tasks_[row_index]);
 }
 
-
-}  // namespace task_management
+}  // namespace task_manager

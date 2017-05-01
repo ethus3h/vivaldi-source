@@ -4,46 +4,53 @@
 
 #include "net/tools/quic/quic_simple_server_stream.h"
 
-#include "base/logging.h"
+#include <list>
+#include <utility>
+
 #include "base/stl_util.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/string_split.h"
-#include "net/quic/quic_flags.h"
-#include "net/quic/quic_spdy_stream.h"
-#include "net/quic/spdy_utils.h"
+#include "net/quic/core/quic_flags.h"
+#include "net/quic/core/quic_spdy_stream.h"
+#include "net/quic/core/spdy_utils.h"
+#include "net/quic/platform/api/quic_bug_tracker.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_text_utils.h"
 #include "net/spdy/spdy_protocol.h"
-#include "net/tools/quic/quic_in_memory_cache.h"
+#include "net/tools/quic/quic_http_response_cache.h"
 #include "net/tools/quic/quic_simple_server_session.h"
 
 using base::StringPiece;
-using base::StringToInt;
 using std::string;
 
 namespace net {
-namespace tools {
 
-QuicSimpleServerStream::QuicSimpleServerStream(QuicStreamId id,
-                                               QuicSpdySession* session)
-    : QuicSpdyStream(id, session), content_length_(-1) {}
+QuicSimpleServerStream::QuicSimpleServerStream(
+    QuicStreamId id,
+    QuicSpdySession* session,
+    QuicHttpResponseCache* response_cache)
+    : QuicSpdyServerStreamBase(id, session),
+      content_length_(-1),
+      response_cache_(response_cache) {}
 
 QuicSimpleServerStream::~QuicSimpleServerStream() {}
 
-void QuicSimpleServerStream::OnInitialHeadersComplete(bool fin,
-                                                      size_t frame_len) {
-  QuicSpdyStream::OnInitialHeadersComplete(fin, frame_len);
-  if (!SpdyUtils::ParseHeaders(decompressed_headers().data(),
-                               decompressed_headers().length(),
-                               &content_length_, &request_headers_)) {
-    DVLOG(1) << "Invalid headers";
+void QuicSimpleServerStream::OnInitialHeadersComplete(
+    bool fin,
+    size_t frame_len,
+    const QuicHeaderList& header_list) {
+  QuicSpdyStream::OnInitialHeadersComplete(fin, frame_len, header_list);
+  if (!SpdyUtils::CopyAndValidateHeaders(header_list, &content_length_,
+                                         &request_headers_)) {
+    QUIC_DVLOG(1) << "Invalid headers";
     SendErrorResponse();
   }
-  MarkHeadersConsumed(decompressed_headers().length());
+  ConsumeHeaderList();
 }
 
-void QuicSimpleServerStream::OnTrailingHeadersComplete(bool fin,
-                                                       size_t frame_len) {
-  LOG(DFATAL) << "Server does not support receiving Trailers.";
+void QuicSimpleServerStream::OnTrailingHeadersComplete(
+    bool fin,
+    size_t frame_len,
+    const QuicHeaderList& header_list) {
+  QUIC_BUG << "Server does not support receiving Trailers.";
   SendErrorResponse();
 }
 
@@ -54,13 +61,14 @@ void QuicSimpleServerStream::OnDataAvailable() {
       // No more data to read.
       break;
     }
-    DVLOG(1) << "Processed " << iov.iov_len << " bytes for stream " << id();
+    QUIC_DVLOG(1) << "Processed " << iov.iov_len << " bytes for stream "
+                  << id();
     body_.append(static_cast<char*>(iov.iov_base), iov.iov_len);
 
     if (content_length_ >= 0 &&
-        static_cast<int>(body_.size()) > content_length_) {
-      DVLOG(1) << "Body size (" << body_.size() << ") > content length ("
-               << content_length_ << ").";
+        body_.size() > static_cast<uint64_t>(content_length_)) {
+      QUIC_DVLOG(1) << "Body size (" << body_.size() << ") > content length ("
+                    << content_length_ << ").";
       SendErrorResponse();
       return;
     }
@@ -79,85 +87,87 @@ void QuicSimpleServerStream::OnDataAvailable() {
     return;
   }
 
-  if (request_headers_.empty()) {
-    DVLOG(1) << "Request headers empty.";
-    SendErrorResponse();
-    return;
-  }
-
-  if (content_length_ > 0 &&
-      content_length_ != static_cast<int>(body_.size())) {
-    DVLOG(1) << "Content length (" << content_length_ << ") != body size ("
-             << body_.size() << ").";
-    SendErrorResponse();
-    return;
-  }
-
   SendResponse();
 }
 
 void QuicSimpleServerStream::PushResponse(
     SpdyHeaderBlock push_request_headers) {
   if (id() % 2 != 0) {
-    LOG(DFATAL) << "Client initiated stream shouldn't be used "
-                << "as promised stream.";
+    QUIC_BUG << "Client initiated stream shouldn't be used as promised stream.";
     return;
   }
   // Change the stream state to emulate a client request.
-  request_headers_ = push_request_headers;
+  request_headers_ = std::move(push_request_headers);
   content_length_ = 0;
-  DVLOG(1) << "Stream " << id() << ": Ready to receive server push response.";
+  QUIC_DVLOG(1) << "Stream " << id()
+                << ": Ready to receive server push response.";
 
   // Set as if stream decompresed the headers and received fin.
-  QuicSpdyStream::OnInitialHeadersComplete(/*fin=*/true, 0);
+  QuicSpdyStream::OnInitialHeadersComplete(/*fin=*/true, 0, QuicHeaderList());
 }
 
 void QuicSimpleServerStream::SendResponse() {
-  if (!ContainsKey(request_headers_, ":authority") ||
-      !ContainsKey(request_headers_, ":path")) {
-    DVLOG(1) << "Request headers do not contain :authority or :path.";
+  if (request_headers_.empty()) {
+    QUIC_DVLOG(1) << "Request headers empty.";
+    SendErrorResponse();
+    return;
+  }
+
+  if (content_length_ > 0 &&
+      static_cast<uint64_t>(content_length_) != body_.size()) {
+    QUIC_DVLOG(1) << "Content length (" << content_length_ << ") != body size ("
+                  << body_.size() << ").";
+    SendErrorResponse();
+    return;
+  }
+
+  if (!base::ContainsKey(request_headers_, ":authority") ||
+      !base::ContainsKey(request_headers_, ":path")) {
+    QUIC_DVLOG(1) << "Request headers do not contain :authority or :path.";
     SendErrorResponse();
     return;
   }
 
   // Find response in cache. If not found, send error response.
-  const QuicInMemoryCache::Response* response =
-      QuicInMemoryCache::GetInstance()->GetResponse(
-          request_headers_[":authority"], request_headers_[":path"]);
+  const QuicHttpResponseCache::Response* response = nullptr;
+  auto authority = request_headers_.find(":authority");
+  auto path = request_headers_.find(":path");
+  if (authority != request_headers_.end() && path != request_headers_.end()) {
+    response = response_cache_->GetResponse(authority->second, path->second);
+  }
   if (response == nullptr) {
-    DVLOG(1) << "Response not found in cache.";
-    SendErrorResponse();
+    QUIC_DVLOG(1) << "Response not found in cache.";
+    SendNotFoundResponse();
     return;
   }
 
-  if (response->response_type() == QuicInMemoryCache::CLOSE_CONNECTION) {
-    DVLOG(1) << "Special response: closing connection.";
+  if (response->response_type() == QuicHttpResponseCache::CLOSE_CONNECTION) {
+    QUIC_DVLOG(1) << "Special response: closing connection.";
     CloseConnectionWithDetails(QUIC_NO_ERROR, "Toy server forcing close");
     return;
   }
 
-  if (response->response_type() == QuicInMemoryCache::IGNORE_REQUEST) {
-    DVLOG(1) << "Special response: ignoring request.";
+  if (response->response_type() == QuicHttpResponseCache::IGNORE_REQUEST) {
+    QUIC_DVLOG(1) << "Special response: ignoring request.";
     return;
   }
 
   // Examing response status, if it was not pure integer as typical h2 response
   // status, send error response.
-  string request_url;
-  if (!request_headers_[":scheme"].as_string().empty()) {
-    request_url = request_headers_[":scheme"].as_string() + "://" +
-                  request_headers_[":authority"].as_string() +
-                  request_headers_[":path"].as_string();
-  } else {
-    request_url = request_headers_[":authority"].as_string() +
-                  request_headers_[":path"].as_string();
-  }
+  string request_url = request_headers_[":authority"].as_string() +
+                       request_headers_[":path"].as_string();
   int response_code;
-  SpdyHeaderBlock response_headers = response->headers();
-  if (!base::StringToInt(response_headers[":status"], &response_code)) {
-    DVLOG(1) << "Illegal (non-integer) response :status from cache: "
-             << response_headers[":status"].as_string() << " for request "
-             << request_url;
+  const SpdyHeaderBlock& response_headers = response->headers();
+  if (!ParseHeaderStatusCode(response_headers, &response_code)) {
+    auto status = response_headers.find(":status");
+    if (status == response_headers.end()) {
+      QUIC_LOG(WARNING)
+          << ":status not present in response from cache for request "
+          << request_url;
+    } else {
+      QUIC_LOG(WARNING) << "Illegal (non-integer) response :status from cache: "
+                        << status->second << " for request " << request_url;
+    }
     SendErrorResponse();
     return;
   }
@@ -168,16 +178,16 @@ void QuicSimpleServerStream::SendResponse() {
     // This behavior mirrors the HTTP/2 implementation.
     bool is_redirection = response_code / 100 == 3;
     if (response_code != 200 && !is_redirection) {
-      LOG(WARNING) << "Response to server push request " << request_url
-                   << " result in response code " << response_code;
+      QUIC_LOG(WARNING) << "Response to server push request " << request_url
+                        << " result in response code " << response_code;
       Reset(QUIC_STREAM_CANCELLED);
       return;
     }
   }
-  list<QuicInMemoryCache::ServerPushInfo> resources =
-      QuicInMemoryCache::GetInstance()->GetServerPushResources(request_url);
-  DVLOG(1) << "Found " << resources.size() << " push resources for stream "
-           << id();
+  std::list<QuicHttpResponseCache::ServerPushInfo> resources =
+      response_cache_->GetServerPushResources(request_url);
+  QUIC_DVLOG(1) << "Found " << resources.size() << " push resources for stream "
+                << id();
 
   if (!resources.empty()) {
     QuicSimpleServerSession* session =
@@ -186,62 +196,74 @@ void QuicSimpleServerStream::SendResponse() {
                                   request_headers_);
   }
 
-  DVLOG(1) << "Sending response for stream " << id();
-  SendHeadersAndBodyAndTrailers(response->headers(), response->body(),
-                                response->trailers());
+  QUIC_DVLOG(1) << "Sending response for stream " << id();
+  SendHeadersAndBodyAndTrailers(response->headers().Clone(), response->body(),
+                                response->trailers().Clone());
+}
+
+void QuicSimpleServerStream::SendNotFoundResponse() {
+  QUIC_DVLOG(1) << "Sending not found response for stream " << id();
+  SpdyHeaderBlock headers;
+  headers[":status"] = "404";
+  headers["content-length"] =
+      QuicTextUtils::Uint64ToString(strlen(kNotFoundResponseBody));
+  SendHeadersAndBody(std::move(headers), kNotFoundResponseBody);
 }
 
 void QuicSimpleServerStream::SendErrorResponse() {
-  DVLOG(1) << "Sending error response for stream " << id();
+  QUIC_DVLOG(1) << "Sending error response for stream " << id();
   SpdyHeaderBlock headers;
   headers[":status"] = "500";
-  headers["content-length"] = base::UintToString(strlen(kErrorResponseBody));
-  SendHeadersAndBody(headers, kErrorResponseBody);
+  headers["content-length"] =
+      QuicTextUtils::Uint64ToString(strlen(kErrorResponseBody));
+  SendHeadersAndBody(std::move(headers), kErrorResponseBody);
 }
 
 void QuicSimpleServerStream::SendHeadersAndBody(
-    const SpdyHeaderBlock& response_headers,
+    SpdyHeaderBlock response_headers,
     StringPiece body) {
-  SendHeadersAndBodyAndTrailers(response_headers, body, SpdyHeaderBlock());
+  SendHeadersAndBodyAndTrailers(std::move(response_headers), body,
+                                SpdyHeaderBlock());
 }
 
 void QuicSimpleServerStream::SendHeadersAndBodyAndTrailers(
-    const SpdyHeaderBlock& response_headers,
+    SpdyHeaderBlock response_headers,
     StringPiece body,
-    const SpdyHeaderBlock& response_trailers) {
-  // This server only supports SPDY and HTTP, and neither handles bidirectional
-  // streaming.
-  if (!reading_stopped()) {
+    SpdyHeaderBlock response_trailers) {
+  if (!allow_bidirectional_data() && !reading_stopped()) {
     StopReading();
   }
 
   // Send the headers, with a FIN if there's nothing else to send.
   bool send_fin = (body.empty() && response_trailers.empty());
-  DVLOG(1) << "Writing headers (fin = " << send_fin
-           << ") : " << response_headers.DebugString();
-  WriteHeaders(response_headers, send_fin, nullptr);
+  QUIC_DLOG(INFO) << "Writing headers (fin = " << send_fin
+                  << ") : " << response_headers.DebugString();
+  WriteHeaders(std::move(response_headers), send_fin, nullptr);
   if (send_fin) {
     // Nothing else to send.
     return;
   }
 
-  // Send the body, with a FIN if there's nothing else to send.
+  // Send the body, with a FIN if there's no trailers to send.
   send_fin = response_trailers.empty();
-  DVLOG(1) << "Writing body (fin = " << send_fin
-           << ") with size: " << body.size();
-  WriteOrBufferData(body, send_fin, nullptr);
+  QUIC_DLOG(INFO) << "Writing body (fin = " << send_fin
+                  << ") with size: " << body.size();
+  if (!body.empty() || send_fin) {
+    WriteOrBufferData(body, send_fin, nullptr);
+  }
   if (send_fin) {
     // Nothing else to send.
     return;
   }
 
   // Send the trailers. A FIN is always sent with trailers.
-  DVLOG(1) << "Writing trailers (fin = true): "
-           << response_trailers.DebugString();
-  WriteTrailers(response_trailers, nullptr);
+  QUIC_DLOG(INFO) << "Writing trailers (fin = true): "
+                  << response_trailers.DebugString();
+  WriteTrailers(std::move(response_trailers), nullptr);
 }
 
 const char* const QuicSimpleServerStream::kErrorResponseBody = "bad";
+const char* const QuicSimpleServerStream::kNotFoundResponseBody =
+    "file not found";
 
-}  // namespace tools
 }  // namespace net

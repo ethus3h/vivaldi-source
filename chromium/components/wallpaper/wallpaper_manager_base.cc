@@ -10,25 +10,28 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/sys_info.h"
-#include "base/threading/worker_pool.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/core/account_id/account_id.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_image/user_image.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_type.h"
+#include "components/wallpaper/wallpaper_files_id.h"
 #include "components/wallpaper/wallpaper_layout.h"
+#include "components/wallpaper/wallpaper_manager_base.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/geometry/safe_integer_conversions.h"
@@ -60,6 +63,11 @@ const unsigned kLoadMaxDelayMs = 2000;
 // When no wallpaper image is specified, the screen is filled with a solid
 // color.
 const SkColor kDefaultWallpaperColor = SK_ColorGRAY;
+
+#if DCHECK_IS_ON()
+base::LazyInstance<base::SequenceChecker>::Leaky g_wallpaper_sequence_checker =
+    LAZY_INSTANCE_INITIALIZER;
+#endif
 
 // The path ids for directories.
 int dir_user_data_path_id = -1;            // chrome::DIR_USER_DATA
@@ -93,24 +101,26 @@ void DeleteWallpaperInList(const std::vector<base::FilePath>& file_list) {
   }
 }
 
-// Creates all new custom wallpaper directories for |user_id_hash| if not exist.
+// Creates all new custom wallpaper directories for |wallpaper_files_id| if not
+// exist.
 // static
-void EnsureCustomWallpaperDirectories(const std::string& user_id_hash) {
+void EnsureCustomWallpaperDirectories(
+    const wallpaper::WallpaperFilesId& wallpaper_files_id) {
   base::FilePath dir;
   dir = WallpaperManagerBase::GetCustomWallpaperDir(kSmallWallpaperSubDir);
-  dir = dir.Append(user_id_hash);
+  dir = dir.Append(wallpaper_files_id.id());
   if (!base::PathExists(dir))
     base::CreateDirectory(dir);
   dir = WallpaperManagerBase::GetCustomWallpaperDir(kLargeWallpaperSubDir);
-  dir = dir.Append(user_id_hash);
+  dir = dir.Append(wallpaper_files_id.id());
   if (!base::PathExists(dir))
     base::CreateDirectory(dir);
   dir = WallpaperManagerBase::GetCustomWallpaperDir(kOriginalWallpaperSubDir);
-  dir = dir.Append(user_id_hash);
+  dir = dir.Append(wallpaper_files_id.id());
   if (!base::PathExists(dir))
     base::CreateDirectory(dir);
   dir = WallpaperManagerBase::GetCustomWallpaperDir(kThumbnailWallpaperSubDir);
-  dir = dir.Append(user_id_hash);
+  dir = dir.Append(wallpaper_files_id.id());
   if (!base::PathExists(dir))
     base::CreateDirectory(dir);
 }
@@ -152,6 +162,12 @@ WallpaperInfo::WallpaperInfo(const std::string& in_location,
 }
 
 WallpaperInfo::~WallpaperInfo() {
+}
+
+void AssertCalledOnWallpaperSequence() {
+#if DCHECK_IS_ON()
+  DCHECK(g_wallpaper_sequence_checker.Get().CalledOnValidSequence());
+#endif
 }
 
 const char kWallpaperSequenceTokenName[] = "wallpaper-sequence";
@@ -307,11 +323,12 @@ void WallpaperManagerBase::EnsureLoggedInUserWallpaperLoaded() {
   if (GetLoggedInUserWallpaperInfo(&info)) {
     UMA_HISTOGRAM_ENUMERATION("Ash.Wallpaper.Type", info.type,
                               user_manager::User::WALLPAPER_TYPE_COUNT);
+    RecordWallpaperAppType();
     if (info == current_user_wallpaper_info_)
       return;
   }
   SetUserWallpaperNow(
-      user_manager::UserManager::Get()->GetLoggedInUser()->GetAccountId());
+      user_manager::UserManager::Get()->GetActiveUser()->GetAccountId());
 }
 
 void WallpaperManagerBase::ClearDisposableWallpaperCache() {
@@ -352,8 +369,7 @@ bool WallpaperManagerBase::GetLoggedInUserWallpaperInfo(WallpaperInfo* info) {
   }
 
   return GetUserWallpaperInfo(
-      user_manager::UserManager::Get()->GetLoggedInUser()->GetAccountId(),
-      info);
+      user_manager::UserManager::Get()->GetActiveUser()->GetAccountId(), info);
 }
 
 // static
@@ -458,16 +474,22 @@ void WallpaperManagerBase::OnPolicyCleared(const std::string& policy,
   GetUserWallpaperInfo(account_id, &info);
   info.type = user_manager::User::DEFAULT;
   SetUserWallpaperInfo(account_id, info, true /* is_persistent */);
-  SetDefaultWallpaperNow(account_id);
+  // If the user's policy is cleared, try to set the device wallpaper first.
+  // Note We have to modify the user wallpaper info first. Otherwise, we won't
+  // be able to override the current user policy wallpaper. The wallpaper info
+  // will be set correctly if the device wallpaper is set successfully.
+  if (!SetDeviceWallpaperIfApplicable(account_id)) {
+    SetDefaultWallpaperNow(account_id);
+  }
 }
 
 // static
 base::FilePath WallpaperManagerBase::GetCustomWallpaperPath(
     const char* sub_dir,
-    const std::string& user_id_hash,
+    const wallpaper::WallpaperFilesId& wallpaper_files_id,
     const std::string& file) {
   base::FilePath custom_wallpaper_path = GetCustomWallpaperDir(sub_dir);
-  return custom_wallpaper_path.Append(user_id_hash).Append(file);
+  return custom_wallpaper_path.Append(wallpaper_files_id.id()).Append(file);
 }
 
 WallpaperManagerBase::WallpaperManagerBase()
@@ -486,25 +508,25 @@ WallpaperManagerBase::~WallpaperManagerBase() {
 
 // static
 void WallpaperManagerBase::SaveCustomWallpaper(
-    const std::string& user_id_hash,
+    const WallpaperFilesId& wallpaper_files_id,
     const base::FilePath& original_path,
     WallpaperLayout layout,
-    scoped_ptr<gfx::ImageSkia> image) {
-  base::DeleteFile(
-      GetCustomWallpaperDir(kOriginalWallpaperSubDir).Append(user_id_hash),
-      true /* recursive */);
-  base::DeleteFile(
-      GetCustomWallpaperDir(kSmallWallpaperSubDir).Append(user_id_hash),
-      true /* recursive */);
-  base::DeleteFile(
-      GetCustomWallpaperDir(kLargeWallpaperSubDir).Append(user_id_hash),
-      true /* recursive */);
-  EnsureCustomWallpaperDirectories(user_id_hash);
+    std::unique_ptr<gfx::ImageSkia> image) {
+  base::DeleteFile(GetCustomWallpaperDir(kOriginalWallpaperSubDir)
+                       .Append(wallpaper_files_id.id()),
+                   true /* recursive */);
+  base::DeleteFile(GetCustomWallpaperDir(kSmallWallpaperSubDir)
+                       .Append(wallpaper_files_id.id()),
+                   true /* recursive */);
+  base::DeleteFile(GetCustomWallpaperDir(kLargeWallpaperSubDir)
+                       .Append(wallpaper_files_id.id()),
+                   true /* recursive */);
+  EnsureCustomWallpaperDirectories(wallpaper_files_id);
   std::string file_name = original_path.BaseName().value();
-  base::FilePath small_wallpaper_path =
-      GetCustomWallpaperPath(kSmallWallpaperSubDir, user_id_hash, file_name);
-  base::FilePath large_wallpaper_path =
-      GetCustomWallpaperPath(kLargeWallpaperSubDir, user_id_hash, file_name);
+  base::FilePath small_wallpaper_path = GetCustomWallpaperPath(
+      kSmallWallpaperSubDir, wallpaper_files_id, file_name);
+  base::FilePath large_wallpaper_path = GetCustomWallpaperPath(
+      kLargeWallpaperSubDir, wallpaper_files_id, file_name);
 
   // Re-encode orginal file to jpeg format and saves the result in case that
   // resized wallpaper is not generated (i.e. chrome shutdown before resized
@@ -522,25 +544,29 @@ void WallpaperManagerBase::SaveCustomWallpaper(
 // static
 void WallpaperManagerBase::MoveCustomWallpapersOnWorker(
     const AccountId& account_id,
-    const std::string& user_id_hash,
+    const WallpaperFilesId& wallpaper_files_id,
     const scoped_refptr<base::SingleThreadTaskRunner>& reply_task_runner,
     base::WeakPtr<WallpaperManagerBase> weak_ptr) {
+  const std::string& temporary_wallpaper_dir =
+      account_id.GetUserEmail();  // Migrated
   if (MoveCustomWallpaperDirectory(kOriginalWallpaperSubDir,
-                                   account_id.GetUserEmail(), user_id_hash)) {
+                                   temporary_wallpaper_dir,
+                                   wallpaper_files_id.id())) {
     // Consider success if the original wallpaper is moved to the new directory.
     // Original wallpaper is the fallback if the correct resolution wallpaper
     // can not be found.
     reply_task_runner->PostTask(
         FROM_HERE,
         base::Bind(&WallpaperManagerBase::MoveCustomWallpapersSuccess, weak_ptr,
-                   account_id, user_id_hash));
+                   account_id, wallpaper_files_id));
   }
-  MoveCustomWallpaperDirectory(kLargeWallpaperSubDir, account_id.GetUserEmail(),
-                               user_id_hash);
-  MoveCustomWallpaperDirectory(kSmallWallpaperSubDir, account_id.GetUserEmail(),
-                               user_id_hash);
+  MoveCustomWallpaperDirectory(kLargeWallpaperSubDir, temporary_wallpaper_dir,
+                               wallpaper_files_id.id());
+  MoveCustomWallpaperDirectory(kSmallWallpaperSubDir, temporary_wallpaper_dir,
+                               wallpaper_files_id.id());
   MoveCustomWallpaperDirectory(kThumbnailWallpaperSubDir,
-                               account_id.GetUserEmail(), user_id_hash);
+                               temporary_wallpaper_dir,
+                               wallpaper_files_id.id());
 }
 
 // static
@@ -564,11 +590,13 @@ void WallpaperManagerBase::GetCustomWallpaperInternal(
   if (!base::PathExists(valid_path)) {
     // Falls back to custom wallpaper that uses AccountId as part of its file
     // path.
-    // Note that account id is used instead of user_id_hash here.
+    // Note that account id is used instead of wallpaper_files_id here.
     LOG(ERROR) << "Failed to load custom wallpaper from its original fallback "
                   "file path: " << valid_path.value();
-    valid_path = GetCustomWallpaperPath(
-        kOriginalWallpaperSubDir, account_id.GetUserEmail(), info.location);
+    const std::string& old_path = account_id.GetUserEmail();  // Migrated
+    valid_path = GetCustomWallpaperPath(kOriginalWallpaperSubDir,
+                                        WallpaperFilesId::FromString(old_path),
+                                        info.location);
   }
 
   if (!base::PathExists(valid_path)) {
@@ -594,6 +622,15 @@ void WallpaperManagerBase::InitInitialUserWallpaper(const AccountId& account_id,
   current_user_wallpaper_info_.type = user_manager::User::DEFAULT;
   current_user_wallpaper_info_.date = base::Time::Now().LocalMidnight();
 
+  std::string device_wallpaper_url;
+  std::string device_wallpaper_hash;
+  if (ShouldSetDeviceWallpaper(account_id, &device_wallpaper_url,
+                               &device_wallpaper_hash)) {
+    current_user_wallpaper_info_.location =
+        GetDeviceWallpaperFilePath().value();
+    current_user_wallpaper_info_.type = user_manager::User::DEVICE;
+  }
+
   WallpaperInfo info = current_user_wallpaper_info_;
   SetUserWallpaperInfo(account_id, info, is_persistent);
 }
@@ -608,7 +645,8 @@ void WallpaperManagerBase::SetUserWallpaperNow(const AccountId& account_id) {
 }
 
 void WallpaperManagerBase::UpdateWallpaper(bool clear_cache) {
-  FOR_EACH_OBSERVER(Observer, observers_, OnUpdateWallpaperForTesting());
+  for (auto& observer : observers_)
+    observer.OnUpdateWallpaperForTesting();
   if (clear_cache)
     wallpaper_cache_.clear();
   SetUserWallpaperNow(last_selected_user_);
@@ -625,8 +663,8 @@ void WallpaperManagerBase::RemoveObserver(
 }
 
 void WallpaperManagerBase::NotifyAnimationFinished() {
-  FOR_EACH_OBSERVER(Observer, observers_,
-                    OnWallpaperAnimationFinished(last_selected_user_));
+  for (auto& observer : observers_)
+    observer.OnWallpaperAnimationFinished(last_selected_user_);
 }
 
 // WallpaperManager, protected: -----------------------------------------------
@@ -686,10 +724,15 @@ void WallpaperManagerBase::CacheUserWallpaper(const AccountId& account_id) {
     base::FilePath wallpaper_dir;
     base::FilePath wallpaper_path;
     if (info.type == user_manager::User::CUSTOMIZED ||
-        info.type == user_manager::User::POLICY) {
-      const char* sub_dir = GetCustomWallpaperSubdirForCurrentResolution();
-      base::FilePath wallpaper_path = GetCustomWallpaperDir(sub_dir);
-      wallpaper_path = wallpaper_path.Append(info.location);
+        info.type == user_manager::User::POLICY ||
+        info.type == user_manager::User::DEVICE) {
+      base::FilePath wallpaper_path;
+      if (info.type == user_manager::User::DEVICE) {
+        wallpaper_path = GetDeviceWallpaperFilePath();
+      } else {
+        const char* sub_dir = GetCustomWallpaperSubdirForCurrentResolution();
+        wallpaper_path = GetCustomWallpaperDir(sub_dir).Append(info.location);
+      }
       // Set the path to the cache.
       wallpaper_cache_[account_id] =
           CustomWallpaperElement(wallpaper_path, gfx::ImageSkia());
@@ -737,8 +780,13 @@ void WallpaperManagerBase::DeleteUserWallpapers(
   wallpaper_path = wallpaper_path.Append(path_to_file);
   file_to_remove.push_back(wallpaper_path);
 
-  base::WorkerPool::PostTask(
-      FROM_HERE, base::Bind(&DeleteWallpaperInList, file_to_remove), false);
+  base::PostTaskWithTraits(
+      FROM_HERE, base::TaskTraits()
+                     .WithShutdownBehavior(
+                         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN)
+                     .WithPriority(base::TaskPriority::BACKGROUND)
+                     .MayBlock(),
+      base::Bind(&DeleteWallpaperInList, file_to_remove));
 }
 
 void WallpaperManagerBase::SetCommandLineForTesting(
@@ -830,13 +878,15 @@ void WallpaperManagerBase::LoadWallpaper(
 
 void WallpaperManagerBase::MoveCustomWallpapersSuccess(
     const AccountId& account_id,
-    const std::string& user_id_hash) {
+    const wallpaper::WallpaperFilesId& wallpaper_files_id) {
   WallpaperInfo info;
   GetUserWallpaperInfo(account_id, &info);
   if (info.type == user_manager::User::CUSTOMIZED) {
-    // New file field should include user id hash in addition to file name.
-    // This is needed because at login screen, user id hash is not available.
-    info.location = base::FilePath(user_id_hash).Append(info.location).value();
+    // New file field should include user wallpaper_files_id in addition to
+    // file name.  This is needed because at login screen, wallpaper_files_id
+    // is not available.
+    info.location =
+        base::FilePath(wallpaper_files_id.id()).Append(info.location).value();
     bool is_persistent =
         !user_manager::UserManager::Get()->IsUserNonCryptohomeDataEphemeral(
             account_id);
@@ -847,14 +897,15 @@ void WallpaperManagerBase::MoveCustomWallpapersSuccess(
 void WallpaperManagerBase::MoveLoggedInUserCustomWallpaper() {
   DCHECK(thread_checker_.CalledOnValidThread());
   const user_manager::User* logged_in_user =
-      user_manager::UserManager::Get()->GetLoggedInUser();
+      user_manager::UserManager::Get()->GetActiveUser();
   if (logged_in_user) {
     task_runner_->PostTask(
         FROM_HERE,
-        base::Bind(
-            &WallpaperManagerBase::MoveCustomWallpapersOnWorker,
-            logged_in_user->GetAccountId(), logged_in_user->username_hash(),
-            base::ThreadTaskRunnerHandle::Get(), weak_factory_.GetWeakPtr()));
+        base::Bind(&WallpaperManagerBase::MoveCustomWallpapersOnWorker,
+                   logged_in_user->GetAccountId(),
+                   GetFilesId(logged_in_user->GetAccountId()),
+                   base::ThreadTaskRunnerHandle::Get(),
+                   weak_factory_.GetWeakPtr()));
   }
 }
 
@@ -897,27 +948,28 @@ base::TimeDelta WallpaperManagerBase::GetWallpaperLoadDelay() const {
 
 void WallpaperManagerBase::OnCustomizedDefaultWallpaperDecoded(
     const GURL& wallpaper_url,
-    scoped_ptr<CustomizedWallpaperRescaledFiles> rescaled_files,
-    const user_manager::UserImage& wallpaper) {
+    std::unique_ptr<CustomizedWallpaperRescaledFiles> rescaled_files,
+    std::unique_ptr<user_manager::UserImage> wallpaper) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   // If decoded wallpaper is empty, we have probably failed to decode the file.
-  if (wallpaper.image().isNull()) {
+  if (wallpaper->image().isNull()) {
     LOG(WARNING) << "Failed to decode customized wallpaper.";
     return;
   }
 
-  wallpaper.image().EnsureRepsForSupportedScales();
-  scoped_ptr<gfx::ImageSkia> deep_copy(wallpaper.image().DeepCopy());
+  wallpaper->image().EnsureRepsForSupportedScales();
+  // TODO(crbug.com/593251): DeepCopy() may be unnecessary as this function
+  // owns |wallpaper| as scoped_ptr whereas it used to be a const reference.
+  std::unique_ptr<gfx::ImageSkia> deep_copy(wallpaper->image().DeepCopy());
 
-  scoped_ptr<bool> success(new bool(false));
-  scoped_ptr<gfx::ImageSkia> small_wallpaper_image(new gfx::ImageSkia);
-  scoped_ptr<gfx::ImageSkia> large_wallpaper_image(new gfx::ImageSkia);
+  std::unique_ptr<bool> success(new bool(false));
+  std::unique_ptr<gfx::ImageSkia> small_wallpaper_image(new gfx::ImageSkia);
+  std::unique_ptr<gfx::ImageSkia> large_wallpaper_image(new gfx::ImageSkia);
 
-  // TODO(bshe): This may break if RawImage becomes RefCountedMemory.
   base::Closure resize_closure = base::Bind(
       &WallpaperManagerBase::ResizeCustomizedDefaultWallpaper,
-      base::Passed(&deep_copy), wallpaper.raw_image(),
+      base::Passed(&deep_copy),
       base::Unretained(rescaled_files.get()), base::Unretained(success.get()),
       base::Unretained(small_wallpaper_image.get()),
       base::Unretained(large_wallpaper_image.get()));
@@ -935,8 +987,7 @@ void WallpaperManagerBase::OnCustomizedDefaultWallpaperDecoded(
 }
 
 void WallpaperManagerBase::ResizeCustomizedDefaultWallpaper(
-    scoped_ptr<gfx::ImageSkia> image,
-    const user_manager::UserImage::RawImage& raw_image,
+    std::unique_ptr<gfx::ImageSkia> image,
     const CustomizedWallpaperRescaledFiles* rescaled_files,
     bool* success,
     gfx::ImageSkia* small_wallpaper_image,
@@ -966,7 +1017,7 @@ void WallpaperManagerBase::SetCustomizedDefaultWallpaper(
     return;
   }
   std::string downloaded_file_name = downloaded_file.BaseName().value();
-  scoped_ptr<CustomizedWallpaperRescaledFiles> rescaled_files(
+  std::unique_ptr<CustomizedWallpaperRescaledFiles> rescaled_files(
       new CustomizedWallpaperRescaledFiles(
           downloaded_file, resized_directory.Append(downloaded_file_name +
                                                     kSmallWallpaperSuffix),

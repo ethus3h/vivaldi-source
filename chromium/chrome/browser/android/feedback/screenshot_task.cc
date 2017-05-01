@@ -9,16 +9,16 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/bind.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "jni/ScreenshotTask_jni.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/android/window_android.h"
-#include "ui/gfx/display.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/screen.h"
 #include "ui/snapshot/snapshot.h"
 
 using base::android::AttachCurrentThread;
+using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using ui::WindowAndroid;
 
@@ -30,7 +30,7 @@ bool RegisterScreenshotTask(JNIEnv* env) {
 }
 
 void SnapshotCallback(JNIEnv* env,
-                      base::android::ScopedJavaGlobalRef<jobject>* callback,
+                      const JavaRef<jobject>& callback,
                       scoped_refptr<base::RefCountedBytes> png_data) {
   jbyteArray jbytes = nullptr;
   if (png_data.get()) {
@@ -38,9 +38,7 @@ void SnapshotCallback(JNIEnv* env,
     jbytes = env->NewByteArray(size);
     env->SetByteArrayRegion(jbytes, 0, size, (jbyte*) png_data->front());
   }
-  Java_ScreenshotTask_notifySnapshotFinished(env,
-                                             callback->obj(),
-                                             jbytes);
+  Java_ScreenshotTask_notifySnapshotFinished(env, callback, jbytes);
 }
 
 void GrabWindowSnapshotAsync(JNIEnv* env,
@@ -53,13 +51,9 @@ void GrabWindowSnapshotAsync(JNIEnv* env,
       native_window_android);
   gfx::Rect window_bounds(window_width, window_height);
   ui::GrabWindowSnapshotAsync(
-      window_android,
-      window_bounds,
-      base::ThreadTaskRunnerHandle::Get(),
-      base::Bind(&SnapshotCallback,
-                 env,
-                 base::Owned(new ScopedJavaGlobalRef<jobject>(env,
-                                                              jcallback))));
+      window_android, window_bounds, base::ThreadTaskRunnerHandle::Get(),
+      base::Bind(&SnapshotCallback, env,
+                 ScopedJavaGlobalRef<jobject>(env, jcallback)));
 }
 
 }  // namespace android

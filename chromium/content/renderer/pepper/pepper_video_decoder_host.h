@@ -9,12 +9,12 @@
 
 #include <list>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
 #include "base/containers/hash_tables.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "content/common/content_export.h"
 #include "media/video/video_decode_accelerator.h"
@@ -29,9 +29,7 @@ class SharedMemory;
 
 namespace content {
 
-class PPB_Graphics3D_Impl;
 class RendererPpapiHost;
-class RenderViewImpl;
 class VideoDecoderShim;
 
 class CONTENT_EXPORT PepperVideoDecoderHost
@@ -73,6 +71,8 @@ class CONTENT_EXPORT PepperVideoDecoderHost
 
   // media::VideoDecodeAccelerator::Client implementation.
   void ProvidePictureBuffers(uint32_t requested_num_of_buffers,
+                             media::VideoPixelFormat format,
+                             uint32_t textures_per_buffer,
                              const gfx::Size& dimensions,
                              uint32_t texture_target) override;
   void DismissPictureBuffer(int32_t picture_buffer_id) override;
@@ -120,10 +120,16 @@ class CONTENT_EXPORT PepperVideoDecoderHost
 
   media::VideoCodecProfile profile_;
 
-  scoped_ptr<media::VideoDecodeAccelerator> decoder_;
+  std::unique_ptr<media::VideoDecodeAccelerator> decoder_;
 
   bool software_fallback_allowed_ = false;
   bool software_fallback_used_ = false;
+
+  int pending_texture_requests_ = 0;
+
+  // Set after software decoder fallback to dismiss all outstanding texture
+  // requests.
+  int assign_textures_messages_to_dismiss_ = 0;
 
   // A vector holding our shm buffers, in sync with a similar vector in the
   // resource. We use a buffer's index in these vectors as its id on both sides

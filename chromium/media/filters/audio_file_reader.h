@@ -5,9 +5,12 @@
 #ifndef MEDIA_FILTERS_AUDIO_FILE_READER_H_
 #define MEDIA_FILTERS_AUDIO_FILE_READER_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "media/base/audio_codecs.h"
 #include "media/base/media_export.h"
+#include "media/ffmpeg/ffmpeg_deleters.h"
 #include "media/filters/ffmpeg_glue.h"
 
 struct AVCodecContext;
@@ -76,7 +79,7 @@ class MEDIA_EXPORT AudioFileReader {
 
   const AVStream* GetAVStreamForTesting() const;
   const AVCodecContext* codec_context_for_testing() const {
-    return codec_context_;
+    return codec_context_.get();
   }
 
  private:
@@ -84,10 +87,13 @@ class MEDIA_EXPORT AudioFileReader {
   bool OpenDecoder();
   bool ReadPacket(AVPacket* output_packet);
 
-  scoped_ptr<FFmpegGlue> glue_;
-  AVCodecContext* codec_context_;
+  // Destruct |glue_| after |codec_context_|.
+  std::unique_ptr<FFmpegGlue> glue_;
+  std::unique_ptr<AVCodecContext, ScopedPtrAVFreeContext> codec_context_;
+
   int stream_index_;
   FFmpegURLProtocol* protocol_;
+  AudioCodec audio_codec_;
   int channels_;
   int sample_rate_;
 
@@ -95,7 +101,7 @@ class MEDIA_EXPORT AudioFileReader {
   int av_sample_format_;
 
 #if defined(USE_SYSTEM_PROPRIETARY_CODECS)
-  scoped_ptr<IPCAudioDecoder> ipc_audio_decoder_;
+  std::unique_ptr<IPCAudioDecoder> ipc_audio_decoder_;
 #endif  // USE_SYSTEM_PROPRIETARY_CODECS
 
   DISALLOW_COPY_AND_ASSIGN(AudioFileReader);

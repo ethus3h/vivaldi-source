@@ -13,7 +13,8 @@
 #include "base/logging.h"
 #include "base/native_library.h"
 #include "base/strings/string_util.h"
-#include "media/base/decrypt_config.h"
+#include "media/base/encryption_scheme.h"
+#include "media/base/subsample_entry.h"
 
 namespace {
 const char kMediaFormatKeyCropLeft[] = "crop-left";
@@ -54,11 +55,6 @@ NdkMediaCodecBridge::NdkMediaCodecBridge(const std::string& mime,
     media_codec_.reset(AMediaCodec_createEncoderByType(mime.c_str()));
 }
 
-MediaCodecStatus NdkMediaCodecBridge::Reset() {
-  media_status_t status = AMediaCodec_flush(media_codec_.get());
-  return TranslateMediaCodecStatus(status);
-}
-
 bool NdkMediaCodecBridge::Start() {
   return AMEDIA_OK == AMediaCodec_start(media_codec_.get());
 }
@@ -67,7 +63,12 @@ void NdkMediaCodecBridge::Stop() {
   AMediaCodec_stop(media_codec_.get());
 }
 
-void NdkMediaCodecBridge::GetOutputFormat(int* width, int* height) {
+MediaCodecStatus NdkMediaCodecBridge::Flush() {
+  media_status_t status = AMediaCodec_flush(media_codec_.get());
+  return TranslateMediaCodecStatus(status);
+}
+
+MediaCodecStatus NdkMediaCodecBridge::GetOutputSize(gfx::Size* size) {
   AMediaFormat* format = AMediaCodec_getOutputFormat(media_codec_.get());
   int left, right, bottom, top;
   bool has_left = AMediaFormat_getInt32(format, kMediaFormatKeyCropLeft, &left);
@@ -76,29 +77,45 @@ void NdkMediaCodecBridge::GetOutputFormat(int* width, int* height) {
   bool has_bottom =
       AMediaFormat_getInt32(format, kMediaFormatKeyCropBottom, &bottom);
   bool has_top = AMediaFormat_getInt32(format, kMediaFormatKeyCropTop, &top);
+  int width, height;
   if (has_left && has_right && has_bottom && has_top) {
     // Use crop size as it is more accurate. right and bottom are inclusive.
-    *width = right - left + 1;
-    *height = top - bottom + 1;
+    width = right - left + 1;
+    height = top - bottom + 1;
   } else {
-    AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_WIDTH, width);
-    AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_HEIGHT, height);
+    AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_WIDTH, &width);
+    AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_HEIGHT, &height);
   }
+  AMediaFormat_delete(format);
+  size->SetSize(width, height);
+  return MEDIA_CODEC_OK;
 }
 
-int NdkMediaCodecBridge::GetOutputSamplingRate() {
+MediaCodecStatus NdkMediaCodecBridge::GetOutputSamplingRate(
+    int* sampling_rate) {
   AMediaFormat* format = AMediaCodec_getOutputFormat(media_codec_.get());
-  int sample_rate = 0;
-  AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sample_rate);
-  DCHECK(sample_rate != 0);
-  return sample_rate;
+  *sampling_rate = 0;
+  AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_SAMPLE_RATE, sampling_rate);
+  AMediaFormat_delete(format);
+  DCHECK_NE(*sampling_rate, 0);
+  return MEDIA_CODEC_OK;
+}
+
+MediaCodecStatus NdkMediaCodecBridge::GetOutputChannelCount(
+    int* channel_count) {
+  AMediaFormat* format = AMediaCodec_getOutputFormat(media_codec_.get());
+  *channel_count = 0;
+  AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, channel_count);
+  AMediaFormat_delete(format);
+  DCHECK_NE(*channel_count, 0);
+  return MEDIA_CODEC_OK;
 }
 
 MediaCodecStatus NdkMediaCodecBridge::QueueInputBuffer(
     int index,
     const uint8_t* data,
     size_t data_size,
-    const base::TimeDelta& presentation_time) {
+    base::TimeDelta presentation_time) {
   if (data_size >
       base::checked_cast<size_t>(std::numeric_limits<int32_t>::max())) {
     return MEDIA_CODEC_ERROR;
@@ -120,7 +137,8 @@ MediaCodecStatus NdkMediaCodecBridge::QueueSecureInputBuffer(
     const std::vector<char>& iv,
     const SubsampleEntry* subsamples,
     int subsamples_size,
-    const base::TimeDelta& presentation_time) {
+    const EncryptionScheme& encryption_scheme,
+    base::TimeDelta presentation_time) {
   if (data_size >
       base::checked_cast<size_t>(std::numeric_limits<int32_t>::max())) {
     return MEDIA_CODEC_ERROR;
@@ -128,6 +146,9 @@ MediaCodecStatus NdkMediaCodecBridge::QueueSecureInputBuffer(
   if (key_id.size() > 16 || iv.size())
     return MEDIA_CODEC_ERROR;
   if (data && !FillInputBuffer(index, data, data_size))
+    return MEDIA_CODEC_ERROR;
+  if (encryption_scheme.mode() != EncryptionScheme::CIPHER_MODE_AES_CTR ||
+      encryption_scheme.pattern().IsInEffect())
     return MEDIA_CODEC_ERROR;
 
   int new_subsamples_size = subsamples_size == 0 ? 1 : subsamples_size;
@@ -170,7 +191,7 @@ void NdkMediaCodecBridge::QueueEOS(int input_buffer_index) {
 }
 
 MediaCodecStatus NdkMediaCodecBridge::DequeueInputBuffer(
-    const base::TimeDelta& timeout,
+    base::TimeDelta timeout,
     int* index) {
   *index = AMediaCodec_dequeueInputBuffer(media_codec_.get(),
                                           timeout.InMicroseconds());
@@ -183,7 +204,7 @@ MediaCodecStatus NdkMediaCodecBridge::DequeueInputBuffer(
 }
 
 MediaCodecStatus NdkMediaCodecBridge::DequeueOutputBuffer(
-    const base::TimeDelta& timeout,
+    base::TimeDelta timeout,
     int* index,
     size_t* offset,
     size_t* size,
@@ -213,26 +234,30 @@ void NdkMediaCodecBridge::ReleaseOutputBuffer(int index, bool render) {
   AMediaCodec_releaseOutputBuffer(media_codec_.get(), index, render);
 }
 
-void NdkMediaCodecBridge::GetInputBuffer(int input_buffer_index,
-                                         uint8_t** data,
-                                         size_t* capacity) {
+MediaCodecStatus NdkMediaCodecBridge::GetInputBuffer(int input_buffer_index,
+                                                     uint8_t** data,
+                                                     size_t* capacity) {
   *data = AMediaCodec_getInputBuffer(media_codec_.get(), input_buffer_index,
                                      capacity);
+  return MEDIA_CODEC_OK;
 }
 
-bool NdkMediaCodecBridge::CopyFromOutputBuffer(int index,
-                                               size_t offset,
-                                               void* dst,
-                                               int dst_size) {
-  size_t capacity;
-  uint8_t* src_data =
-      AMediaCodec_getOutputBuffer(media_codec_.get(), index, &capacity);
+MediaCodecStatus NdkMediaCodecBridge::GetOutputBufferAddress(
+    int index,
+    size_t offset,
+    const uint8_t** addr,
+    size_t* capacity) {
+  const uint8_t* src_data =
+      AMediaCodec_getOutputBuffer(media_codec_.get(), index, capacity);
+  *addr = src_data + offset;
+  *capacity -= offset;
+  return MEDIA_CODEC_OK;
+}
 
-  if (capacity < offset || capacity - offset < static_cast<size_t>(dst_size))
-    return false;
-
-  memcpy(dst, src_data + offset, dst_size);
-  return true;
+std::string NdkMediaCodecBridge::GetName() {
+  // The NDK api doesn't expose a getName like the Java one.
+  NOTIMPLEMENTED();
+  return "";
 }
 
 }  // namespace media

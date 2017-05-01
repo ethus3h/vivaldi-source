@@ -15,8 +15,10 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "net/base/host_port_pair.h"
+#include "net/base/net_export.h"
+#include "net/base/privacy_mode.h"
+#include "net/base/request_priority.h"
 #include "net/http/http_stream_factory.h"
-#include "net/log/net_log.h"
 #include "net/proxy/proxy_server.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/spdy/spdy_session_key.h"
@@ -24,10 +26,16 @@
 namespace net {
 
 class HttpNetworkSession;
+class ProxyInfo;
 class SpdySession;
+class NetLogWithSource;
 
 class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
  public:
+  class NET_EXPORT_PRIVATE Job;
+  class NET_EXPORT_PRIVATE JobController;
+  class NET_EXPORT_PRIVATE JobFactory;
+  class NET_EXPORT_PRIVATE Request;
   // RequestStream may only be called if |for_websockets| is false.
   // RequestWebSocketHandshakeStream may only be called if |for_websockets|
   // is true.
@@ -40,7 +48,7 @@ class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
                                    const SSLConfig& server_ssl_config,
                                    const SSLConfig& proxy_ssl_config,
                                    HttpStreamRequest::Delegate* delegate,
-                                   const BoundNetLog& net_log) override;
+                                   const NetLogWithSource& net_log) override;
 
   HttpStreamRequest* RequestWebSocketHandshakeStream(
       const HttpRequestInfo& info,
@@ -49,32 +57,59 @@ class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
       const SSLConfig& proxy_ssl_config,
       HttpStreamRequest::Delegate* delegate,
       WebSocketHandshakeStreamBase::CreateHelper* create_helper,
-      const BoundNetLog& net_log) override;
+      const NetLogWithSource& net_log) override;
 
-  HttpStreamRequest* RequestBidirectionalStreamJob(
+  HttpStreamRequest* RequestBidirectionalStreamImpl(
       const HttpRequestInfo& info,
       RequestPriority priority,
       const SSLConfig& server_ssl_config,
       const SSLConfig& proxy_ssl_config,
       HttpStreamRequest::Delegate* delegate,
-      const BoundNetLog& net_log) override;
+      const NetLogWithSource& net_log) override;
 
-  void PreconnectStreams(int num_streams,
-                         const HttpRequestInfo& info,
-                         const SSLConfig& server_ssl_config,
-                         const SSLConfig& proxy_ssl_config) override;
+  void PreconnectStreams(int num_streams, const HttpRequestInfo& info) override;
   const HostMappingRules* GetHostMappingRules() const override;
 
-  size_t num_orphaned_jobs() const { return orphaned_job_set_.size(); }
+  enum JobType {
+    MAIN,
+    ALTERNATIVE,
+    PRECONNECT,
+  };
 
  private:
   FRIEND_TEST_ALL_PREFIXES(HttpStreamFactoryImplRequestTest, SetPriority);
+  FRIEND_TEST_ALL_PREFIXES(HttpStreamFactoryImplRequestTest, DelayMainJob);
 
-  class NET_EXPORT_PRIVATE Request;
-  class NET_EXPORT_PRIVATE Job;
+  friend class HttpStreamFactoryImplPeer;
 
   typedef std::set<Request*> RequestSet;
   typedef std::map<SpdySessionKey, RequestSet> SpdySessionRequestMap;
+  typedef std::set<std::unique_ptr<JobController>> JobControllerSet;
+
+  // |PreconnectingProxyServer| holds information of a connection to a single
+  // proxy server.
+  struct PreconnectingProxyServer {
+    PreconnectingProxyServer(ProxyServer proxy_server,
+                             PrivacyMode privacy_mode);
+
+    // Needed to be an element of std::set.
+    bool operator<(const PreconnectingProxyServer& other) const;
+    bool operator==(const PreconnectingProxyServer& other) const;
+
+    const ProxyServer proxy_server;
+    const PrivacyMode privacy_mode;
+  };
+
+  // Values must not be changed or reused.  Keep in sync with identically named
+  // enum in histograms.xml.
+  enum AlternativeServiceType {
+    NO_ALTERNATIVE_SERVICE = 0,
+    QUIC_SAME_DESTINATION = 1,
+    QUIC_DIFFERENT_DESTINATION = 2,
+    NOT_QUIC_SAME_DESTINATION = 3,
+    NOT_QUIC_DIFFERENT_DESTINATION = 4,
+    MAX_ALTERNATIVE_SERVICE_TYPE
+  };
 
   HttpStreamRequest* RequestStreamInternal(
       const HttpRequestInfo& info,
@@ -83,14 +118,8 @@ class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
       const SSLConfig& proxy_ssl_config,
       HttpStreamRequest::Delegate* delegate,
       WebSocketHandshakeStreamBase::CreateHelper* create_helper,
-      const BoundNetLog& net_log);
-
-  AlternativeService GetAlternativeServiceFor(
-      const HttpRequestInfo& request_info,
-      HttpStreamRequest::Delegate* delegate);
-
-  // Detaches |job| from |request|.
-  void OrphanJob(Job* job, const Request* request);
+      HttpStreamRequest::StreamType stream_type,
+      const NetLogWithSource& net_log);
 
   // Called when a SpdySession is ready. It will find appropriate Requests and
   // fulfill them. |direct| indicates whether or not |spdy_session| uses a
@@ -99,28 +128,37 @@ class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
                              bool direct,
                              const SSLConfig& used_ssl_config,
                              const ProxyInfo& used_proxy_info,
-                             bool was_npn_negotiated,
-                             NextProto protocol_negotiated,
+                             bool was_alpn_negotiated,
+                             NextProto negotiated_protocol,
                              bool using_spdy,
-                             const BoundNetLog& net_log);
+                             const NetLogWithSource& net_log);
 
   // Called when the Job detects that the endpoint indicated by the
   // Alternate-Protocol does not work. Lets the factory update
   // HttpAlternateProtocols with the failure and resets the SPDY session key.
   void OnBrokenAlternateProtocol(const Job*, const HostPortPair& origin);
 
-  // Invoked when an orphaned Job finishes.
-  void OnOrphanedJobComplete(const Job* job);
-
-  // Invoked when the Job finishes preconnecting sockets.
-  void OnPreconnectsComplete(const Job* job);
-
   // Called when the Preconnect completes. Used for testing.
   virtual void OnPreconnectsCompleteInternal() {}
 
-  // Returns true if QUIC is whitelisted for |host|, which should be
-  // the result of calling ApplyHostMappingRules().
-  bool IsQuicWhitelistedForHost(const std::string& host);
+  // Called when the JobController finishes service. Delete the JobController
+  // from |job_controller_set_|.
+  void OnJobControllerComplete(JobController* controller);
+
+  // Returns true if a connection to the proxy server contained in |proxy_info|
+  // that has privacy mode |privacy_mode| can be skipped by a job controlled by
+  // |controller|.
+  bool OnInitConnection(const JobController& controller,
+                        const ProxyInfo& proxy_info,
+                        PrivacyMode privacy_mode);
+
+  // Notifies |this| that a stream to the proxy server contained in |proxy_info|
+  // with privacy mode |privacy_mode| is ready.
+  void OnStreamReady(const ProxyInfo& proxy_info, PrivacyMode privacy_mode);
+
+  // Returns true if |proxy_info| contains a proxy server that supports request
+  // priorities.
+  bool ProxyServerSupportsPriorities(const ProxyInfo& proxy_info) const;
 
   HttpNetworkSession* const session_;
 
@@ -129,21 +167,24 @@ class NET_EXPORT_PRIVATE HttpStreamFactoryImpl : public HttpStreamFactory {
   // |request_map_|. The Requests will delete the corresponding job.
   std::map<const Job*, Request*> request_map_;
 
+  // All Requests/Preconnects are assigned with a JobController to manage
+  // serving Job(s). JobController might outlive Request when Request
+  // is served while there's some working Job left. JobController will be
+  // deleted from |job_controller_set_| when it determines the completion of
+  // its work.
+  JobControllerSet job_controller_set_;
+
+  // Factory used by job controllers for creating jobs.
+  std::unique_ptr<JobFactory> job_factory_;
+
+  // Set of proxy servers that support request priorities to which subsequent
+  // preconnects should be skipped.
+  std::set<PreconnectingProxyServer> preconnecting_proxy_servers_;
+
   SpdySessionRequestMap spdy_session_request_map_;
 
-  // These jobs correspond to jobs orphaned by Requests and now owned by
-  // HttpStreamFactoryImpl. Since they are no longer tied to Requests, they will
-  // not be canceled when Requests are canceled. Therefore, in
-  // ~HttpStreamFactoryImpl, it is possible for some jobs to still exist in this
-  // set. Leftover jobs will be deleted when the factory is destroyed.
-  std::set<const Job*> orphaned_job_set_;
-
-  // These jobs correspond to preconnect requests and have no associated Request
-  // object. They're owned by HttpStreamFactoryImpl. Leftover jobs will be
-  // deleted when the factory is destroyed.
-  std::set<const Job*> preconnect_job_set_;
-
   const bool for_websockets_;
+
   DISALLOW_COPY_AND_ASSIGN(HttpStreamFactoryImpl);
 };
 

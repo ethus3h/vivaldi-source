@@ -5,8 +5,8 @@
 #include "chrome/browser/notifications/notification_permission_context.h"
 
 #include "base/bind.h"
-#include "base/message_loop/message_loop.h"
-#include "base/test/test_mock_time_task_runner.h"
+#include "base/memory/ptr_util.h"
+#include "base/test/scoped_mock_time_message_loop_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/notifications/desktop_notification_profile_util.h"
@@ -20,20 +20,21 @@
 #include "content/public/browser/permission_manager.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/permission_status.mojom.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/WebKit/public/platform/modules/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
 
 namespace {
 
 void DoNothing(ContentSetting content_setting) {}
-void DoNothing2(content::PermissionStatus status) {}
+void DoNothing2(blink::mojom::PermissionStatus status) {}
 
 class TestNotificationPermissionContext : public NotificationPermissionContext {
  public:
   explicit TestNotificationPermissionContext(Profile* profile)
-      : NotificationPermissionContext(profile),
+      : NotificationPermissionContext(profile,
+                                      content::PermissionType::NOTIFICATIONS),
         permission_set_count_(0),
         last_permission_set_persisted_(false),
         last_permission_set_setting_(CONTENT_SETTING_DEFAULT) {}
@@ -74,31 +75,35 @@ class TestNotificationPermissionContext : public NotificationPermissionContext {
   ContentSetting last_permission_set_setting_;
 };
 
+}  // namespace
+
 class NotificationPermissionContextTest
     : public ChromeRenderViewHostTestHarness {
  public:
-  scoped_refptr<base::TestMockTimeTaskRunner> SwitchToMockTime() {
-    old_task_runner_ = base::MessageLoop::current()->task_runner();
-    scoped_refptr<base::TestMockTimeTaskRunner> task_runner(
-        new base::TestMockTimeTaskRunner(base::Time::Now(),
-                                         base::TimeTicks::Now()));
-    base::MessageLoop::current()->SetTaskRunner(task_runner);
-    return task_runner;
-  }
-
   void TearDown() override {
-    if (old_task_runner_) {
-      base::MessageLoop::current()->SetTaskRunner(old_task_runner_);
-      old_task_runner_ = nullptr;
-    }
+    mock_time_task_runner_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
- private:
-  scoped_refptr<base::SingleThreadTaskRunner> old_task_runner_;
-};
+ protected:
+  base::TestMockTimeTaskRunner* SwitchToMockTime() {
+    EXPECT_FALSE(mock_time_task_runner_);
+    mock_time_task_runner_ =
+        base::MakeUnique<base::ScopedMockTimeMessageLoopTaskRunner>();
+    return mock_time_task_runner_->task_runner();
+  }
 
-}  // namespace
+  void UpdateContentSetting(NotificationPermissionContext* context,
+                            const GURL& requesting_origin,
+                            const GURL& embedding_origin,
+                            ContentSetting setting) {
+    context->UpdateContentSetting(requesting_origin, embedding_origin, setting);
+  }
+
+ private:
+  std::unique_ptr<base::ScopedMockTimeMessageLoopTaskRunner>
+      mock_time_task_runner_;
+};
 
 // Web Notification permission requests will completely ignore the embedder
 // origin. See https://crbug.com/416894.
@@ -107,10 +112,10 @@ TEST_F(NotificationPermissionContextTest, IgnoresEmbedderOrigin) {
   GURL embedding_origin("https://chrome.com");
   GURL different_origin("https://foobar.com");
 
-  NotificationPermissionContext context(profile());
-  context.UpdateContentSetting(requesting_origin,
-                               embedding_origin,
-                               CONTENT_SETTING_ALLOW);
+  NotificationPermissionContext context(profile(),
+                                        content::PermissionType::NOTIFICATIONS);
+  UpdateContentSetting(&context, requesting_origin, embedding_origin,
+                       CONTENT_SETTING_ALLOW);
 
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
       context.GetPermissionStatus(requesting_origin, embedding_origin));
@@ -127,19 +132,71 @@ TEST_F(NotificationPermissionContextTest, IgnoresEmbedderOrigin) {
       context.GetPermissionStatus(requesting_origin, different_origin));
 }
 
+// Push messaging permission requests should only succeed for top level origins
+// (embedding origin == requesting origin).
+TEST_F(NotificationPermissionContextTest, PushTopLevelOriginOnly) {
+  GURL requesting_origin("https://example.com");
+  GURL embedding_origin("https://chrome.com");
+
+  NotificationPermissionContext context(
+      profile(), content::PermissionType::PUSH_MESSAGING);
+  UpdateContentSetting(&context, requesting_origin, embedding_origin,
+                       CONTENT_SETTING_ALLOW);
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            context.GetPermissionStatus(requesting_origin, embedding_origin));
+
+  context.ResetPermission(requesting_origin, embedding_origin);
+
+  UpdateContentSetting(&context, embedding_origin, embedding_origin,
+                       CONTENT_SETTING_ALLOW);
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            context.GetPermissionStatus(embedding_origin, embedding_origin));
+
+  context.ResetPermission(embedding_origin, embedding_origin);
+
+  EXPECT_EQ(CONTENT_SETTING_ASK,
+            context.GetPermissionStatus(embedding_origin, embedding_origin));
+}
+
 // Web Notifications do not require a secure origin when requesting permission.
 // See https://crbug.com/404095.
 TEST_F(NotificationPermissionContextTest, NoSecureOriginRequirement) {
   GURL origin("http://example.com");
 
-  NotificationPermissionContext context(profile());
+  NotificationPermissionContext context(profile(),
+                                        content::PermissionType::NOTIFICATIONS);
   EXPECT_EQ(CONTENT_SETTING_ASK,
             context.GetPermissionStatus(origin, origin));
 
-  context.UpdateContentSetting(origin, origin, CONTENT_SETTING_ALLOW);
+  UpdateContentSetting(&context, origin, origin, CONTENT_SETTING_ALLOW);
 
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             context.GetPermissionStatus(origin, origin));
+}
+
+// Push notifications requires a secure origin to acquire permission.
+TEST_F(NotificationPermissionContextTest, PushSecureOriginRequirement) {
+  GURL origin("http://example.com");
+  GURL secure_origin("https://example.com");
+
+  NotificationPermissionContext context(
+      profile(), content::PermissionType::PUSH_MESSAGING);
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, context.GetPermissionStatus(origin, origin));
+
+  UpdateContentSetting(&context, origin, origin, CONTENT_SETTING_ALLOW);
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, context.GetPermissionStatus(origin, origin));
+
+  EXPECT_EQ(CONTENT_SETTING_ASK,
+            context.GetPermissionStatus(secure_origin, secure_origin));
+
+  UpdateContentSetting(&context, secure_origin, secure_origin,
+                       CONTENT_SETTING_ALLOW);
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            context.GetPermissionStatus(secure_origin, secure_origin));
 }
 
 // Tests auto-denial after a time delay in incognito.
@@ -153,7 +210,7 @@ TEST_F(NotificationPermissionContextTest, TestDenyInIncognitoAfterDelay) {
                                web_contents()->GetMainFrame()->GetRoutingID(),
                                -1);
 
-  scoped_refptr<base::TestMockTimeTaskRunner> task_runner(SwitchToMockTime());
+  base::TestMockTimeTaskRunner* task_runner = SwitchToMockTime();
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());
@@ -219,7 +276,7 @@ TEST_F(NotificationPermissionContextTest, TestCancelledIncognitoRequest) {
                                web_contents()->GetMainFrame()->GetRoutingID(),
                                -1);
 
-  scoped_refptr<base::TestMockTimeTaskRunner> task_runner(SwitchToMockTime());
+  base::TestMockTimeTaskRunner* task_runner = SwitchToMockTime();
 
   content::PermissionManager* permission_manager =
       PermissionManagerFactory::GetForProfile(
@@ -256,7 +313,7 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
                                 web_contents()->GetMainFrame()->GetRoutingID(),
                                 1);
 
-  scoped_refptr<base::TestMockTimeTaskRunner> task_runner(SwitchToMockTime());
+  base::TestMockTimeTaskRunner* task_runner = SwitchToMockTime();
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());

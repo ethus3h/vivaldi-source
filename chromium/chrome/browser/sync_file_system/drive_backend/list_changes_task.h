@@ -7,9 +7,9 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_task.h"
 #include "google_apis/drive/drive_api_error_codes.h"
@@ -34,22 +34,22 @@ class ListChangesTask : public SyncTask {
   explicit ListChangesTask(SyncEngineContext* sync_context);
   ~ListChangesTask() override;
 
-  void RunPreflight(scoped_ptr<SyncTaskToken> token) override;
+  void RunPreflight(std::unique_ptr<SyncTaskToken> token) override;
 
  private:
-  void StartListing(scoped_ptr<SyncTaskToken> token);
-  void DidListChanges(scoped_ptr<SyncTaskToken> token,
+  void StartListing(std::unique_ptr<SyncTaskToken> token);
+  void DidListChanges(std::unique_ptr<SyncTaskToken> token,
                       google_apis::DriveApiErrorCode error,
-                      scoped_ptr<google_apis::ChangeList> change_list);
+                      std::unique_ptr<google_apis::ChangeList> change_list);
   void CheckInChangeList(int64_t largest_change_id,
-                         scoped_ptr<SyncTaskToken> token);
+                         std::unique_ptr<SyncTaskToken> token);
 
   bool IsContextReady();
   MetadataDatabase* metadata_database();
   drive::DriveServiceInterface* drive_service();
 
   SyncEngineContext* sync_context_;
-  ScopedVector<google_apis::ChangeResource> change_list_;
+  std::vector<std::unique_ptr<google_apis::ChangeResource>> change_list_;
 
   std::vector<std::string> file_ids_;
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 // NOTE: The format of types has changed. 'FooType' is now
 //   'chrome.networkingPrivate.FooType'.
 // Please run the closure compiler before committing changes.
-// See https://code.google.com/p/chromium/wiki/ClosureCompilation.
+// See https://chromium.googlesource.com/chromium/src/+/master/docs/closure_compilation.md
 
 /** @fileoverview Externs generated from namespace: networkingPrivate */
 
@@ -357,7 +357,7 @@ chrome.networkingPrivate.IPConfigProperties;
  * @typedef {{
  *   Gateway: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   IPAddress: (!chrome.networkingPrivate.ManagedDOMString|undefined),
- *   NameServers: (!Array<!chrome.networkingPrivate.ManagedDOMString>|undefined),
+ *   NameServers: (!chrome.networkingPrivate.ManagedDOMStringList|undefined),
  *   RoutingPrefix: (!chrome.networkingPrivate.ManagedLong|undefined),
  *   Type: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   WebProxyAutoDiscoveryUrl: (!chrome.networkingPrivate.ManagedDOMString|undefined)
@@ -412,7 +412,7 @@ chrome.networkingPrivate.IPSecProperties;
  *   ClientCertType: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   EAP: (!chrome.networkingPrivate.ManagedEAPProperties|undefined),
  *   Group: (!chrome.networkingPrivate.ManagedDOMString|undefined),
- *   IKEVersion: !chrome.networkingPrivate.ManagedLong,
+ *   IKEVersion: (!chrome.networkingPrivate.ManagedLong|undefined),
  *   PSK: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   SaveCredentials: (!chrome.networkingPrivate.ManagedBoolean|undefined),
  *   ServerCARefs: (!chrome.networkingPrivate.ManagedDOMStringList|undefined),
@@ -595,11 +595,11 @@ chrome.networkingPrivate.OpenVPNProperties;
  *   Proto: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   PushPeerInfo: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   RemoteCertEKU: (!chrome.networkingPrivate.ManagedDOMString|undefined),
- *   RemoteCertKU: (!Array<!chrome.networkingPrivate.ManagedDOMString>|undefined),
+ *   RemoteCertKU: (!chrome.networkingPrivate.ManagedDOMStringList|undefined),
  *   RemoteCertTLS: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   RenegSec: (!chrome.networkingPrivate.ManagedLong|undefined),
  *   SaveCredentials: (!chrome.networkingPrivate.ManagedBoolean|undefined),
- *   ServerCARefs: (!Array<!chrome.networkingPrivate.ManagedDOMString>|undefined),
+ *   ServerCARefs: (!chrome.networkingPrivate.ManagedDOMStringList|undefined),
  *   ServerCertRef: (!chrome.networkingPrivate.ManagedDOMString|undefined),
  *   ServerPollTimeout: (!chrome.networkingPrivate.ManagedLong|undefined),
  *   Shaper: (!chrome.networkingPrivate.ManagedLong|undefined),
@@ -674,6 +674,7 @@ chrome.networkingPrivate.ManagedThirdPartyVPNProperties;
  *   ServingOperator: (!chrome.networkingPrivate.CellularProviderProperties|undefined),
  *   SIMLockStatus: (!chrome.networkingPrivate.SIMLockStatus|undefined),
  *   SIMPresent: (boolean|undefined),
+ *   SignalStrength: (number|undefined),
  *   SupportNetworkScan: (boolean|undefined),
  *   SupportedCarriers: (!Array<string>|undefined)
  * }}
@@ -711,6 +712,7 @@ chrome.networkingPrivate.CellularProperties;
  *   ServingOperator: (!chrome.networkingPrivate.CellularProviderProperties|undefined),
  *   SIMLockStatus: (!chrome.networkingPrivate.SIMLockStatus|undefined),
  *   SIMPresent: (boolean|undefined),
+ *   SignalStrength: (number|undefined),
  *   SupportNetworkScan: (boolean|undefined),
  *   SupportedCarriers: (!Array<string>|undefined)
  * }}
@@ -838,6 +840,8 @@ chrome.networkingPrivate.ManagedWiFiProperties;
 
 /**
  * @typedef {{
+ *   BSSID: (string|undefined),
+ *   Frequency: (number|undefined),
  *   Security: string,
  *   SignalStrength: (number|undefined)
  * }}
@@ -1006,6 +1010,15 @@ chrome.networkingPrivate.VerificationProperties;
  * @see https://developer.chrome.com/extensions/networkingPrivate#type-NetworkFilter
  */
 chrome.networkingPrivate.NetworkFilter;
+
+/**
+ * @typedef {{
+ *   AllowOnlyPolicyNetworksToAutoconnect: (boolean|undefined),
+ *   AllowOnlyPolicyNetworksToConnect: (boolean|undefined)
+ * }}
+ * @see https://developer.chrome.com/extensions/networkingPrivate#type-GlobalPolicy
+ */
+chrome.networkingPrivate.GlobalPolicy;
 
 /**
  * Gets all the properties of the network with id networkGuid. Includes all
@@ -1260,6 +1273,7 @@ chrome.networkingPrivate.getCaptivePortalStatus = function(networkGuid, callback
  * succeeds (|puk| is valid), the PIN will be set to |pin|.   (If |pin| is empty
  * or invalid the operation will fail).
  * @param {string} networkGuid The GUID of the cellular network to unlock.
+ *     If empty, the default cellular device will be used.
  * @param {string} pin The current SIM PIN, or the new PIN if PUK is provided.
  * @param {string=} puk The operator provided PUK for unblocking a blocked SIM.
  * @param {function():void=} callback Called when the operation has completed.
@@ -1276,13 +1290,21 @@ chrome.networkingPrivate.unlockCellularSim = function(networkGuid, pin, puk, cal
  * unlockCellularSim() before this can be called (otherwise it will fail and
  * chrome.runtime.lastError will be set to Error.SimLocked).
  * @param {string} networkGuid The GUID of the cellular network to set the SIM
- *     state of.
+ *     state of.     If empty, the default cellular device will be used.
  * @param {!chrome.networkingPrivate.CellularSimState} simState The SIM state to
  *     set.
  * @param {function():void=} callback Called when the operation has completed.
  * @see https://developer.chrome.com/extensions/networkingPrivate#method-setCellularSimState
  */
 chrome.networkingPrivate.setCellularSimState = function(networkGuid, simState, callback) {};
+
+/**
+ * Gets the global policy properties. These properties are not expected to
+ * change during a session.
+ * @param {function(!chrome.networkingPrivate.GlobalPolicy):void} callback
+ * @see https://developer.chrome.com/extensions/networkingPrivate#method-getGlobalPolicy
+ */
+chrome.networkingPrivate.getGlobalPolicy = function(callback) {};
 
 /**
  * Fired when the properties change on any of the networks.  Sends a list of

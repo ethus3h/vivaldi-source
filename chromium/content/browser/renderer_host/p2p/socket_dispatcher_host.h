@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/network_change_notifier.h"
 
@@ -65,7 +67,7 @@ class P2PSocketDispatcherHost
   friend struct BrowserThread::DeleteOnThread<BrowserThread::IO>;
   friend class base::DeleteHelper<P2PSocketDispatcherHost>;
 
-  typedef std::map<int, P2PSocketHost*> SocketsMap;
+  typedef std::map<int, std::unique_ptr<P2PSocketHost>> SocketsMap;
 
   class DnsRequest;
 
@@ -79,6 +81,7 @@ class P2PSocketDispatcherHost
   void OnCreateSocket(P2PSocketType type,
                       int socket_id,
                       const net::IPEndPoint& local_address,
+                      const P2PPortRange& port_range,
                       const P2PHostAndIPEndPoint& remote_address);
   void OnAcceptIncomingTcpConnection(int listen_socket_id,
                                      const net::IPEndPoint& remote_address,
@@ -93,13 +96,13 @@ class P2PSocketDispatcherHost
 
   void DoGetNetworkList();
   void SendNetworkList(const net::NetworkInterfaceList& list,
-                       const net::IPAddressNumber& default_ipv4_local_address,
-                       const net::IPAddressNumber& default_ipv6_local_address);
+                       const net::IPAddress& default_ipv4_local_address,
+                       const net::IPAddress& default_ipv6_local_address);
 
   // This connects a UDP socket to a public IP address and gets local
   // address. Since it binds to the "any" address (0.0.0.0 or ::) internally, it
   // retrieves the default local address.
-  net::IPAddressNumber GetDefaultLocalAddress(int family);
+  net::IPAddress GetDefaultLocalAddress(int family);
 
   void OnAddressResolved(DnsRequest* request,
                          const net::IPAddressList& addresses);
@@ -113,11 +116,11 @@ class P2PSocketDispatcherHost
 
   bool monitoring_networks_;
 
-  std::set<DnsRequest*> dns_requests_;
+  std::set<std::unique_ptr<DnsRequest>> dns_requests_;
   P2PMessageThrottler throttler_;
 
-  net::IPAddressNumber default_ipv4_local_address_;
-  net::IPAddressNumber default_ipv6_local_address_;
+  net::IPAddress default_ipv4_local_address_;
+  net::IPAddress default_ipv6_local_address_;
 
   bool dump_incoming_rtp_packet_;
   bool dump_outgoing_rtp_packet_;

@@ -9,7 +9,6 @@
 #include <stdint.h>
 
 #include "base/containers/stack_container.h"
-#include "base/memory/scoped_vector.h"
 #include "ui/events/gesture_detection/gesture_detection_export.h"
 #include "ui/events/gesture_detection/motion_event.h"
 
@@ -19,6 +18,7 @@ struct GESTURE_DETECTION_EXPORT PointerProperties {
   PointerProperties();
   PointerProperties(float x, float y, float touch_major);
   PointerProperties(const MotionEvent& event, size_t pointer_index);
+  PointerProperties(const PointerProperties& other);
 
   // Sets |touch_major|, |touch_minor|, and |orientation| from the given radius
   // and rotation angle (in degrees).
@@ -93,7 +93,7 @@ class GESTURE_DETECTION_EXPORT MotionEventGeneric : public MotionEvent {
 
   // Add an event to the history. |this| and |event| must have the same pointer
   // count and must both have an action of ACTION_MOVE.
-  void PushHistoricalEvent(scoped_ptr<MotionEvent> event);
+  void PushHistoricalEvent(std::unique_ptr<MotionEvent> event);
 
   void set_action(Action action) { action_ = action; }
   void set_event_time(base::TimeTicks event_time) { event_time_ = event_time; }
@@ -104,8 +104,10 @@ class GESTURE_DETECTION_EXPORT MotionEventGeneric : public MotionEvent {
   void set_button_state(int button_state) { button_state_ = button_state; }
   void set_flags(int flags) { flags_ = flags; }
 
-  static scoped_ptr<MotionEventGeneric> CloneEvent(const MotionEvent& event);
-  static scoped_ptr<MotionEventGeneric> CancelEvent(const MotionEvent& event);
+  static std::unique_ptr<MotionEventGeneric> CloneEvent(
+      const MotionEvent& event);
+  static std::unique_ptr<MotionEventGeneric> CancelEvent(
+      const MotionEvent& event);
 
  protected:
   MotionEventGeneric();
@@ -124,7 +126,7 @@ class GESTURE_DETECTION_EXPORT MotionEventGeneric : public MotionEvent {
   int button_state_;
   int flags_;
   base::StackVector<PointerProperties, kTypicalMaxPointerCount> pointers_;
-  ScopedVector<MotionEvent> historical_events_;
+  std::vector<std::unique_ptr<MotionEvent>> historical_events_;
 };
 
 }  // namespace ui

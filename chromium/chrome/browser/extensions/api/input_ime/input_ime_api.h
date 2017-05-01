@@ -15,14 +15,15 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/input_method/input_method_engine_base.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "content/public/browser/notification_observer.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
-#include "ui/base/ime/ime_engine_observer.h"
 #include "ui/base/ime/text_input_flags.h"
 
 #if defined(OS_CHROMEOS)
@@ -33,23 +34,26 @@
 
 class Profile;
 
+namespace content {
+class NotificationRegistrar;
+}
+
 namespace ui {
 class IMEEngineHandlerInterface;
-class IMEEngineObserver;
 
-class ImeObserver : public IMEEngineObserver {
+class ImeObserver : public input_method::InputMethodEngineBase::Observer {
  public:
   ImeObserver(const std::string& extension_id, Profile* profile);
 
   ~ImeObserver() override {}
 
-  // IMEEngineObserver overrides.
+  // input_method::InputMethodEngineBase::Observer overrides.
   void OnActivate(const std::string& component_id) override;
   void OnFocus(const IMEEngineHandlerInterface::InputContext& context) override;
   void OnBlur(int context_id) override;
   void OnKeyEvent(
       const std::string& component_id,
-      const IMEEngineHandlerInterface::KeyboardEvent& event,
+      const input_method::InputMethodEngineBase::KeyboardEvent& event,
       IMEEngineHandlerInterface::KeyEventDoneCallback& key_data) override;
   void OnReset(const std::string& component_id) override;
   void OnDeactivated(const std::string& component_id) override;
@@ -61,6 +65,7 @@ class ImeObserver : public IMEEngineObserver {
                                 int cursor_pos,
                                 int anchor_pos,
                                 int offset_pos) override;
+  void OnRequestEngineSwitch() override {};
 
  protected:
   // Helper function used to forward the given event to the |profile_|'s event
@@ -68,7 +73,7 @@ class ImeObserver : public IMEEngineObserver {
   virtual void DispatchEventToExtension(
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      scoped_ptr<base::ListValue> args) = 0;
+      std::unique_ptr<base::ListValue> args) = 0;
 
   // Returns the type of the current screen.
   virtual std::string GetCurrentScreenType() = 0;
@@ -106,6 +111,7 @@ class InputImeEventRouterFactory {
  public:
   static InputImeEventRouterFactory* GetInstance();
   InputImeEventRouter* GetRouter(Profile* profile);
+  void RemoveProfile(Profile* profile);
 
  private:
   friend struct base::DefaultSingletonTraits<InputImeEventRouterFactory>;
@@ -117,7 +123,7 @@ class InputImeEventRouterFactory {
   DISALLOW_COPY_AND_ASSIGN(InputImeEventRouterFactory);
 };
 
-class InputImeKeyEventHandledFunction : public AsyncExtensionFunction {
+class InputImeKeyEventHandledFunction : public UIThreadExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("input.ime.keyEventHandled",
                              INPUT_IME_KEYEVENTHANDLED)
@@ -125,13 +131,48 @@ class InputImeKeyEventHandledFunction : public AsyncExtensionFunction {
  protected:
   ~InputImeKeyEventHandledFunction() override {}
 
-  // ExtensionFunction:
-  bool RunAsync() override;
+  // UIThreadExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class InputImeSetCompositionFunction : public UIThreadExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("input.ime.setComposition",
+                             INPUT_IME_SETCOMPOSITION)
+
+ protected:
+  ~InputImeSetCompositionFunction() override {}
+
+  // UIThreadExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class InputImeCommitTextFunction : public UIThreadExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("input.ime.commitText", INPUT_IME_COMMITTEXT)
+
+ protected:
+  ~InputImeCommitTextFunction() override {}
+
+  // UIThreadExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class InputImeSendKeyEventsFunction : public UIThreadExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("input.ime.sendKeyEvents", INPUT_IME_SENDKEYEVENTS)
+
+ protected:
+  ~InputImeSendKeyEventsFunction() override {}
+
+  // UIThreadExtensionFunction:
+  ResponseAction Run() override;
 };
 
 class InputImeAPI : public BrowserContextKeyedAPI,
                     public ExtensionRegistryObserver,
-                    public EventRouter::Observer {
+                    public EventRouter::Observer,
+                    public content::NotificationObserver {
  public:
   explicit InputImeAPI(content::BrowserContext* context);
   ~InputImeAPI() override;
@@ -149,6 +190,11 @@ class InputImeAPI : public BrowserContextKeyedAPI,
   // EventRouter::Observer implementation.
   void OnListenerAdded(const EventListenerInfo& details) override;
 
+  // content::NotificationObserver:
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
+
  private:
   friend class BrowserContextKeyedAPIFactory<InputImeAPI>;
   InputImeEventRouter* input_ime_event_router();
@@ -164,6 +210,8 @@ class InputImeAPI : public BrowserContextKeyedAPI,
   // Listen to extension load, unloaded notifications.
   ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observer_;
+
+  content::NotificationRegistrar registrar_;
 };
 
 InputImeEventRouter* GetInputImeEventRouter(Profile* profile);

@@ -6,21 +6,22 @@
 
 #include <stddef.h>
 
-#include "base/metrics/field_trial.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/bind.h"
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/fallback_icon_service_factory.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
 #include "chrome/browser/history/top_sites_factory.h"
+#include "chrome/browser/ntp_tiles/chrome_most_visited_sites_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_io_context.h"
 #include "chrome/browser/search/instant_service_observer.h"
 #include "chrome/browser/search/most_visited_iframe_source.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/search/suggestions/image_decoder_impl.h"
 #include "chrome/browser/search/suggestions/suggestions_service_factory.h"
-#include "chrome/browser/search/suggestions/suggestions_source.h"
 #include "chrome/browser/search/thumbnail_source.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
@@ -31,10 +32,13 @@
 #include "chrome/browser/ui/webui/large_icon_source.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/favicon/core/fallback_icon_service.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "components/history/core/browser/top_sites.h"
+#include "components/image_fetcher/image_fetcher_impl.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/ntp_tiles/icon_cacher.h"
 #include "components/search/search.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browser_thread.h"
@@ -42,40 +46,27 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/url_data_source.h"
-#include "content/public/common/url_constants.h"
-#include "grit/theme_resources.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image_skia.h"
-#include "url/url_constants.h"
 
 #if !defined(OS_ANDROID)
 #include "chrome/browser/search/local_ntp_source.h"
-#endif
-
-#if defined(ENABLE_THEMES)
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#endif  // defined(ENABLE_THEMES)
+#endif
 
 namespace {
 
-const char kLocalNTPSuggestionService[] = "LocalNTPSuggestionsService";
-const char kLocalNTPSuggestionServiceEnabled[] = "Enabled";
-
-bool IsLocalNTPSuggestionServiceEnabled() {
-  return base::StartsWith(
-      base::FieldTrialList::FindFullName(kLocalNTPSuggestionService),
-      kLocalNTPSuggestionServiceEnabled, base::CompareCase::INSENSITIVE_ASCII);
-}
+const base::Feature kNtpTilesFeature{"NTPTilesInInstantService",
+                                     base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace
 
 InstantService::InstantService(Profile* profile)
     : profile_(profile),
       template_url_service_(TemplateURLServiceFactory::GetForProfile(profile_)),
-      suggestions_service_(NULL),
       weak_ptr_factory_(this) {
   // The initialization below depends on a typical set of browser threads. Skip
   // it if we are running in a unit test without the full suite.
@@ -100,7 +91,7 @@ InstantService::InstantService(Profile* profile)
     }
   }
 
-  ResetInstantSearchPrerenderer();
+  ResetInstantSearchPrerendererIfNecessary();
 
   registrar_.Add(this,
                  content::NOTIFICATION_RENDERER_PROCESS_CREATED,
@@ -109,10 +100,19 @@ InstantService::InstantService(Profile* profile)
                  content::NOTIFICATION_RENDERER_PROCESS_TERMINATED,
                  content::NotificationService::AllSources());
 
-  scoped_refptr<history::TopSites> top_sites =
-      TopSitesFactory::GetForProfile(profile_);
-  if (top_sites)
-    top_sites->AddObserver(this);
+  if (base::FeatureList::IsEnabled(kNtpTilesFeature)) {
+    most_visited_sites_ =
+        ChromeMostVisitedSitesFactory::NewForProfile(profile_);
+    most_visited_sites_->SetMostVisitedURLsObserver(this, 8);
+  } else {
+    top_sites_ = TopSitesFactory::GetForProfile(profile_);
+    if (top_sites_) {
+      top_sites_->AddObserver(this);
+      // Immediately query the TopSites state.
+      TopSitesChanged(top_sites_.get(),
+                      history::TopSitesObserver::ChangeReason::MOST_VISITED);
+    }
+  }
 
   if (profile_ && profile_->GetResourceContext()) {
     content::BrowserThread::PostTask(
@@ -122,18 +122,15 @@ InstantService::InstantService(Profile* profile)
   }
 
   // Set up the data sources that Instant uses on the NTP.
-#if defined(ENABLE_THEMES)
+  // TODO(aurimas) remove this #if once instant_service.cc is no longer compiled
+  // on Android.
+#if !defined(OS_ANDROID)
   // Listen for theme installation.
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
                  content::Source<ThemeService>(
                      ThemeServiceFactory::GetForProfile(profile_)));
 
   content::URLDataSource::Add(profile_, new ThemeSource(profile_));
-#endif  // defined(ENABLE_THEMES)
-
-  // TODO(aurimas) remove this #if once instant_service.cc is no longer compiled
-  // on Android.
-#if !defined(OS_ANDROID)
   content::URLDataSource::Add(profile_, new LocalNtpSource(profile_));
   content::URLDataSource::Add(profile_, new ThumbnailSource(profile_, false));
   content::URLDataSource::Add(profile_, new ThumbnailSource(profile_, true));
@@ -151,20 +148,6 @@ InstantService::InstantService(Profile* profile)
   content::URLDataSource::Add(
       profile_, new LargeIconSource(fallback_icon_service, large_icon_service));
   content::URLDataSource::Add(profile_, new MostVisitedIframeSource());
-  content::URLDataSource::Add(
-      profile_, new suggestions::SuggestionsSource(profile_));
-
-  if (IsLocalNTPSuggestionServiceEnabled()) {
-    suggestions_service_ =
-        suggestions::SuggestionsServiceFactory::GetForProfile(profile_);
-  }
-
-  if (suggestions_service_) {
-    suggestions_service_->FetchSuggestionsData(
-        suggestions::INITIALIZED_ENABLED_HISTORY,
-        base::Bind(&InstantService::OnSuggestionsAvailable,
-                   weak_ptr_factory_.GetWeakPtr()));
-  }
 }
 
 InstantService::~InstantService() {
@@ -195,62 +178,65 @@ void InstantService::RemoveObserver(InstantServiceObserver* observer) {
   observers_.RemoveObserver(observer);
 }
 
-void InstantService::DeleteMostVisitedItem(const GURL& url) {
-  scoped_refptr<history::TopSites> top_sites =
-      TopSitesFactory::GetForProfile(profile_);
-  if (top_sites)
-    top_sites->AddBlacklistedURL(url);
+void InstantService::OnNewTabPageOpened() {
+  if (most_visited_sites_) {
+    most_visited_sites_->Refresh();
+  } else if (top_sites_) {
+    top_sites_->SyncWithHistory();
+  }
+}
 
-  if (suggestions_service_) {
-    suggestions_service_->BlacklistURL(
-        url, base::Bind(&InstantService::OnSuggestionsAvailable,
-                        weak_ptr_factory_.GetWeakPtr()),
-        base::Closure());
+void InstantService::DeleteMostVisitedItem(const GURL& url) {
+  if (most_visited_sites_) {
+    most_visited_sites_->AddOrRemoveBlacklistedUrl(url, true);
+  } else if (top_sites_) {
+    top_sites_->AddBlacklistedURL(url);
   }
 }
 
 void InstantService::UndoMostVisitedDeletion(const GURL& url) {
-  scoped_refptr<history::TopSites> top_sites =
-      TopSitesFactory::GetForProfile(profile_);
-  if (top_sites)
-    top_sites->RemoveBlacklistedURL(url);
-
-  if (suggestions_service_) {
-    suggestions_service_->UndoBlacklistURL(
-        url, base::Bind(&InstantService::OnSuggestionsAvailable,
-                        weak_ptr_factory_.GetWeakPtr()),
-        base::Closure());
+  if (most_visited_sites_) {
+    most_visited_sites_->AddOrRemoveBlacklistedUrl(url, false);
+  } else if (top_sites_) {
+    top_sites_->RemoveBlacklistedURL(url);
   }
 }
 
 void InstantService::UndoAllMostVisitedDeletions() {
-  scoped_refptr<history::TopSites> top_sites =
-      TopSitesFactory::GetForProfile(profile_);
-  if (top_sites)
-    top_sites->ClearBlacklistedURLs();
-
-  if (suggestions_service_) {
-    suggestions_service_->ClearBlacklist(
-        base::Bind(&InstantService::OnSuggestionsAvailable,
-                   weak_ptr_factory_.GetWeakPtr()));
+  if (most_visited_sites_) {
+    most_visited_sites_->ClearBlacklistedUrls();
+  } else if (top_sites_) {
+    top_sites_->ClearBlacklistedURLs();
   }
 }
 
 void InstantService::UpdateThemeInfo() {
-#if defined(ENABLE_THEMES)
+#if !defined(OS_ANDROID)
   // Update theme background info.
   // Initialize |theme_info| if necessary.
   if (!theme_info_) {
     OnThemeChanged();
   } else {
-    FOR_EACH_OBSERVER(InstantServiceObserver, observers_,
-                      ThemeInfoChanged(*theme_info_));
+    for (InstantServiceObserver& observer : observers_)
+      observer.ThemeInfoChanged(*theme_info_);
   }
-#endif  // defined(ENABLE_THEMES)
+#endif  // !defined(OS_ANDROID)
 }
 
 void InstantService::UpdateMostVisitedItemsInfo() {
   NotifyAboutMostVisitedItems();
+}
+
+void InstantService::SendSearchURLsToRenderer(content::RenderProcessHost* rph) {
+  rph->Send(new ChromeViewMsg_SetSearchURLs(
+      search::GetSearchURLs(profile_), search::GetNewTabPageURL(profile_)));
+}
+
+InstantSearchPrerenderer* InstantService::GetInstantSearchPrerenderer() {
+  // The Instant prefetch base URL may have changed (see e.g. crbug.com/660923).
+  // If so, recreate the prerenderer.
+  ResetInstantSearchPrerendererIfNecessary();
+  return instant_prerenderer_.get();
 }
 
 void InstantService::Shutdown() {
@@ -263,10 +249,12 @@ void InstantService::Shutdown() {
                    instant_io_context_));
   }
 
-  scoped_refptr<history::TopSites> top_sites =
-      TopSitesFactory::GetForProfile(profile_);
-  if (top_sites)
-    top_sites->RemoveObserver(this);
+  if (most_visited_sites_) {
+    most_visited_sites_.reset();
+  } else if (top_sites_) {
+    top_sites_->RemoveObserver(this);
+    top_sites_ = nullptr;
+  }
 
   instant_io_context_ = NULL;
 }
@@ -283,43 +271,14 @@ void InstantService::Observe(int type,
       OnRendererProcessTerminated(
           content::Source<content::RenderProcessHost>(source)->GetID());
       break;
-#if defined(ENABLE_THEMES)
+#if !defined(OS_ANDROID)
     case chrome::NOTIFICATION_BROWSER_THEME_CHANGED:
       OnThemeChanged();
       break;
-#endif  // defined(ENABLE_THEMES)
+#endif  // !defined(OS_ANDROID)
     default:
       NOTREACHED() << "Unexpected notification type in InstantService.";
   }
-}
-
-void InstantService::SendSearchURLsToRenderer(content::RenderProcessHost* rph) {
-  rph->Send(new ChromeViewMsg_SetSearchURLs(
-      search::GetSearchURLs(profile_), search::GetNewTabPageURL(profile_)));
-}
-
-bool InstantService::IsValidURLForNavigation(const GURL& url) const {
-  // Certain URLs are privileged and should never be considered valid
-  // navigation targets.
-  // TODO(treib): Ideally this should deny by default and only allow if the
-  // scheme passes the content::ChildProcessSecurityPolicy::IsWebSafeScheme()
-  // check.
-  if (url.SchemeIs(content::kChromeUIScheme))
-    return false;
-
-  // javascript: URLs never make sense as a most visited item either.
-  if (url.SchemeIs(url::kJavaScriptScheme))
-    return false;
-
-  for (const auto& item : most_visited_items_) {
-    if (item.url == url)
-      return true;
-  }
-  for (const auto& item : suggestions_items_) {
-    if (item.url == url)
-      return true;
-  }
-  return false;
 }
 
 void InstantService::OnRendererProcessTerminated(int process_id) {
@@ -333,62 +292,45 @@ void InstantService::OnRendererProcessTerminated(int process_id) {
   }
 }
 
-void InstantService::OnSuggestionsAvailable(
-    const suggestions::SuggestionsProfile& profile) {
-  std::vector<InstantMostVisitedItem> new_suggestions_items;
-  for (int i = 0; i < profile.suggestions_size(); ++i) {
-    const suggestions::ChromeSuggestion& suggestion = profile.suggestions(i);
-
-    InstantMostVisitedItem item;
-    item.url = GURL(suggestion.url());
-    item.title = base::UTF8ToUTF16(suggestion.title());
-    if (suggestion.has_thumbnail()) {
-      item.thumbnail = GURL(suggestion.thumbnail());
-    }
-    if (suggestion.has_favicon_url()) {
-      item.favicon = GURL(suggestion.favicon_url());
-    }
-    if (suggestion.has_impression_url()) {
-      item.impression_url = GURL(suggestion.impression_url());
-    }
-    if (suggestion.has_click_url()) {
-      item.click_url = GURL(suggestion.click_url());
-    }
-    item.is_server_side_suggestion = true;
-    new_suggestions_items.push_back(item);
-  }
-  suggestions_items_ = new_suggestions_items;
-  NotifyAboutMostVisitedItems();
-}
-
-void InstantService::OnMostVisitedItemsReceived(
+void InstantService::OnTopSitesReceived(
     const history::MostVisitedURLList& data) {
-  history::MostVisitedURLList reordered_data(data);
-  std::vector<InstantMostVisitedItem> new_most_visited_items;
-  for (size_t i = 0; i < reordered_data.size(); i++) {
-    const history::MostVisitedURL& url = reordered_data[i];
+  most_visited_items_.clear();
+  for (const history::MostVisitedURL& mv_url : data) {
     InstantMostVisitedItem item;
-    item.url = url.url;
-    item.title = url.title;
-    item.is_server_side_suggestion = false;
-    new_most_visited_items.push_back(item);
+    item.url = mv_url.url;
+    item.title = mv_url.title;
+    item.source = ntp_tiles::NTPTileSource::TOP_SITES;
+    most_visited_items_.push_back(item);
   }
 
-  most_visited_items_ = new_most_visited_items;
   NotifyAboutMostVisitedItems();
 }
+
+void InstantService::OnMostVisitedURLsAvailable(
+    const ntp_tiles::NTPTilesVector& tiles) {
+  DCHECK(most_visited_sites_);
+  most_visited_items_.clear();
+  for (const ntp_tiles::NTPTile& tile : tiles) {
+    InstantMostVisitedItem item;
+    item.url = tile.url;
+    item.title = tile.title;
+    item.thumbnail = tile.thumbnail_url;
+    item.favicon = tile.favicon_url;
+    item.source = tile.source;
+    most_visited_items_.push_back(item);
+  }
+
+  NotifyAboutMostVisitedItems();
+}
+
+void InstantService::OnIconMadeAvailable(const GURL& site_url) {}
 
 void InstantService::NotifyAboutMostVisitedItems() {
-  if (suggestions_service_ && !suggestions_items_.empty()) {
-    FOR_EACH_OBSERVER(InstantServiceObserver, observers_,
-                      MostVisitedItemsChanged(suggestions_items_));
-  } else {
-    FOR_EACH_OBSERVER(InstantServiceObserver, observers_,
-                      MostVisitedItemsChanged(most_visited_items_));
-  }
+  for (InstantServiceObserver& observer : observers_)
+    observer.MostVisitedItemsChanged(most_visited_items_);
 }
 
-#if defined(ENABLE_THEMES)
+#if !defined(OS_ANDROID)
 
 namespace {
 
@@ -476,7 +418,7 @@ void InstantService::OnThemeChanged() {
     else
       theme_info_->image_vertical_alignment = THEME_BKGRND_IMAGE_ALIGN_CENTER;
 
-    // Set theme backgorund image tiling.
+    // Set theme background image tiling.
     int tiling = theme_provider.GetDisplayProperty(
         ThemeProperties::NTP_BACKGROUND_TILING);
     switch (tiling) {
@@ -504,10 +446,10 @@ void InstantService::OnThemeChanged() {
         theme_provider.HasCustomImage(IDR_THEME_NTP_ATTRIBUTION);
   }
 
-  FOR_EACH_OBSERVER(InstantServiceObserver, observers_,
-                    ThemeInfoChanged(*theme_info_));
+  for (InstantServiceObserver& observer : observers_)
+    observer.ThemeInfoChanged(*theme_info_);
 }
-#endif  // defined(ENABLE_THEMES)
+#endif  // !defined(OS_ANDROID)
 
 void InstantService::OnTemplateURLServiceChanged() {
   // Check whether the default search provider was changed.
@@ -529,38 +471,43 @@ void InstantService::OnTemplateURLServiceChanged() {
   GURL google_base_url(UIThreadSearchTermsData(profile_).GoogleBaseURLValue());
   if (google_base_url != previous_google_base_url_) {
     previous_google_base_url_ = google_base_url;
-    if (template_url && template_url->HasGoogleBaseURLs(
-            UIThreadSearchTermsData(profile_)))
+    if (template_url &&
+        template_url->HasGoogleBaseURLs(UIThreadSearchTermsData(profile_))) {
       google_base_url_domain_changed = true;
+    }
   }
 
   if (default_search_provider_changed || google_base_url_domain_changed) {
-    ResetInstantSearchPrerenderer();
-    FOR_EACH_OBSERVER(
-        InstantServiceObserver, observers_,
-        DefaultSearchProviderChanged(google_base_url_domain_changed));
+    ResetInstantSearchPrerendererIfNecessary();
+    for (InstantServiceObserver& observer : observers_)
+      observer.DefaultSearchProviderChanged(google_base_url_domain_changed);
   }
 }
 
 void InstantService::TopSitesLoaded(history::TopSites* top_sites) {
+  DCHECK(!most_visited_sites_);
+  DCHECK_EQ(top_sites_.get(), top_sites);
 }
 
 void InstantService::TopSitesChanged(history::TopSites* top_sites,
                                      ChangeReason change_reason) {
+  DCHECK(!most_visited_sites_);
+  DCHECK_EQ(top_sites_.get(), top_sites);
   // As forced urls already come from tiles, we can safely ignore those updates.
   if (change_reason == history::TopSitesObserver::ChangeReason::FORCED_URL)
     return;
-  top_sites->GetMostVisitedURLs(
-      base::Bind(&InstantService::OnMostVisitedItemsReceived,
-                 weak_ptr_factory_.GetWeakPtr()),
-      false);
+  top_sites_->GetMostVisitedURLs(base::Bind(&InstantService::OnTopSitesReceived,
+                                            weak_ptr_factory_.GetWeakPtr()),
+                                 false);
 }
 
-void InstantService::ResetInstantSearchPrerenderer() {
+void InstantService::ResetInstantSearchPrerendererIfNecessary() {
   if (!search::ShouldPrefetchSearchResults())
     return;
 
   GURL url(search::GetSearchResultPrefetchBaseURL(profile_));
-  instant_prerenderer_.reset(
-      url.is_valid() ? new InstantSearchPrerenderer(profile_, url) : NULL);
+  if (!instant_prerenderer_ || instant_prerenderer_->prerender_url() != url) {
+    instant_prerenderer_.reset(
+        url.is_valid() ? new InstantSearchPrerenderer(profile_, url) : nullptr);
+  }
 }

@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/rand_util.h"
 #include "base/values.h"
@@ -48,7 +48,7 @@ DomainReliabilityContext::DomainReliabilityContext(
     const base::TimeTicks* last_network_change_time,
     DomainReliabilityDispatcher* dispatcher,
     DomainReliabilityUploader* uploader,
-    scoped_ptr<const DomainReliabilityConfig> config)
+    std::unique_ptr<const DomainReliabilityConfig> config)
     : config_(std::move(config)),
       time_(time),
       upload_reporter_string_(upload_reporter_string),
@@ -67,10 +67,12 @@ DomainReliabilityContext::~DomainReliabilityContext() {
   ClearBeacons();
 }
 
-void DomainReliabilityContext::OnBeacon(
-    scoped_ptr<DomainReliabilityBeacon> beacon) {
+bool DomainReliabilityContext::OnBeacon(
+    std::unique_ptr<DomainReliabilityBeacon> beacon) {
   bool success = (beacon->status == "ok");
-  double sample_rate = config().GetSampleRate(success);
+  double sample_rate = beacon->details.quic_port_migration_detected
+                           ? 1.0
+                           : config().GetSampleRate(success);
   bool should_report = base::RandDouble() < sample_rate;
   UMA_HISTOGRAM_BOOLEAN("DomainReliability.BeaconReported", should_report);
   if (!should_report) {
@@ -78,7 +80,7 @@ void DomainReliabilityContext::OnBeacon(
     // an older beacon. (This histogram is also logged below based on whether
     // an older beacon was actually evicted.)
     LogOnBeaconDidEvictHistogram(false);
-    return;
+    return false;
   }
   beacon->sample_rate = sample_rate;
 
@@ -89,27 +91,37 @@ void DomainReliabilityContext::OnBeacon(
         "DomainReliability.ReportedBeaconError_HasServerIP",
         -beacon->chrome_error);
   }
-  // TODO(ttuttle): Histogram HTTP response code?
+  UMA_HISTOGRAM_COUNTS_100("DomainReliability.ReportedBeaconUploadDepth",
+                           beacon->upload_depth);
+  // TODO(juliatuttle): Histogram HTTP response code?
 
   // Allow beacons about reports, but don't schedule an upload for more than
   // one layer of recursion, to avoid infinite report loops.
   if (beacon->upload_depth <= kMaxUploadDepthToSchedule)
     scheduler_.OnBeaconAdded();
-  beacons_.push_back(beacon.release());
+  beacons_.push_back(std::move(beacon));
   bool should_evict = beacons_.size() > kMaxQueuedBeacons;
   if (should_evict)
     RemoveOldestBeacon();
 
   LogOnBeaconDidEvictHistogram(should_evict);
+
+  base::TimeTicks now = base::TimeTicks::Now();
+  if (last_queued_beacon_time_ != base::TimeTicks()) {
+    UMA_HISTOGRAM_LONG_TIMES("DomainReliability.BeaconInterval",
+                             now - last_queued_beacon_time_);
+  }
+  last_queued_beacon_time_ = now;
+
+  return true;
 }
 
 void DomainReliabilityContext::ClearBeacons() {
-  STLDeleteElements(&beacons_);
   beacons_.clear();
   uploading_beacons_size_ = 0;
 }
 
-scoped_ptr<Value> DomainReliabilityContext::GetWebUIData() const {
+std::unique_ptr<Value> DomainReliabilityContext::GetWebUIData() const {
   DictionaryValue* context_value = new DictionaryValue();
 
   context_value->SetString("origin", config().origin.spec());
@@ -118,14 +130,16 @@ scoped_ptr<Value> DomainReliabilityContext::GetWebUIData() const {
       static_cast<int>(uploading_beacons_size_));
   context_value->Set("scheduler", scheduler_.GetWebUIData());
 
-  return scoped_ptr<Value>(context_value);
+  return std::unique_ptr<Value>(context_value);
 }
 
 void DomainReliabilityContext::GetQueuedBeaconsForTesting(
     std::vector<const DomainReliabilityBeacon*>* beacons_out) const {
   DCHECK(this);
   DCHECK(beacons_out);
-  beacons_out->assign(beacons_.begin(), beacons_.end());
+  beacons_out->clear();
+  for (const auto& beacon : beacons_)
+    beacons_out->push_back(beacon.get());
 }
 
 void DomainReliabilityContext::ScheduleUpload(
@@ -140,6 +154,10 @@ void DomainReliabilityContext::ScheduleUpload(
 }
 
 void DomainReliabilityContext::StartUpload() {
+  RemoveExpiredBeacons();
+  if (beacons_.empty())
+    return;
+
   MarkUpload();
 
   size_t collector_index = scheduler_.OnUploadStart();
@@ -195,13 +213,13 @@ void DomainReliabilityContext::OnUploadComplete(
   upload_time_ = base::TimeTicks();
 }
 
-scoped_ptr<const Value> DomainReliabilityContext::CreateReport(
+std::unique_ptr<const Value> DomainReliabilityContext::CreateReport(
     base::TimeTicks upload_time,
     const GURL& collector_url,
     int* max_upload_depth_out) const {
   int max_upload_depth = 0;
 
-  scoped_ptr<ListValue> beacons_value(new ListValue());
+  std::unique_ptr<ListValue> beacons_value(new ListValue());
   for (const auto& beacon : beacons_) {
     beacons_value->Append(beacon->ToValue(upload_time,
                                           *last_network_change_time_,
@@ -211,7 +229,7 @@ scoped_ptr<const Value> DomainReliabilityContext::CreateReport(
       max_upload_depth = beacon->upload_depth;
   }
 
-  scoped_ptr<DictionaryValue> report_value(new DictionaryValue());
+  std::unique_ptr<DictionaryValue> report_value(new DictionaryValue());
   report_value->SetString("reporter", upload_reporter_string_);
   report_value->Set("entries", beacons_value.release());
 
@@ -228,7 +246,6 @@ void DomainReliabilityContext::MarkUpload() {
 void DomainReliabilityContext::CommitUpload() {
   auto begin = beacons_.begin();
   auto end = begin + uploading_beacons_size_;
-  STLDeleteContainerPointers(begin, end);
   beacons_.erase(begin, end);
   DCHECK_NE(0u, uploading_beacons_size_);
   uploading_beacons_size_ = 0;
@@ -245,13 +262,19 @@ void DomainReliabilityContext::RemoveOldestBeacon() {
   VLOG(1) << "Beacon queue for " << config().origin << " full; "
           << "removing oldest beacon";
 
-  delete beacons_.front();
   beacons_.pop_front();
 
   // If that just removed a beacon counted in uploading_beacons_size_, decrement
   // that.
   if (uploading_beacons_size_ > 0)
     --uploading_beacons_size_;
+}
+
+void DomainReliabilityContext::RemoveExpiredBeacons() {
+  base::TimeTicks now = time_->NowTicks();
+  const base::TimeDelta kMaxAge = base::TimeDelta::FromHours(1);
+  while (!beacons_.empty() && now - beacons_.front()->start_time >= kMaxAge)
+    beacons_.pop_front();
 }
 
 }  // namespace domain_reliability

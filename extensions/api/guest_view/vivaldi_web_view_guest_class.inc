@@ -26,6 +26,7 @@
   void UpdateTargetURL(content::WebContents *source, const GURL &url) override;
   void CreateSearch(const base::ListValue & search) override;
   void PasteAndGo(const base::ListValue & search) override;
+  void SimpleAction(const base::ListValue & search);
   void ToggleFullscreenModeForTab(content::WebContents *web_contents,
                                   bool enter_fullscreen);
   void ShowValidationMessage(content::WebContents *web_contents,
@@ -37,7 +38,6 @@
                              const gfx::Rect &anchor_in_root_view) override;
 
 
-
   // Vivaldi customs below
   bool IsVivaldiWebPanel();
 
@@ -45,9 +45,7 @@
 
   bool IsVisible();
 
-#ifdef VIVALDI_BUILD
-  void UpdateMediaState(TabMediaState state);
-#endif // VIVALDI_BUILD
+  void UpdateMediaState(TabAlertState state);
 
   void SetIsFullscreen(bool is_fullscreen);
   extensions::AppWindow* GetAppWindow();
@@ -61,8 +59,26 @@
   // Creates the |ExtensionHost|
   void CreateExtensionHost(const std::string& extension_id);
 
+  // contentblocking handling
+  void OnContentBlocked(ContentSettingsType settings_type,
+                        const base::string16 &details);
+  void AllowRunningInsecureContent();
+
+  // Note(andre@vivaldi.com):
+  // This is used for pages opened from extensions. The delegate is not set
+  // and therefore navigation is not possible. We use this to navigate after
+  // attaching is done.
+  std::unique_ptr<std::string> delayed_open_url_;
+
+  // Called when the mouse cursor enters/leaves the appwindow the guest is
+  // inside.
+  void OnMouseEnter();
+  void OnMouseLeave();
+
+  void ResetGestureState() { gesture_recording_ = false; }
+
  private:
-  void VisibleSSLStateChanged(const content::WebContents* source) override;
+  void VisibleSecurityStateChanged(content::WebContents* source) override;
 
   // Parses the user input string for new window creation.
   void ParseNewWindowUserInput(const std::string& user_input,
@@ -75,8 +91,6 @@
   void AddGuestToTabStripModel(WebViewGuest* guest,
                                int windowId,
                                bool activePage = true);
-
-  void SetWebContentsWasInitiallyGuest(bool born_guest);
 
   content::WebContents::CreateParams GetWebContentsCreateParams(
     content::BrowserContext* context, const GURL site);
@@ -94,49 +108,75 @@
   // per RenderViewHost
   content::RenderViewHost* current_host_;
 
-  enum GestureDirection {
-    GestureDirectionNONE = -1,
-    GestureDirectionUp,
-    GestureDirectionRight,
-    GestureDirectionDown,
-    GestureDirectionLeft
-  };
   enum GestureState {
     GestureStateNone,
     GestureStateRecording,
     GestureStateBlocked
   };
 
-  GestureState gesture_state_;
-  int x_;
-  int y_;
-  // Current gesture direction
-  GestureDirection gesture_direction_;
-  // Candidate position for mouse gesture direction change.
-  int gesture_direction_candidate_x_;
-  int gesture_direction_candidate_y_;
-  // Accumulated gesture state.
-  int gesture_data_;
+  int mousedown_x_;
+  int mousedown_y_;
+  bool fire_context_menu_;
+
+  bool gesture_recording_;
 
 #ifdef VIVALDI_BUILD
-  TabMediaState media_state_;
+  TabAlertState media_state_;
 #endif //VIVALDI_BUILD
   bool is_visible_;
   bool is_fullscreen_;
   int window_state_prior_to_fullscreen_;
 
-  bool webcontents_was_created_as_guest_;
+  base::WeakPtr<ValidationMessageBubble> validation_message_bubble_;
 
-  scoped_ptr<ValidationMessageBubble> validation_message_bubble_;
+  std::unique_ptr<ExtensionHostForWebContents> extension_host_;
 
-  scoped_ptr<ExtensionHostForWebContents> extension_host_;
+#if defined(USE_AURA)
 
-  // Note(andre@vivaldi.com):
-  // This is used for pages opened from extensions. The delegate is not set
-  // and therefore navigation is not possible. We use this to navigate after
-  // attaching is done.
-  scoped_ptr<std::string> delayed_open_url_;
+#define TIME_BEFORE_HIDING_MS 3000
+
+  // This is a object that will hide the cursor for the webviewguests window
+  // based on a timer. The cursor will be shown by the CompoundEventFilter on
+  // mouse events, but this class will hide the cursor on a beat in fullscreen.
+  class CursorHider {
+  public:
+    static std::unique_ptr<CursorHider> Create(aura::Window *window) {
+      return std::unique_ptr<CursorHider>(
+          base::WrapUnique(new CursorHider(window)));
+    }
+
+    void Hide() { cursor_client_->HideCursor(); }
+
+    CursorHider(aura::Window *window) {
+      cursor_client_ = aura::client::GetCursorClient(window);
+      hide_timer_.Start(
+          FROM_HERE, base::TimeDelta::FromMilliseconds(TIME_BEFORE_HIDING_MS),
+          this, &CursorHider::Hide);
+    }
+
+    ~CursorHider() { cursor_client_->ShowCursor(); }
+
+    // Reset and stop the hide timer.
+    void Reset() {
+      hide_timer_.Reset();
+    }
+    void Stop() { hide_timer_.Stop(); }
+
+  private:
+    aura::client::CursorClient *cursor_client_;
+
+    // A timer to delay hiding the mouse.
+    base::RepeatingTimer hide_timer_;
+
+    DISALLOW_COPY_AND_ASSIGN(CursorHider);
+  };
+
+  // The object to hide cursor when going into fullscreen mode.
+  std::unique_ptr<CursorHider> cursor_hider_;
+#endif // USE_AURA
 
 private:
+
+  content::RenderWidgetHost::MouseEventCallback mouseevent_callback_;
 
 // };

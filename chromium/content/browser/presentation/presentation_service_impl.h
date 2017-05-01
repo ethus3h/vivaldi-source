@@ -7,35 +7,35 @@
 
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
+#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "content/common/content_export.h"
-#include "content/common/presentation/presentation_service.mojom.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/presentation_screen_availability_listener.h"
 #include "content/public/browser/presentation_service_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/frame_navigate_params.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "third_party/WebKit/public/platform/modules/presentation/presentation.mojom.h"
+#include "url/gurl.h"
 
 namespace content {
 
 struct FrameNavigateParams;
 struct LoadCommittedDetails;
-struct PresentationSessionMessage;
+struct PresentationConnectionMessage;
 class RenderFrameHost;
-
-using NewSessionMojoCallback = mojo::Callback<
-    void(presentation::PresentationSessionInfoPtr,
-         presentation::PresentationErrorPtr)>;
 
 // Implementation of Mojo PresentationService.
 // It handles Presentation API requests coming from Blink / renderer process
@@ -46,10 +46,14 @@ using NewSessionMojoCallback = mojo::Callback<
 // This class is instantiated on-demand via Mojo's ConnectToRemoteService
 // from the renderer when the first presentation API request is handled.
 class CONTENT_EXPORT PresentationServiceImpl
-    : public NON_EXPORTED_BASE(presentation::PresentationService),
+    : public NON_EXPORTED_BASE(blink::mojom::PresentationService),
       public WebContentsObserver,
       public PresentationServiceDelegate::Observer {
  public:
+  using NewSessionCallback =
+      base::Callback<void(blink::mojom::PresentationSessionInfoPtr,
+                          blink::mojom::PresentationErrorPtr)>;
+
   ~PresentationServiceImpl() override;
 
   // Static factory method to create an instance of PresentationServiceImpl.
@@ -57,7 +61,7 @@ class CONTENT_EXPORT PresentationServiceImpl
   // |request|: The instance will be bound to this request. Used for Mojo setup.
   static void CreateMojoService(
       RenderFrameHost* render_frame_host,
-      mojo::InterfaceRequest<presentation::PresentationService> request);
+      mojo::InterfaceRequest<blink::mojom::PresentationService> request);
 
  private:
   friend class PresentationServiceImplTest;
@@ -70,11 +74,11 @@ class CONTENT_EXPORT PresentationServiceImpl
       OtherRenderFrameDeleted);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest, DelegateFails);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
-      SetDefaultPresentationUrl);
+                           SetDefaultPresentationUrls);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
-      SetSameDefaultPresentationUrl);
+                           SetSameDefaultPresentationUrls);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
-      ClearDefaultPresentationUrl);
+                           ClearDefaultPresentationUrls);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
       ListenForDefaultSessionStart);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
@@ -82,22 +86,26 @@ class CONTENT_EXPORT PresentationServiceImpl
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
       DefaultSessionStartReset);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
-                           ReceiveSessionMessagesAfterReset);
+                           ReceiveConnectionMessagesAfterReset);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
                            MaxPendingStartSessionRequests);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
                            MaxPendingJoinSessionRequests);
   FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
                            ListenForConnectionStateChange);
+  FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
+                           ListenForConnectionClose);
+  FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
+                           SetPresentationConnection);
+  FRIEND_TEST_ALL_PREFIXES(PresentationServiceImplTest,
+                           ReceiverPresentationServiceDelegate);
 
   // Maximum number of pending JoinSession requests at any given time.
   static const int kMaxNumQueuedSessionRequests = 10;
 
-  using PresentationSessionMojoCallback =
-      mojo::Callback<void(presentation::PresentationSessionInfoPtr)>;
-  using SessionMessagesCallback =
-      mojo::Callback<void(mojo::Array<presentation::SessionMessagePtr>)>;
-  using SendMessageMojoCallback = mojo::Callback<void(bool)>;
+  using ConnectionMessagesCallback =
+      base::Callback<void(std::vector<blink::mojom::ConnectionMessagePtr>)>;
+  using SendConnectionMessageCallback = base::Callback<void(bool)>;
 
   // Listener implementation owned by PresentationServiceImpl. An instance of
   // this is created when PresentationRequest.getAvailability() is resolved.
@@ -106,71 +114,80 @@ class CONTENT_EXPORT PresentationServiceImpl
   class CONTENT_EXPORT ScreenAvailabilityListenerImpl
       : public PresentationScreenAvailabilityListener {
    public:
-    ScreenAvailabilityListenerImpl(
-        const std::string& availability_url,
-        PresentationServiceImpl* service);
+    ScreenAvailabilityListenerImpl(const GURL& availability_url,
+                                   PresentationServiceImpl* service);
     ~ScreenAvailabilityListenerImpl() override;
 
     // PresentationScreenAvailabilityListener implementation.
-    std::string GetAvailabilityUrl() const override;
+    GURL GetAvailabilityUrl() const override;
     void OnScreenAvailabilityChanged(bool available) override;
     void OnScreenAvailabilityNotSupported() override;
 
    private:
-    const std::string availability_url_;
+    const GURL availability_url_;
     PresentationServiceImpl* const service_;
   };
 
-  // Ensures the provided NewSessionMojoCallback is invoked exactly once
+  // Ensures the provided NewSessionCallback is invoked exactly once
   // before it goes out of scope.
-  class NewSessionMojoCallbackWrapper {
+  class NewSessionCallbackWrapper {
    public:
-    explicit NewSessionMojoCallbackWrapper(
-        const NewSessionMojoCallback& callback);
-    ~NewSessionMojoCallbackWrapper();
+    explicit NewSessionCallbackWrapper(
+        const NewSessionCallback& callback);
+    ~NewSessionCallbackWrapper();
 
-    void Run(presentation::PresentationSessionInfoPtr session,
-             presentation::PresentationErrorPtr error);
+    void Run(blink::mojom::PresentationSessionInfoPtr session,
+             blink::mojom::PresentationErrorPtr error);
 
    private:
-    NewSessionMojoCallback callback_;
+    NewSessionCallback callback_;
 
-    DISALLOW_COPY_AND_ASSIGN(NewSessionMojoCallbackWrapper);
+    DISALLOW_COPY_AND_ASSIGN(NewSessionCallbackWrapper);
   };
 
   // |render_frame_host|: The RFH this instance is associated with.
   // |web_contents|: The WebContents to observe.
-  // |delegate|: Where Presentation API requests are delegated to. Not owned
-  // by this class.
+  // |controller_delegate|: Where Presentation API requests are delegated to in
+  // controller frame. Set to nullptr if current frame is receiver frame. Not
+  // owned by this class.
+  // |receiver_delegate|: Where Presentation API requests are delegated to in
+  // receiver frame. Set to nullptr if current frame is controller frame. Not
+  // owned by this class.
   PresentationServiceImpl(
       RenderFrameHost* render_frame_host,
       WebContents* web_contents,
-      PresentationServiceDelegate* delegate);
+      ControllerPresentationServiceDelegate* controller_delegate,
+      ReceiverPresentationServiceDelegate* receiver_delegate);
 
   // PresentationService implementation.
-  void SetDefaultPresentationURL(const mojo::String& url) override;
-  void SetClient(presentation::PresentationServiceClientPtr client) override;
-  void ListenForScreenAvailability(const mojo::String& url) override;
-  void StopListeningForScreenAvailability(const mojo::String& url) override;
-  void StartSession(
-      const mojo::String& presentation_url,
-      const NewSessionMojoCallback& callback) override;
-  void JoinSession(
-      const mojo::String& presentation_url,
-      const mojo::String& presentation_id,
-      const NewSessionMojoCallback& callback) override;
-  void SendSessionMessage(presentation::PresentationSessionInfoPtr session_info,
-                          presentation::SessionMessagePtr session_message,
-                          const SendMessageMojoCallback& callback) override;
-  void CloseConnection(const mojo::String& presentation_url,
-                       const mojo::String& presentation_id) override;
-  void Terminate(const mojo::String& presentation_url,
-                 const mojo::String& presentation_id) override;
-  void ListenForSessionMessages(
-      presentation::PresentationSessionInfoPtr session) override;
+  void SetDefaultPresentationUrls(
+      const std::vector<GURL>& presentation_urls) override;
+  void SetClient(blink::mojom::PresentationServiceClientPtr client) override;
+  void ListenForScreenAvailability(const GURL& url) override;
+  void StopListeningForScreenAvailability(const GURL& url) override;
+  void StartSession(const std::vector<GURL>& presentation_urls,
+                    const NewSessionCallback& callback) override;
+  void JoinSession(const std::vector<GURL>& presentation_urls,
+                   const base::Optional<std::string>& presentation_id,
+                   const NewSessionCallback& callback) override;
+  void SendConnectionMessage(
+      blink::mojom::PresentationSessionInfoPtr session_info,
+      blink::mojom::ConnectionMessagePtr connection_message,
+      const SendConnectionMessageCallback& callback) override;
+  void CloseConnection(const GURL& presentation_url,
+                       const std::string& presentation_id) override;
+  void Terminate(const GURL& presentation_url,
+                 const std::string& presentation_id) override;
+  void ListenForConnectionMessages(
+      blink::mojom::PresentationSessionInfoPtr session) override;
+  void SetPresentationConnection(
+      blink::mojom::PresentationSessionInfoPtr session,
+      blink::mojom::PresentationConnectionPtr controller_connection_ptr,
+      blink::mojom::PresentationConnectionRequest receiver_connection_request)
+      override;
 
   // Creates a binding between this object and |request|.
-  void Bind(mojo::InterfaceRequest<presentation::PresentationService> request);
+  void Bind(mojo::InterfaceRequest<blink::mojom::PresentationService> request);
 
   // WebContentsObserver override.
   void DidNavigateAnyFrame(
@@ -178,6 +195,7 @@ class CONTENT_EXPORT PresentationServiceImpl
       const content::LoadCommittedDetails& details,
       const content::FrameNavigateParams& params) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
+  void WebContentsDestroyed() override;
 
   // PresentationServiceDelegate::Observer
   void OnDelegateDestroyed() override;
@@ -194,8 +212,8 @@ class CONTENT_EXPORT PresentationServiceImpl
   // Returns true if the callback was found.
   bool RunAndEraseJoinSessionMojoCallback(
       int request_session_id,
-      presentation::PresentationSessionInfoPtr session,
-      presentation::PresentationErrorPtr error);
+      blink::mojom::PresentationSessionInfoPtr session,
+      blink::mojom::PresentationErrorPtr error);
 
   // Removes all listeners and resets default presentation URL on this instance
   // and informs the PresentationServiceDelegate of such.
@@ -225,55 +243,75 @@ class CONTENT_EXPORT PresentationServiceImpl
 
   // Passed to embedder's implementation of PresentationServiceDelegate for
   // later invocation when session messages arrive.
-  void OnSessionMessages(
+  void OnConnectionMessages(
       const content::PresentationSessionInfo& session,
-      const ScopedVector<PresentationSessionMessage>& messages,
+      const std::vector<std::unique_ptr<PresentationConnectionMessage>>&
+          messages,
       bool pass_ownership);
+
+  // A callback registered to OffscreenPresentationManager when
+  // the PresentationServiceImpl for the presentation receiver is initialized.
+  // Calls |client_| to create a new PresentationConnection on receiver page.
+  void OnReceiverConnectionAvailable(
+      const content::PresentationSessionInfo& session_info,
+      PresentationConnectionPtr controller_connection_ptr,
+      PresentationConnectionRequest receiver_connection_request);
 
   // Associates a JoinSession |callback| with a unique request ID and
   // stores it in a map.
   // Returns a positive value on success.
-  int RegisterJoinSessionCallback(const NewSessionMojoCallback& callback);
+  int RegisterJoinSessionCallback(const NewSessionCallback& callback);
 
   // Invoked by the embedder's PresentationServiceDelegate when a
   // PresentationConnection's state has changed.
-  void OnConnectionStateChanged(const PresentationSessionInfo& connection,
-                                PresentationConnectionState state);
+  void OnConnectionStateChanged(
+      const PresentationSessionInfo& connection,
+      const PresentationConnectionStateChangeInfo& info);
 
   // Returns true if this object is associated with |render_frame_host|.
   bool FrameMatches(content::RenderFrameHost* render_frame_host) const;
 
-  // Embedder-specific delegate to forward Presentation requests to.
-  // May be null if embedder does not support Presentation API.
-  PresentationServiceDelegate* delegate_;
+  // Returns |controller_delegate| if current frame is controller frame; Returns
+  // |receiver_delegate| if current frame is receiver frame.
+  PresentationServiceDelegate* GetPresentationServiceDelegate();
+
+  // Embedder-specific delegate for controller to forward Presentation requests
+  // to. Must be nullptr if current page is receiver page or
+  // embedder does not support Presentation API .
+  ControllerPresentationServiceDelegate* controller_delegate_;
+
+  // Embedder-specific delegate for receiver to forward Presentation requests
+  // to. Must be nullptr if current page is receiver page or
+  // embedder does not support Presentation API.
+  ReceiverPresentationServiceDelegate* receiver_delegate_;
 
   // Proxy to the PresentationServiceClient to send results (e.g., screen
   // availability) to.
-  presentation::PresentationServiceClientPtr client_;
+  blink::mojom::PresentationServiceClientPtr client_;
 
-  std::string default_presentation_url_;
+  std::vector<GURL> default_presentation_urls_;
 
   using ScreenAvailabilityListenerMap =
-      std::map<std::string, scoped_ptr<ScreenAvailabilityListenerImpl>>;
+      std::map<GURL, std::unique_ptr<ScreenAvailabilityListenerImpl>>;
   ScreenAvailabilityListenerMap screen_availability_listeners_;
 
   // For StartSession requests.
   // Set to a positive value when a StartSession request is being processed.
   int start_session_request_id_;
-  scoped_ptr<NewSessionMojoCallbackWrapper> pending_start_session_cb_;
+  std::unique_ptr<NewSessionCallbackWrapper> pending_start_session_cb_;
 
   // For JoinSession requests.
-  base::hash_map<int, linked_ptr<NewSessionMojoCallbackWrapper>>
+  base::hash_map<int, linked_ptr<NewSessionCallbackWrapper>>
       pending_join_session_cbs_;
 
   // RAII binding of |this| to an Presentation interface request.
   // The binding is removed when binding_ is cleared or goes out of scope.
-  scoped_ptr<mojo::Binding<presentation::PresentationService>> binding_;
+  std::unique_ptr<mojo::Binding<blink::mojom::PresentationService>> binding_;
 
   // There can be only one send message request at a time.
-  scoped_ptr<SendMessageMojoCallback> send_message_callback_;
+  std::unique_ptr<SendConnectionMessageCallback> send_message_callback_;
 
-  scoped_ptr<SessionMessagesCallback> on_session_messages_callback_;
+  std::unique_ptr<ConnectionMessagesCallback> on_connection_messages_callback_;
 
   // ID of the RenderFrameHost this object is associated with.
   int render_process_id_;

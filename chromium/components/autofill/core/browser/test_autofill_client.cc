@@ -11,9 +11,8 @@ namespace autofill {
 TestAutofillClient::TestAutofillClient()
     : token_service_(new FakeOAuth2TokenService()),
       identity_provider_(new FakeIdentityProvider(token_service_.get())),
-      rappor_service_(new rappor::TestRapporService()),
-      is_context_secure_(true) {
-}
+      rappor_service_(new rappor::TestRapporServiceImpl()),
+      form_origin_(GURL("https://example.test")) {}
 
 TestAutofillClient::~TestAutofillClient() {
 }
@@ -30,7 +29,7 @@ PrefService* TestAutofillClient::GetPrefs() {
   return prefs_.get();
 }
 
-sync_driver::SyncService* TestAutofillClient::GetSyncService() {
+syncer::SyncService* TestAutofillClient::GetSyncService() {
   return nullptr;
 }
 
@@ -38,11 +37,8 @@ IdentityProvider* TestAutofillClient::GetIdentityProvider() {
   return identity_provider_.get();
 }
 
-rappor::RapporService* TestAutofillClient::GetRapporService() {
+rappor::RapporServiceImpl* TestAutofillClient::GetRapporServiceImpl() {
   return rappor_service_.get();
-}
-
-void TestAutofillClient::HideRequestAutocompleteDialog() {
 }
 
 void TestAutofillClient::ShowAutofillSettings() {
@@ -50,6 +46,7 @@ void TestAutofillClient::ShowAutofillSettings() {
 
 void TestAutofillClient::ShowUnmaskPrompt(
     const CreditCard& card,
+    UnmaskCardReason reason,
     base::WeakPtr<CardUnmaskDelegate> delegate) {
 }
 
@@ -63,7 +60,13 @@ void TestAutofillClient::ConfirmSaveCreditCardLocally(
 
 void TestAutofillClient::ConfirmSaveCreditCardToCloud(
     const CreditCard& card,
-    scoped_ptr<base::DictionaryValue> legal_message,
+    std::unique_ptr<base::DictionaryValue> legal_message,
+    const base::Closure& callback) {
+  callback.Run();
+}
+
+void TestAutofillClient::ConfirmCreditCardFillAssist(
+    const CreditCard& card,
     const base::Closure& callback) {
   callback.Run();
 }
@@ -79,12 +82,6 @@ bool TestAutofillClient::HasCreditCardScanFeature() {
 
 void TestAutofillClient::ScanCreditCard(
     const CreditCardScanCallback& callback) {
-}
-
-void TestAutofillClient::ShowRequestAutocompleteDialog(
-    const FormData& form,
-    content::RenderFrameHost* rfh,
-    const ResultCallback& callback) {
 }
 
 void TestAutofillClient::ShowAutofillPopup(
@@ -119,8 +116,17 @@ void TestAutofillClient::DidFillOrPreviewField(
 void TestAutofillClient::OnFirstUserGestureObserved() {
 }
 
-bool TestAutofillClient::IsContextSecure(const GURL& form_origin) {
-  return is_context_secure_;
+bool TestAutofillClient::IsContextSecure() {
+  // Simplified secure context check for tests.
+  return form_origin_.SchemeIs("https");
 }
+
+bool TestAutofillClient::ShouldShowSigninPromo() {
+  return false;
+}
+
+void TestAutofillClient::StartSigninFlow() {}
+
+void TestAutofillClient::ShowHttpNotSecureExplanation() {}
 
 }  // namespace autofill

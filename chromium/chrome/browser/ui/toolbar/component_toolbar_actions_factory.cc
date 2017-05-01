@@ -17,6 +17,8 @@
 #include "chrome/browser/ui/toolbar/media_router_action.h"
 #endif
 
+#include "app/vivaldi_apptools.h"
+
 namespace {
 
 ComponentToolbarActionsFactory* testing_factory_ = nullptr;
@@ -47,15 +49,16 @@ std::set<std::string> ComponentToolbarActionsFactory::GetInitialComponentIds(
   return component_ids;
 }
 
-scoped_ptr<ToolbarActionViewController>
+std::unique_ptr<ToolbarActionViewController>
 ComponentToolbarActionsFactory::GetComponentToolbarActionForId(
     const std::string& id,
     Browser* browser,
     ToolbarActionsBar* bar) {
+  if (!vivaldi::IsVivaldiRunning()) {// See note in ToolbarActionsModel.
   // This is currently behind the extension-action-redesign flag, as it is
   // designed for the new toolbar.
   DCHECK(extensions::FeatureSwitch::extension_action_redesign()->IsEnabled());
-
+  }
   // Add component toolbar actions here.
   // This current design means that the ComponentToolbarActionsFactory is aware
   // of all actions. Since we should *not* have an excessive amount of these
@@ -64,12 +67,12 @@ ComponentToolbarActionsFactory::GetComponentToolbarActionForId(
   // e.g., RegisterChromeAction().
 #if defined(ENABLE_MEDIA_ROUTER)
   if (id == kMediaRouterActionId)
-    return scoped_ptr<ToolbarActionViewController>(
+    return std::unique_ptr<ToolbarActionViewController>(
         new MediaRouterAction(browser, bar));
 #endif  // defined(ENABLE_MEDIA_ROUTER)
 
   NOTREACHED();
-  return scoped_ptr<ToolbarActionViewController>();
+  return std::unique_ptr<ToolbarActionViewController>();
 }
 
 // static
@@ -87,7 +90,7 @@ void ComponentToolbarActionsFactory::RegisterComponentMigrations(
 void ComponentToolbarActionsFactory::HandleComponentMigrations(
     extensions::ComponentMigrationHelper* helper,
     Profile* profile) const {
-  if (media_router::MediaRouterEnabled(profile) && !profile->IsOffTheRecord()) {
+  if (media_router::MediaRouterEnabled(profile)) {
     helper->OnFeatureEnabled(kMediaRouterActionId);
   } else {
     helper->OnFeatureDisabled(kMediaRouterActionId);

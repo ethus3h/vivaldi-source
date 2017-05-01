@@ -44,7 +44,7 @@ prep_staging_debian() {
   install -m 755 -d "${STAGEDIR}/DEBIAN" \
     "${STAGEDIR}/etc/cron.daily" \
     "${STAGEDIR}/usr/share/menu" \
-    "${STAGEDIR}/usr/share/doc/${PACKAGE}"
+    "${STAGEDIR}/usr/share/doc/${USR_BIN_SYMLINK_NAME}"
 }
 
 # Put the package contents in the staging area.
@@ -144,6 +144,8 @@ usage() {
   echo "-o dir     package output directory [${OUTPUTDIR}]"
   echo "-b dir     build input directory    [${BUILDDIR}]"
   echo "-d brand   either chromium or google_chrome"
+  echo "-s dir     /path/to/sysroot"
+  echo "-e dir     /path/to/dpkg-dev"
   echo "-h         this help message"
 }
 
@@ -182,7 +184,7 @@ verify_channel() {
 }
 
 process_opts() {
-  while getopts ":o:b:c:a:d:h" OPTNAME
+  while getopts ":e:s:o:b:c:a:d:h" OPTNAME
   do
     case $OPTNAME in
       o )
@@ -200,6 +202,12 @@ process_opts() {
         ;;
       d )
         BRANDING="$OPTARG"
+        ;;
+      s )
+        SYSROOT="$OPTARG"
+        ;;
+      e )
+        DPKG_DEV_DIR="$OPTARG"
         ;;
       h )
         usage
@@ -243,6 +251,15 @@ trap cleanup 0
 process_opts "$@"
 BUILDDIR=${BUILDDIR:=$(readlink -f "${SCRIPTDIR}/../../../../../out/Release")}
 
+if [[ "$(basename ${SYSROOT})" = "debian_wheezy_"*"-sysroot" ]]; then
+  TARGET_DISTRO="wheezy"
+elif [[ "$(basename ${SYSROOT})" = "debian_jessie_"*"-sysroot" ]]; then
+  TARGET_DISTRO="jessie"
+else
+  echo "Debian package can only be built using the wheezy or jessie sysroot."
+  exit 1
+fi
+
 source ${BUILDDIR}/installer/common/installer.include
 
 get_version_info
@@ -250,7 +267,7 @@ VERSIONFULL="${VERSION}-${PACKAGE_RELEASE}"
 
 if [ "$BRANDING" = "vivaldi" ]; then
   source "${BUILDDIR}/installer/common/vivaldi.info"
-elif [ "$BRANDING_BUILD" = "_google_chrome" ]; then
+elif [ "$BRANDING" = "google_chrome" ]; then
   source "${BUILDDIR}/installer/common/google-chrome.info"
 else
   source "${BUILDDIR}/installer/common/chromium-browser.info"
@@ -272,13 +289,6 @@ export DEBEMAIL="${MAINTMAIL}"
 # the LSB sub-packages, to avoid pulling in all that stuff that's not installed
 # by default.
 
-# Need a dummy debian/control file for dpkg-shlibdeps.
-DUMMY_STAGING_DIR="${TMPFILEDIR}/dummy_staging"
-mkdir "$DUMMY_STAGING_DIR"
-cd "$DUMMY_STAGING_DIR"
-mkdir debian
-touch debian/control
-
 # Generate the dependencies,
 # TODO(mmoss): This is a workaround for a problem where dpkg-shlibdeps was
 # resolving deps using some of our build output shlibs (i.e.
@@ -288,36 +298,55 @@ touch debian/control
 # but it seems that we don't currently, so this is the most expediant fix.
 SAVE_LDLP=${LD_LIBRARY_PATH:-}
 unset LD_LIBRARY_PATH
-DPKG_SHLIB_DEPS=$(dpkg-shlibdeps -O "$BUILDDIR/vivaldi" | \
-  sed 's/^shlibs:Depends=//')
+if [ ${TARGETARCH} = "x64" ]; then
+  SHLIB_ARGS="-l${SYSROOT}/usr/lib/x86_64-linux-gnu"
+  SHLIB_ARGS="${SHLIB_ARGS} -l${SYSROOT}/lib/x86_64-linux-gnu"
+else
+  SHLIB_ARGS="-l${SYSROOT}/usr/lib/i386-linux-gnu"
+  SHLIB_ARGS="${SHLIB_ARGS} -l${SYSROOT}/lib/i386-linux-gnu"
+fi
+SHLIB_ARGS="${SHLIB_ARGS} -l${SYSROOT}/usr/lib"
+# TODO(thomasanderson): Unbundle dpkg-shlibdeps once the Precise->Trusty
+# transition is complete by reverting CL 2411423002 and applying ps40001.
+DPKG_SHLIB_DEPS=$(cd ${SYSROOT} && DPKG_DATADIR=${DPKG_DEV_DIR} \
+  perl -I ${DPKG_DEV_DIR}/scripts ${DPKG_DEV_DIR}/scripts/dpkg-shlibdeps.pl \
+  ${SHLIB_ARGS:-} -O -e"$BUILDDIR/vivaldi" | sed 's/^shlibs:Depends=//')
 if [ -n "$SAVE_LDLP" ]; then
   LD_LIBRARY_PATH=$SAVE_LDLP
 fi
 
 # Format it nicely and save it for comparison.
-# The grep -v is for a duplicate libc6 dep caused by Lucid glibc silliness.
-echo "$DPKG_SHLIB_DEPS" | sed 's/, /\n/g' | \
-  grep -v '^libc6 (>= 2.3.6-6~)$' > actual
+echo "$DPKG_SHLIB_DEPS" | sed 's/, /\n/g' | LANG=C sort > actual
 
-# Compare the expected dependency list to the generate list.
+# Compare the expected dependency list to the generated list.
 BAD_DIFF=0
-diff "$SCRIPTDIR/expected_deps_$TARGETARCH" actual || BAD_DIFF=1
+diff -u "$SCRIPTDIR/expected_deps_${TARGETARCH}_${TARGET_DISTRO}" actual || \
+  BAD_DIFF=1
 if [ $BAD_DIFF -ne 0 ] && [ -z "${IGNORE_DEPS_CHANGES:-}" ]; then
   echo
   echo "ERROR: Shared library dependencies changed!"
   echo "If this is intentional, please update:"
-  echo "chrome/installer/linux/debian/expected_deps_ia32"
-  echo "chrome/installer/linux/debian/expected_deps_x64"
+  echo "chrome/installer/linux/debian/expected_deps_ia32_jessie"
+  echo "chrome/installer/linux/debian/expected_deps_ia32_wheezy"
+  echo "chrome/installer/linux/debian/expected_deps_x64_jessie"
+  echo "chrome/installer/linux/debian/expected_deps_x64_wheezy"
   echo
   exit $BAD_DIFF
 fi
-rm -rf "$DUMMY_STAGING_DIR"
 
 # Additional dependencies not in the dpkg-shlibdeps output.
-# - Pull a more recent version of NSS than required by runtime linking, for
-#   security and stability updates in NSS.
-ADDITION_DEPS="ca-certificates, fonts-liberation, libappindicator1, libcurl3, \
-  libnss3 (>= 3.14.3), xdg-utils (>= 1.0.2), wget"
+# ca-certificates: Make sure users have SSL certificates.
+# fonts-liberation: Make sure users have compatible fonts for viewing PDFs.
+# libappindicator1: Make systray icons work in Unity.
+# libnss3: Pull a more recent version of NSS than required by runtime linking,
+#          for security and stability updates in NSS.
+# libstdc++6: For C++11 support.
+# lsb-base: Implies many other dependencies.
+# xdg-utils: For OS integration.
+# wget: For uploading crash reports with Breakpad.
+ADDITION_DEPS="ca-certificates, fonts-liberation, libappindicator1, \
+  libnss3 (>= 3.17.2), \
+  xdg-utils (>= 1.0.2), wget"
 
 # Fix-up libnspr dependency due to renaming in Ubuntu (the old package still
 # exists, but it was moved to "universe" repository, which isn't installed by
@@ -325,6 +354,10 @@ ADDITION_DEPS="ca-certificates, fonts-liberation, libappindicator1, libcurl3, \
 DPKG_SHLIB_DEPS=$(sed \
     's/\(libnspr4-0d ([^)]*)\), /\1 | libnspr4 (>= 4.9.5-0ubuntu0), /g' \
     <<< $DPKG_SHLIB_DEPS)
+
+# VB-23524 fix too new libfontconfig dependency on Ubuntu 12.04
+DPKG_SHLIB_DEPS=$(sed 's/\(libfontconfig1 ([^)]*)\), /libfontconfig1 (>= 2.8.0), /g' \
+                  <<< $DPKG_SHLIB_DEPS)
 
 # Fix-up libudev dependency because Ubuntu 13.04 has libudev1 instead of
 # libudev0.

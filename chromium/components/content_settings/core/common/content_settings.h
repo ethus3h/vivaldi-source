@@ -18,6 +18,9 @@
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.preferences.website
 // GENERATED_JAVA_CLASS_NAME_OVERRIDE: ContentSettingValues
+//
+// TODO(nigeltao): migrate the Java users of this enum to the mojom-generated
+// enum.
 enum ContentSetting {
   CONTENT_SETTING_DEFAULT = 0,
   CONTENT_SETTING_ALLOW,
@@ -43,6 +46,7 @@ struct ContentSettingPatternSource {
                               ContentSetting setting,
                               const std::string& source,
                               bool incognito);
+  ContentSettingPatternSource(const ContentSettingPatternSource& other);
   ContentSettingPatternSource();
   ContentSettingsPattern primary_pattern;
   ContentSettingsPattern secondary_pattern;
@@ -58,6 +62,7 @@ struct RendererContentSettingRules {
   ~RendererContentSettingRules();
   ContentSettingsForOneType image_rules;
   ContentSettingsForOneType script_rules;
+  ContentSettingsForOneType autoplay_rules;
 };
 
 namespace content_settings {

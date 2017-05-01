@@ -11,12 +11,16 @@
 #include <sys/sysctl.h>
 #include <string>
 
-#include "base/mac/scoped_nsobject.h"
+#import "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/sys_info.h"
+
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
 
 namespace {
 
@@ -36,6 +40,7 @@ const UAVersions& GetUAVersionsForCurrentOS() {
   // Safari version can't be, so a lookup table is used instead (for both, since
   // the reported versions should stay in sync).
   static const OSVersionMap version_map[] = {
+      {10, 0, {"602.1", "602.1.50"}},
       {9, 0, {"601.1.46", "601.1"}},
       {8, 0, {"600.1.4", "600.1.4"}},
       {7, 1, {"9537.53", "537.51.2"}},

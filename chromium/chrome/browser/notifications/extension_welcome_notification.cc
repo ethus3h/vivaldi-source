@@ -12,10 +12,9 @@
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
@@ -25,9 +24,10 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "components/syncable_prefs/pref_service_syncable.h"
-#include "grit/theme_resources.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync_preferences/pref_service_syncable.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/message_center/message_center.h"
@@ -88,7 +88,7 @@ class NotificationCallbacks
         profile_,
         GURL(chrome::kNotificationWelcomeLearnMoreURL),
         ui::PAGE_TRANSITION_LINK);
-    params.disposition = NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
     params.window_action = chrome::NavigateParams::SHOW_WINDOW;
     chrome::Navigate(&params);
   }
@@ -179,11 +179,11 @@ ExtensionWelcomeNotification::~ExtensionWelcomeNotification() {
 
 void ExtensionWelcomeNotification::OnIsSyncingChanged() {
   DCHECK(delayed_notification_);
-  syncable_prefs::PrefServiceSyncable* const pref_service_syncable =
+  sync_preferences::PrefServiceSyncable* const pref_service_syncable =
       PrefServiceSyncableFromProfile(profile_);
   if (pref_service_syncable->IsSyncing()) {
     pref_service_syncable->RemoveObserver(this);
-    scoped_ptr<Notification> previous_notification(
+    std::unique_ptr<Notification> previous_notification(
         delayed_notification_.release());
     ShowWelcomeNotificationIfNecessary(*(previous_notification.get()));
   }
@@ -192,7 +192,7 @@ void ExtensionWelcomeNotification::OnIsSyncingChanged() {
 void ExtensionWelcomeNotification::ShowWelcomeNotificationIfNecessary(
     const Notification& notification) {
   if ((notification.notifier_id() == notifier_id_) && !delayed_notification_) {
-    syncable_prefs::PrefServiceSyncable* const pref_service_syncable =
+    sync_preferences::PrefServiceSyncable* const pref_service_syncable =
         PrefServiceSyncableFromProfile(profile_);
     if (pref_service_syncable->IsSyncing()) {
       PrefService* const pref_service = profile_->GetPrefs();
@@ -259,7 +259,7 @@ void ExtensionWelcomeNotification::ShowWelcomeNotification(
     welcome_notification_id_ = base::GenerateGUID();
 
   if (!welcome_notification_id_.empty()) {
-    scoped_ptr<message_center::Notification> message_center_notification(
+    std::unique_ptr<message_center::Notification> message_center_notification(
         new message_center::Notification(
             message_center::NOTIFICATION_TYPE_BASE_FORMAT,
             welcome_notification_id_,

@@ -5,8 +5,6 @@
 #ifndef  VIVALDI_IMPORTER_VIV_IMPORTER_H_
 #define VIVALDI_IMPORTER_VIV_IMPORTER_H_
 
-struct ImportedBookmarkEntry;
-
 namespace base {
 class DictionaryValue;
 }
@@ -19,10 +17,7 @@ namespace viv_importer {
 void DetectOperaProfiles(std::vector<importer::SourceProfile>* profiles);
 }
 
-class ImportedNoteEntry;
-
-class OperaImporter : public Importer
-{
+class OperaImporter : public Importer {
  public:
   OperaImporter(const importer::ImportConfig &import_config);
 
@@ -33,13 +28,15 @@ class OperaImporter : public Importer
  private:
   ~OperaImporter() override;
 
-  void ImportBookMarks();
+  // Returns false on error in which case error is filled with an error message.
+  bool ImportBookMarks(std::string& error);
 
   //void ReadFaviconIndexFile(base::string16 domain, );
 
-  void ImportNotes();
+  bool ImportNotes(std::string& error);
+  bool ImportSpeedDial(std::string& error);
 
-  void ImportWand();
+  bool ImportWand(std::string& error);
   bool ImportWand_ReadEntryHTML(std::string::iterator &buffer,
                                 std::string::iterator &buffer_end,
                                 std::vector<autofill::PasswordForm> &passwords,

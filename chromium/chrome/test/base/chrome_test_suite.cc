@@ -17,14 +17,14 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/features.h"
 #include "chrome/common/url_constants.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "content/public/test/test_launcher.h"
 #include "extensions/common/constants.h"
+#include "media/base/media.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(ANDROID_JAVA_UI)
+#if defined(OS_ANDROID)
 #include "base/android/jni_android.h"
 #include "chrome/browser/android/chrome_jni_registrar.h"
 #endif
@@ -37,13 +37,7 @@
 #if defined(OS_MACOSX)
 #include "base/mac/bundle_locations.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#if !defined(OS_IOS)
 #include "chrome/browser/chrome_browser_application_mac.h"
-#endif  // !defined(OS_IOS)
-#endif
-
-#if !defined(OS_IOS)
-#include "media/base/media.h"
 #endif
 
 namespace {
@@ -74,9 +68,7 @@ ChromeTestSuite::~ChromeTestSuite() {
 void ChromeTestSuite::Initialize() {
 #if defined(OS_MACOSX)
   base::mac::ScopedNSAutoreleasePool autorelease_pool;
-#if !defined(OS_IOS)
   chrome_browser_application_mac::RegisterBrowserCrApp();
-#endif  // !defined(OS_IOS)
 #endif
 
   if (!browser_dir_.empty()) {
@@ -84,18 +76,16 @@ void ChromeTestSuite::Initialize() {
     PathService::Override(base::DIR_MODULE, browser_dir_);
   }
 
-#if BUILDFLAG(ANDROID_JAVA_UI)
-  ASSERT_TRUE(chrome::android::RegisterBrowserJNI(
-      base::android::AttachCurrentThread()));
+#if defined(OS_ANDROID)
+  ASSERT_TRUE(
+      android::RegisterBrowserJNI(base::android::AttachCurrentThread()));
 #endif
 
-#if !defined(OS_IOS)
   // Disable external libraries load if we are under python process in
   // ChromeOS.  That means we are autotest and, if ASAN is used,
   // external libraries load crashes.
   if (!IsCrosPythonProcess())
     media::InitializeMediaLibrary();
-#endif
 
   // Initialize after overriding paths as some content paths depend on correct
   // values for DIR_EXE and DIR_MODULE.
@@ -104,7 +94,7 @@ void ChromeTestSuite::Initialize() {
   ContentSettingsPattern::SetNonWildcardDomainNonPortScheme(
       extensions::kExtensionScheme);
 
-#if defined(OS_MACOSX) && !defined(OS_IOS)
+#if defined(OS_MACOSX)
   // Look in the framework bundle for resources.
   base::FilePath path;
   PathService::Get(base::DIR_EXE, &path);
@@ -114,7 +104,7 @@ void ChromeTestSuite::Initialize() {
 }
 
 void ChromeTestSuite::Shutdown() {
-#if defined(OS_MACOSX) && !defined(OS_IOS)
+#if defined(OS_MACOSX)
   base::mac::SetOverrideFrameworkBundle(NULL);
 #endif
 

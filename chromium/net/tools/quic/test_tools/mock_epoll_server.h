@@ -8,13 +8,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "base/logging.h"
 #include "base/macros.h"
 #include "net/tools/epoll_server/epoll_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace net {
-namespace tools {
 namespace test {
 
 // Unlike the full MockEpollServer, this only lies about the time but lets
@@ -53,7 +55,7 @@ class FakeTimeEpollServer : public EpollServer {
 
 class MockEpollServer : public FakeTimeEpollServer {
  public:  // type definitions
-  typedef base::hash_multimap<int64_t, struct epoll_event> EventQueue;
+  using EventQueue = std::unordered_multimap<int64_t, struct epoll_event>;
 
   MockEpollServer();
   ~MockEpollServer() override;
@@ -82,7 +84,7 @@ class MockEpollServer : public FakeTimeEpollServer {
     WaitForEventsAndExecuteCallbacks();
   }
 
-  base::hash_set<AlarmCB*>::size_type NumberOfAlarms() const {
+  std::unordered_set<AlarmCB*>::size_type NumberOfAlarms() const {
     return all_alarms_.size();
   }
 
@@ -108,7 +110,6 @@ class MockEpollServer : public FakeTimeEpollServer {
 };
 
 }  // namespace test
-}  // namespace tools
 }  // namespace net
 
 #endif  // NET_TOOLS_QUIC_TEST_TOOLS_MOCK_EPOLL_SERVER_H_

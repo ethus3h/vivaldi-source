@@ -225,6 +225,16 @@ namespace app.window {
     // Requires the <code>app.window.ime</code> API permission.
     [nodoc] boolean? ime;
 
+    // If true, the window will have its own shelf icon. Otherwise the window
+    // will be grouped in the shelf with other windows that are associated with
+    // the app. Defaults to false. If showInShelf is set to true you need to
+    // specify an id for the window.
+    boolean? showInShelf;
+
+    // URL of the window icon. A window can have its own icon when showInShelf
+    // is set to true. The URL should be a global or an extension local URL.
+    DOMString? icon;
+
     // Frame type: <code>none</code> or <code>chrome</code> (defaults to
     // <code>chrome</code>). For <code>none</code>, the
     // <code>-webkit-app-region</code> CSS property can be used to apply
@@ -282,6 +292,10 @@ namespace app.window {
     // (Vivaldi) If true, this window will be used as a hidden window for
     // thumbnail generation.
     boolean? thumbnailWindow;
+
+    // (Vivaldi) If true, this window will not use the position cache app
+    // windows usually use but rather the provided dimensions as-is.
+    boolean ? avoidCachedPositions;
 
     // Data to store different members used in Vivaldi
     DOMString? extData;
@@ -382,7 +396,6 @@ namespace app.window {
     [nodoc] boolean hasFrameColor;
     [nodoc] long activeFrameColor;
     [nodoc] long inactiveFrameColor;
-    [nodoc] boolean? firstShowHasHappened;
 
     // Set whether the window should stay above most other windows. Requires the
     // <code>alwaysOnTopWindows</code> permission.
@@ -485,8 +498,5 @@ namespace app.window {
 
     // Fired when the window's ability to use alpha transparency changes.
     [nocompile, nodoc] static void onAlphaEnabledChanged();
-
-    // Event for testing. Lets tests wait until a window has been shown.
-    [nocompile, nodoc] static void onWindowFirstShown();
   };
 };

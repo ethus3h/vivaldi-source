@@ -95,9 +95,8 @@ public class ActivityUtils {
      * @param fragmentTag The tag of the fragment to be loaded.
      */
     @SuppressWarnings({"unchecked", "TypeParameterUnusedInFormals"})
-    public static <T> T waitForFragment(Activity activity, String fragmentTag)
-            throws InterruptedException {
-        CriteriaHelper.pollForCriteria(new FragmentPresentCriteria(activity, fragmentTag),
+    public static <T> T waitForFragment(Activity activity, String fragmentTag) {
+        CriteriaHelper.pollInstrumentationThread(new FragmentPresentCriteria(activity, fragmentTag),
                 ACTIVITY_START_TIMEOUT_MS, CONDITION_POLL_INTERVAL_MS);
         return (T) activity.getFragmentManager().findFragmentByTag(fragmentTag);
     }
@@ -115,14 +114,14 @@ public class ActivityUtils {
      */
     @SuppressWarnings("unchecked")
     public static <T extends Fragment> T waitForFragmentToAttach(
-            final Preferences activity, final Class<T> fragmentClass)
-            throws InterruptedException {
-        CriteriaHelper.pollForCriteria(new Criteria("Could not find fragment " + fragmentClass) {
-            @Override
-            public boolean isSatisfied() {
-                return fragmentClass.isInstance(activity.getFragmentForTest());
-            }
-        }, ACTIVITY_START_TIMEOUT_MS, CONDITION_POLL_INTERVAL_MS);
+            final Preferences activity, final Class<T> fragmentClass) {
+        CriteriaHelper.pollInstrumentationThread(
+                new Criteria("Could not find fragment " + fragmentClass) {
+                    @Override
+                    public boolean isSatisfied() {
+                        return fragmentClass.isInstance(activity.getFragmentForTest());
+                    }
+                }, ACTIVITY_START_TIMEOUT_MS, CONDITION_POLL_INTERVAL_MS);
         return (T) activity.getFragmentForTest();
     }
 }

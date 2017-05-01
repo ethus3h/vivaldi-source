@@ -14,8 +14,8 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -125,7 +125,8 @@ void TestURLFetcher::SetRequestContext(
     URLRequestContextGetter* request_context_getter) {
 }
 
-void TestURLFetcher::SetInitiatorURL(const GURL& initiator) {}
+void TestURLFetcher::SetInitiator(
+    const base::Optional<url::Origin>& initiator) {}
 
 void TestURLFetcher::SetURLRequestUserData(
     const void* key,
@@ -170,7 +171,7 @@ void TestURLFetcher::SaveResponseToTemporaryFile(
 }
 
 void TestURLFetcher::SaveResponseWithWriter(
-    scoped_ptr<URLFetcherResponseWriter> response_writer) {
+    std::unique_ptr<URLFetcherResponseWriter> response_writer) {
   // In class URLFetcherCore this method is called by all three:
   // GetResponseAsString() / SaveResponseToFileAtPath() /
   // SaveResponseToTemporaryFile(). But here (in TestURLFetcher), this method
@@ -188,7 +189,7 @@ void TestURLFetcher::SaveResponseWithWriter(
                                        fake_response_string_.size(),
                                        CompletionCallback());
     DCHECK_EQ(static_cast<int>(fake_response_string_.size()), response);
-    response = response_writer_->Finish(CompletionCallback());
+    response = response_writer_->Finish(OK, CompletionCallback());
     DCHECK_EQ(OK, response);
   } else if (fake_response_destination_ == TEMP_FILE) {
     // SaveResponseToFileAtPath() should be called instead of this method to
@@ -255,10 +256,6 @@ const URLRequestStatus& TestURLFetcher::GetStatus() const {
 
 int TestURLFetcher::GetResponseCode() const {
   return fake_response_code_;
-}
-
-const ResponseCookies& TestURLFetcher::GetCookies() const {
-  return fake_cookies_;
 }
 
 void TestURLFetcher::ReceivedContentWasMalformed() {
@@ -331,7 +328,7 @@ TestURLFetcherFactory::TestURLFetcherFactory()
 
 TestURLFetcherFactory::~TestURLFetcherFactory() {}
 
-scoped_ptr<URLFetcher> TestURLFetcherFactory::CreateURLFetcher(
+std::unique_ptr<URLFetcher> TestURLFetcherFactory::CreateURLFetcher(
     int id,
     const GURL& url,
     URLFetcher::RequestType request_type,
@@ -341,7 +338,7 @@ scoped_ptr<URLFetcher> TestURLFetcherFactory::CreateURLFetcher(
     fetcher->set_owner(this);
   fetcher->SetDelegateForTests(delegate_for_tests_);
   fetchers_[id] = fetcher;
-  return scoped_ptr<URLFetcher>(fetcher);
+  return std::unique_ptr<URLFetcher>(fetcher);
 }
 
 TestURLFetcher* TestURLFetcherFactory::GetFetcherByID(int id) const {
@@ -402,7 +399,7 @@ void FakeURLFetcher::RunDelegate() {
   // this with a weak pointer, and only call OnURLFetchComplete if this still
   // exists.
   auto weak_this = weak_factory_.GetWeakPtr();
-  delegate()->OnURLFetchDownloadProgress(this, response_bytes_,
+  delegate()->OnURLFetchDownloadProgress(this, response_bytes_, response_bytes_,
                                          response_bytes_);
   if (weak_this.get())
     delegate()->OnURLFetchComplete(this);
@@ -427,19 +424,20 @@ FakeURLFetcherFactory::FakeURLFetcherFactory(
       default_factory_(default_factory) {
 }
 
-scoped_ptr<FakeURLFetcher> FakeURLFetcherFactory::DefaultFakeURLFetcherCreator(
-      const GURL& url,
-      URLFetcherDelegate* delegate,
-      const std::string& response_data,
-      HttpStatusCode response_code,
-      URLRequestStatus::Status status) {
-  return scoped_ptr<FakeURLFetcher>(
+std::unique_ptr<FakeURLFetcher>
+FakeURLFetcherFactory::DefaultFakeURLFetcherCreator(
+    const GURL& url,
+    URLFetcherDelegate* delegate,
+    const std::string& response_data,
+    HttpStatusCode response_code,
+    URLRequestStatus::Status status) {
+  return std::unique_ptr<FakeURLFetcher>(
       new FakeURLFetcher(url, delegate, response_data, response_code, status));
 }
 
 FakeURLFetcherFactory::~FakeURLFetcherFactory() {}
 
-scoped_ptr<URLFetcher> FakeURLFetcherFactory::CreateURLFetcher(
+std::unique_ptr<URLFetcher> FakeURLFetcherFactory::CreateURLFetcher(
     int id,
     const GURL& url,
     URLFetcher::RequestType request_type,
@@ -455,7 +453,7 @@ scoped_ptr<URLFetcher> FakeURLFetcherFactory::CreateURLFetcher(
     }
   }
 
-  scoped_ptr<URLFetcher> fake_fetcher =
+  std::unique_ptr<URLFetcher> fake_fetcher =
       creator_.Run(url, d, it->second.response_data, it->second.response_code,
                    it->second.status);
   return fake_fetcher;
@@ -482,12 +480,12 @@ URLFetcherImplFactory::URLFetcherImplFactory() {}
 
 URLFetcherImplFactory::~URLFetcherImplFactory() {}
 
-scoped_ptr<URLFetcher> URLFetcherImplFactory::CreateURLFetcher(
+std::unique_ptr<URLFetcher> URLFetcherImplFactory::CreateURLFetcher(
     int id,
     const GURL& url,
     URLFetcher::RequestType request_type,
     URLFetcherDelegate* d) {
-  return scoped_ptr<URLFetcher>(new URLFetcherImpl(url, request_type, d));
+  return std::unique_ptr<URLFetcher>(new URLFetcherImpl(url, request_type, d));
 }
 
 }  // namespace net

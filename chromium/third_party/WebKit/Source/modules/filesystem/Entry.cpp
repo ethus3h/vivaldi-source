@@ -29,8 +29,9 @@
  */
 #include "modules/filesystem/Entry.h"
 
-#include "core/dom/ExecutionContext.h"
+#include "bindings/core/v8/ScriptState.h"
 #include "core/fileapi/FileError.h"
+#include "core/frame/UseCounter.h"
 #include "core/html/VoidCallback.h"
 #include "modules/filesystem/DirectoryEntry.h"
 #include "modules/filesystem/EntryCallback.h"
@@ -43,38 +44,79 @@
 namespace blink {
 
 Entry::Entry(DOMFileSystemBase* fileSystem, const String& fullPath)
-    : EntryBase(fileSystem, fullPath)
-{
+    : EntryBase(fileSystem, fullPath) {}
+
+DOMFileSystem* Entry::filesystem(ScriptState* scriptState) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(
+        scriptState->getExecutionContext(),
+        UseCounter::Entry_Filesystem_AttributeGetter_IsolatedFileSystem);
+  return filesystem();
 }
 
-void Entry::getMetadata(MetadataCallback* successCallback, ErrorCallback* errorCallback)
-{
-    m_fileSystem->getMetadata(this, successCallback, errorCallback);
+void Entry::getMetadata(ScriptState* scriptState,
+                        MetadataCallback* successCallback,
+                        ErrorCallback* errorCallback) {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_GetMetadata_Method_IsolatedFileSystem);
+  m_fileSystem->getMetadata(this, successCallback,
+                            ScriptErrorCallback::wrap(errorCallback));
 }
 
-void Entry::moveTo(DirectoryEntry* parent, const String& name, EntryCallback* successCallback, ErrorCallback* errorCallback) const
-{
-    m_fileSystem->move(this, parent, name, successCallback, errorCallback);
+void Entry::moveTo(ScriptState* scriptState,
+                   DirectoryEntry* parent,
+                   const String& name,
+                   EntryCallback* successCallback,
+                   ErrorCallback* errorCallback) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_MoveTo_Method_IsolatedFileSystem);
+  m_fileSystem->move(this, parent, name, successCallback,
+                     ScriptErrorCallback::wrap(errorCallback));
 }
 
-void Entry::copyTo(DirectoryEntry* parent, const String& name, EntryCallback* successCallback, ErrorCallback* errorCallback) const
-{
-    m_fileSystem->copy(this, parent, name, successCallback, errorCallback);
+void Entry::copyTo(ScriptState* scriptState,
+                   DirectoryEntry* parent,
+                   const String& name,
+                   EntryCallback* successCallback,
+                   ErrorCallback* errorCallback) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_CopyTo_Method_IsolatedFileSystem);
+  m_fileSystem->copy(this, parent, name, successCallback,
+                     ScriptErrorCallback::wrap(errorCallback));
 }
 
-void Entry::remove(VoidCallback* successCallback, ErrorCallback* errorCallback) const
-{
-    m_fileSystem->remove(this, successCallback, errorCallback);
+void Entry::remove(ScriptState* scriptState,
+                   VoidCallback* successCallback,
+                   ErrorCallback* errorCallback) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_Remove_Method_IsolatedFileSystem);
+  m_fileSystem->remove(this, successCallback,
+                       ScriptErrorCallback::wrap(errorCallback));
 }
 
-void Entry::getParent(EntryCallback* successCallback, ErrorCallback* errorCallback) const
-{
-    m_fileSystem->getParent(this, successCallback, errorCallback);
+void Entry::getParent(ScriptState* scriptState,
+                      EntryCallback* successCallback,
+                      ErrorCallback* errorCallback) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_GetParent_Method_IsolatedFileSystem);
+  m_fileSystem->getParent(this, successCallback,
+                          ScriptErrorCallback::wrap(errorCallback));
 }
 
-DEFINE_TRACE(Entry)
-{
-    EntryBase::trace(visitor);
+String Entry::toURL(ScriptState* scriptState) const {
+  if (m_fileSystem->type() == FileSystemTypeIsolated)
+    UseCounter::count(scriptState->getExecutionContext(),
+                      UseCounter::Entry_ToURL_Method_IsolatedFileSystem);
+  return static_cast<const EntryBase*>(this)->toURL();
 }
 
-} // namespace blink
+DEFINE_TRACE(Entry) {
+  EntryBase::trace(visitor);
+}
+
+}  // namespace blink

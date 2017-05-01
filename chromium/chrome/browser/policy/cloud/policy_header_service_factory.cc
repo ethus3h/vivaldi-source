@@ -4,9 +4,10 @@
 
 #include "chrome/browser/policy/cloud/policy_header_service_factory.h"
 
+#include <memory>
 #include <utility>
 
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -18,10 +19,10 @@
 #include "components/policy/core/common/cloud/policy_header_service.h"
 
 #if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/policy/active_directory_policy_manager.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_factory_chromeos.h"
+#include "chrome/browser/chromeos/policy/user_policy_manager_factory_chromeos.h"
 #else
 #include "chrome/browser/policy/cloud/user_cloud_policy_manager_factory.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
@@ -33,7 +34,8 @@ namespace {
 
 class PolicyHeaderServiceWrapper : public KeyedService {
  public:
-  explicit PolicyHeaderServiceWrapper(scoped_ptr<PolicyHeaderService> service)
+  explicit PolicyHeaderServiceWrapper(
+      std::unique_ptr<PolicyHeaderService> service)
       : policy_header_service_(std::move(service)) {}
 
   PolicyHeaderService* policy_header_service() const {
@@ -47,7 +49,7 @@ class PolicyHeaderServiceWrapper : public KeyedService {
   }
 
  private:
-  scoped_ptr<PolicyHeaderService> policy_header_service_;
+  std::unique_ptr<PolicyHeaderService> policy_header_service_;
 };
 
 }  // namespace
@@ -57,7 +59,7 @@ PolicyHeaderServiceFactory::PolicyHeaderServiceFactory()
         "PolicyHeaderServiceFactory",
         BrowserContextDependencyManager::GetInstance()) {
 #if defined(OS_CHROMEOS)
-  DependsOn(UserCloudPolicyManagerFactoryChromeOS::GetInstance());
+  DependsOn(UserPolicyManagerFactoryChromeOS::GetInstance());
 #else
   DependsOn(UserCloudPolicyManagerFactory::GetInstance());
 #endif
@@ -88,29 +90,34 @@ KeyedService* PolicyHeaderServiceFactory::BuildServiceInstanceFor(
       g_browser_process->browser_policy_connector();
 #endif
 
-  DeviceManagementService* device_management_service =
-      connector->device_management_service();
+  CloudPolicyStore* user_store;
 #if defined(OS_CHROMEOS)
-  CloudPolicyManager* manager =
-      UserCloudPolicyManagerFactoryChromeOS::GetForProfile(
-           Profile::FromBrowserContext(context));
+  Profile* profile = Profile::FromBrowserContext(context);
+  CloudPolicyManager* cloud_manager =
+      UserPolicyManagerFactoryChromeOS::GetCloudPolicyManagerForProfile(
+          profile);
+  if (cloud_manager) {
+    user_store = cloud_manager->core()->store();
+  } else {
+    ActiveDirectoryPolicyManager* active_directory_manager =
+        UserPolicyManagerFactoryChromeOS::
+            GetActiveDirectoryPolicyManagerForProfile(profile);
+    if (!active_directory_manager)
+      return nullptr;
+    user_store = active_directory_manager->store();
+  }
 #else
   CloudPolicyManager* manager =
       UserCloudPolicyManagerFactory::GetForBrowserContext(context);
-#endif
   if (!manager)
-    return NULL;
-  CloudPolicyStore* user_store = manager->core()->store();
-  CloudPolicyStore* device_store = NULL;
-#if defined(OS_CHROMEOS)
-  device_store = connector->GetDeviceCloudPolicyManager()->core()->store();
+    return nullptr;
+  user_store = manager->core()->store();
 #endif
 
-  scoped_ptr<PolicyHeaderService> service = make_scoped_ptr(
-      new PolicyHeaderService(device_management_service->GetServerUrl(),
-                              kPolicyVerificationKeyHash,
-                              user_store,
-                              device_store));
+  std::unique_ptr<PolicyHeaderService> service =
+      base::MakeUnique<PolicyHeaderService>(
+          connector->device_management_service()->GetServerUrl(),
+          kPolicyVerificationKeyHash, user_store);
   return new PolicyHeaderServiceWrapper(std::move(service));
 }
 

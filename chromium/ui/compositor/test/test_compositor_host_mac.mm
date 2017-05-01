@@ -10,11 +10,12 @@
 #import <AppKit/NSWindow.h>
 #import <Foundation/NSAutoreleasePool.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -83,7 +84,8 @@ class TestCompositorHostMac : public TestCompositorHost,
                               public AppKitHost {
  public:
   TestCompositorHostMac(const gfx::Rect& bounds,
-                        ui::ContextFactory* context_factory);
+                        ui::ContextFactory* context_factory,
+                        ui::ContextFactoryPrivate* context_factory_private);
   ~TestCompositorHostMac() override;
 
  private:
@@ -92,8 +94,6 @@ class TestCompositorHostMac : public TestCompositorHost,
   ui::Compositor* GetCompositor() override;
 
   gfx::Rect bounds_;
-
-  ui::ContextFactory* context_factory_;
 
   ui::Compositor compositor_;
 
@@ -105,12 +105,14 @@ class TestCompositorHostMac : public TestCompositorHost,
 
 TestCompositorHostMac::TestCompositorHostMac(
     const gfx::Rect& bounds,
-    ui::ContextFactory* context_factory)
+    ui::ContextFactory* context_factory,
+    ui::ContextFactoryPrivate* context_factory_private)
     : bounds_(bounds),
-      context_factory_(context_factory),
-      compositor_(context_factory, base::ThreadTaskRunnerHandle::Get()),
-      window_(nil) {
-}
+      compositor_(context_factory_private->AllocateFrameSinkId(),
+                  context_factory,
+                  context_factory_private,
+                  base::ThreadTaskRunnerHandle::Get()),
+      window_(nil) {}
 
 TestCompositorHostMac::~TestCompositorHostMac() {
   // Release reference to |compositor_|.  Important because the |compositor_|
@@ -152,8 +154,10 @@ ui::Compositor* TestCompositorHostMac::GetCompositor() {
 // static
 TestCompositorHost* TestCompositorHost::Create(
     const gfx::Rect& bounds,
-    ui::ContextFactory* context_factory) {
-  return new TestCompositorHostMac(bounds, context_factory);
+    ui::ContextFactory* context_factory,
+    ui::ContextFactoryPrivate* context_factory_private) {
+  return new TestCompositorHostMac(bounds, context_factory,
+                                   context_factory_private);
 }
 
 }  // namespace ui

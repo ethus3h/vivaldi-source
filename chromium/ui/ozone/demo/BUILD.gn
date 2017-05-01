@@ -32,8 +32,8 @@ executable("ozone_demo") {
     "//ui/events/ozone:events_ozone_layout",
     "//ui/gfx/geometry",
     "//ui/gl",
+    "//ui/gl/init",
     "//ui/ozone",
-    "//ui/ozone:ozone_base",
     "//ui/platform_window",
   ]
 }

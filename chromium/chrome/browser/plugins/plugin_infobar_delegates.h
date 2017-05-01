@@ -8,22 +8,18 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "chrome/common/features.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "url/gurl.h"
 
-#if defined(ENABLE_PLUGIN_INSTALLATION)
+#if BUILDFLAG(ENABLE_PLUGIN_INSTALLATION)
 #include "chrome/browser/plugins/plugin_installer_observer.h"
 #endif
 
 class InfoBarService;
-class HostContentSettingsMap;
 class PluginMetadata;
 
-namespace content {
-class WebContents;
-}
-
-#if defined(ENABLE_PLUGIN_INSTALLATION)
+#if BUILDFLAG(ENABLE_PLUGIN_INSTALLATION)
 // Infobar that's shown when a plugin is out of date.
 class OutdatedPluginInfoBarDelegate : public ConfirmInfoBarDelegate,
                                       public WeakPluginInstallerObserver {
@@ -32,25 +28,25 @@ class OutdatedPluginInfoBarDelegate : public ConfirmInfoBarDelegate,
   // |infobar_service|.
   static void Create(InfoBarService* infobar_service,
                      PluginInstaller* installer,
-                     scoped_ptr<PluginMetadata> metadata);
+                     std::unique_ptr<PluginMetadata> metadata);
 
   // Replaces |infobar|, which must currently be owned, with an infobar asking
   // the user to update a particular plugin.
   static void Replace(infobars::InfoBar* infobar,
                       PluginInstaller* installer,
-                      scoped_ptr<PluginMetadata> plugin_metadata,
+                      std::unique_ptr<PluginMetadata> plugin_metadata,
                       const base::string16& message);
 
  private:
   OutdatedPluginInfoBarDelegate(PluginInstaller* installer,
-                                scoped_ptr<PluginMetadata> metadata,
+                                std::unique_ptr<PluginMetadata> metadata,
                                 const base::string16& message);
   ~OutdatedPluginInfoBarDelegate() override;
 
   // ConfirmInfoBarDelegate:
   infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override;
   void InfoBarDismissed() override;
-  int GetIconId() const override;
+  gfx::VectorIconId GetVectorIconId() const override;
   base::string16 GetMessageText() const override;
   base::string16 GetButtonLabel(InfoBarButton button) const override;
   bool Accept() override;
@@ -73,12 +69,12 @@ class OutdatedPluginInfoBarDelegate : public ConfirmInfoBarDelegate,
 
   std::string identifier_;
 
-  scoped_ptr<PluginMetadata> plugin_metadata_;
+  std::unique_ptr<PluginMetadata> plugin_metadata_;
 
   base::string16 message_;
 
   DISALLOW_COPY_AND_ASSIGN(OutdatedPluginInfoBarDelegate);
 };
-#endif  // defined(ENABLE_PLUGIN_INSTALLATION)
+#endif  // BUILDFLAG(ENABLE_PLUGIN_INSTALLATION)
 
 #endif  // CHROME_BROWSER_PLUGINS_PLUGIN_INFOBAR_DELEGATES_H_

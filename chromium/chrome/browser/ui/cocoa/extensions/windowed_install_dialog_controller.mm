@@ -8,8 +8,8 @@
 
 #import "base/callback_helpers.h"
 #import "base/mac/sdk_forward_declarations.h"
-#include "base/message_loop/message_loop.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
 #include "chrome/browser/profiles/profile.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_install_view_controller.h"
@@ -28,14 +28,14 @@
 - (id)initWithProfile:(Profile*)profile
             navigator:(content::PageNavigator*)navigator
              delegate:(WindowedInstallDialogController*)delegate
-               prompt:(scoped_ptr<ExtensionInstallPrompt::Prompt>)prompt;
+               prompt:(std::unique_ptr<ExtensionInstallPrompt::Prompt>)prompt;
 
 @end
 
 WindowedInstallDialogController::WindowedInstallDialogController(
     ExtensionInstallPromptShowParams* show_params,
     const ExtensionInstallPrompt::DoneCallback& done_callback,
-    scoped_ptr<ExtensionInstallPrompt::Prompt> prompt)
+    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt)
     : done_callback_(done_callback) {
   install_controller_.reset([[WindowedInstallController alloc]
       initWithProfile:show_params->profile()
@@ -56,7 +56,7 @@ void WindowedInstallDialogController::OnWindowClosing() {
     base::ResetAndReturn(&done_callback_).Run(
         ExtensionInstallPrompt::Result::ABORTED);
   }
-  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
 }
 
 ExtensionInstallViewController*
@@ -87,7 +87,7 @@ void WindowedInstallDialogController::OnStoreLinkClicked() {
 - (id)initWithProfile:(Profile*)profile
             navigator:(content::PageNavigator*)navigator
              delegate:(WindowedInstallDialogController*)delegate
-               prompt:(scoped_ptr<ExtensionInstallPrompt::Prompt>)prompt {
+               prompt:(std::unique_ptr<ExtensionInstallPrompt::Prompt>)prompt {
   base::scoped_nsobject<NSWindow> controlledPanel(
       [[NSPanel alloc] initWithContentRect:ui::kWindowSizeDeterminedLater
                                  styleMask:NSTitledWindowMask

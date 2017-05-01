@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <queue>
 #include <string>
 
@@ -14,13 +15,13 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/common/process_type.h"
 #include "net/base/completion_callback.h"
+#include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
-#include "net/udp/udp_socket.h"
+#include "net/socket/udp_socket.h"
 #include "ppapi/c/pp_instance.h"
 #include "ppapi/c/pp_stdint.h"
 #include "ppapi/c/ppb_udp_socket.h"
@@ -50,7 +51,6 @@ struct ReplyMessageContext;
 namespace content {
 
 class BrowserPpapiHostImpl;
-struct SocketPermissionRequest;
 
 class CONTENT_EXPORT PepperUDPSocketMessageFilter
     : public ppapi::host::ResourceMessageFilter {
@@ -75,13 +75,14 @@ class CONTENT_EXPORT PepperUDPSocketMessageFilter
   };
 
   struct PendingSend {
-    PendingSend(const net::IPAddressNumber& address,
+    PendingSend(const net::IPAddress& address,
                 int port,
                 const scoped_refptr<net::IOBufferWithSize>& buffer,
                 const ppapi::host::ReplyMessageContext& context);
+    PendingSend(const PendingSend& other);
     ~PendingSend();
 
-    net::IPAddressNumber address;
+    net::IPAddress address;
     int port;
     scoped_refptr<net::IOBufferWithSize> buffer;
     ppapi::host::ReplyMessageContext context;
@@ -112,14 +113,14 @@ class CONTENT_EXPORT PepperUDPSocketMessageFilter
 
   void DoBind(const ppapi::host::ReplyMessageContext& context,
               const PP_NetAddress_Private& addr);
-  void OnBindComplete(scoped_ptr<net::UDPSocket> socket,
+  void OnBindComplete(std::unique_ptr<net::UDPSocket> socket,
                       const ppapi::host::ReplyMessageContext& context,
                       const PP_NetAddress_Private& net_address);
 #if defined(OS_CHROMEOS)
   void OpenFirewallHole(const net::IPEndPoint& local_address,
                         base::Closure bind_complete);
   void OnFirewallHoleOpened(base::Closure bind_complete,
-                            scoped_ptr<chromeos::FirewallHole> hole);
+                            std::unique_ptr<chromeos::FirewallHole> hole);
 #endif  // defined(OS_CHROMEOS)
   void DoRecvFrom();
   void DoSendTo(const ppapi::host::ReplyMessageContext& context,
@@ -162,10 +163,11 @@ class CONTENT_EXPORT PepperUDPSocketMessageFilter
   int multicast_ttl_;
   int32_t can_use_multicast_;
 
-  scoped_ptr<net::UDPSocket> socket_;
+  std::unique_ptr<net::UDPSocket> socket_;
   bool closed_;
 #if defined(OS_CHROMEOS)
-  scoped_ptr<chromeos::FirewallHole, content::BrowserThread::DeleteOnUIThread>
+  std::unique_ptr<chromeos::FirewallHole,
+                  content::BrowserThread::DeleteOnUIThread>
       firewall_hole_;
 #endif  // defined(OS_CHROMEOS)
 

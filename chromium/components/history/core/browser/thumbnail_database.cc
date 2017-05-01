@@ -279,7 +279,7 @@ void RecoverDatabaseOrRaze(sql::Connection* db, const base::FilePath& db_path) {
   int64_t original_size = 0;
   base::GetFileSize(db_path, &original_size);
 
-  scoped_ptr<sql::Recovery> recovery = sql::Recovery::Begin(db, db_path);
+  std::unique_ptr<sql::Recovery> recovery = sql::Recovery::Begin(db, db_path);
   if (!recovery) {
     // TODO(shess): Unable to create recovery connection.  This
     // implies something substantial is wrong.  At this point |db| has
@@ -352,18 +352,18 @@ void RecoverDatabaseOrRaze(sql::Connection* db, const base::FilePath& db_path) {
     return;
   }
 
-  if (!recovery->AutoRecoverTable("favicons", 0, &favicons_rows_recovered)) {
+  if (!recovery->AutoRecoverTable("favicons", &favicons_rows_recovered)) {
     sql::Recovery::Rollback(std::move(recovery));
     RecordRecoveryEvent(RECOVERY_EVENT_FAILED_AUTORECOVER_FAVICONS);
     return;
   }
-  if (!recovery->AutoRecoverTable("favicon_bitmaps", 0,
+  if (!recovery->AutoRecoverTable("favicon_bitmaps",
                                   &favicon_bitmaps_rows_recovered)) {
     sql::Recovery::Rollback(std::move(recovery));
     RecordRecoveryEvent(RECOVERY_EVENT_FAILED_AUTORECOVER_FAVICON_BITMAPS);
     return;
   }
-  if (!recovery->AutoRecoverTable("icon_mapping", 0,
+  if (!recovery->AutoRecoverTable("icon_mapping",
                                   &icon_mapping_rows_recovered)) {
     sql::Recovery::Rollback(std::move(recovery));
     RecordRecoveryEvent(RECOVERY_EVENT_FAILED_AUTORECOVER_ICON_MAPPING);
@@ -433,7 +433,7 @@ void DatabaseErrorCallback(sql::Connection* db,
   }
 
   // The default handling is to assert on debug and to ignore on release.
-  if (!sql::Connection::ShouldIgnoreSqliteError(extended_error))
+  if (!sql::Connection::IsExpectedSqliteError(extended_error))
     DLOG(FATAL) << db->GetErrorMessage();
 }
 

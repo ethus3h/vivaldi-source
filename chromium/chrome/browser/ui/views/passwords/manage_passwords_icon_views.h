@@ -13,7 +13,6 @@
 #include "ui/views/controls/image_view.h"
 
 class CommandUpdater;
-class ManagePasswordsUIController;
 
 // View for the password icon in the Omnibox.
 class ManagePasswordsIconViews : public ManagePasswordsIconView,
@@ -29,7 +28,7 @@ class ManagePasswordsIconViews : public ManagePasswordsIconView,
   void OnExecuting(BubbleIconView::ExecuteSource source) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
-  views::BubbleDelegateView* GetBubble() const override;
+  views::BubbleDialogDelegateView* GetBubble() const override;
   gfx::VectorIconId GetVectorIcon() const override;
 
   // views::View:

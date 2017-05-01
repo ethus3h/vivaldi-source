@@ -5,11 +5,11 @@
 #ifndef CHROMEOS_LOGIN_AUTH_LOGIN_PERFORMER_H_
 #define CHROMEOS_LOGIN_AUTH_LOGIN_PERFORMER_H_
 
+#include <memory>
 #include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/chromeos_export.h"
 #include "chromeos/login/auth/auth_status_consumer.h"
@@ -22,10 +22,6 @@ class AccountId;
 
 namespace net {
 class URLRequestContextGetter;
-}
-
-namespace policy {
-class WildcardLoginChecker;
 }
 
 namespace content {
@@ -57,6 +53,7 @@ class CHROMEOS_EXPORT LoginPerformer : public AuthStatusConsumer {
     ~Delegate() override {}
     virtual void WhiteListCheckFailed(const std::string& email) = 0;
     virtual void PolicyLoadFailed() = 0;
+    virtual void SetAuthFlowOffline(bool offline) = 0;
   };
 
   LoginPerformer(scoped_refptr<base::TaskRunner> task_runner,
@@ -78,9 +75,12 @@ class CHROMEOS_EXPORT LoginPerformer : public AuthStatusConsumer {
   // Performs public session login with a given |user_context|.
   void LoginAsPublicSession(const UserContext& user_context);
 
-  // Performs a login into the kiosk mode account with |app_user_id|.
-  void LoginAsKioskAccount(const std::string& app_user_id,
+  // Performs a login into the kiosk mode account with |app_account_id|.
+  void LoginAsKioskAccount(const AccountId& app_account_id,
                            bool use_guest_mount);
+
+  // Performs a login into the ARC kiosk mode account with |arc_app_account_id|.
+  void LoginAsArcKioskAccount(const AccountId& arc_app_account_id);
 
   // AuthStatusConsumer implementation:
   void OnAuthFailure(const AuthFailure& error) override;

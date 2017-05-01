@@ -5,15 +5,17 @@
 #include "content/browser/web_contents/web_contents_view_aura.h"
 
 #include <stddef.h>
+#include <tuple>
 
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_timeouts.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "content/browser/frame_host/navigation_controller_impl.h"
@@ -41,8 +43,8 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/events/event_processor.h"
-#include "ui/events/event_switches.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
 
@@ -171,14 +173,13 @@ class NavigationWatcher : public WebContentsObserver {
     if (navigated_)
       return;
     should_quit_loop_ = true;
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
   }
 
  private:
   // Overridden from WebContentsObserver:
-  void DidStartNavigationToPendingEntry(
-      const GURL& validated_url,
-      NavigationController::ReloadType reload_type) override {
+  void DidStartNavigationToPendingEntry(const GURL& validated_url,
+                                        ReloadType reload_type) override {
     navigated_ = true;
     if (should_quit_loop_)
       base::MessageLoop::current()->QuitWhenIdle();
@@ -223,8 +224,8 @@ class InputEventMessageFilterWaitsForAcks : public BrowserMessageFilter {
     if (message.type() == InputHostMsg_HandleInputEvent_ACK::ID) {
       InputHostMsg_HandleInputEvent_ACK::Param params;
       InputHostMsg_HandleInputEvent_ACK::Read(&message, &params);
-      blink::WebInputEvent::Type type = base::get<0>(params).type;
-      InputEventAckState ack = base::get<0>(params).state;
+      blink::WebInputEvent::Type type = std::get<0>(params).type;
+      InputEventAckState ack = std::get<0>(params).state;
       BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
           base::Bind(&InputEventMessageFilterWaitsForAcks::ReceivedEventAck,
                      this, type, ack));
@@ -248,7 +249,7 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
   // Executes the javascript synchronously and makes sure the returned value is
   // freed properly.
   void ExecuteSyncJSFunction(RenderFrameHost* rfh, const std::string& jscript) {
-    scoped_ptr<base::Value> value =
+    std::unique_ptr<base::Value> value =
         content::ExecuteScriptAndGetValue(rfh, jscript);
   }
 
@@ -269,15 +270,15 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
     NavigationControllerImpl* controller = &web_contents->GetController();
 
     screenshot_manager_ = new ScreenshotTracker(controller);
-    controller->SetScreenshotManager(make_scoped_ptr(screenshot_manager_));
+    controller->SetScreenshotManager(base::WrapUnique(screenshot_manager_));
 
     frame_watcher_ = new FrameWatcher();
-    GetRenderWidgetHost()->GetProcess()->AddFilter(frame_watcher_.get());
+    frame_watcher_->AttachTo(shell()->web_contents());
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitchASCII(switches::kTouchEvents,
-                           switches::kTouchEventsEnabled);
+    cmd->AppendSwitchASCII(switches::kTouchEventFeatureDetection,
+                           switches::kTouchEventFeatureDetectionEnabled);
   }
 
   void TestOverscrollNavigation(bool touch_handler) {
@@ -290,7 +291,7 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
     EXPECT_FALSE(controller.CanGoBack());
     EXPECT_FALSE(controller.CanGoForward());
     int index = -1;
-    scoped_ptr<base::Value> value =
+    std::unique_ptr<base::Value> value =
         content::ExecuteScriptAndGetValue(main_frame, "get_current()");
     ASSERT_TRUE(value->GetAsInteger(&index));
     EXPECT_EQ(0, index);
@@ -372,7 +373,7 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
         static_cast<WebContentsImpl*>(shell()->web_contents());
     RenderFrameHost* main_frame = web_contents->GetMainFrame();
     int index = -1;
-    scoped_ptr<base::Value> value;
+    std::unique_ptr<base::Value> value;
     value = content::ExecuteScriptAndGetValue(main_frame, "get_current()");
     if (!value->GetAsInteger(&index))
       index = -1;
@@ -382,9 +383,7 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
   int ExecuteScriptAndExtractInt(const std::string& script) {
     int value = 0;
     EXPECT_TRUE(content::ExecuteScriptAndExtractInt(
-        shell()->web_contents(),
-        "domAutomationController.send(" + script + ")",
-        &value));
+        shell(), "domAutomationController.send(" + script + ")", &value));
     return value;
   }
 
@@ -498,7 +497,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   ui::EventProcessor* dispatcher = content->GetHost()->event_processor();
   gfx::Rect bounds = content->GetBoundsInRootWindow();
 
-  base::TimeDelta timestamp = ui::EventTimeForNow();
+  base::TimeTicks timestamp = ui::EventTimeForNow();
   ui::TouchEvent press(
       ui::ET_TOUCH_PRESSED,
       gfx::Point(bounds.x() + bounds.width() / 2, bounds.y() + 5), 0,
@@ -737,7 +736,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, ReplaceStateReloadPushState) {
   // history.replaceState shouldn't capture a screenshot
   EXPECT_FALSE(screenshot_manager()->screenshot_taken_for());
   screenshot_manager()->Reset();
-  web_contents->GetController().Reload(true);
+  web_contents->GetController().Reload(ReloadType::NORMAL, true);
   WaitForLoadStop(web_contents);
   // reloading the page shouldn't capture a screenshot
   // TODO (mfomitchev): currently broken. Uncomment when
@@ -765,7 +764,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                        DISABLED_ContentWindowReparent) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
 
-  scoped_ptr<aura::Window> window(new aura::Window(NULL));
+  std::unique_ptr<aura::Window> window(new aura::Window(NULL));
   window->Init(ui::LAYER_NOT_DRAWN);
 
   WebContentsImpl* web_contents =
@@ -806,11 +805,12 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, ContentWindowClose) {
 }
 
 
-#if defined(OS_WIN) || (defined(OS_LINUX) && !defined(OS_CHROMEOS))
+#if defined(OS_WIN) || defined(OS_LINUX)
 // This appears to be flaky in the same was as the other overscroll
 // tests. Enabling for non-Windows platforms.
 // See http://crbug.com/369871.
-// For linux, see http://crbug.com/381294
+// For linux, see http://crbug.com/381294.
+// For ChromeOS, see http://crbug.com/668128.
 #define MAYBE_RepeatedQuickOverscrollGestures DISABLED_RepeatedQuickOverscrollGestures
 #else
 #define MAYBE_RepeatedQuickOverscrollGestures RepeatedQuickOverscrollGestures
@@ -888,7 +888,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, HideContentOnParenHide) {
 IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, WebContentsViewReparent) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
 
-  scoped_ptr<aura::Window> window(new aura::Window(NULL));
+  std::unique_ptr<aura::Window> window(new aura::Window(NULL));
   window->Init(ui::LAYER_NOT_DRAWN);
 
   RenderWidgetHostViewAura* rwhva =
@@ -957,7 +957,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
     ASSERT_EQ(INPUT_EVENT_ACK_STATE_NOT_CONSUMED, filter()->last_ack_state());
 
     blink::WebGestureEvent scroll_begin =
-        SyntheticWebGestureEventBuilder::BuildScrollBegin(1, 1);
+        SyntheticWebGestureEventBuilder::BuildScrollBegin(
+            1, 1, blink::WebGestureDeviceTouchscreen);
     GetRenderWidgetHost()->ForwardGestureEventWithLatencyInfo(
         scroll_begin, ui::LatencyInfo());
     // Scroll begin ignores ack disposition, so don't wait for the ack.
@@ -986,8 +987,10 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                                                             ui::LatencyInfo());
     WaitAFrame();
 
-    blink::WebGestureEvent scroll_end;
-    scroll_end.type = blink::WebInputEvent::GestureScrollEnd;
+    blink::WebGestureEvent scroll_end(
+        blink::WebInputEvent::GestureScrollEnd,
+        blink::WebInputEvent::NoModifiers,
+        ui::EventTimeStampToSeconds(ui::EventTimeForNow()));
     GetRenderWidgetHost()->ForwardGestureEventWithLatencyInfo(
         scroll_end, ui::LatencyInfo());
     WaitAFrame();
@@ -1000,8 +1003,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
 }
 
 // Test that vertical overscroll updates are sent only when a user overscrolls
-// vertically.
-#if defined(OS_WIN)
+// vertically. Flaky on several platforms. https://crbug.com/679420
+#if defined(OS_WIN) || defined(OS_CHROMEOS)
 #define MAYBE_VerticalOverscroll DISABLED_VerticalOverscroll
 #else
 #define MAYBE_VerticalOverscroll VerticalOverscroll
@@ -1030,7 +1033,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, MAYBE_VerticalOverscroll) {
   {
     int kXStep = bounds.width() / 10;
     gfx::Point location(bounds.right() - kXStep, bounds.y() + 5);
-    base::TimeDelta timestamp = ui::EventTimeForNow();
+    base::TimeTicks timestamp = ui::EventTimeForNow();
     ui::TouchEvent press(ui::ET_TOUCH_PRESSED, location, 0, timestamp);
     ui::EventDispatchDetails details = dispatcher->OnEventFromSource(&press);
     ASSERT_FALSE(details.dispatcher_destroyed);
@@ -1062,7 +1065,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, MAYBE_VerticalOverscroll) {
 
     int kYStep = bounds.height() / 10;
     gfx::Point location(bounds.x() + 10, bounds.y() + kYStep);
-    base::TimeDelta timestamp = ui::EventTimeForNow();
+    base::TimeTicks timestamp = ui::EventTimeForNow();
     ui::TouchEvent press(ui::ET_TOUCH_PRESSED, location, 0, timestamp);
     ui::EventDispatchDetails details = dispatcher->OnEventFromSource(&press);
     ASSERT_FALSE(details.dispatcher_destroyed);
@@ -1096,7 +1099,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, MAYBE_VerticalOverscroll) {
     int kXStep = bounds.width() / 10;
     int kYStep = bounds.height() / 10;
     gfx::Point location = bounds.origin() + gfx::Vector2d(0, kYStep);
-    base::TimeDelta timestamp = ui::EventTimeForNow();
+    base::TimeTicks timestamp = ui::EventTimeForNow();
     ui::TouchEvent press(ui::ET_TOUCH_PRESSED, location, 0, timestamp);
     ui::EventDispatchDetails details = dispatcher->OnEventFromSource(&press);
     ASSERT_FALSE(details.dispatcher_destroyed);

@@ -6,11 +6,10 @@
 
 #include <utility>
 
-#include "base/command_line.h"
-#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/content_settings/core/common/content_settings_pattern.h"
+#include "base/location.h"
+#include "base/memory/ptr_util.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/guest_view/browser/guest_view_event.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -20,7 +19,20 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
+#include "ppapi/features/features.h"
+
+#include "base/command_line.h"
+#include "browser/vivaldi_browser_finder.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "extensions/helper/vivaldi_app_helper.h"
+
+#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+
+#include "chrome/browser/extensions/api/tab_capture/tab_capture_registry.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/extensions/extension_constants.h"
 
 using content::BrowserPluginGuestDelegate;
 using content::RenderViewHost;
@@ -190,13 +202,23 @@ WebViewPermissionHelper* WebViewPermissionHelper::FromFrameID(
 // static
 WebViewPermissionHelper* WebViewPermissionHelper::FromWebContents(
       content::WebContents* web_contents) {
+  // This can be a MimeHandlerViewGuest, used to show PDFs. In that case use the
+  // owner webcontents which will give us a WebViewGuest.
+  MimeHandlerViewGuest* mime_view_guest =
+      MimeHandlerViewGuest::FromWebContents(web_contents);
+  if (mime_view_guest) {
+    WebViewGuest* web_view_guest =
+        WebViewGuest::FromWebContents(mime_view_guest->owner_web_contents());
+    return web_view_guest->web_view_permission_helper_.get();
+  }
   WebViewGuest* web_view_guest = WebViewGuest::FromWebContents(web_contents);
-  if (!web_view_guest)
-      return NULL;
+  if (!web_view_guest) {
+    return NULL;
+  }
   return web_view_guest->web_view_permission_helper_.get();
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 bool WebViewPermissionHelper::OnMessageReceived(
     const IPC::Message& message,
     content::RenderFrameHost* render_frame_host) {
@@ -207,19 +229,51 @@ bool WebViewPermissionHelper::OnMessageReceived(
 bool WebViewPermissionHelper::OnMessageReceived(const IPC::Message& message) {
   return web_view_permission_helper_delegate_->OnMessageReceived(message);
 }
-#endif  // defined(ENABLE_PLUGINS)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 void WebViewPermissionHelper::RequestMediaAccessPermission(
     content::WebContents* source,
     const content::MediaStreamRequest& request,
     const content::MediaResponseCallback& callback) {
+#if defined(ENABLE_MEDIA_ROUTER)
+  // If this is a TabCast request.
+  if (request.video_type == content::MEDIA_TAB_VIDEO_CAPTURE ||
+      request.audio_type == content::MEDIA_TAB_AUDIO_CAPTURE) {
+    // Only allow the stable Google cast component extension...
+    std::string extension_id = request.security_origin.host();
+    if (extension_id == extension_misc::kMediaRouterStableExtensionId) {
+      content::MediaStreamDevices devices;
+      extensions::TabCaptureRegistry* const tab_capture_registry =
+          extensions::TabCaptureRegistry::Get(source->GetBrowserContext());
+      // and doublecheck that this came from the correct renderer.
+      if (tab_capture_registry &&
+          tab_capture_registry->VerifyRequest(request.render_process_id,
+                                              request.render_frame_id,
+                                              extension_id)) {
+        if (request.audio_type == content::MEDIA_TAB_AUDIO_CAPTURE) {
+          devices.push_back(content::MediaStreamDevice(
+              content::MEDIA_TAB_AUDIO_CAPTURE, std::string(), std::string()));
+        }
+        if (request.video_type == content::MEDIA_TAB_VIDEO_CAPTURE) {
+          devices.push_back(content::MediaStreamDevice(
+              content::MEDIA_TAB_VIDEO_CAPTURE, std::string(), std::string()));
+        }
+      }
 
+      callback.Run(devices,
+                   devices.empty() ? content::MEDIA_DEVICE_INVALID_STATE
+                                   : content::MEDIA_DEVICE_OK,
+                   std::unique_ptr<content::MediaStreamUI>(nullptr));
+      return;
+    }
+  }
+
+#endif  // ENABLE_MEDIA_ROUTER
   extensions::VivaldiAppHelper* helper =
       extensions::VivaldiAppHelper::FromWebContents(web_view_guest()->
         embedder_web_contents());
   if (helper) do {
-    Profile* profile =
-        chrome::FindBrowserWithWebContents(web_contents())->profile();
+    Profile* profile = Profile::FromBrowserContext(source->GetBrowserContext());
 
     ContentSetting audio_setting = CONTENT_SETTING_DEFAULT;
     ContentSetting camera_setting = CONTENT_SETTING_DEFAULT;
@@ -247,8 +301,8 @@ void WebViewPermissionHelper::RequestMediaAccessPermission(
     if (audio_setting == CONTENT_SETTING_BLOCK ||
         camera_setting == CONTENT_SETTING_BLOCK) {
       callback.Run(content::MediaStreamDevices(),
-                 content::MEDIA_DEVICE_PERMISSION_DENIED,
-                 scoped_ptr<content::MediaStreamUI>());
+                   content::MEDIA_DEVICE_PERMISSION_DENIED,
+                   std::unique_ptr<content::MediaStreamUI>());
       return;
     }
     if (audio_setting == CONTENT_SETTING_ALLOW ||
@@ -303,17 +357,18 @@ void WebViewPermissionHelper::OnMediaPermissionResponse(
       extensions::VivaldiAppHelper::FromWebContents(
           web_view_guest()->embedder_web_contents());
   if (helper) {
-    Profile* profile =
-        chrome::FindBrowserWithWebContents(web_contents())->profile();
+    Browser* browser = vivaldi::FindBrowserWithWebContents(web_contents());
+    DCHECK(browser);
+    Profile* profile = browser->profile();
 
     if (request.audio_type != content::MEDIA_NO_SERVICE) {
-      HostContentSettingsMapFactory::GetForProfile(profile)->SetContentSetting(
+      HostContentSettingsMapFactory::GetForProfile(profile)->SetContentSettingCustomScope(
           primary_pattern, ContentSettingsPattern::Wildcard(),
           CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, std::string(),
           allow ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
     }
     if (request.video_type  != content::MEDIA_NO_SERVICE) {
-      HostContentSettingsMapFactory::GetForProfile(profile)->SetContentSetting(
+      HostContentSettingsMapFactory::GetForProfile(profile)->SetContentSettingCustomScope(
           primary_pattern, ContentSettingsPattern::Wildcard(),
           CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, std::string(),
           allow ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
@@ -323,14 +378,14 @@ void WebViewPermissionHelper::OnMediaPermissionResponse(
   if (!allow) {
     callback.Run(content::MediaStreamDevices(),
                  content::MEDIA_DEVICE_PERMISSION_DENIED,
-                 scoped_ptr<content::MediaStreamUI>());
+                 std::unique_ptr<content::MediaStreamUI>());
     return;
   }
   if (!web_view_guest()->attached() ||
       !web_view_guest()->embedder_web_contents()->GetDelegate()) {
     callback.Run(content::MediaStreamDevices(),
                  content::MEDIA_DEVICE_INVALID_STATE,
-                 scoped_ptr<content::MediaStreamUI>());
+                 std::unique_ptr<content::MediaStreamUI>());
     return;
   }
 
@@ -428,36 +483,35 @@ int WebViewPermissionHelper::RequestPermission(
     // objects held by the permission request are not destroyed immediately
     // after creation. This is to allow those same objects to be accessed again
     // in the same scope without fear of use after freeing.
-    base::MessageLoop::current()->PostTask(
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::Bind(&PermissionResponseCallback::Run,
                    base::Owned(new PermissionResponseCallback(callback)),
-                   allowed_by_default,
-                   std::string()));
+                   allowed_by_default, std::string()));
     return webview::kInvalidPermissionRequestID;
   }
 
   int request_id = next_permission_request_id_++;
   pending_permission_requests_[request_id] =
       PermissionResponseInfo(callback, permission_type, allowed_by_default);
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->Set(webview::kRequestInfo, request_info.DeepCopy());
   args->SetInteger(webview::kRequestId, request_id);
   switch (permission_type) {
     case WEB_VIEW_PERMISSION_TYPE_NEW_WINDOW: {
-      web_view_guest_->DispatchEventToView(
-          new GuestViewEvent(webview::kEventNewWindow, std::move(args)));
+      web_view_guest_->DispatchEventToView(base::MakeUnique<GuestViewEvent>(
+          webview::kEventNewWindow, std::move(args)));
       break;
     }
     case WEB_VIEW_PERMISSION_TYPE_JAVASCRIPT_DIALOG: {
-      web_view_guest_->DispatchEventToView(
-          new GuestViewEvent(webview::kEventDialog, std::move(args)));
+      web_view_guest_->DispatchEventToView(base::MakeUnique<GuestViewEvent>(
+          webview::kEventDialog, std::move(args)));
       break;
     }
     default: {
       args->SetString(webview::kPermission,
                       PermissionTypeToString(permission_type));
-      web_view_guest_->DispatchEventToView(new GuestViewEvent(
+      web_view_guest_->DispatchEventToView(base::MakeUnique<GuestViewEvent>(
           webview::kEventPermissionRequest, std::move(args)));
       break;
     }
@@ -514,6 +568,9 @@ WebViewPermissionHelper::PermissionResponseInfo::PermissionResponseInfo(
       permission_type(permission_type),
       allowed_by_default(allowed_by_default) {
 }
+
+WebViewPermissionHelper::PermissionResponseInfo::PermissionResponseInfo(
+    const PermissionResponseInfo& other) = default;
 
 WebViewPermissionHelper::PermissionResponseInfo::~PermissionResponseInfo() {
 }

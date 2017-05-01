@@ -21,64 +21,43 @@
 #ifndef CSSCursorImageValue_h
 #define CSSCursorImageValue_h
 
-#include "core/css/CSSImageValue.h"
+#include "core/css/CSSValue.h"
 #include "platform/geometry/IntPoint.h"
-#include "wtf/HashSet.h"
 
 namespace blink {
 
-class Element;
-class SVGElement;
-
 class CSSCursorImageValue : public CSSValue {
-public:
-    static PassRefPtrWillBeRawPtr<CSSCursorImageValue> create(PassRefPtrWillBeRawPtr<CSSValue> imageValue, bool hotSpotSpecified, const IntPoint& hotSpot)
-    {
-        return adoptRefWillBeNoop(new CSSCursorImageValue(imageValue, hotSpotSpecified, hotSpot));
-    }
+ public:
+  static const CSSCursorImageValue* create(const CSSValue& imageValue,
+                                           bool hotSpotSpecified,
+                                           const IntPoint& hotSpot) {
+    return new CSSCursorImageValue(imageValue, hotSpotSpecified, hotSpot);
+  }
 
-    ~CSSCursorImageValue();
+  ~CSSCursorImageValue();
 
-    bool hotSpotSpecified() const { return m_hotSpotSpecified; }
+  bool hotSpotSpecified() const { return m_hotSpotSpecified; }
+  const IntPoint& hotSpot() const { return m_hotSpot; }
+  const CSSValue& imageValue() const { return *m_imageValue; }
 
-    IntPoint hotSpot() const { return m_hotSpot; }
+  String customCSSText() const;
 
-    String customCSSText() const;
+  bool equals(const CSSCursorImageValue&) const;
 
-    bool updateIfSVGCursorIsUsed(Element*);
-    bool isCachePending(float deviceScaleFactor) const;
-    StyleImage* cachedImage(float deviceScaleFactor) const;
-    StyleImage* cacheImage(Document*, float deviceScaleFactor);
+  DECLARE_TRACE_AFTER_DISPATCH();
 
-#if !ENABLE(OILPAN)
-    void removeReferencedElement(SVGElement*);
-#endif
+ private:
+  CSSCursorImageValue(const CSSValue& imageValue,
+                      bool hotSpotSpecified,
+                      const IntPoint& hotSpot);
 
-    bool equals(const CSSCursorImageValue&) const;
-
-    DECLARE_TRACE_AFTER_DISPATCH();
-
-private:
-    CSSCursorImageValue(PassRefPtrWillBeRawPtr<CSSValue> imageValue, bool hotSpotSpecified, const IntPoint& hotSpot);
-
-    bool isSVGCursor() const;
-    String cachedImageURL();
-    void clearImageResource();
-
-    RefPtrWillBeMember<CSSValue> m_imageValue;
-
-    bool m_hotSpotSpecified;
-    IntPoint m_hotSpot;
-    bool m_isCachePending;
-    RefPtrWillBeMember<StyleImage> m_cachedImage;
-
-#if !ENABLE(OILPAN)
-    HashSet<SVGElement*> m_referencedElements;
-#endif
+  Member<const CSSValue> m_imageValue;
+  IntPoint m_hotSpot;
+  bool m_hotSpotSpecified;
 };
 
 DEFINE_CSS_VALUE_TYPE_CASTS(CSSCursorImageValue, isCursorImageValue());
 
-} // namespace blink
+}  // namespace blink
 
-#endif // CSSCursorImageValue_h
+#endif  // CSSCursorImageValue_h

@@ -28,6 +28,7 @@
 #include "chrome/installer/util/master_preferences.h"
 #include "chrome/installer/util/master_preferences_constants.h"
 #include "chrome/installer/util/util_constants.h"
+#include "components/strings/grit/components_locale_settings.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/win/shell.h"
@@ -109,7 +110,7 @@ void DoPostImportPlatformSpecificTasks(Profile* /* profile */) {
   // configuring this user's install (e.g. per-user shortcuts).
   // Delay the task slightly to give Chrome launch I/O priority while also
   // making sure shortcuts are created promptly to avoid annoying the user by
-  // re-creating shortcuts he previously deleted.
+  // re-creating shortcuts they previously deleted.
   static const int64_t kTiggerActiveSetupDelaySeconds = 5;
   base::FilePath chrome_exe;
   if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {

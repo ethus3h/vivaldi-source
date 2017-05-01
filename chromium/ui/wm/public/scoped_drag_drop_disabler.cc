@@ -4,8 +4,8 @@
 
 #include "ui/wm/public/scoped_drag_drop_disabler.h"
 
+#include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/window.h"
-#include "ui/wm/public/drag_drop_client.h"
 
 namespace aura {
 namespace client {
@@ -18,12 +18,10 @@ class NopDragDropClient : public DragDropClient {
                        aura::Window* source_window,
                        const gfx::Point& screen_location,
                        int operation,
-                       ui::DragDropTypes::DragEventSource source) override {
+                       ui::DragDropTypes::DragEventSource source,
+                       bool& cancelled) override {
     return 0;
   }
-  void DragUpdate(aura::Window* target,
-                  const ui::LocatedEvent& event) override {}
-  void Drop(aura::Window* target, const ui::LocatedEvent& event) override {}
   void DragCancel() override {}
   bool IsDragDropInProgress() override {
     return false;

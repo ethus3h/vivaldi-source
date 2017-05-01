@@ -11,7 +11,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_country.h"
-#include "third_party/libphonenumber/src/phonenumber_api.h"
+#include "third_party/libphonenumber/phonenumber_api.h"
 
 using i18n::phonenumbers::PhoneNumber;
 using i18n::phonenumbers::PhoneNumberUtil;
@@ -246,7 +246,7 @@ PhoneObject::PhoneObject(const base::string16& number,
   // [ http://crbug.com/100845 ].  Once the bug is fixed, add a DCHECK here to
   // verify.
 
-  scoped_ptr<PhoneNumber> i18n_number(new PhoneNumber);
+  std::unique_ptr<PhoneNumber> i18n_number(new PhoneNumber);
   if (ParsePhoneNumber(number, region, &country_code_, &city_code_, &number_,
                        &region_, i18n_number.get())) {
     // The phone number was successfully parsed, so store the parsed version.

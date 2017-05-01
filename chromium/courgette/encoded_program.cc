@@ -10,11 +10,11 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/environment.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
@@ -22,15 +22,10 @@
 #include "courgette/courgette.h"
 #include "courgette/disassembler_elf_32_arm.h"
 #include "courgette/streams.h"
-#include "courgette/types_elf.h"
 
 namespace courgette {
 
-// Constructor is here rather than in the header.  Although the constructor
-// appears to do nothing it is fact quite large because of the implicit calls to
-// field constructors.  Ditto for the destructor.
-EncodedProgram::EncodedProgram() : image_base_(0) {}
-EncodedProgram::~EncodedProgram() {}
+namespace {
 
 // Serializes a vector of integral values using Varint32 coding.
 template<typename V>
@@ -132,60 +127,26 @@ bool ReadVectorU8(V* items, SourceStream* buffer) {
   return ok;
 }
 
+}  // namespace
+
 ////////////////////////////////////////////////////////////////////////////////
 
-CheckBool EncodedProgram::DefineRel32Label(int index, RVA value) {
-  return DefineLabelCommon(&rel32_rva_, index, value);
-}
+// Constructor is here rather than in the header. Although the constructor
+// appears to do nothing it is fact quite large because of the implicit calls to
+// field constructors. Ditto for the destructor.
+EncodedProgram::EncodedProgram() {}
+EncodedProgram::~EncodedProgram() {}
 
-CheckBool EncodedProgram::DefineAbs32Label(int index, RVA value) {
-  return DefineLabelCommon(&abs32_rva_, index, value);
-}
-
-static const RVA kUnassignedRVA = static_cast<RVA>(-1);
-
-CheckBool EncodedProgram::DefineLabelCommon(RvaVector* rvas,
-                                            int index,
-                                            RVA rva) {
-  bool ok = true;
-
-  // Resize |rvas| to accommodate |index|. If we naively call resize(), in the
-  // worst case we'd encounter |index| in increasing order, and then we'd
-  // require reallocation every time. Turns out this worst case is the typical
-  // scenario, and noticeable slowness (~5x slow down) ensues. The solution is
-  // to exponentially increase capacity. We use a factor of 1.01 to be frugal.
-  if (static_cast<int>(rvas->capacity()) <= index)
-    ok = rvas->reserve((index + 1) * 1.01);
-  if (ok && static_cast<int>(rvas->size()) <= index)
-    ok = rvas->resize(index + 1, kUnassignedRVA);
-
-  if (ok) {
-    DCHECK_EQ((*rvas)[index], kUnassignedRVA)
-        << "DefineLabel double assigned " << index;
-    (*rvas)[index] = rva;
+CheckBool EncodedProgram::ImportLabels(
+    const LabelManager& abs32_label_manager,
+    const LabelManager& rel32_label_manager) {
+  if (!WriteRvasToList(abs32_label_manager, &abs32_rva_) ||
+      !WriteRvasToList(rel32_label_manager, &rel32_rva_)) {
+    return false;
   }
-
-  return ok;
-}
-
-void EncodedProgram::EndLabels() {
-  FinishLabelsCommon(&abs32_rva_);
-  FinishLabelsCommon(&rel32_rva_);
-}
-
-void EncodedProgram::FinishLabelsCommon(RvaVector* rvas) {
-  // Replace all unassigned slots with the value at the previous index so they
-  // delta-encode to zero.  (There might be better values than zero.  The way to
-  // get that is have the higher level assembly program assign the unassigned
-  // slots.)
-  RVA previous = 0;
-  size_t size = rvas->size();
-  for (size_t i = 0;  i < size;  ++i) {
-    if ((*rvas)[i] == kUnassignedRVA)
-      (*rvas)[i] = previous;
-    else
-      previous = (*rvas)[i];
-  }
+  FillUnassignedRvaSlots(&abs32_rva_);
+  FillUnassignedRvaSlots(&rel32_rva_);
+  return true;
 }
 
 CheckBool EncodedProgram::AddOrigin(RVA origin) {
@@ -295,7 +256,7 @@ enum FieldSelect {
 
 static FieldSelect GetFieldSelect() {
   // TODO(sra): Use better configuration.
-  scoped_ptr<base::Environment> env(base::Environment::Create());
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
   std::string s;
   env->GetVar("A_FIELDS", &s);
   uint64_t fields;
@@ -749,9 +710,47 @@ class RelocBlock {
   RelocBlockPOD pod;
 };
 
+// static
+// Updates |rvas| so |rvas[label.index_] == label.rva_| for each |label| in
+// |label_manager|, assuming |label.index_| is properly assigned. Takes care of
+// |rvas| resizing. Unused slots in |rvas| are assigned |kUnassignedRVA|.
+// Returns true on success, and false otherwise.
+CheckBool EncodedProgram::WriteRvasToList(const LabelManager& label_manager,
+                                          RvaVector* rvas) {
+  rvas->clear();
+  int index_bound = LabelManager::GetLabelIndexBound(label_manager.Labels());
+  if (!rvas->resize(index_bound, kUnassignedRVA))
+    return false;
+
+  // For each Label, write its RVA to assigned index.
+  for (const Label& label : label_manager.Labels()) {
+    DCHECK_NE(label.index_, Label::kNoIndex);
+    DCHECK_EQ((*rvas)[label.index_], kUnassignedRVA)
+        << "ExportToList() double assigned " << label.index_;
+    (*rvas)[label.index_] = label.rva_;
+  }
+  return true;
+}
+
+// static
+// Replaces all unassigned slots in |rvas| with the value at the previous index
+// so they delta-encode to zero. (There might be better values than zero. The
+// way to get that is have the higher level assembly program assign the
+// unassigned slots.)
+void EncodedProgram::FillUnassignedRvaSlots(RvaVector* rvas) {
+  RVA previous = 0;
+  for (RVA& rva : *rvas) {
+    if (rva == kUnassignedRVA)
+      rva = previous;
+    else
+      previous = rva;
+  }
+}
+
 CheckBool EncodedProgram::GeneratePeRelocations(SinkStream* buffer,
                                                 uint8_t type) {
   std::sort(abs32_relocs_.begin(), abs32_relocs_.end());
+  DCHECK(abs32_relocs_.empty() || abs32_relocs_.back() != kUnassignedRVA);
 
   RelocBlock block;
 
@@ -773,6 +772,7 @@ CheckBool EncodedProgram::GeneratePeRelocations(SinkStream* buffer,
 CheckBool EncodedProgram::GenerateElfRelocations(Elf32_Word r_info,
                                                  SinkStream* buffer) {
   std::sort(abs32_relocs_.begin(), abs32_relocs_.end());
+  DCHECK(abs32_relocs_.empty() || abs32_relocs_.back() != kUnassignedRVA);
 
   Elf32_Rel relocation_block;
 
@@ -794,14 +794,15 @@ Status WriteEncodedProgram(EncodedProgram* encoded, SinkStreamSet* sink) {
   return C_OK;
 }
 
-Status ReadEncodedProgram(SourceStreamSet* streams, EncodedProgram** output) {
-  EncodedProgram* encoded = new EncodedProgram();
-  if (encoded->ReadFrom(streams)) {
-    *output = encoded;
-    return C_OK;
-  }
-  delete encoded;
-  return C_DESERIALIZATION_FAILED;
+Status ReadEncodedProgram(SourceStreamSet* streams,
+                          std::unique_ptr<EncodedProgram>* output) {
+  output->reset();
+  std::unique_ptr<EncodedProgram> encoded(new EncodedProgram());
+  if (!encoded->ReadFrom(streams))
+    return C_DESERIALIZATION_FAILED;
+
+  *output = std::move(encoded);
+  return C_OK;
 }
 
 Status Assemble(EncodedProgram* encoded, SinkStream* buffer) {
@@ -809,10 +810,6 @@ Status Assemble(EncodedProgram* encoded, SinkStream* buffer) {
   if (assembled)
     return C_OK;
   return C_ASSEMBLY_FAILED;
-}
-
-void DeleteEncodedProgram(EncodedProgram* encoded) {
-  delete encoded;
 }
 
 }  // namespace courgette

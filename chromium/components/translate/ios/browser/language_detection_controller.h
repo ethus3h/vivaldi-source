@@ -5,15 +5,15 @@
 #ifndef COMPONENTS_TRANSLATE_IOS_BROWSER_LANGUAGE_DETECTION_CONTROLLER_H_
 #define COMPONENTS_TRANSLATE_IOS_BROWSER_LANGUAGE_DETECTION_CONTROLLER_H_
 
+#include <memory>
 #include <string>
 
 #include "base/callback_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/pref_member.h"
 #include "base/strings/string16.h"
+#include "components/prefs/pref_member.h"
 #include "ios/web/public/web_state/web_state_observer.h"
 
 class GURL;
@@ -54,7 +54,7 @@ class LanguageDetectionController : public web::WebStateObserver {
   typedef base::CallbackList<void(const DetectionDetails&)> CallbackList;
 
   // Registers a callback for language detection events.
-  scoped_ptr<CallbackList::Subscription> RegisterLanguageDetectionCallback(
+  std::unique_ptr<CallbackList::Subscription> RegisterLanguageDetectionCallback(
       const Callback& callback);
 
  private:
@@ -83,7 +83,7 @@ class LanguageDetectionController : public web::WebStateObserver {
   void WebStateDestroyed() override;
 
   CallbackList language_detection_callbacks_;
-  base::scoped_nsobject<JsLanguageDetectionManager> js_manager_;
+  JsLanguageDetectionManager* js_manager_;
   BooleanPrefMember translate_enabled_;
   base::WeakPtrFactory<LanguageDetectionController> weak_method_factory_;
 

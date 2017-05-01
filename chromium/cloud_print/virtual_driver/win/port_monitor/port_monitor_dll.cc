@@ -29,7 +29,7 @@
 
 namespace cloud_print {
 
-const wchar_t kChromeExePath[] = L"google\\chrome\\application\\vivaldi.exe";
+const wchar_t kChromeExePath[] = L"google\\chrome\\application\\chrome.exe";
 const wchar_t kChromeExePathRegValue[] = L"PathToChromeExe";
 const wchar_t kChromeProfilePathRegValue[] = L"PathToChromeProfile";
 const wchar_t kPrintCommandRegValue[] = L"PrintCommand";
@@ -64,8 +64,7 @@ bool CanRegister() {
 
 }  // namespace
 
-
-}   // namespace cloud_print
+}  // namespace cloud_print
 
 HRESULT WINAPI DllRegisterServer(void) {
   base::AtExitManager at_exit_manager;
@@ -90,9 +89,7 @@ HRESULT WINAPI DllUnregisterServer(void) {
     return E_ACCESSDENIED;
   }
   base::FilePath dll_path(cloud_print::GetPortMonitorDllName());
-  if (DeleteMonitor(NULL,
-                    NULL,
-                    const_cast<LPWSTR>(dll_path.value().c_str()))) {
+  if (DeleteMonitor(NULL, NULL, const_cast<LPWSTR>(dll_path.value().c_str()))) {
     return S_OK;
   }
   return cloud_print::GetLastHResult();

@@ -5,11 +5,17 @@
 #ifndef GIN_PUBLIC_ISOLATE_HOLDER_H_
 #define GIN_PUBLIC_ISOLATE_HOLDER_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "gin/gin_export.h"
 #include "gin/public/v8_idle_task_runner.h"
 #include "v8/include/v8.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace gin {
 
@@ -41,8 +47,10 @@ class GIN_EXPORT IsolateHolder {
     kStableAndExperimentalV8Extras,
   };
 
-  IsolateHolder();
-  explicit IsolateHolder(AccessMode access_mode);
+  explicit IsolateHolder(
+      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  IsolateHolder(scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+                AccessMode access_mode);
   ~IsolateHolder();
 
   // Should be invoked once before creating IsolateHolder instances to
@@ -74,7 +82,7 @@ class GIN_EXPORT IsolateHolder {
   // This method returns if v8::Locker is needed to access isolate.
   AccessMode access_mode() const { return access_mode_; }
 
-  void EnableIdleTasks(scoped_ptr<V8IdleTaskRunner> idle_task_runner);
+  void EnableIdleTasks(std::unique_ptr<V8IdleTaskRunner> idle_task_runner);
 
   // This method returns V8IsolateMemoryDumpProvider of this isolate, used for
   // testing.
@@ -85,9 +93,9 @@ class GIN_EXPORT IsolateHolder {
 
  private:
   v8::Isolate* isolate_;
-  scoped_ptr<PerIsolateData> isolate_data_;
-  scoped_ptr<RunMicrotasksObserver> task_observer_;
-  scoped_ptr<V8IsolateMemoryDumpProvider> isolate_memory_dump_provider_;
+  std::unique_ptr<PerIsolateData> isolate_data_;
+  std::unique_ptr<RunMicrotasksObserver> task_observer_;
+  std::unique_ptr<V8IsolateMemoryDumpProvider> isolate_memory_dump_provider_;
   AccessMode access_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(IsolateHolder);

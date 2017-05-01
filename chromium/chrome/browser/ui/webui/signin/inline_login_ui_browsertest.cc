@@ -4,8 +4,9 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
-#include "base/prefs/scoped_user_pref_update.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/ref_counted.h"
+#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
@@ -33,6 +34,8 @@
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/core/browser/fake_profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_manager.h"
 #include "components/signin/core/common/profile_management_switches.h"
@@ -50,6 +53,7 @@
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/url_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -119,11 +123,6 @@ class FooWebUIProvider
                                                    const GURL& url));
 };
 
-class MockLoginUIObserver : public LoginUIService::Observer {
- public:
-  MOCK_METHOD0(OnUntrustedLoginUIShown, void());
-};
-
 const char kFooWebUIURL[] = "chrome://foo/";
 
 bool AddToSet(std::set<content::WebContents*>* set,
@@ -152,12 +151,13 @@ class MockInlineSigninHelper : public InlineSigninHelper {
 
   MOCK_METHOD1(OnClientOAuthSuccess, void(const ClientOAuthResult& result));
   MOCK_METHOD1(OnClientOAuthFailure, void(const GoogleServiceAuthError& error));
-  MOCK_METHOD7(CreateSyncStarter,
+  MOCK_METHOD8(CreateSyncStarter,
                void(Browser*,
                     content::WebContents*,
                     const GURL&,
                     const GURL&,
                     const std::string&,
+                    OneClickSigninSyncStarter::ProfileMode,
                     OneClickSigninSyncStarter::StartSyncMode,
                     OneClickSigninSyncStarter::ConfirmationRequired));
 
@@ -178,18 +178,19 @@ MockInlineSigninHelper::MockInlineSigninHelper(
     const std::string& signin_scoped_device_id,
     bool choose_what_to_sync,
     bool confirm_untrusted_signin)
-  : InlineSigninHelper(handler,
-                       getter,
-                       profile,
-                       current_url,
-                       email,
-                       gaia_id,
-                       password,
-                       session_index,
-                       auth_code,
-                       signin_scoped_device_id,
-                       choose_what_to_sync,
-                       confirm_untrusted_signin) {}
+    : InlineSigninHelper(handler,
+                         getter,
+                         profile,
+                         Profile::CreateStatus::CREATE_STATUS_INITIALIZED,
+                         current_url,
+                         email,
+                         gaia_id,
+                         password,
+                         session_index,
+                         auth_code,
+                         signin_scoped_device_id,
+                         choose_what_to_sync,
+                         confirm_untrusted_signin) {}
 
 // This class is used to mock out virtual methods with side effects so that
 // tests below can ensure they are called without causing side effects.
@@ -209,12 +210,13 @@ class MockSyncStarterInlineSigninHelper : public InlineSigninHelper {
       bool choose_what_to_sync,
       bool confirm_untrusted_signin);
 
-  MOCK_METHOD7(CreateSyncStarter,
+  MOCK_METHOD8(CreateSyncStarter,
                void(Browser*,
                     content::WebContents*,
                     const GURL&,
                     const GURL&,
                     const std::string&,
+                    OneClickSigninSyncStarter::ProfileMode,
                     OneClickSigninSyncStarter::StartSyncMode,
                     OneClickSigninSyncStarter::ConfirmationRequired));
 
@@ -235,18 +237,19 @@ MockSyncStarterInlineSigninHelper::MockSyncStarterInlineSigninHelper(
     const std::string& signin_scoped_device_id,
     bool choose_what_to_sync,
     bool confirm_untrusted_signin)
-  : InlineSigninHelper(handler,
-                       getter,
-                       profile,
-                       current_url,
-                       email,
-                       gaia_id,
-                       password,
-                       session_index,
-                       auth_code,
-                       signin_scoped_device_id,
-                       choose_what_to_sync,
-                       confirm_untrusted_signin) {}
+    : InlineSigninHelper(handler,
+                         getter,
+                         profile,
+                         Profile::CreateStatus::CREATE_STATUS_INITIALIZED,
+                         current_url,
+                         email,
+                         gaia_id,
+                         password,
+                         session_index,
+                         auth_code,
+                         signin_scoped_device_id,
+                         choose_what_to_sync,
+                         confirm_untrusted_signin) {}
 
 }  // namespace
 
@@ -289,7 +292,7 @@ void InlineLoginUIBrowserTest::AddEmailToOneClickRejectedList(
   PrefService* pref_service = browser()->profile()->GetPrefs();
   ListPrefUpdate updater(pref_service,
                          prefs::kReverseAutologinRejectedEmailList);
-  updater->AppendIfNotPresent(new base::StringValue(email));
+  updater->AppendIfNotPresent(base::MakeUnique<base::StringValue>(email));
 }
 
 void InlineLoginUIBrowserTest::AllowSigninCookies(bool enable) {
@@ -312,8 +315,8 @@ void InlineLoginUIBrowserTest::SetAllowedUsernamePattern(
 #define MAYBE_DifferentStorageId DifferentStorageId
 #endif
 IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, MAYBE_DifferentStorageId) {
-  ContentInfo info =
-      NavigateAndGetInfo(browser(), GetSigninPromoURL(), CURRENT_TAB);
+  ContentInfo info = NavigateAndGetInfo(browser(), GetSigninPromoURL(),
+                                        WindowOpenDisposition::CURRENT_TAB);
   WaitUntilUIReady(browser());
 
   // Make sure storage partition of embedded webview is different from
@@ -342,18 +345,16 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, OneProcessLimit) {
   // still be given its own process and storage partition.
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
-  ContentInfo info1 =
-      NavigateAndGetInfo(browser(), test_url_1, CURRENT_TAB);
-  ContentInfo info2 =
-      NavigateAndGetInfo(browser(), test_url_2, CURRENT_TAB);
-  ContentInfo info3 =
-      NavigateAndGetInfo(browser(), GetSigninPromoURL(), CURRENT_TAB);
+  ContentInfo info1 = NavigateAndGetInfo(browser(), test_url_1,
+                                         WindowOpenDisposition::CURRENT_TAB);
+  ContentInfo info2 = NavigateAndGetInfo(browser(), test_url_2,
+                                         WindowOpenDisposition::CURRENT_TAB);
+  ContentInfo info3 = NavigateAndGetInfo(browser(), GetSigninPromoURL(),
+                                         WindowOpenDisposition::CURRENT_TAB);
 
   ASSERT_EQ(info1.pid, info2.pid);
   ASSERT_NE(info1.pid, info3.pid);
 }
-
-#if !defined(OS_CHROMEOS)
 
 IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, CanOfferNoProfile) {
   std::string error_message;
@@ -478,11 +479,12 @@ class InlineLoginHelperBrowserTest : public InProcessBrowserTest {
       const std::string& cookie_string) {
     net::TestURLFetcher* fetcher = url_fetcher_factory_.GetFetcherByID(0);
     ASSERT_TRUE(fetcher);
-    net::ResponseCookies cookies;
-    cookies.push_back(cookie_string);
+    scoped_refptr<net::HttpResponseHeaders> reponse_headers =
+        new net::HttpResponseHeaders("");
+    reponse_headers->AddCookie(cookie_string);
     fetcher->set_status(net::URLRequestStatus());
     fetcher->set_response_code(net::HTTP_OK);
-    fetcher->set_cookies(cookies);
+    fetcher->set_response_headers(reponse_headers);
     fetcher->delegate()->OnURLFetchComplete(fetcher);
   }
 
@@ -510,7 +512,8 @@ class InlineLoginHelperBrowserTest : public InProcessBrowserTest {
   net::TestURLFetcherFactory url_fetcher_factory_;
   FakeSigninManagerForTesting* signin_manager_;
   FakeProfileOAuth2TokenService* token_service_;
-  scoped_ptr<base::CallbackList<void(content::BrowserContext*)>::Subscription>
+  std::unique_ptr<
+      base::CallbackList<void(content::BrowserContext*)>::Subscription>
       will_create_browser_context_services_subscription_;
 
   DISALLOW_COPY_AND_ASSIGN(InlineLoginHelperBrowserTest);
@@ -592,11 +595,12 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
   EXPECT_CALL(
       *helper,
       CreateSyncStarter(_, _, _, _, "refresh_token",
+                        OneClickSigninSyncStarter::CURRENT_PROFILE,
                         OneClickSigninSyncStarter::CONFIRM_SYNC_SETTINGS_FIRST,
                         OneClickSigninSyncStarter::CONFIRM_AFTER_SIGNIN));
 
   SimulateOnClientOAuthSuccess(helper, "refresh_token");
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 // Test signin helper creates sync starter with correct confirmation when
@@ -626,11 +630,12 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
           false);  // confirm untrusted signin
   EXPECT_CALL(*helper, CreateSyncStarter(
                            _, _, _, _, "refresh_token",
+                           OneClickSigninSyncStarter::CURRENT_PROFILE,
                            OneClickSigninSyncStarter::CONFIGURE_SYNC_FIRST,
                            OneClickSigninSyncStarter::CONFIRM_AFTER_SIGNIN));
 
   SimulateOnClientOAuthSuccess(helper, "refresh_token");
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 // Test signin helper creates sync starter with correct confirmation when
@@ -661,11 +666,12 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
   EXPECT_CALL(
       *helper,
       CreateSyncStarter(_, _, _, _, "refresh_token",
+                        OneClickSigninSyncStarter::CURRENT_PROFILE,
                         OneClickSigninSyncStarter::CONFIRM_SYNC_SETTINGS_FIRST,
                         OneClickSigninSyncStarter::CONFIRM_UNTRUSTED_SIGNIN));
 
   SimulateOnClientOAuthSuccess(helper, "refresh_token");
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 // Test signin helper creates sync starter with correct confirmation during
@@ -698,11 +704,12 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
   // settings, which means the user wants to CONFIGURE_SYNC_FIRST.
   EXPECT_CALL(*helper, CreateSyncStarter(
                            _, _, _, _, "refresh_token",
+                           OneClickSigninSyncStarter::CURRENT_PROFILE,
                            OneClickSigninSyncStarter::CONFIGURE_SYNC_FIRST,
                            OneClickSigninSyncStarter::CONFIRM_AFTER_SIGNIN));
 
   SimulateOnClientOAuthSuccess(helper, "refresh_token");
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 // Test signin helper does not create sync starter when reauthenticating.
@@ -714,21 +721,18 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
   // possible values of access_point=, reason=.
   GURL url("chrome://chrome-signin/?access_point=3&reason=2");
   base::WeakPtr<InlineLoginHandlerImpl> handler;
-  InlineSigninHelper helper(handler,
-                            browser()->profile()->GetRequestContext(),
+  InlineSigninHelper helper(handler, browser()->profile()->GetRequestContext(),
                             browser()->profile(),
-                            url,
-                            "foo@gmail.com",
-                            "gaiaid-12345",
-                            "password",
-                            "",  // session index
+                            Profile::CreateStatus::CREATE_STATUS_INITIALIZED,
+                            url, "foo@gmail.com", "gaiaid-12345", "password",
+                            "",           // session index
                             "auth_code",  // auth code
                             std::string(),
-                            false,  // choose what to sync
+                            false,   // choose what to sync
                             false);  // confirm untrusted signin
   SimulateOnClientOAuthSuccess(&helper, "refresh_token");
   ASSERT_EQ(1ul, token_service()->GetAccounts().size());
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 // Test signin helper does not create sync starter when adding another account
@@ -741,24 +745,19 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest,
   // possible values of access_point=, reason=.
   GURL url("chrome://chrome-signin/?access_point=10&reason=1");
   base::WeakPtr<InlineLoginHandlerImpl> handler;
-  InlineSigninHelper helper(handler,
-                            browser()->profile()->GetRequestContext(),
+  InlineSigninHelper helper(handler, browser()->profile()->GetRequestContext(),
                             browser()->profile(),
-                            url,
-                            "foo@gmail.com",
-                            "gaiaid-12345",
-                            "password",
-                            "",  // session index
+                            Profile::CreateStatus::CREATE_STATUS_INITIALIZED,
+                            url, "foo@gmail.com", "gaiaid-12345", "password",
+                            "",           // session index
                             "auth_code",  // auth code
                             std::string(),
-                            false,  // choose what to sync
+                            false,   // choose what to sync
                             false);  // confirm untrusted signin
   SimulateOnClientOAuthSuccess(&helper, "refresh_token");
   ASSERT_EQ(1ul, token_service()->GetAccounts().size());
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
-
-#endif  // OS_CHROMEOS
 
 class InlineLoginUISafeIframeBrowserTest : public InProcessBrowserTest {
  public:
@@ -801,7 +800,7 @@ class InlineLoginUISafeIframeBrowserTest : public InProcessBrowserTest {
   }
 
   FooWebUIProvider foo_provider_;
-  scoped_ptr<TestChromeWebUIControllerFactory> test_factory_;
+  std::unique_ptr<TestChromeWebUIControllerFactory> test_factory_;
 };
 
 // Make sure that the foo webui handler is working properly and that it gets
@@ -822,17 +821,10 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest, NoWebUIInIframe) {
   ui_test_utils::NavigateToURL(browser(), url);
 }
 
-// Flaky on CrOS, http://crbug.com/364759.
-#if defined(OS_CHROMEOS)
-#define MAYBE_TopFrameNavigationDisallowed DISABLED_TopFrameNavigationDisallowed
-#else
-#define MAYBE_TopFrameNavigationDisallowed TopFrameNavigationDisallowed
-#endif
-
 // Make sure that the gaia iframe cannot trigger top-frame navigation.
 // TODO(guohui): flaky on trybot crbug/364759.
 IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest,
-    MAYBE_TopFrameNavigationDisallowed) {
+    TopFrameNavigationDisallowed) {
   // Loads into gaia iframe a web page that attempts to deframe on load.
   GURL deframe_url(embedded_test_server()->GetURL("/login/deframe.html"));
   GURL url(net::AppendOrReplaceQueryParameter(GetSigninPromoURL(), "frameUrl",
@@ -866,34 +858,3 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest,
 
   EXPECT_EQ(GURL("about:blank"), contents->GetVisibleURL());
 }
-
-#if !defined(OS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest,
-    ConfirmationRequiredForNonsecureSignin) {
-  FakeGaia fake_gaia;
-  fake_gaia.Initialize();
-
-  embedded_test_server()->RegisterRequestHandler(
-      base::Bind(&FakeGaia::HandleRequest,
-                 base::Unretained(&fake_gaia)));
-  fake_gaia.SetFakeMergeSessionParams(
-      "email@gmail.com", "fake-sid-cookie", "fake-lsid-cookie");
-
-  // Navigates to the Chrome signin page which loads the fake gaia auth page.
-  // Since the fake gaia auth page is served over HTTP, thus expects to see an
-  // untrusted signin confirmation dialog upon submitting credentials below.
-  ui_test_utils::NavigateToURL(browser(), GetSigninPromoURL());
-  WaitUntilUIReady(browser());
-
-  MockLoginUIObserver observer;
-  LoginUIServiceFactory::GetForProfile(browser()->profile())
-      ->AddObserver(&observer);
-  base::RunLoop run_loop;
-  EXPECT_CALL(observer, OnUntrustedLoginUIShown())
-      .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
-
-  ExecuteJsToSigninInSigninFrame(browser(), "email@gmail.com", "password");
-  run_loop.Run();
-  base::MessageLoop::current()->RunUntilIdle();
-}
-#endif // OS_CHROMEOS

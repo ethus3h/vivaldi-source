@@ -6,7 +6,7 @@ package org.chromium.android_webview.test;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
@@ -98,7 +98,7 @@ public class AwContentsClientFaviconTest extends AwTestBase {
                 CommonResources.getTextHtmlHeaders(true));
 
         loadUrlSync(mAwContents, mContentsClient.getOnPageFinishedHelper(), pageUrl);
-        poll(new Callable<Boolean>() {
+        pollInstrumentationThread(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 return mWebServer.getRequestCount(FAVICON1_URL) == 1;

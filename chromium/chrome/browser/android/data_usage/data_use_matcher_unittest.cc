@@ -10,13 +10,16 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/histogram_tester.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
-#include "chrome/browser/android/data_usage/external_data_use_observer.h"
+#include "chrome/browser/android/data_usage/data_use_tab_model.h"
+#include "chrome/browser/android/data_usage/external_data_use_observer_bridge.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -56,6 +59,14 @@ class NowTestTickClock : public base::TickClock {
   DISALLOW_COPY_AND_ASSIGN(NowTestTickClock);
 };
 
+class TestExternalDataUseObserverBridge
+    : public chrome::android::ExternalDataUseObserverBridge {
+ public:
+  TestExternalDataUseObserverBridge() {}
+  void FetchMatchingRules() const override {}
+  void ShouldRegisterAsDataUseObserver(bool should_register) const override{};
+};
+
 }  // namespace
 
 namespace chrome {
@@ -68,12 +79,16 @@ class DataUseMatcherTest : public testing::Test {
  public:
   DataUseMatcherTest()
       : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
-        data_use_matcher_(base::WeakPtr<DataUseTabModel>(),
-                          content::BrowserThread::GetMessageLoopProxyForThread(
-                              content::BrowserThread::IO),
-                          base::WeakPtr<ExternalDataUseObserver>(),
-                          base::TimeDelta::FromSeconds(
-                              kDefaultMatchingRuleExpirationDurationSeconds)) {}
+        external_data_use_observer_bridge_(
+            new TestExternalDataUseObserverBridge()),
+        data_use_matcher_(
+            base::Bind(&DataUseTabModel::OnTrackingLabelRemoved,
+                       base::WeakPtr<DataUseTabModel>()),
+            base::Bind(
+                &ExternalDataUseObserverBridge::ShouldRegisterAsDataUseObserver,
+                base::Unretained(external_data_use_observer_bridge_.get())),
+            base::TimeDelta::FromSeconds(
+                kDefaultMatchingRuleExpirationDurationSeconds)) {}
 
   DataUseMatcher* data_use_matcher() { return &data_use_matcher_; }
 
@@ -93,6 +108,8 @@ class DataUseMatcherTest : public testing::Test {
 
  private:
   content::TestBrowserThreadBundle thread_bundle_;
+  std::unique_ptr<ExternalDataUseObserverBridge>
+      external_data_use_observer_bridge_;
   DataUseMatcher data_use_matcher_;
   DISALLOW_COPY_AND_ASSIGN(DataUseMatcherTest);
 };

@@ -15,9 +15,11 @@
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
-#include "cc/animation/layer_animation_event_observer.h"
+#include "cc/animation/animation_delegate.h"
+#include "cc/trees/target_property.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/compositor/layer_animation_element.h"
+#include "ui/compositor/layer_threaded_animation_delegate.h"
 #include "ui/gfx/animation/tween.h"
 
 namespace cc {
@@ -53,7 +55,8 @@ class ScopedLayerAnimationSettings;
 // must guarantee that |this| is valid.
 class COMPOSITOR_EXPORT LayerAnimator
     : public base::RefCounted<LayerAnimator>,
-      NON_EXPORTED_BASE(public cc::LayerAnimationEventObserver) {
+      public LayerThreadedAnimationDelegate,
+      NON_EXPORTED_BASE(public cc::AnimationDelegate) {
  public:
   enum PreemptionStrategy {
     IMMEDIATELY_SET_NEW_TARGET,
@@ -113,14 +116,9 @@ class COMPOSITOR_EXPORT LayerAnimator
   void SwitchToLayer(scoped_refptr<cc::Layer> new_layer);
 
   // Attach AnimationPlayer to Layer and AnimationTimeline
-  void SetCompositor(Compositor* compositor);
+  void AttachLayerAndTimeline(Compositor* compositor);
   // Detach AnimationPlayer from Layer and AnimationTimeline
-  void ResetCompositor(Compositor* compositor);
-
-  // TODO(loyso): Rework it as an implementation for
-  // LayerThreadedAnimationDelegate and make it private.
-  void AddThreadedAnimation(scoped_ptr<cc::Animation> animation);
-  void RemoveThreadedAnimation(int animation_id);
+  void DetachLayerAndTimeline(Compositor* compositor);
 
   cc::AnimationPlayer* GetAnimationPlayerForTesting() const;
 
@@ -196,7 +194,9 @@ class COMPOSITOR_EXPORT LayerAnimator
   void RemoveObserver(LayerAnimationObserver* observer);
 
   // Called when a threaded animation is actually started.
-  void OnThreadedAnimationStarted(const cc::AnimationEvent& event);
+  void OnThreadedAnimationStarted(base::TimeTicks monotonic_time,
+                                  cc::TargetProperty::Type target_property,
+                                  int group_id);
 
   // This determines how implicit animations will be tweened. This has no
   // effect on animations that are explicitly started or scheduled. The default
@@ -245,6 +245,7 @@ class COMPOSITOR_EXPORT LayerAnimator
   class RunningAnimation {
    public:
     RunningAnimation(const base::WeakPtr<LayerAnimationSequence>& sequence);
+    RunningAnimation(const RunningAnimation& other);
     ~RunningAnimation();
 
     bool is_sequence_alive() const { return !!sequence_.get(); }
@@ -338,8 +339,25 @@ class COMPOSITOR_EXPORT LayerAnimator
 
   LayerAnimatorCollection* GetLayerAnimatorCollection();
 
-  // LayerAnimationEventObserver
-  void OnAnimationStarted(const cc::AnimationEvent& event) override;
+  // cc::AnimationDelegate implementation.
+  void NotifyAnimationStarted(base::TimeTicks monotonic_time,
+                              cc::TargetProperty::Type target_property,
+                              int group_id) override;
+  void NotifyAnimationFinished(base::TimeTicks monotonic_time,
+                               cc::TargetProperty::Type target_property,
+                               int group_id) override {}
+  void NotifyAnimationAborted(base::TimeTicks monotonic_time,
+                              cc::TargetProperty::Type target_property,
+                              int group_id) override {}
+  void NotifyAnimationTakeover(
+      base::TimeTicks monotonic_time,
+      cc::TargetProperty::Type target_property,
+      double animation_start_time,
+      std::unique_ptr<cc::AnimationCurve> curve) override {}
+
+  // Implementation of LayerThreadedAnimationDelegate.
+  void AddThreadedAnimation(std::unique_ptr<cc::Animation> animation) override;
+  void RemoveThreadedAnimation(int animation_id) override;
 
   void AttachLayerToAnimationPlayer(int layer_id);
   void DetachLayerFromAnimationPlayer();

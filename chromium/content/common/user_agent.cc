@@ -12,7 +12,6 @@
 #include "base/sys_info.h"
 #include "build/build_config.h"
 #include "build/util/webkit_version.h"
-#include "components/version_info/version_info_values.h"
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
 #include <sys/utsname.h>
@@ -22,6 +21,8 @@
 #include "base/win/windows_version.h"
 #endif
 
+#include "components/version_info/version_info_values.h"
+
 namespace content {
 
 std::string GetWebKitVersion() {
@@ -29,14 +30,6 @@ std::string GetWebKitVersion() {
                             WEBKIT_VERSION_MAJOR,
                             WEBKIT_VERSION_MINOR,
                             WEBKIT_SVN_REVISION);
-}
-
-int GetWebKitMajorVersion() {
-  return WEBKIT_VERSION_MAJOR;
-}
-
-int GetWebKitMinorVersion() {
-  return WEBKIT_VERSION_MINOR;
 }
 
 std::string GetWebKitRevision() {

@@ -7,8 +7,8 @@
 // in an iframe. Iframes can be layered on top of each other, but not mixed in
 // with page content, so all overlapping content on uber must be framed.
 
-<include src="../../../../ui/webui/resources/js/util.js">
-<include src="uber_utils.js">
+// <include src="../../../../ui/webui/resources/js/util.js">
+// <include src="uber_utils.js">
 
 cr.define('uber_frame', function() {
 
@@ -53,7 +53,7 @@ cr.define('uber_frame', function() {
     uber.invokeMethodOnParent('showPage',
        {pageId: e.currentTarget.getAttribute('controls')});
 
-    setSelection(e.currentTarget);
+    setSelection(/** @type {Element} */(e.currentTarget));
   }
 
   /**
@@ -116,7 +116,7 @@ cr.define('uber_frame', function() {
    * Adjusts this frame's content to scrolls from the outer frame. This is done
    * to obscure text in RTL as a user scrolls over the content of this frame (as
    * currently RTL scrollbars still draw on the right).
-   * @param {number} scroll document.body.scrollLeft of the content frame.
+   * @param {number} scrollLeft document.body.scrollLeft of the content frame.
    */
   function adjustToScroll(scrollLeft) {
     assert(isRTL());
@@ -169,8 +169,7 @@ cr.define('uber_frame', function() {
   function setNavigationOverride(controls, override) {
     var navItem =
         document.querySelector('li[controls="' + controls + '"]');
-    if(navItem)
-      navItem.setAttribute('override', override);
+    navItem.setAttribute('override', override);
   }
 
   return {

@@ -20,7 +20,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_iterator.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabrestore.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -31,6 +31,8 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/extension_function_dispatcher.h"
+
+#include "components/sessions/vivaldi_session_service_commands.h"
 
 using sessions::ContentSerializedNavigationBuilder;
 using sessions::SerializedNavigationEntry;
@@ -82,7 +84,7 @@ VivaldiSessionService::VivaldiSessionService(Profile* profile)
 base::File* VivaldiSessionService::OpenAndWriteHeader(
     const base::FilePath& path) {
   DCHECK(!path.empty());
-  scoped_ptr<base::File> file(new base::File(
+  std::unique_ptr<base::File> file(new base::File(
       path,
       base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE |
       base::File::FLAG_EXCLUSIVE_WRITE | base::File::FLAG_EXCLUSIVE_READ));
@@ -115,12 +117,11 @@ void VivaldiSessionService::ResetFile(const base::FilePath& file_name) {
 }
 
 bool VivaldiSessionService::AppendCommandsToFile(
-    base::File* file, const ScopedVector<sessions::SessionCommand>& commands) {
-  for (ScopedVector<sessions::SessionCommand>::const_iterator i =
-           commands.begin();
-       i != commands.end(); ++i) {
+    base::File* file,
+    const std::vector<std::unique_ptr<sessions::SessionCommand>>& commands) {
+  for (auto &i: commands) {
     int wrote;
-    const size_type content_size = static_cast<size_type>((*i)->size());
+    const size_type content_size = static_cast<size_type>(i->size());
     const size_type total_size =  content_size + sizeof(id_type);
     wrote = file->WriteAtCurrentPos(reinterpret_cast<const char*>(&total_size),
                                     sizeof(total_size));
@@ -128,7 +129,7 @@ bool VivaldiSessionService::AppendCommandsToFile(
       NOTREACHED() << "error writing";
       return false;
     }
-    id_type command_id = (*i)->id();
+    id_type command_id = i->id();
     wrote = file->WriteAtCurrentPos(reinterpret_cast<char*>(&command_id),
                                     sizeof(command_id));
     if (wrote != sizeof(command_id)) {
@@ -136,7 +137,7 @@ bool VivaldiSessionService::AppendCommandsToFile(
       return false;
     }
     if (content_size > 0) {
-      wrote = file->WriteAtCurrentPos(reinterpret_cast<char*>((*i)->contents()),
+      wrote = file->WriteAtCurrentPos(reinterpret_cast<char*>(i->contents()),
                                       content_size);
       if (wrote != content_size) {
         NOTREACHED() << "error writing";
@@ -183,9 +184,9 @@ bool VivaldiSessionService::ShouldTrackWindow(Browser* browser,
 }
 
 void VivaldiSessionService::ScheduleCommand(
-    scoped_ptr<sessions::SessionCommand> command) {
+    std::unique_ptr<sessions::SessionCommand> command) {
   DCHECK(command);
-  pending_commands_.push_back(command.release());
+  pending_commands_.push_back(std::move(command));
 }
 
 void VivaldiSessionService::BuildCommandsForTab(const SessionID& window_id,
@@ -284,24 +285,27 @@ void VivaldiSessionService::BuildCommandsForBrowser(Browser* browser) {
       browser->session_id(), browser->tab_strip_model()->active_index()));
 }
 
-bool VivaldiSessionService::Load(const base::FilePath& path, Browser* browser) {
+bool VivaldiSessionService::Load(const base::FilePath& path,
+                                 Browser* browser,
+                                 SessionOptions& opts) {
   browser_ = browser;
+  opts_ = opts;
   current_session_file_.reset(new base::File(
       path,
       base::File::FLAG_OPEN | base::File::FLAG_READ));
   if (!current_session_file_->IsValid())
     return false;
 
-  ScopedVector<sessions::SessionCommand> commands;
-  ScopedVector<sessions::SessionWindow> valid_windows;
+  std::vector <std::unique_ptr<sessions::SessionCommand>> commands;
+  std::vector<std::unique_ptr<sessions::SessionWindow>> valid_windows;
   SessionID::id_type active_window_id = 0;
 
   if (Read(&commands)) {
-    sessions::RestoreSessionFromCommands(commands, &valid_windows.get(),
+    sessions::RestoreSessionFromCommands(commands, &valid_windows,
                                          &active_window_id);
-    RemoveUnusedRestoreWindows(&valid_windows.get());
+    RemoveUnusedRestoreWindows(&valid_windows);
     std::vector<SessionRestoreDelegate::RestoredTab> created_contents;
-    ProcessSessionWindows(&valid_windows.get(), active_window_id,
+    ProcessSessionWindows(&valid_windows, active_window_id,
                           &created_contents);
     return true;
   }
@@ -311,13 +315,11 @@ bool VivaldiSessionService::Load(const base::FilePath& path, Browser* browser) {
 Browser* VivaldiSessionService::CreateRestoredBrowser(
     Browser::Type type, gfx::Rect bounds, ui::WindowShowState show_state,
     const std::string& app_name) {
-  Browser::CreateParams params(type, profile_,
-                               chrome::HOST_DESKTOP_TYPE_NATIVE);
+  Browser::CreateParams params(type, profile_);
   if (!app_name.empty()) {
     const bool trusted_source = true;  // We only store trusted app windows.
     params = Browser::CreateParams::CreateForApp(
-        app_name, trusted_source, bounds, profile_,
-        chrome::HOST_DESKTOP_TYPE_NATIVE);
+        app_name, trusted_source, bounds, profile_);
   } else {
     params.initial_bounds = bounds;
   }
@@ -431,9 +433,6 @@ content::WebContents* VivaldiSessionService::RestoreTab(
   // focused tab will be loaded by Browser, and TabLoader will load the rest.
   DCHECK(web_contents->GetController().NeedsReload());
 
-  if (browser->is_vivaldi())
-    web_contents->GetController().LoadIfNecessary();
-
   return web_contents;
 }
 
@@ -453,7 +452,7 @@ void VivaldiSessionService::NotifySessionServiceOfRestoredTabs(
 
 
 Browser* VivaldiSessionService::ProcessSessionWindows(
-    std::vector<sessions::SessionWindow*>* windows,
+  std::vector<std::unique_ptr<sessions::SessionWindow>>* windows,
     SessionID::id_type active_window_id,
     std::vector<SessionRestoreDelegate::RestoredTab>* created_contents) {
   DVLOG(1) << "ProcessSessionWindows " << windows->size();
@@ -481,23 +480,21 @@ Browser* VivaldiSessionService::ProcessSessionWindows(
   // active window it will be made visible by the call to
   // browser_to_activate->window()->Activate() later on in this method.
   bool has_visible_browser = false;
-  for (std::vector<sessions::SessionWindow*>::iterator i = windows->begin();
-        i != windows->end(); ++i) {
+  for (auto i = windows->begin(); i != windows->end(); ++i) {
     if ((*i)->show_state != ui::SHOW_STATE_MINIMIZED ||
         (*i)->window_id.id() == active_window_id)
       has_visible_browser = true;
   }
 
-  for (std::vector<sessions::SessionWindow*>::iterator i = windows->begin();
-        i != windows->end(); ++i) {
+  for (auto i = windows->begin(); i != windows->end(); ++i) {
     Browser* browser = nullptr;
     if (!has_tabbed_browser &&
-        (*i)->type == sessions::SessionWindow::TYPE_TABBED)
+        (*i)->type == sessions::SessionWindow::TYPE_TABBED) {
       has_tabbed_browser = true;
-    if (i == windows->begin() &&
+    }
+    if (i == windows->begin() && !opts_.openInNewWindow_ &&
         (*i)->type == sessions::SessionWindow::TYPE_TABBED && browser_ &&
-        browser_->is_type_tabbed() &&
-        !browser_->profile()->IsOffTheRecord()) {
+        browser_->is_type_tabbed() && !browser_->profile()->IsOffTheRecord()) {
       // The first set of tabs is added to the existing browser.
       browser = browser_;
     } else {
@@ -533,7 +530,7 @@ Browser* VivaldiSessionService::ProcessSessionWindows(
   if (browser_to_activate && browser_to_activate->is_type_tabbed())
     last_browser = browser_to_activate;
 
-  if (browser_to_activate && !browser_to_activate->is_vivaldi())
+  if (browser_to_activate)
     browser_to_activate->window()->Activate();
 
   // sessionStorages needed for the session restore have now been recreated
@@ -546,10 +543,10 @@ Browser* VivaldiSessionService::ProcessSessionWindows(
 }
 
 void VivaldiSessionService::RemoveUnusedRestoreWindows(
-    std::vector<sessions::SessionWindow*>* window_list) {
-  std::vector<sessions::SessionWindow*>::iterator i = window_list->begin();
+    std::vector<std::unique_ptr<sessions::SessionWindow>>* window_list) {
+  auto i = window_list->begin();
   while (i != window_list->end()) {
-    sessions::SessionWindow* window = *i;
+    sessions::SessionWindow* window = i->get();
     if (window->type != sessions::SessionWindow::TYPE_TABBED) {
       delete window;
       i = window_list->erase(i);
@@ -560,7 +557,7 @@ void VivaldiSessionService::RemoveUnusedRestoreWindows(
 }
 
 bool VivaldiSessionService::Read(
-    ScopedVector<sessions::SessionCommand>* commands) {
+  std::vector<std::unique_ptr<sessions::SessionCommand>>* commands) {
   FileHeader header;
   int read_count;
   read_count = current_session_file_->ReadAtCurrentPos(
@@ -569,10 +566,10 @@ bool VivaldiSessionService::Read(
       header.version != kFileCurrentVersion)
     return false;
 
-  ScopedVector<sessions::SessionCommand> read_commands;
-  for (sessions::SessionCommand* command = ReadCommand(); command && !errored_;
-       command = ReadCommand()) {
-    read_commands.push_back(command);
+  std::vector <std::unique_ptr<sessions::SessionCommand>> read_commands;
+  for (std::unique_ptr<sessions::SessionCommand> command = ReadCommand();
+       command && !errored_; command = ReadCommand()) {
+    read_commands.push_back(std::move(command));
   }
   if (!errored_) {
     read_commands.swap(*commands);
@@ -580,7 +577,7 @@ bool VivaldiSessionService::Read(
   return !errored_;
 }
 
-sessions::SessionCommand* VivaldiSessionService::ReadCommand() {
+std::unique_ptr<sessions::SessionCommand> VivaldiSessionService::ReadCommand() {
   // Make sure there is enough in the buffer for the size of the next command.
   if (available_count_ < sizeof(size_type)) {
     if (!FillBuffer())
@@ -617,8 +614,9 @@ sessions::SessionCommand* VivaldiSessionService::ReadCommand() {
   const id_type command_id = buffer_[buffer_position_];
   // NOTE: command_size includes the size of the id, which is not part of
   // the contents of the SessionCommand.
-  sessions::SessionCommand* command =
-      new sessions::SessionCommand(command_id, command_size - sizeof(id_type));
+  std::unique_ptr<sessions::SessionCommand> command =
+      base::MakeUnique<sessions::SessionCommand>(
+          command_id, command_size - sizeof(id_type));
   if (command_size > sizeof(id_type)) {
     memcpy(command->contents(),
            &(buffer_[buffer_position_ + sizeof(id_type)]),

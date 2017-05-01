@@ -20,8 +20,9 @@
 // infobars, etc.).
 //
 // Otherwise the permission is already decided.
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/geolocation/geolocation_permission_context.h"
 
@@ -43,6 +44,12 @@ class GeolocationPermissionContextAndroid
   explicit GeolocationPermissionContextAndroid(Profile* profile);
   ~GeolocationPermissionContextAndroid() override;
 
+ protected:
+  // GeolocationPermissionContext:
+  ContentSetting GetPermissionStatusInternal(
+      const GURL& requesting_origin,
+      const GURL& embedding_origin) const override;
+
  private:
   friend class GeolocationPermissionContextTests;
 
@@ -55,6 +62,12 @@ class GeolocationPermissionContextAndroid
       const BrowserPermissionCallback& callback) override;
   void CancelPermissionRequest(content::WebContents* web_contents,
                                const PermissionRequestID& id) override;
+  void NotifyPermissionSet(const PermissionRequestID& id,
+                           const GURL& requesting_origin,
+                           const GURL& embedding_origin,
+                           const BrowserPermissionCallback& callback,
+                           bool persist,
+                           ContentSetting content_setting) override;
 
   void HandleUpdateAndroidPermissions(const PermissionRequestID& id,
                                       const GURL& requesting_frame_origin,
@@ -64,9 +77,10 @@ class GeolocationPermissionContextAndroid
 
   // Overrides the LocationSettings object used to determine whether
   // system and Chrome-wide location permissions are enabled.
-  void SetLocationSettingsForTesting(scoped_ptr<LocationSettings> settings);
+  void SetLocationSettingsForTesting(
+      std::unique_ptr<LocationSettings> settings);
 
-  scoped_ptr<LocationSettings> location_settings_;
+  std::unique_ptr<LocationSettings> location_settings_;
 
   // This is owned by the InfoBarService (owner of the InfoBar).
   infobars::InfoBar* permission_update_infobar_;

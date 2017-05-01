@@ -7,6 +7,7 @@
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "components/autofill/core/browser/credit_card.h"
 #include "components/autofill/core/browser/validation.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,6 +24,11 @@ struct ExpirationDate {
 struct IntExpirationDate {
   const int year;
   const int month;
+};
+
+struct SecurityCodeCardTypePair {
+  const char* security_code;
+  const char* card_type;
 };
 
 // From https://www.paypalobjects.com/en_US/vhelp/paypalmanager_help/credit_card_numbers.htm
@@ -44,9 +50,7 @@ const char* const kValidNumbers[] = {
   "4222-2222-2222-2",
   "5019717010103742",
   "6331101999990016",
-
-  // A UnionPay card that doesn't pass the Luhn checksum
-  "6200000000000000",
+  "6247130048162403",
 };
 const char* const kInvalidNumbers[] = {
   "4111 1111 112", /* too short */
@@ -55,32 +59,27 @@ const char* const kInvalidNumbers[] = {
   "3056 9309 0259 04aa", /* non-digit characters */
 };
 const char kCurrentDate[]="1 May 2013";
-const ExpirationDate kValidCreditCardExpirationDate[] = {
-  { "2013", "5" },  // Valid month in current year.
-  { "2014", "1" },  // Any month in next year.
-  { "2014", " 1" },  // Whitespace in month.
-  { " 2014", "1" },  // Whitespace in year.
-};
 const IntExpirationDate kValidCreditCardIntExpirationDate[] = {
   { 2013, 5 },  // Valid month in current year.
   { 2014, 1 },  // Any month in next year.
-};
-const ExpirationDate kInvalidCreditCardExpirationDate[] = {
-  { "2013", "04" },  // Previous month in current year.
-  { "2012", "12" },  // Any month in previous year.
+  { 2014, 12 },  // Edge condition.
 };
 const IntExpirationDate kInvalidCreditCardIntExpirationDate[] = {
   { 2013, 4 },  // Previous month in current year.
   { 2012, 12 },  // Any month in previous year.
+  { 2015, 13 },  // Not a real month.
+  { 2015, 0 },  // Zero is legal in the CC class but is not a valid date.
 };
-const char* const kValidCreditCardSecurityCode[] = {
-  "323",  // 3-digit CSC.
-  "3234",  // 4-digit CSC.
+const SecurityCodeCardTypePair kValidSecurityCodeCardTypePairs[] = {
+  { "323",  kGenericCard }, // 3-digit CSC.
+  { "3234", kAmericanExpressCard }, // 4-digit CSC.
 };
-const char* const kInvalidCreditCardSecurityCode[] = {
-  "32",  // CSC too short.
-  "12345",  // CSC too long.
-  "asd",  // non-numeric CSC.
+const SecurityCodeCardTypePair kInvalidSecurityCodeCardTypePairs[] = {
+  { "32", kGenericCard }, // CSC too short.
+  { "323", kAmericanExpressCard }, // CSC too short.
+  { "3234", kGenericCard }, // CSC too long.
+  { "12345", kAmericanExpressCard }, // CSC too long.
+  { "asd", kGenericCard }, // non-numeric CSC.
 };
 const char* const kValidEmailAddress[] = {
   "user@example",
@@ -94,43 +93,16 @@ const char* const kInvalidEmailAddress[] = {
   "user@",
   "user@=example.com"
 };
-const char kAmericanExpressCard[] = "341111111111111";
-const char kVisaCard[] = "4111111111111111";
-const char kAmericanExpressCVC[] = "1234";
-const char kVisaCVC[] = "123";
 }  // namespace
 
 TEST(AutofillValidation, IsValidCreditCardNumber) {
-  for (size_t i = 0; i < arraysize(kValidNumbers); ++i) {
-    SCOPED_TRACE(kValidNumbers[i]);
-    EXPECT_TRUE(
-        IsValidCreditCardNumber(ASCIIToUTF16(kValidNumbers[i])));
+  for (const char* valid_number : kValidNumbers) {
+    SCOPED_TRACE(valid_number);
+    EXPECT_TRUE(IsValidCreditCardNumber(ASCIIToUTF16(valid_number)));
   }
-  for (size_t i = 0; i < arraysize(kInvalidNumbers); ++i) {
-    SCOPED_TRACE(kInvalidNumbers[i]);
-    EXPECT_FALSE(IsValidCreditCardNumber(ASCIIToUTF16(kInvalidNumbers[i])));
-  }
-}
-
-TEST(AutofillValidation, IsValidCreditCardExpirationDate) {
-  base::Time now;
-  ASSERT_TRUE(base::Time::FromString(kCurrentDate, &now));
-
-  for (size_t i = 0; i < arraysize(kValidCreditCardExpirationDate); ++i) {
-    const ExpirationDate& data = kValidCreditCardExpirationDate[i];
-    SCOPED_TRACE(data.year);
-    SCOPED_TRACE(data.month);
-    EXPECT_TRUE(IsValidCreditCardExpirationDate(ASCIIToUTF16(data.year),
-                                                ASCIIToUTF16(data.month),
-                                                now));
-  }
-  for (size_t i = 0; i < arraysize(kInvalidCreditCardExpirationDate); ++i) {
-    const ExpirationDate& data = kInvalidCreditCardExpirationDate[i];
-    SCOPED_TRACE(data.year);
-    SCOPED_TRACE(data.month);
-    EXPECT_TRUE(!IsValidCreditCardExpirationDate(ASCIIToUTF16(data.year),
-                                                 ASCIIToUTF16(data.month),
-                                                 now));
+  for (const char* invalid_number : kInvalidNumbers) {
+    SCOPED_TRACE(invalid_number);
+    EXPECT_FALSE(IsValidCreditCardNumber(ASCIIToUTF16(invalid_number)));
   }
 }
 
@@ -138,56 +110,42 @@ TEST(AutofillValidation, IsValidCreditCardIntExpirationDate) {
   base::Time now;
   ASSERT_TRUE(base::Time::FromString(kCurrentDate, &now));
 
-  for (size_t i = 0; i < arraysize(kValidCreditCardIntExpirationDate); ++i) {
-    const IntExpirationDate& data = kValidCreditCardIntExpirationDate[i];
+  for (const IntExpirationDate& data : kValidCreditCardIntExpirationDate) {
     SCOPED_TRACE(data.year);
     SCOPED_TRACE(data.month);
     EXPECT_TRUE(IsValidCreditCardExpirationDate(data.year, data.month, now));
   }
-  for (size_t i = 0; i < arraysize(kInvalidCreditCardIntExpirationDate); ++i) {
-    const IntExpirationDate& data = kInvalidCreditCardIntExpirationDate[i];
+  for (const IntExpirationDate& data : kInvalidCreditCardIntExpirationDate) {
     SCOPED_TRACE(data.year);
     SCOPED_TRACE(data.month);
     EXPECT_TRUE(!IsValidCreditCardExpirationDate(data.year, data.month, now));
   }
 }
+
 TEST(AutofillValidation, IsValidCreditCardSecurityCode) {
-  for (size_t i = 0; i < arraysize(kValidCreditCardSecurityCode); ++i) {
-    SCOPED_TRACE(kValidCreditCardSecurityCode[i]);
-    EXPECT_TRUE(IsValidCreditCardSecurityCode(
-        ASCIIToUTF16(kValidCreditCardSecurityCode[i])));
+  for (const auto data : kValidSecurityCodeCardTypePairs) {
+    SCOPED_TRACE(data.security_code);
+    SCOPED_TRACE(data.card_type);
+    EXPECT_TRUE(IsValidCreditCardSecurityCode(ASCIIToUTF16(data.security_code),
+                                              data.card_type));
   }
-  for (size_t i = 0; i < arraysize(kInvalidCreditCardSecurityCode); ++i) {
-    SCOPED_TRACE(kInvalidCreditCardSecurityCode[i]);
-    EXPECT_FALSE(IsValidCreditCardSecurityCode(
-        ASCIIToUTF16(kInvalidCreditCardSecurityCode[i])));
+  for (const auto data : kInvalidSecurityCodeCardTypePairs) {
+    SCOPED_TRACE(data.security_code);
+    SCOPED_TRACE(data.card_type);
+    EXPECT_FALSE(IsValidCreditCardSecurityCode(ASCIIToUTF16(data.security_code),
+                                               data.card_type));
   }
 }
 
 TEST(AutofillValidation, IsValidEmailAddress) {
-  for (size_t i = 0; i < arraysize(kValidEmailAddress); ++i) {
-    SCOPED_TRACE(kValidEmailAddress[i]);
-    EXPECT_TRUE(IsValidEmailAddress(ASCIIToUTF16(kValidEmailAddress[i])));
+  for (const char* valid_email : kValidEmailAddress) {
+    SCOPED_TRACE(valid_email);
+    EXPECT_TRUE(IsValidEmailAddress(ASCIIToUTF16(valid_email)));
   }
-  for (size_t i = 0; i < arraysize(kInvalidEmailAddress); ++i) {
-    SCOPED_TRACE(kInvalidEmailAddress[i]);
-    EXPECT_FALSE(IsValidEmailAddress(ASCIIToUTF16(kInvalidEmailAddress[i])));
+  for (const char* invalid_email : kInvalidEmailAddress) {
+    SCOPED_TRACE(invalid_email);
+    EXPECT_FALSE(IsValidEmailAddress(ASCIIToUTF16(invalid_email)));
   }
-}
-
-TEST(AutofillValidation, IsValidCreditCardSecurityCodeWithNumber) {
-  EXPECT_TRUE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kAmericanExpressCVC), ASCIIToUTF16(kAmericanExpressCard)));
-  EXPECT_TRUE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kVisaCVC), ASCIIToUTF16(kVisaCard)));
-  EXPECT_FALSE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kVisaCVC), ASCIIToUTF16(kAmericanExpressCard)));
-  EXPECT_FALSE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kAmericanExpressCVC), ASCIIToUTF16(kVisaCard)));
-  EXPECT_TRUE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kVisaCVC), ASCIIToUTF16(kInvalidNumbers[0])));
-  EXPECT_FALSE(IsValidCreditCardSecurityCode(
-      ASCIIToUTF16(kAmericanExpressCVC), ASCIIToUTF16(kInvalidNumbers[0])));
 }
 
 }  // namespace autofill

@@ -6,10 +6,10 @@
 
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
-#include "base/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 
 namespace {
 
@@ -34,24 +34,6 @@ SafeSitesState GetState(const Profile* profile) {
 
   if (!profile->GetPrefs()->GetBoolean(prefs::kSupervisedUserSafeSites))
     return SafeSitesState::DISABLED;
-
-  std::string arg = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-      switches::kSupervisedUserSafeSites);
-  if (!arg.empty()) {
-    if (arg == "enabled")
-      return SafeSitesState::ENABLED;
-    if (arg == "disabled")
-      return SafeSitesState::DISABLED;
-    if (arg == "blacklist-only")
-      return SafeSitesState::BLACKLIST_ONLY;
-    if (arg == "online-check-only")
-      return SafeSitesState::ONLINE_CHECK_ONLY;
-
-    LOG(WARNING) << "Invalid value \"" << arg << "\" specified for flag \""
-                 << switches::kSupervisedUserSafeSites
-                 << "\", defaulting to \"disabled\"";
-    return SafeSitesState::DISABLED;
-  }
 
   // If no cmdline arg is specified, evaluate the field trial.
   if (trial_group == "Disabled")

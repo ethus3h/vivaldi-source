@@ -4,27 +4,29 @@
 
 #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
 
+#include <unordered_map>
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "content/public/browser/stream_handle.h"
 #include "content/public/browser/stream_info.h"
 #include "content/public/common/content_constants.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
 #include "extensions/common/constants.h"
-#include "mojo/public/cpp/bindings/map.h"
+#include "mojo/public/cpp/bindings/strong_binding.h"
 #include "net/http/http_response_headers.h"
 
 namespace extensions {
 namespace {
 
-mojo::Map<mojo::String, mojo::String> CreateResponseHeadersMap(
+std::unordered_map<std::string, std::string> CreateResponseHeadersMap(
     const net::HttpResponseHeaders* headers) {
-  std::map<std::string, std::string> result;
+  std::unordered_map<std::string, std::string> result;
   if (!headers)
-    return mojo::Map<mojo::String, mojo::String>::From(result);
+    return result;
 
-  void* iter = nullptr;
+  size_t iter = 0;
   std::string header_name;
   std::string header_value;
   while (headers->EnumerateHeaderLines(&iter, &header_name, &header_value)) {
@@ -42,30 +44,28 @@ mojo::Map<mojo::String, mojo::String> CreateResponseHeadersMap(
       current_value += ", ";
     current_value += header_value;
   }
-  return mojo::Map<mojo::String, mojo::String>::From(result);
+  return result;
 }
 
 }  // namespace
 
+MimeHandlerServiceImpl::MimeHandlerServiceImpl(
+    base::WeakPtr<StreamContainer> stream_container)
+    : stream_(stream_container), weak_factory_(this) {}
+
+MimeHandlerServiceImpl::~MimeHandlerServiceImpl() {}
+
 // static
 void MimeHandlerServiceImpl::Create(
     base::WeakPtr<StreamContainer> stream_container,
-    mojo::InterfaceRequest<mime_handler::MimeHandlerService> request) {
-  new MimeHandlerServiceImpl(stream_container, std::move(request));
-}
-
-MimeHandlerServiceImpl::MimeHandlerServiceImpl(
-    base::WeakPtr<StreamContainer> stream_container,
-    mojo::InterfaceRequest<mime_handler::MimeHandlerService> request)
-    : stream_(stream_container),
-      binding_(this, std::move(request)),
-      weak_factory_(this) {}
-
-MimeHandlerServiceImpl::~MimeHandlerServiceImpl() {
+    mime_handler::MimeHandlerServiceRequest request) {
+  mojo::MakeStrongBinding(
+      base::MakeUnique<MimeHandlerServiceImpl>(stream_container),
+      std::move(request));
 }
 
 void MimeHandlerServiceImpl::GetStreamInfo(
-    const mojo::Callback<void(mime_handler::StreamInfoPtr)>& callback) {
+    const GetStreamInfoCallback& callback) {
   if (!stream_) {
     callback.Run(mime_handler::StreamInfoPtr());
     return;
@@ -73,8 +73,7 @@ void MimeHandlerServiceImpl::GetStreamInfo(
   callback.Run(mojo::ConvertTo<mime_handler::StreamInfoPtr>(*stream_));
 }
 
-void MimeHandlerServiceImpl::AbortStream(
-    const mojo::Callback<void()>& callback) {
+void MimeHandlerServiceImpl::AbortStream(const AbortStreamCallback& callback) {
   if (!stream_) {
     callback.Run();
     return;
@@ -84,7 +83,7 @@ void MimeHandlerServiceImpl::AbortStream(
 }
 
 void MimeHandlerServiceImpl::OnStreamClosed(
-    const mojo::Callback<void()>& callback) {
+    const AbortStreamCallback& callback) {
   callback.Run();
 }
 

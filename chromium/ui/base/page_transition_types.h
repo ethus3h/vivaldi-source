@@ -151,6 +151,11 @@ enum PageTransition {
 UI_BASE_EXPORT bool PageTransitionCoreTypeIs(PageTransition lhs,
                                              PageTransition rhs);
 
+// Compares two PageTransition types including qualifiers. Rarely useful,
+// PageTransitionCoreTypeIs() is more likely what you need.
+UI_BASE_EXPORT bool PageTransitionTypeIncludingQualifiersIs(PageTransition lhs,
+                                                            PageTransition rhs);
+
 // Simplifies the provided transition by removing any qualifier
 UI_BASE_EXPORT PageTransition PageTransitionStripQualifier(
     PageTransition type);
@@ -181,18 +186,18 @@ UI_BASE_EXPORT bool PageTransitionIsWebTriggerable(PageTransition type);
 UI_BASE_EXPORT const char* PageTransitionGetCoreTransitionString(
     PageTransition type);
 
-// TODO(joth): Remove the #if guard here; requires all chrome layer code to
-// be fixed up not to use operator==
-#if defined(CONTENT_IMPLEMENTATION)
 // Declare a dummy class that is intentionally never defined.
 class DontUseOperatorEquals;
 
-// Ban operator== as it's way too easy to forget to strip the qualifiers. Use
-// PageTransitionCoreTypeIs() instead.
+// Ban operator== and operator!= as it's way too easy to forget to strip the
+// qualifiers. Use PageTransitionCoreTypeIs() instead or, in rare cases,
+// PageTransitionTypeIncludingQualifiersIs().
 DontUseOperatorEquals operator==(PageTransition, PageTransition);
 DontUseOperatorEquals operator==(PageTransition, int);
 DontUseOperatorEquals operator==(int, PageTransition);
-#endif  // defined(CONTENT_IMPLEMENTATION)
+DontUseOperatorEquals operator!=(PageTransition, PageTransition);
+DontUseOperatorEquals operator!=(PageTransition, int);
+DontUseOperatorEquals operator!=(int, PageTransition);
 
 }  // namespace ui
 

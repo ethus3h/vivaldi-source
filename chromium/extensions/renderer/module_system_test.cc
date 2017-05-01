@@ -7,20 +7,24 @@
 #include <stddef.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/callback.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/lazy_instance.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_piece.h"
 #include "extensions/common/extension_paths.h"
 #include "extensions/renderer/logging_native_handler.h"
 #include "extensions/renderer/object_backed_native_handler.h"
 #include "extensions/renderer/safe_builtins.h"
+#include "extensions/renderer/string_source_map.h"
+#include "extensions/renderer/test_v8_extension_configuration.h"
 #include "extensions/renderer/utils_native_handler.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -34,30 +38,6 @@ class FailsOnException : public ModuleSystem::ExceptionHandler {
     FAIL() << "Uncaught exception: " << CreateExceptionString(try_catch);
   }
 };
-
-class V8ExtensionConfigurator {
- public:
-  V8ExtensionConfigurator()
-      : safe_builtins_(SafeBuiltins::CreateV8Extension()),
-        names_(1, safe_builtins_->name()),
-        configuration_(
-            new v8::ExtensionConfiguration(static_cast<int>(names_.size()),
-                                           names_.data())) {
-    v8::RegisterExtension(safe_builtins_.get());
-  }
-
-  v8::ExtensionConfiguration* GetConfiguration() {
-    return configuration_.get();
-  }
-
- private:
-  scoped_ptr<v8::Extension> safe_builtins_;
-  std::vector<const char*> names_;
-  scoped_ptr<v8::ExtensionConfiguration> configuration_;
-};
-
-base::LazyInstance<V8ExtensionConfigurator>::Leaky g_v8_extension_configurator =
-    LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -97,40 +77,13 @@ class ModuleSystemTestEnvironment::AssertNatives
   bool failed_;
 };
 
-// Source map that operates on std::strings.
-class ModuleSystemTestEnvironment::StringSourceMap
-    : public ModuleSystem::SourceMap {
- public:
-  StringSourceMap() {}
-  ~StringSourceMap() override {}
-
-  v8::Local<v8::Value> GetSource(v8::Isolate* isolate,
-                                 const std::string& name) override {
-    if (source_map_.count(name) == 0)
-      return v8::Undefined(isolate);
-    return v8::String::NewFromUtf8(isolate, source_map_[name].c_str());
-  }
-
-  bool Contains(const std::string& name) override {
-    return source_map_.count(name);
-  }
-
-  void RegisterModule(const std::string& name, const std::string& source) {
-    CHECK_EQ(0u, source_map_.count(name)) << "Module " << name << " not found";
-    source_map_[name] = source;
-  }
-
- private:
-  std::map<std::string, std::string> source_map_;
-};
-
 ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(v8::Isolate* isolate)
     : isolate_(isolate),
       context_holder_(new gin::ContextHolder(isolate_)),
       handle_scope_(isolate_),
       source_map_(new StringSourceMap()) {
   context_holder_->SetContext(v8::Context::New(
-      isolate, g_v8_extension_configurator.Get().GetConfiguration()));
+      isolate, TestV8ExtensionConfiguration::GetConfiguration()));
   context_.reset(new ScriptContext(context_holder_->context(),
                                    nullptr,  // WebFrame
                                    nullptr,  // Extension
@@ -141,21 +94,21 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(v8::Isolate* isolate)
   assert_natives_ = new AssertNatives(context_.get());
 
   {
-    scoped_ptr<ModuleSystem> module_system(
+    std::unique_ptr<ModuleSystem> module_system(
         new ModuleSystem(context_.get(), source_map_.get()));
     context_->set_module_system(std::move(module_system));
   }
   ModuleSystem* module_system = context_->module_system();
   module_system->RegisterNativeHandler(
-      "assert", scoped_ptr<NativeHandler>(assert_natives_));
+      "assert", std::unique_ptr<NativeHandler>(assert_natives_));
   module_system->RegisterNativeHandler(
       "logging",
-      scoped_ptr<NativeHandler>(new LoggingNativeHandler(context_.get())));
+      std::unique_ptr<NativeHandler>(new LoggingNativeHandler(context_.get())));
   module_system->RegisterNativeHandler(
       "utils",
-      scoped_ptr<NativeHandler>(new UtilsNativeHandler(context_.get())));
+      std::unique_ptr<NativeHandler>(new UtilsNativeHandler(context_.get())));
   module_system->SetExceptionHandlerForTest(
-      scoped_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
+      std::unique_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
 }
 
 ModuleSystemTestEnvironment::~ModuleSystemTestEnvironment() {
@@ -223,6 +176,7 @@ ModuleSystemTest::~ModuleSystemTest() {
 
 void ModuleSystemTest::SetUp() {
   env_ = CreateEnvironment();
+  base::CommandLine::ForCurrentProcess()->AppendSwitch("test-type");
 }
 
 void ModuleSystemTest::TearDown() {
@@ -244,8 +198,9 @@ void ModuleSystemTest::TearDown() {
   }
 }
 
-scoped_ptr<ModuleSystemTestEnvironment> ModuleSystemTest::CreateEnvironment() {
-  return make_scoped_ptr(new ModuleSystemTestEnvironment(isolate_));
+std::unique_ptr<ModuleSystemTestEnvironment>
+ModuleSystemTest::CreateEnvironment() {
+  return base::WrapUnique(new ModuleSystemTestEnvironment(isolate_));
 }
 
 void ModuleSystemTest::ExpectNoAssertionsMade() {
@@ -253,7 +208,7 @@ void ModuleSystemTest::ExpectNoAssertionsMade() {
 }
 
 void ModuleSystemTest::RunResolvedPromises() {
-  isolate_->RunMicrotasks();
+  v8::MicrotasksScope::PerformCheckpoint(isolate_);
 }
 
 }  // namespace extensions

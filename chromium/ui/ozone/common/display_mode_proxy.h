@@ -7,18 +7,20 @@
 
 #include "base/macros.h"
 #include "ui/display/types/display_mode.h"
-#include "ui/ozone/ozone_base_export.h"
 
 namespace ui {
 
 struct DisplayMode_Params;
 
-class OZONE_BASE_EXPORT DisplayModeProxy : public DisplayMode {
+class DisplayModeProxy : public display::DisplayMode {
  public:
-  DisplayModeProxy(const DisplayMode_Params& params);
+  explicit DisplayModeProxy(const DisplayMode_Params& params);
   ~DisplayModeProxy() override;
+  std::unique_ptr<display::DisplayMode> Clone() const override;
 
  private:
+  DisplayModeProxy(const gfx::Size& size, bool interlaced, float refresh_rate);
+
   DISALLOW_COPY_AND_ASSIGN(DisplayModeProxy);
 };
 

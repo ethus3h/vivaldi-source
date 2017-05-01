@@ -15,11 +15,13 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/time/time.h"
-#include "media/base/android/media_codec_util.h"
+#include "media/base/android/media_codec_direction.h"
 #include "media/base/media_export.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace media {
 
+class EncryptionScheme;
 struct SubsampleEntry;
 
 // These must be in sync with MediaCodecBridge.MEDIA_CODEC_XXX constants in
@@ -45,14 +47,6 @@ class MEDIA_EXPORT MediaCodecBridge {
  public:
   virtual ~MediaCodecBridge();
 
-  // Resets both input and output, all indices previously returned in calls to
-  // DequeueInputBuffer() and DequeueOutputBuffer() become invalid.
-  // Please note that this clears all the inputs in the media codec. In other
-  // words, there will be no outputs until new input is provided.
-  // Returns MEDIA_CODEC_ERROR if an unexpected error happens, or Media_CODEC_OK
-  // otherwise.
-  virtual MediaCodecStatus Reset() = 0;
-
   // Calls start() against the media codec instance. Returns whether media
   // codec was successfully started.
   virtual bool Start() = 0;
@@ -64,13 +58,28 @@ class MEDIA_EXPORT MediaCodecBridge {
   // instance -> StartAudio/Video() is recommended.
   virtual void Stop() = 0;
 
-  // Used for getting output format. This is valid after DequeueInputBuffer()
-  // returns a format change by returning INFO_OUTPUT_FORMAT_CHANGED
-  virtual void GetOutputFormat(int* width, int* height) = 0;
+  // Calls flush() on the MediaCodec. All indices previously returned in calls
+  // to DequeueInputBuffer() and DequeueOutputBuffer() become invalid. Please
+  // note that this clears all the inputs in the media codec. In other words,
+  // there will be no outputs until new input is provided. Returns
+  // MEDIA_CODEC_ERROR if an unexpected error happens, or MEDIA_CODEC_OK
+  // otherwise.
+  virtual MediaCodecStatus Flush() = 0;
+
+  // Used for getting the output size. This is valid after DequeueInputBuffer()
+  // returns a format change by returning INFO_OUTPUT_FORMAT_CHANGED.
+  // Returns MEDIA_CODEC_ERROR if an error occurs, or MEDIA_CODEC_OK otherwise.
+  virtual MediaCodecStatus GetOutputSize(gfx::Size* size) = 0;
 
   // Used for checking for new sampling rate after DequeueInputBuffer() returns
   // INFO_OUTPUT_FORMAT_CHANGED
-  virtual int GetOutputSamplingRate() = 0;
+  // Returns MEDIA_CODEC_ERROR if an error occurs, or MEDIA_CODEC_OK otherwise.
+  virtual MediaCodecStatus GetOutputSamplingRate(int* sampling_rate) = 0;
+
+  // Fills |channel_count| with the number of audio channels. Useful after
+  // INFO_OUTPUT_FORMAT_CHANGED.
+  // Returns MEDIA_CODEC_ERROR if an error occurs, or MEDIA_CODEC_OK otherwise.
+  virtual MediaCodecStatus GetOutputChannelCount(int* channel_count) = 0;
 
   // Submits a byte array to the given input buffer. Call this after getting an
   // available buffer from DequeueInputBuffer(). If |data| is NULL, assume the
@@ -80,7 +89,7 @@ class MEDIA_EXPORT MediaCodecBridge {
       int index,
       const uint8_t* data,
       size_t data_size,
-      const base::TimeDelta& presentation_time) = 0;
+      base::TimeDelta presentation_time) = 0;
 
   // Similar to the above call, but submits a buffer that is encrypted.  Note:
   // NULL |subsamples| indicates the whole buffer is encrypted.  If |data| is
@@ -93,12 +102,13 @@ class MEDIA_EXPORT MediaCodecBridge {
       const std::string& key_id,
       const std::string& iv,
       const std::vector<SubsampleEntry>& subsamples,
-      const base::TimeDelta& presentation_time);
+      const EncryptionScheme& encryption_scheme,
+      base::TimeDelta presentation_time);
 
-  // Same QueueSecureInputBuffer overriden for the use with MediaSourcePlayer
-  // and MediaCodecPlayer.
-  // TODO(timav): remove this method and keep only the one above after we
-  // switch to the Spitzer pipeline.
+  // Same QueueSecureInputBuffer overriden for the use with
+  // AndroidVideoDecodeAccelerator and MediaCodecAudioDecoder. TODO(timav):
+  // remove this method and keep only the one above after we switch to the
+  // Spitzer pipeline.
   virtual MediaCodecStatus QueueSecureInputBuffer(
       int index,
       const uint8_t* data,
@@ -107,7 +117,8 @@ class MEDIA_EXPORT MediaCodecBridge {
       const std::vector<char>& iv,
       const SubsampleEntry* subsamples,
       int subsamples_size,
-      const base::TimeDelta& presentation_time) = 0;
+      const EncryptionScheme& encryption_scheme,
+      base::TimeDelta presentation_time) = 0;
 
   // Submits an empty buffer with a EOS (END OF STREAM) flag.
   virtual void QueueEOS(int input_buffer_index) = 0;
@@ -118,7 +129,7 @@ class MEDIA_EXPORT MediaCodecBridge {
   // MEDIA_CODEC_ERROR if unexpected error happens.
   // Note: Never use infinite timeout as this would block the decoder thread and
   // prevent the decoder job from being released.
-  virtual MediaCodecStatus DequeueInputBuffer(const base::TimeDelta& timeout,
+  virtual MediaCodecStatus DequeueInputBuffer(base::TimeDelta timeout,
                                               int* index) = 0;
 
   // Dequeues an output buffer, block at most timeout_us microseconds.
@@ -131,7 +142,7 @@ class MEDIA_EXPORT MediaCodecBridge {
   // TODO(xhwang): Can we drop |end_of_stream| and return
   // MEDIA_CODEC_OUTPUT_END_OF_STREAM?
   virtual MediaCodecStatus DequeueOutputBuffer(
-      const base::TimeDelta& timeout,
+      base::TimeDelta timeout,
       int* index,
       size_t* offset,
       size_t* size,
@@ -143,25 +154,31 @@ class MEDIA_EXPORT MediaCodecBridge {
   // configuring this video decoder you can optionally render the buffer.
   virtual void ReleaseOutputBuffer(int index, bool render) = 0;
 
-  // Returns the number of output buffers used by the codec.
-  // TODO(qinmin): this call is deprecated in Lollipop.
-  virtual int GetOutputBuffersCount();
-
-  // Returns the capacity of each output buffer used by the codec.
-  // TODO(qinmin): this call is deprecated in Lollipop.
-  virtual size_t GetOutputBuffersCapacity();
-
   // Returns an input buffer's base pointer and capacity.
-  virtual void GetInputBuffer(int input_buffer_index,
-                              uint8_t** data,
-                              size_t* capacity) = 0;
+  virtual MediaCodecStatus GetInputBuffer(int input_buffer_index,
+                                          uint8_t** data,
+                                          size_t* capacity) = 0;
 
-  // Copy |dst_size| bytes from output buffer |index|'s |offset| onwards into
-  // |*dst|.
-  virtual bool CopyFromOutputBuffer(int index,
-                                    size_t offset,
-                                    void* dst,
-                                    int dst_size) = 0;
+  // Gives the access to buffer's data which is referenced by |index| and
+  // |offset|. The size of available data for reading is written to |*capacity|
+  // and the address is written to |*addr|.
+  // Returns MEDIA_CODEC_ERROR if a error occurs, or MEDIA_CODEC_OK otherwise.
+  virtual MediaCodecStatus GetOutputBufferAddress(int index,
+                                                  size_t offset,
+                                                  const uint8_t** addr,
+                                                  size_t* capacity) = 0;
+
+  // Copies |num| bytes from output buffer |index|'s |offset| into the memory
+  // region pointed to by |dst|. To avoid overflows, the size of both source
+  // and destination must be at least |num| bytes, and should not overlap.
+  // Returns MEDIA_CODEC_ERROR if an error occurs, or MEDIA_CODEC_OK otherwise.
+  MediaCodecStatus CopyFromOutputBuffer(int index,
+                                        size_t offset,
+                                        void* dst,
+                                        size_t num);
+
+  // Gets the component name. Before API level 18 this returns an empty string.
+  virtual std::string GetName() = 0;
 
  protected:
   MediaCodecBridge();

@@ -17,14 +17,14 @@
 
 class GURL;
 struct ImportedBookmarkEntry;
-struct FaviconUsageData;
 class ExternalProcessImporterHost;
+
+struct ImportedSpeedDialEntry;
 
 namespace importer {
 #if defined(OS_WIN)
 struct ImporterIE7PasswordInfo;
 #endif
-struct ImporterURlRow;
 struct SearchEngineInfo;
 }
 
@@ -40,6 +40,9 @@ class InProcessImporterBridge : public ImporterBridge {
   void AddNotes(
       const std::vector<ImportedNotesEntry>& notes,
       const base::string16& first_folder_name) override;
+
+  void AddSpeedDial(
+      const std::vector<ImportedSpeedDialEntry>& speeddials) override;
 
   void AddHomePage(const GURL& home_page) override;
 
@@ -69,6 +72,8 @@ class InProcessImporterBridge : public ImporterBridge {
   void NotifyItemStarted(importer::ImportItem item) override;
   void NotifyItemEnded(importer::ImportItem item) override;
   void NotifyEnded() override;
+  void NotifyItemFailed(importer::ImportItem item,
+                        const std::string& error) override;
 
   base::string16 GetLocalizedString(int message_id) override;
   // End ImporterBridge implementation.

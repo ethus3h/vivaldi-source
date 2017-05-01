@@ -4,31 +4,24 @@
 
 #include "chrome/browser/ui/ash/launcher/browser_status_monitor.h"
 
-#include "ash/display/window_tree_host_manager.h"
-#include "ash/shelf/shelf_util.h"
+#include "ash/common/shelf/shelf_item_types.h"
 #include "ash/shell.h"
 #include "ash/wm/window_util.h"
 #include "base/macros.h"
-#include "base/stl_util.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/ui/ash/launcher/browser_shortcut_launcher_item_controller.h"
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
+#include "chrome/browser/ui/ash/launcher/chrome_launcher_controller_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/settings_window_manager.h"
-#include "chrome/browser/ui/settings_window_manager_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "grit/ash_resources.h"
-#include "grit/generated_resources.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/screen.h"
 #include "ui/wm/public/activation_client.h"
 
 // This class monitors the WebContent of the all tab and notifies a navigation
@@ -81,89 +74,42 @@ class BrowserStatusMonitor::LocalWebContentsObserver
   DISALLOW_COPY_AND_ASSIGN(LocalWebContentsObserver);
 };
 
-// Observes any new settings windows and sets their shelf icon (since they
-// are excluded from BrowserShortcutLauncherItem).
-class BrowserStatusMonitor::SettingsWindowObserver
-    : public chrome::SettingsWindowManagerObserver {
- public:
-  SettingsWindowObserver() {}
-  ~SettingsWindowObserver() override {}
-
-  // SettingsWindowManagerObserver
-  void OnNewSettingsWindow(Browser* settings_browser) override {
-    ash::SetShelfItemDetailsForDialogWindow(
-        settings_browser->window()->GetNativeWindow(),
-        IDR_ASH_SHELF_ICON_SETTINGS,
-        l10n_util::GetStringUTF16(IDS_SETTINGS_TITLE));
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SettingsWindowObserver);
-};
-
 BrowserStatusMonitor::BrowserStatusMonitor(
     ChromeLauncherController* launcher_controller)
     : launcher_controller_(launcher_controller),
-      observed_activation_clients_(this),
-      observed_root_windows_(this),
-      settings_window_observer_(new SettingsWindowObserver),
       browser_tab_strip_tracker_(this, this, this) {
   DCHECK(launcher_controller_);
-
-  chrome::SettingsWindowManager::GetInstance()->AddObserver(
-      settings_window_observer_.get());
-
-  // This check needs for win7_aura. Without this, all tests in
-  // ChromeLauncherController will fail in win7_aura.
-  if (ash::Shell::HasInstance()) {
-    // We can't assume all RootWindows have the same ActivationClient.
-    // Add a RootWindow and its ActivationClient to the observed list.
-    aura::Window::Windows root_windows = ash::Shell::GetAllRootWindows();
-    aura::Window::Windows::const_iterator iter = root_windows.begin();
-    for (; iter != root_windows.end(); ++iter) {
-      // |observed_activation_clients_| can have the same activation client
-      // multiple times - which would be handled by the used
-      // |ScopedObserverWithDuplicatedSources|.
-      observed_activation_clients_.Add(
-          aura::client::GetActivationClient(*iter));
-      observed_root_windows_.Add(static_cast<aura::Window*>(*iter));
-    }
-    ash::Shell::GetInstance()->GetScreen()->AddObserver(this);
-  }
-
-  browser_tab_strip_tracker_.Init(
-      BrowserTabStripTracker::InitWith::ALL_BROWERS);
+  ash::Shell::GetInstance()->activation_client()->AddObserver(this);
 }
 
 BrowserStatusMonitor::~BrowserStatusMonitor() {
-  // This check needs for win7_aura. Without this, all tests in
-  // ChromeLauncherController will fail in win7_aura.
-  if (ash::Shell::HasInstance())
-    ash::Shell::GetInstance()->GetScreen()->RemoveObserver(this);
-
-  chrome::SettingsWindowManager::GetInstance()->RemoveObserver(
-      settings_window_observer_.get());
-
+  ash::Shell::GetInstance()->activation_client()->RemoveObserver(this);
   browser_tab_strip_tracker_.StopObservingAndSendOnBrowserRemoved();
+}
 
-  STLDeleteContainerPairSecondPointers(webcontents_to_observer_map_.begin(),
-                                       webcontents_to_observer_map_.end());
+void BrowserStatusMonitor::Initialize() {
+  DCHECK(!initialized_);
+  initialized_ = true;
+  browser_tab_strip_tracker_.Init(
+      BrowserTabStripTracker::InitWith::ALL_BROWERS);
 }
 
 void BrowserStatusMonitor::UpdateAppItemState(
     content::WebContents* contents,
     ChromeLauncherController::AppState app_state) {
   DCHECK(contents);
+  DCHECK(initialized_);
   // It is possible to come here from Browser::SwapTabContent where the contents
   // cannot be associated with a browser. A removal however should be properly
   // processed.
   Browser* browser = chrome::FindBrowserWithWebContents(contents);
   if (app_state == ChromeLauncherController::APP_STATE_REMOVED ||
-      (browser && launcher_controller_->IsBrowserFromActiveUser(browser)))
+      (browser && IsBrowserFromActiveUser(browser)))
     launcher_controller_->UpdateAppState(contents, app_state);
 }
 
 void BrowserStatusMonitor::UpdateBrowserItemState() {
+  DCHECK(initialized_);
   launcher_controller_->GetBrowserShortcutLauncherItemController()->
       UpdateBrowserItemState();
 }
@@ -172,6 +118,7 @@ void BrowserStatusMonitor::OnWindowActivated(
     aura::client::ActivationChangeObserver::ActivationReason reason,
     aura::Window* gained_active,
     aura::Window* lost_active) {
+  DCHECK(initialized_);
   Browser* browser = NULL;
   content::WebContents* contents_from_gained = NULL;
   content::WebContents* contents_from_lost = NULL;
@@ -203,18 +150,12 @@ void BrowserStatusMonitor::OnWindowActivated(
     UpdateBrowserItemState();
 }
 
-void BrowserStatusMonitor::OnWindowDestroyed(aura::Window* window) {
-  // Remove RootWindow and its ActivationClient from observed list.
-  observed_root_windows_.Remove(window);
-  observed_activation_clients_.Remove(
-      aura::client::GetActivationClient(window));
-}
-
 bool BrowserStatusMonitor::ShouldTrackBrowser(Browser* browser) {
-  return browser->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH;
+  return true;
 }
 
 void BrowserStatusMonitor::OnBrowserAdded(Browser* browser) {
+  DCHECK(initialized_);
   if (browser->is_type_popup() && browser->is_app()) {
     // Note: A V1 application will set the tab strip observer when the app gets
     // added to the shelf. This makes sure that in the multi user case we will
@@ -224,36 +165,11 @@ void BrowserStatusMonitor::OnBrowserAdded(Browser* browser) {
 }
 
 void BrowserStatusMonitor::OnBrowserRemoved(Browser* browser) {
+  DCHECK(initialized_);
   if (browser->is_type_popup() && browser->is_app())
     RemoveV1AppFromShelf(browser);
 
   UpdateBrowserItemState();
-}
-
-void BrowserStatusMonitor::OnDisplayAdded(const gfx::Display& new_display) {
-  // Add a new RootWindow and its ActivationClient to observed list.
-  aura::Window* root_window = ash::Shell::GetInstance()
-                                  ->window_tree_host_manager()
-                                  ->GetRootWindowForDisplayId(new_display.id());
-  // When the primary root window's display get removed, the existing root
-  // window is taken over by the new display and the observer is already set.
-  if (!observed_root_windows_.IsObserving(root_window)) {
-    observed_root_windows_.Add(static_cast<aura::Window*>(root_window));
-    observed_activation_clients_.Add(
-        aura::client::GetActivationClient(root_window));
-  }
-}
-
-void BrowserStatusMonitor::OnDisplayRemoved(const gfx::Display& old_display) {
-  // When this is called, RootWindow of |old_display| is already removed.
-  // Instead, we can remove RootWindow and its ActivationClient in the
-  // OnWindowRemoved().
-  // Do nothing here.
-}
-
-void BrowserStatusMonitor::OnDisplayMetricsChanged(const gfx::Display&,
-                                                   uint32_t) {
-  // Do nothing here.
 }
 
 void BrowserStatusMonitor::ActiveTabChanged(content::WebContents* old_contents,
@@ -264,9 +180,6 @@ void BrowserStatusMonitor::ActiveTabChanged(content::WebContents* old_contents,
   // Use |new_contents|. |old_contents| could be NULL.
   DCHECK(new_contents);
   browser = chrome::FindBrowserWithWebContents(new_contents);
-
-  if (browser && browser->host_desktop_type() != chrome::HOST_DESKTOP_TYPE_ASH)
-    return;
 
   ChromeLauncherController::AppState state =
       ChromeLauncherController::APP_STATE_INACTIVE;
@@ -294,9 +207,6 @@ void BrowserStatusMonitor::TabReplacedAt(TabStripModel* tab_strip_model,
   DCHECK(old_contents && new_contents);
   Browser* browser = chrome::FindBrowserWithWebContents(new_contents);
 
-  if (browser && browser->host_desktop_type() != chrome::HOST_DESKTOP_TYPE_ASH)
-    return;
-
   UpdateAppItemState(old_contents,
                      ChromeLauncherController::APP_STATE_REMOVED);
   RemoveWebContentsObserver(old_contents);
@@ -315,7 +225,8 @@ void BrowserStatusMonitor::TabReplacedAt(TabStripModel* tab_strip_model,
   AddWebContentsObserver(new_contents);
 }
 
-void BrowserStatusMonitor::TabInsertedAt(content::WebContents* contents,
+void BrowserStatusMonitor::TabInsertedAt(TabStripModel* tab_strip_model,
+                                         content::WebContents* contents,
                                          int index,
                                          bool foreground) {
   // An inserted tab is not active - ActiveTabChanged() will be called to
@@ -341,6 +252,7 @@ void BrowserStatusMonitor::WebContentsDestroyed(
 
 void BrowserStatusMonitor::AddV1AppToShelf(Browser* browser) {
   DCHECK(browser->is_type_popup() && browser->is_app());
+  DCHECK(initialized_);
 
   std::string app_id =
       web_app::GetExtensionIdFromApplicationName(browser->app_name());
@@ -352,6 +264,7 @@ void BrowserStatusMonitor::AddV1AppToShelf(Browser* browser) {
 
 void BrowserStatusMonitor::RemoveV1AppFromShelf(Browser* browser) {
   DCHECK(browser->is_type_popup() && browser->is_app());
+  DCHECK(initialized_);
 
   if (browser_to_app_id_map_.find(browser) != browser_to_app_id_map_.end()) {
     launcher_controller_->UnlockV1AppWithID(browser_to_app_id_map_[browser]);
@@ -368,7 +281,7 @@ void BrowserStatusMonitor::AddWebContentsObserver(
   if (webcontents_to_observer_map_.find(contents) ==
           webcontents_to_observer_map_.end()) {
     webcontents_to_observer_map_[contents] =
-        new LocalWebContentsObserver(contents, this);
+        base::MakeUnique<LocalWebContentsObserver>(contents, this);
   }
 }
 
@@ -376,7 +289,6 @@ void BrowserStatusMonitor::RemoveWebContentsObserver(
     content::WebContents* contents) {
   DCHECK(webcontents_to_observer_map_.find(contents) !=
       webcontents_to_observer_map_.end());
-  delete webcontents_to_observer_map_[contents];
   webcontents_to_observer_map_.erase(contents);
 }
 

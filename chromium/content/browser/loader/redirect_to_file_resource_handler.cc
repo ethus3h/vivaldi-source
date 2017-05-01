@@ -10,9 +10,9 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/threading/thread_restrictions.h"
+#include "content/browser/loader/resource_controller.h"
 #include "content/browser/loader/resource_request_info_impl.h"
 #include "content/browser/loader/temporary_file_stream.h"
-#include "content/public/browser/resource_controller.h"
 #include "content/public/common/resource_response.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
@@ -61,7 +61,7 @@ static const int kMaxReadBufSize = 524288;
 class RedirectToFileResourceHandler::Writer {
  public:
   Writer(RedirectToFileResourceHandler* handler,
-         scoped_ptr<net::FileStream> file_stream,
+         std::unique_ptr<net::FileStream> file_stream,
          ShareableFileReference* deletable_file)
       : handler_(handler),
         file_stream_(std::move(file_stream)),
@@ -119,7 +119,7 @@ class RedirectToFileResourceHandler::Writer {
 
   RedirectToFileResourceHandler* handler_;
 
-  scoped_ptr<net::FileStream> file_stream_;
+  std::unique_ptr<net::FileStream> file_stream_;
   bool is_writing_;
 
   // We create a ShareableFileReference that's deletable for the temp file
@@ -130,7 +130,7 @@ class RedirectToFileResourceHandler::Writer {
 };
 
 RedirectToFileResourceHandler::RedirectToFileResourceHandler(
-    scoped_ptr<ResourceHandler> next_handler,
+    std::unique_ptr<ResourceHandler> next_handler,
     net::URLRequest* request)
     : LayeredResourceHandler(request, std::move(next_handler)),
       buf_(new net::GrowableIOBuffer()),
@@ -177,6 +177,7 @@ bool RedirectToFileResourceHandler::OnWillStart(const GURL& url, bool* defer) {
   // network request like this.
   will_start_url_ = url;
   did_defer_ = *defer = true;
+  request()->LogBlockedBy("RedirectToFileResourceHandler");
   if (create_temporary_file_stream_.is_null()) {
     CreateTemporaryFileStream(
         base::Bind(&RedirectToFileResourceHandler::DidCreateTemporaryFile,
@@ -220,6 +221,7 @@ bool RedirectToFileResourceHandler::OnReadCompleted(int bytes_read,
 
   if (BufIsFull()) {
     did_defer_ = *defer = true;
+    request()->LogBlockedBy("RedirectToFileResourceHandler");
 
     if (buf_->capacity() == bytes_read) {
       // The network layer has saturated our buffer in one read. Next time, we
@@ -233,22 +235,21 @@ bool RedirectToFileResourceHandler::OnReadCompleted(int bytes_read,
 
 void RedirectToFileResourceHandler::OnResponseCompleted(
     const net::URLRequestStatus& status,
-    const std::string& security_info,
     bool* defer) {
   if (writer_ && writer_->is_writing()) {
     completed_during_write_ = true;
     completed_status_ = status;
-    completed_security_info_ = security_info;
     did_defer_ = true;
     *defer = true;
+    request()->LogBlockedBy("RedirectToFileResourceHandler");
     return;
   }
-  next_handler_->OnResponseCompleted(status, security_info, defer);
+  next_handler_->OnResponseCompleted(status, defer);
 }
 
 void RedirectToFileResourceHandler::DidCreateTemporaryFile(
     base::File::Error error_code,
-    scoped_ptr<net::FileStream> file_stream,
+    std::unique_ptr<net::FileStream> file_stream,
     ShareableFileReference* deletable_file) {
   DCHECK(!writer_);
   if (error_code != base::File::FILE_OK) {
@@ -261,10 +262,11 @@ void RedirectToFileResourceHandler::DidCreateTemporaryFile(
   // Resume the request.
   DCHECK(did_defer_);
   bool defer = false;
+  request()->LogUnblocked();
   if (!next_handler_->OnWillStart(will_start_url_, &defer)) {
     controller()->Cancel();
   } else if (!defer) {
-    ResumeIfDeferred();
+    Resume();
   } else {
     did_defer_ = false;
   }
@@ -300,11 +302,10 @@ void RedirectToFileResourceHandler::DidWriteToFile(int result) {
     // this should run even in the |failed| case above, otherwise a failed write
     // leaves the handler stuck.
     bool defer = false;
-    next_handler_->OnResponseCompleted(completed_status_,
-                                       completed_security_info_,
-                                       &defer);
+    request()->LogUnblocked();
+    next_handler_->OnResponseCompleted(completed_status_, &defer);
     if (!defer) {
-      ResumeIfDeferred();
+      Resume();
     } else {
       did_defer_ = false;
     }
@@ -318,8 +319,10 @@ bool RedirectToFileResourceHandler::WriteMore() {
       // We've caught up to the network load, but it may be in the process of
       // appending more data to the buffer.
       if (!buf_write_pending_) {
-        if (BufIsFull())
-          ResumeIfDeferred();
+        if (BufIsFull()) {
+          request()->LogUnblocked();
+          Resume();
+        }
         buf_->set_offset(0);
         write_cursor_ = 0;
       }
@@ -365,11 +368,10 @@ bool RedirectToFileResourceHandler::BufIsFull() const {
   return buf_->RemainingCapacity() <= (2 * net::kMaxBytesToSniff);
 }
 
-void RedirectToFileResourceHandler::ResumeIfDeferred() {
-  if (did_defer_) {
-    did_defer_ = false;
-    controller()->Resume();
-  }
+void RedirectToFileResourceHandler::Resume() {
+  DCHECK(did_defer_);
+  did_defer_ = false;
+  controller()->Resume();
 }
 
 }  // namespace content

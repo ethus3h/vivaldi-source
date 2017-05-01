@@ -13,7 +13,6 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
-#include "media/cast/cast_defines.h"
 #include "media/cast/net/cast_transport_config.h"
 #include "media/cast/sender/performance_metrics_overlay.h"
 #include "media/cast/sender/video_encoder.h"
@@ -41,17 +40,23 @@ const int kConstantTimeMs = 75;
 // available to handle the occasional more-complex frames).
 const int kTargetUtilizationPercentage = 75;
 
+// This is the minimum duration in milliseconds that the sender sends key frame
+// request to the encoder on receiving Pli messages. This is used to prevent
+// sending multiple requests while the sender is waiting for an encoded key
+// frame or receiving multiple Pli messages in a short period.
+const int64_t kMinKeyFrameRequestOnPliIntervalMs = 500;
+
 // Extract capture begin/end timestamps from |video_frame|'s metadata and log
 // it.
 void LogVideoCaptureTimestamps(CastEnvironment* cast_environment,
                                const media::VideoFrame& video_frame,
                                RtpTimeTicks rtp_timestamp) {
-  scoped_ptr<FrameEvent> capture_begin_event(new FrameEvent());
+  std::unique_ptr<FrameEvent> capture_begin_event(new FrameEvent());
   capture_begin_event->type = FRAME_CAPTURE_BEGIN;
   capture_begin_event->media_type = VIDEO_EVENT;
   capture_begin_event->rtp_timestamp = rtp_timestamp;
 
-  scoped_ptr<FrameEvent> capture_end_event(new FrameEvent());
+  std::unique_ptr<FrameEvent> capture_end_event(new FrameEvent());
   capture_end_event->type = FRAME_CAPTURE_END;
   capture_end_event->media_type = VIDEO_EVENT;
   capture_end_event->rtp_timestamp = rtp_timestamp;
@@ -83,22 +88,16 @@ void LogVideoCaptureTimestamps(CastEnvironment* cast_environment,
 // See details: crbug.com/392086.
 VideoSender::VideoSender(
     scoped_refptr<CastEnvironment> cast_environment,
-    const VideoSenderConfig& video_config,
+    const FrameSenderConfig& video_config,
     const StatusChangeCallback& status_change_cb,
     const CreateVideoEncodeAcceleratorCallback& create_vea_cb,
     const CreateVideoEncodeMemoryCallback& create_video_encode_mem_cb,
-    CastTransportSender* const transport_sender,
+    CastTransport* const transport_sender,
     const PlayoutDelayChangeCB& playout_delay_change_cb)
     : FrameSender(
           cast_environment,
-          false,
           transport_sender,
-          kVideoFrequency,
-          video_config.ssrc,
-          video_config.max_frame_rate,
-          video_config.min_playout_delay,
-          video_config.max_playout_delay,
-          video_config.animated_playout_delay,
+          video_config,
           video_config.use_external_encoder
               ? NewFixedCongestionControl(
                     (video_config.min_bitrate + video_config.max_bitrate) / 2)
@@ -110,7 +109,7 @@ VideoSender::VideoSender(
       last_bitrate_(0),
       playout_delay_change_cb_(playout_delay_change_cb),
       low_latency_mode_(false),
-      last_reported_deadline_utilization_(-1.0),
+      last_reported_encoder_utilization_(-1.0),
       last_reported_lossy_utilization_(-1.0),
       weak_factory_(this) {
   video_encoder_ = VideoEncoder::Create(
@@ -125,20 +124,6 @@ VideoSender::VideoSender(
         FROM_HERE,
         base::Bind(status_change_cb, STATUS_UNSUPPORTED_CODEC));
   }
-
-  media::cast::CastTransportRtpConfig transport_config;
-  transport_config.ssrc = video_config.ssrc;
-  transport_config.feedback_ssrc = video_config.receiver_ssrc;
-  transport_config.rtp_payload_type = video_config.rtp_payload_type;
-  transport_config.aes_key = video_config.aes_key;
-  transport_config.aes_iv_mask = video_config.aes_iv_mask;
-
-  transport_sender->InitializeVideo(
-      transport_config,
-      base::Bind(&VideoSender::OnReceivedCastFeedback,
-                 weak_factory_.GetWeakPtr()),
-      base::Bind(&VideoSender::OnMeasuredRoundTripTime,
-                 weak_factory_.GetWeakPtr()));
 }
 
 VideoSender::~VideoSender() {
@@ -190,6 +175,21 @@ void VideoSender::InsertRawVideoFrame(
                          "rtp_timestamp", rtp_timestamp.lower_32_bits(),
                          "reason", "time did not increase");
     return;
+  }
+
+  // Request a key frame when a Pli message was received, and it has been passed
+  // long enough from the last time sending key frame request on receiving a Pli
+  // message.
+  if (picture_lost_at_receiver_) {
+    const int64_t min_attemp_interval_ms =
+        std::max(kMinKeyFrameRequestOnPliIntervalMs,
+                 6 * target_playout_delay_.InMilliseconds());
+    if (last_time_attempted_to_resolve_pli_.is_null() ||
+        ((reference_time - last_time_attempted_to_resolve_pli_)
+             .InMilliseconds() > min_attemp_interval_ms)) {
+      video_encoder_->GenerateKeyFrame();
+      last_time_attempted_to_resolve_pli_ = reference_time;
+    }
   }
 
   // Two video frames are needed to compute the exact media duration added by
@@ -250,13 +250,10 @@ void VideoSender::InsertRawVideoFrame(
 
   TRACE_COUNTER_ID1("cast.stream", "Video Target Bitrate", this, bitrate);
 
-  MaybeRenderPerformanceMetricsOverlay(GetTargetPlayoutDelay(),
-                                       low_latency_mode_,
-                                       bitrate,
-                                       frames_in_encoder_ + 1,
-                                       last_reported_deadline_utilization_,
-                                       last_reported_lossy_utilization_,
-                                       video_frame.get());
+  MaybeRenderPerformanceMetricsOverlay(
+      GetTargetPlayoutDelay(), low_latency_mode_, bitrate,
+      frames_in_encoder_ + 1, last_reported_encoder_utilization_,
+      last_reported_lossy_utilization_, video_frame.get());
 
   if (video_encoder_->EncodeVideoFrame(
           video_frame,
@@ -279,7 +276,7 @@ void VideoSender::InsertRawVideoFrame(
   }
 }
 
-scoped_ptr<VideoFrameFactory> VideoSender::CreateVideoFrameFactory() {
+std::unique_ptr<VideoFrameFactory> VideoSender::CreateVideoFrameFactory() {
   return video_encoder_ ? video_encoder_->CreateVideoFrameFactory() : nullptr;
 }
 
@@ -289,7 +286,7 @@ int VideoSender::GetNumberOfFramesInEncoder() const {
 
 base::TimeDelta VideoSender::GetInFlightMediaDuration() const {
   if (GetUnacknowledgedFrameCount() > 0) {
-    const uint32_t oldest_unacked_frame_id = latest_acked_frame_id_ + 1;
+    const FrameId oldest_unacked_frame_id = latest_acked_frame_id_ + 1;
     return last_enqueued_frame_reference_time_ -
         GetRecordedReferenceTime(oldest_unacked_frame_id);
   } else {
@@ -300,29 +297,34 @@ base::TimeDelta VideoSender::GetInFlightMediaDuration() const {
 void VideoSender::OnEncodedVideoFrame(
     const scoped_refptr<media::VideoFrame>& video_frame,
     int encoder_bitrate,
-    scoped_ptr<SenderEncodedFrame> encoded_frame) {
+    std::unique_ptr<SenderEncodedFrame> encoded_frame) {
   DCHECK(cast_environment_->CurrentlyOn(CastEnvironment::MAIN));
 
   frames_in_encoder_--;
   DCHECK_GE(frames_in_encoder_, 0);
 
+  // Encoding was exited with errors.
+  if (!encoded_frame)
+    return;
+
   duration_in_encoder_ =
       last_enqueued_frame_reference_time_ - encoded_frame->reference_time;
 
-  last_reported_deadline_utilization_ = encoded_frame->deadline_utilization;
+  last_reported_encoder_utilization_ = encoded_frame->encoder_utilization;
   last_reported_lossy_utilization_ = encoded_frame->lossy_utilization;
 
   TRACE_EVENT_ASYNC_END2("cast.stream", "Video Encode", video_frame.get(),
-      "deadline_utilization", last_reported_deadline_utilization_,
-      "lossy_utilization", last_reported_lossy_utilization_);
+                         "encoder_utilization",
+                         last_reported_encoder_utilization_,
+                         "lossy_utilization", last_reported_lossy_utilization_);
 
   // Report the resource utilization for processing this frame.  Take the
   // greater of the two utilization values and attenuate them such that the
   // target utilization is reported as the maximum sustainable amount.
   const double attenuated_utilization =
-      std::max(last_reported_deadline_utilization_,
+      std::max(last_reported_encoder_utilization_,
                last_reported_lossy_utilization_) /
-          (kTargetUtilizationPercentage / 100.0);
+      (kTargetUtilizationPercentage / 100.0);
   if (attenuated_utilization >= 0.0) {
     // Key frames are artificially capped to 1.0 because their actual
     // utilization is atypical compared to the other frames in the stream, and

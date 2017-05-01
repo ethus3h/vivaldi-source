@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/cdm_factory.h"
 #include "media/base/cdm_key_information.h"
@@ -21,9 +22,11 @@
 
 namespace media {
 
+namespace {
 const char kMediaEME[] = "Media.EME.";
 const char kDot[] = ".";
 const char kTimeToCreateCdmUMAName[] = "CreateCdmTime";
+}  // namespace
 
 CdmSessionAdapter::CdmSessionAdapter()
     : trace_id_(0), weak_ptr_factory_(this) {}
@@ -35,7 +38,7 @@ void CdmSessionAdapter::CreateCdm(
     const std::string& key_system,
     const GURL& security_origin,
     const CdmConfig& cdm_config,
-    scoped_ptr<blink::WebContentDecryptionModuleResult> result) {
+    std::unique_ptr<blink::WebContentDecryptionModuleResult> result) {
   TRACE_EVENT_ASYNC_BEGIN0("media", "CdmSessionAdapter::CreateCdm",
                            ++trace_id_);
 
@@ -53,7 +56,6 @@ void CdmSessionAdapter::CreateCdm(
       key_system, security_origin, cdm_config,
       base::Bind(&CdmSessionAdapter::OnSessionMessage, weak_this),
       base::Bind(&CdmSessionAdapter::OnSessionClosed, weak_this),
-      base::Bind(&CdmSessionAdapter::OnLegacySessionError, weak_this),
       base::Bind(&CdmSessionAdapter::OnSessionKeysChange, weak_this),
       base::Bind(&CdmSessionAdapter::OnSessionExpirationUpdate, weak_this),
       base::Bind(&CdmSessionAdapter::OnCdmCreated, this, key_system,
@@ -62,7 +64,7 @@ void CdmSessionAdapter::CreateCdm(
 
 void CdmSessionAdapter::SetServerCertificate(
     const std::vector<uint8_t>& certificate,
-    scoped_ptr<SimpleCdmPromise> promise) {
+    std::unique_ptr<SimpleCdmPromise> promise) {
   cdm_->SetServerCertificate(certificate, std::move(promise));
 }
 
@@ -74,7 +76,7 @@ bool CdmSessionAdapter::RegisterSession(
     const std::string& session_id,
     base::WeakPtr<WebContentDecryptionModuleSessionImpl> session) {
   // If this session ID is already registered, don't register it again.
-  if (ContainsKey(sessions_, session_id))
+  if (base::ContainsKey(sessions_, session_id))
     return false;
 
   sessions_[session_id] = session;
@@ -82,43 +84,47 @@ bool CdmSessionAdapter::RegisterSession(
 }
 
 void CdmSessionAdapter::UnregisterSession(const std::string& session_id) {
-  DCHECK(ContainsKey(sessions_, session_id));
+  DCHECK(base::ContainsKey(sessions_, session_id));
   sessions_.erase(session_id);
 }
 
 void CdmSessionAdapter::InitializeNewSession(
     EmeInitDataType init_data_type,
     const std::vector<uint8_t>& init_data,
-    MediaKeys::SessionType session_type,
-    scoped_ptr<NewSessionCdmPromise> promise) {
+    CdmSessionType session_type,
+    std::unique_ptr<NewSessionCdmPromise> promise) {
   cdm_->CreateSessionAndGenerateRequest(session_type, init_data_type, init_data,
                                         std::move(promise));
 }
 
-void CdmSessionAdapter::LoadSession(MediaKeys::SessionType session_type,
-                                    const std::string& session_id,
-                                    scoped_ptr<NewSessionCdmPromise> promise) {
+void CdmSessionAdapter::LoadSession(
+    CdmSessionType session_type,
+    const std::string& session_id,
+    std::unique_ptr<NewSessionCdmPromise> promise) {
   cdm_->LoadSession(session_type, session_id, std::move(promise));
 }
 
-void CdmSessionAdapter::UpdateSession(const std::string& session_id,
-                                      const std::vector<uint8_t>& response,
-                                      scoped_ptr<SimpleCdmPromise> promise) {
+void CdmSessionAdapter::UpdateSession(
+    const std::string& session_id,
+    const std::vector<uint8_t>& response,
+    std::unique_ptr<SimpleCdmPromise> promise) {
   cdm_->UpdateSession(session_id, response, std::move(promise));
 }
 
-void CdmSessionAdapter::CloseSession(const std::string& session_id,
-                                     scoped_ptr<SimpleCdmPromise> promise) {
+void CdmSessionAdapter::CloseSession(
+    const std::string& session_id,
+    std::unique_ptr<SimpleCdmPromise> promise) {
   cdm_->CloseSession(session_id, std::move(promise));
 }
 
-void CdmSessionAdapter::RemoveSession(const std::string& session_id,
-                                      scoped_ptr<SimpleCdmPromise> promise) {
+void CdmSessionAdapter::RemoveSession(
+    const std::string& session_id,
+    std::unique_ptr<SimpleCdmPromise> promise) {
   cdm_->RemoveSession(session_id, std::move(promise));
 }
 
-CdmContext* CdmSessionAdapter::GetCdmContext() {
-  return cdm_->GetCdmContext();
+scoped_refptr<ContentDecryptionModule> CdmSessionAdapter::GetCdm() {
+  return cdm_;
 }
 
 const std::string& CdmSessionAdapter::GetKeySystem() const {
@@ -130,11 +136,12 @@ const std::string& CdmSessionAdapter::GetKeySystemUMAPrefix() const {
   return key_system_uma_prefix_;
 }
 
-void CdmSessionAdapter::OnCdmCreated(const std::string& key_system,
-                                     base::TimeTicks start_time,
-                                     const scoped_refptr<MediaKeys>& cdm,
-                                     const std::string& error_message) {
-  DVLOG(2) << __FUNCTION__ << ": "
+void CdmSessionAdapter::OnCdmCreated(
+    const std::string& key_system,
+    base::TimeTicks start_time,
+    const scoped_refptr<ContentDecryptionModule>& cdm,
+    const std::string& error_message) {
+  DVLOG(2) << __func__ << ": "
            << (cdm ? "success" : "failure (" + error_message + ")");
   DCHECK(!cdm_);
 
@@ -166,11 +173,10 @@ void CdmSessionAdapter::OnCdmCreated(const std::string& key_system,
 
 void CdmSessionAdapter::OnSessionMessage(
     const std::string& session_id,
-    MediaKeys::MessageType message_type,
-    const std::vector<uint8_t>& message,
-    const GURL& /* legacy_destination_url */) {
+    ContentDecryptionModule::MessageType message_type,
+    const std::vector<uint8_t>& message) {
   WebContentDecryptionModuleSessionImpl* session = GetSession(session_id);
-  DLOG_IF(WARNING, !session) << __FUNCTION__ << " for unknown session "
+  DLOG_IF(WARNING, !session) << __func__ << " for unknown session "
                              << session_id;
   if (session)
     session->OnSessionMessage(message_type, message);
@@ -179,20 +185,18 @@ void CdmSessionAdapter::OnSessionMessage(
 void CdmSessionAdapter::OnSessionKeysChange(const std::string& session_id,
                                             bool has_additional_usable_key,
                                             CdmKeysInfo keys_info) {
-  // TODO(jrummell): Pass |keys_info| on.
   WebContentDecryptionModuleSessionImpl* session = GetSession(session_id);
-  DLOG_IF(WARNING, !session) << __FUNCTION__ << " for unknown session "
+  DLOG_IF(WARNING, !session) << __func__ << " for unknown session "
                              << session_id;
   if (session)
     session->OnSessionKeysChange(has_additional_usable_key,
                                  std::move(keys_info));
 }
 
-void CdmSessionAdapter::OnSessionExpirationUpdate(
-    const std::string& session_id,
-    const base::Time& new_expiry_time) {
+void CdmSessionAdapter::OnSessionExpirationUpdate(const std::string& session_id,
+                                                  base::Time new_expiry_time) {
   WebContentDecryptionModuleSessionImpl* session = GetSession(session_id);
-  DLOG_IF(WARNING, !session) << __FUNCTION__ << " for unknown session "
+  DLOG_IF(WARNING, !session) << __func__ << " for unknown session "
                              << session_id;
   if (session)
     session->OnSessionExpirationUpdate(new_expiry_time);
@@ -200,19 +204,10 @@ void CdmSessionAdapter::OnSessionExpirationUpdate(
 
 void CdmSessionAdapter::OnSessionClosed(const std::string& session_id) {
   WebContentDecryptionModuleSessionImpl* session = GetSession(session_id);
-  DLOG_IF(WARNING, !session) << __FUNCTION__ << " for unknown session "
+  DLOG_IF(WARNING, !session) << __func__ << " for unknown session "
                              << session_id;
   if (session)
     session->OnSessionClosed();
-}
-
-void CdmSessionAdapter::OnLegacySessionError(
-    const std::string& session_id,
-    MediaKeys::Exception exception_code,
-    uint32_t system_code,
-    const std::string& error_message) {
-  // Error events not used by unprefixed EME.
-  // TODO(jrummell): Remove when prefixed EME removed.
 }
 
 WebContentDecryptionModuleSessionImpl* CdmSessionAdapter::GetSession(

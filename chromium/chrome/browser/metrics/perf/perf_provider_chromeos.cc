@@ -13,8 +13,9 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -23,8 +24,8 @@
 #include "chrome/browser/metrics/perf/windowed_incognito_observer.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/debug_daemon_client.h"
 #include "components/variations/variations_associated_data.h"
+#include "content/public/browser/browser_thread.h"
 
 namespace metrics {
 
@@ -52,6 +53,7 @@ enum GetPerfDataOutcome {
   INCOGNITO_LAUNCHED,
   PROTOBUF_NOT_PARSED,
   ILLEGAL_DATA_RETURNED,
+  ALREADY_COLLECTING,
   NUM_OUTCOMES
 };
 
@@ -96,8 +98,8 @@ bool GetInt64Param(const std::map<std::string, std::string>& params,
 // Parses the key. e.g.: "PerfCommand::arm::0" returns "arm"
 bool ExtractPerfCommandCpuSpecifier(const std::string& key,
                                     std::string* cpu_specifier) {
-  std::vector<std::string> tokens;
-  base::SplitStringUsingSubstr(key, "::", &tokens);
+  std::vector<std::string> tokens = base::SplitStringUsingSubstr(
+      key, "::", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (tokens.size() != 3)
     return false;
   if (tokens[0] != "PerfCommand")
@@ -107,17 +109,48 @@ bool ExtractPerfCommandCpuSpecifier(const std::string& key,
   return true;
 }
 
+// Parses the components of a version string, e.g. major.minor.bugfix
+void ExtractVersionNumbers(const std::string& version,
+                           int32_t* major_version,
+                           int32_t* minor_version,
+                           int32_t* bugfix_version) {
+  *major_version = *minor_version = *bugfix_version = 0;
+  // Parse out the version numbers from the string.
+  sscanf(version.c_str(), "%d.%d.%d", major_version, minor_version,
+         bugfix_version);
+}
+
+// Returns if a micro-architecture supports LBR callgraph profiling.
+bool MicroarchitectureHasLBRCallgraph(const std::string& uarch) {
+  return uarch == "Haswell" || uarch == "Broadwell" || uarch == "Skylake";
+}
+
+// Returns if a kernel release supports LBR callgraph profiling.
+bool KernelReleaseHasLBRCallgraph(const std::string& release) {
+  int32_t major, minor, bugfix;
+  ExtractVersionNumbers(release, &major, &minor, &bugfix);
+  return major > 4 || (major == 4 && minor >= 4) || (major == 3 && minor == 18);
+}
+
 // Hopefully we never need a space in a command argument.
 const char kPerfCommandDelimiter[] = " ";
 
 const char kPerfRecordCyclesCmd[] =
   "perf record -a -e cycles -c 1000003";
 
-const char kPerfRecordCallgraphCmd[] =
+const char kPerfRecordFPCallgraphCmd[] =
   "perf record -a -e cycles -g -c 4000037";
 
+const char kPerfRecordLBRCallgraphCmd[] =
+  "perf record -a -e cycles -c 4000037 --call-graph lbr";
+
 const char kPerfRecordLBRCmd[] =
-  "perf record -a -e r2c4 -b -c 20011";
+  "perf record -a -e r20c4 -b -c 200011";
+
+// Silvermont, Airmont, Goldmont don't have a branches taken event. Therefore,
+// we sample on the branches retired event.
+const char kPerfRecordLBRCmdAtom[] =
+  "perf record -a -e rc4 -b -c 300001";
 
 const char kPerfRecordInstructionTLBMissesCmd[] =
   "perf record -a -e iTLB-misses -c 2003";
@@ -137,31 +170,82 @@ const std::vector<RandomSelector::WeightAndValue> GetDefaultCommands_x86_64(
   std::vector<WeightAndValue> cmds;
   DCHECK_EQ(cpuid.arch, "x86_64");
   const std::string intel_uarch = GetIntelUarch(cpuid);
+  // Haswell and newer big Intel cores support LBR callstack profiling. This
+  // requires kernel support, which was added in kernel 4.4, and it was
+  // backported to kernel 3.18. Prefer LBR callstack profiling where supported
+  // instead of FP callchains, because the former works with binaries compiled
+  // with frame pointers disabled, such as the ARC++ runtime.
+  const char *callgraph_cmd = kPerfRecordFPCallgraphCmd;
+  if (MicroarchitectureHasLBRCallgraph(intel_uarch) &&
+      KernelReleaseHasLBRCallgraph(cpuid.release)) {
+    callgraph_cmd = kPerfRecordLBRCallgraphCmd;
+  }
+
   if (intel_uarch == "IvyBridge" ||
       intel_uarch == "Haswell" ||
       intel_uarch == "Broadwell") {
-    cmds.push_back(WeightAndValue(60.0, kPerfRecordCyclesCmd));
-    cmds.push_back(WeightAndValue(20.0, kPerfRecordCallgraphCmd));
-    cmds.push_back(WeightAndValue(5.0, kPerfRecordLBRCmd));
+    cmds.push_back(WeightAndValue(50.0, kPerfRecordCyclesCmd));
+    cmds.push_back(WeightAndValue(20.0, callgraph_cmd));
+    cmds.push_back(WeightAndValue(15.0, kPerfRecordLBRCmd));
     cmds.push_back(WeightAndValue(5.0, kPerfRecordInstructionTLBMissesCmd));
     cmds.push_back(WeightAndValue(5.0, kPerfRecordDataTLBMissesCmd));
     cmds.push_back(WeightAndValue(5.0, kPerfStatMemoryBandwidthCmd));
     return cmds;
   }
-  if (intel_uarch == "SandyBridge") {
-    cmds.push_back(WeightAndValue(65.0, kPerfRecordCyclesCmd));
-    cmds.push_back(WeightAndValue(20.0, kPerfRecordCallgraphCmd));
-    cmds.push_back(WeightAndValue(5.0, kPerfRecordLBRCmd));
+  if (intel_uarch == "SandyBridge" || intel_uarch == "Skylake") {
+    cmds.push_back(WeightAndValue(55.0, kPerfRecordCyclesCmd));
+    cmds.push_back(WeightAndValue(20.0, callgraph_cmd));
+    cmds.push_back(WeightAndValue(15.0, kPerfRecordLBRCmd));
+    cmds.push_back(WeightAndValue(5.0, kPerfRecordInstructionTLBMissesCmd));
+    cmds.push_back(WeightAndValue(5.0, kPerfRecordDataTLBMissesCmd));
+    return cmds;
+  }
+  if (intel_uarch == "Silvermont" || intel_uarch == "Airmont") {
+    cmds.push_back(WeightAndValue(55.0, kPerfRecordCyclesCmd));
+    cmds.push_back(WeightAndValue(20.0, callgraph_cmd));
+    cmds.push_back(WeightAndValue(15.0, kPerfRecordLBRCmdAtom));
     cmds.push_back(WeightAndValue(5.0, kPerfRecordInstructionTLBMissesCmd));
     cmds.push_back(WeightAndValue(5.0, kPerfRecordDataTLBMissesCmd));
     return cmds;
   }
   // Other 64-bit x86
   cmds.push_back(WeightAndValue(70.0, kPerfRecordCyclesCmd));
-  cmds.push_back(WeightAndValue(20.0, kPerfRecordCallgraphCmd));
+  cmds.push_back(WeightAndValue(20.0, callgraph_cmd));
   cmds.push_back(WeightAndValue(5.0, kPerfRecordInstructionTLBMissesCmd));
   cmds.push_back(WeightAndValue(5.0, kPerfRecordDataTLBMissesCmd));
   return cmds;
+}
+
+// PerfDataProto is defined elsewhere with more fields than the definition in
+// Chromium's copy of perf_data.proto. During deserialization, the protobuf
+// data could contain fields that are defined elsewhere but not in
+// perf_data.proto, resulting in some data in |unknown_fields| for the message
+// types within PerfDataProto.
+//
+// This function deletes those dangling unknown fields if they are in messages
+// containing strings. See comments in perf_data.proto describing the fields
+// that have been intentionally left out. Note that all unknown fields will be
+// removed from those messages, not just unknown string fields.
+void RemoveUnknownFieldsFromMessagesWithStrings(PerfDataProto* proto) {
+  // Clean up PerfEvent::MMapEvent and PerfEvent::CommEvent.
+  for (PerfDataProto::PerfEvent& event : *proto->mutable_events()) {
+    if (event.has_comm_event())
+      event.mutable_comm_event()->mutable_unknown_fields()->clear();
+    if (event.has_mmap_event())
+      event.mutable_mmap_event()->mutable_unknown_fields()->clear();
+  }
+  // Clean up PerfBuildID.
+  for (PerfDataProto::PerfBuildID& build_id : *proto->mutable_build_ids()) {
+    build_id.mutable_unknown_fields()->clear();
+  }
+  // Clean up StringMetadata and StringMetadata::StringAndMd5sumPrefix.
+  if (proto->has_string_metadata()) {
+    proto->mutable_string_metadata()->mutable_unknown_fields()->clear();
+    if (proto->string_metadata().has_perf_command_line_whole()) {
+      proto->mutable_string_metadata()->mutable_perf_command_line_whole()->
+          mutable_unknown_fields()->clear();
+    }
+  }
 }
 
 }  // namespace
@@ -179,7 +263,7 @@ std::vector<RandomSelector::WeightAndValue> GetDefaultCommandsForCpu(
   if (cpuid.arch == "x86" ||     // 32-bit x86, or...
       cpuid.arch == "armv7l") {  // ARM
     cmds.push_back(WeightAndValue(80.0, kPerfRecordCyclesCmd));
-    cmds.push_back(WeightAndValue(20.0, kPerfRecordCallgraphCmd));
+    cmds.push_back(WeightAndValue(20.0, kPerfRecordFPCallgraphCmd));
     return cmds;
   }
 
@@ -189,6 +273,18 @@ std::vector<RandomSelector::WeightAndValue> GetDefaultCommandsForCpu(
 }
 
 }  // namespace internal
+
+PerfProvider::CollectionParams::CollectionParams()
+    : CollectionParams(
+        base::TimeDelta::FromSeconds(2) /* collection_duration */,
+        base::TimeDelta::FromHours(3) /* periodic_interval */,
+        PerfProvider::CollectionParams::TriggerParams( /* resume_from_suspend */
+            10 /* sampling_factor */,
+            base::TimeDelta::FromSeconds(5)) /* max_collection_delay */,
+        PerfProvider::CollectionParams::TriggerParams( /* restore_session */
+            10 /* sampling_factor */,
+            base::TimeDelta::FromSeconds(10)) /* max_collection_delay */) {
+}
 
 PerfProvider::CollectionParams::CollectionParams(
     base::TimeDelta collection_duration,
@@ -207,21 +303,16 @@ PerfProvider::CollectionParams::TriggerParams::TriggerParams(
     : sampling_factor_(sampling_factor),
       max_collection_delay_(max_collection_delay.ToInternalValue()) {}
 
-const PerfProvider::CollectionParams PerfProvider::kDefaultParameters(
-  /* collection_duration = */ base::TimeDelta::FromSeconds(2),
-  /* periodic_interval = */ base::TimeDelta::FromHours(3),
-  /* resume_from_suspend = */ PerfProvider::CollectionParams::TriggerParams(
-      /* sampling_factor = */ 10,
-      /* max_collection_delay = */ base::TimeDelta::FromSeconds(5)),
-  /* restore_session = */ PerfProvider::CollectionParams::TriggerParams(
-      /* sampling_factor = */ 10,
-      /* max_collection_delay = */ base::TimeDelta::FromSeconds(10)));
-
 PerfProvider::PerfProvider()
-    : collection_params_(kDefaultParameters),
-      login_observer_(this),
-      next_profiling_interval_start_(base::TimeTicks::Now()),
+    : login_observer_(this),
       weak_factory_(this) {
+}
+
+PerfProvider::~PerfProvider() {
+  chromeos::LoginState::Get()->RemoveObserver(&login_observer_);
+}
+
+void PerfProvider::Init() {
   CHECK(command_selector_.SetOdds(
       internal::GetDefaultCommandsForCpu(GetCPUIdentity())));
   std::map<std::string, std::string> params;
@@ -247,10 +338,6 @@ PerfProvider::PerfProvider()
   // when this class is instantiated. By calling LoggedInStateChanged() here,
   // PerfProvider will recognize that the system is already logged in.
   login_observer_.LoggedInStateChanged();
-}
-
-PerfProvider::~PerfProvider() {
-  chromeos::LoginState::Get()->RemoveObserver(&login_observer_);
 }
 
 namespace internal {
@@ -379,46 +466,70 @@ bool PerfProvider::GetSampledProfiles(
   return true;
 }
 
+// Returns one of the above enums given an vector of perf arguments, starting
+// with "perf" itself in |args[0]|.
+// static
+PerfProvider::PerfSubcommand PerfProvider::GetPerfSubcommandType(
+    const std::vector<std::string>& args) {
+  if (args.size() > 1 && args[0] == "perf") {
+    if (args[1] == "record")
+      return PerfSubcommand::PERF_COMMAND_RECORD;
+    if (args[1] == "stat")
+      return PerfSubcommand::PERF_COMMAND_STAT;
+    if (args[1] == "mem")
+      return PerfSubcommand::PERF_COMMAND_MEM;
+  }
+
+  return PerfSubcommand::PERF_COMMAND_UNSUPPORTED;
+}
+
 void PerfProvider::ParseOutputProtoIfValid(
-    scoped_ptr<WindowedIncognitoObserver> incognito_observer,
-    scoped_ptr<SampledProfile> sampled_profile,
-    int result,
-    const std::vector<uint8_t>& perf_data,
-    const std::vector<uint8_t>& perf_stat) {
+    std::unique_ptr<WindowedIncognitoObserver> incognito_observer,
+    std::unique_ptr<SampledProfile> sampled_profile,
+    PerfSubcommand subcommand,
+    const std::string& perf_stdout) {
   DCHECK(CalledOnValidThread());
+
+  // |perf_output_call_| called us, and owns |perf_stdout|. We must delete it,
+  // but not before parsing |perf_stdout|, and we may return early.
+  std::unique_ptr<PerfOutputCall> call_deleter(std::move(perf_output_call_));
 
   if (incognito_observer->incognito_launched()) {
     AddToPerfHistogram(INCOGNITO_LAUNCHED);
     return;
   }
 
-  if (result != 0 || (perf_data.empty() && perf_stat.empty())) {
-    AddToPerfHistogram(PROTOBUF_NOT_PARSED);
-    return;
-  }
-
-  if (!perf_data.empty() && !perf_stat.empty()) {
+  if (perf_stdout.empty()) {
     AddToPerfHistogram(ILLEGAL_DATA_RETURNED);
     return;
   }
 
-  if (!perf_data.empty()) {
-    PerfDataProto perf_data_proto;
-    if (!perf_data_proto.ParseFromArray(perf_data.data(), perf_data.size())) {
+  switch (subcommand) {
+    case PerfSubcommand::PERF_COMMAND_RECORD:
+    case PerfSubcommand::PERF_COMMAND_MEM: {
+      PerfDataProto perf_data_proto;
+      if (!perf_data_proto.ParseFromString(perf_stdout)) {
+        AddToPerfHistogram(PROTOBUF_NOT_PARSED);
+        return;
+      }
+      RemoveUnknownFieldsFromMessagesWithStrings(&perf_data_proto);
+      sampled_profile->set_ms_after_boot(
+          base::SysInfo::Uptime().InMilliseconds());
+      sampled_profile->mutable_perf_data()->Swap(&perf_data_proto);
+      break;
+    }
+    case PerfSubcommand::PERF_COMMAND_STAT: {
+      PerfStatProto perf_stat_proto;
+      if (!perf_stat_proto.ParseFromString(perf_stdout)) {
+        AddToPerfHistogram(PROTOBUF_NOT_PARSED);
+        return;
+      }
+      sampled_profile->mutable_perf_stat()->Swap(&perf_stat_proto);
+      break;
+    }
+    case PerfSubcommand::PERF_COMMAND_UNSUPPORTED:
       AddToPerfHistogram(PROTOBUF_NOT_PARSED);
       return;
-    }
-    sampled_profile->set_ms_after_boot(
-        base::SysInfo::Uptime().InMilliseconds());
-    sampled_profile->mutable_perf_data()->Swap(&perf_data_proto);
-  } else {
-    DCHECK(!perf_stat.empty());
-    PerfStatProto perf_stat_proto;
-    if (!perf_stat_proto.ParseFromArray(perf_stat.data(), perf_stat.size())) {
-      AddToPerfHistogram(PROTOBUF_NOT_PARSED);
-      return;
-    }
-    sampled_profile->mutable_perf_stat()->Swap(&perf_stat_proto);
   }
 
   DCHECK(!login_time_.is_null());
@@ -443,7 +554,7 @@ void PerfProvider::LoginObserver::LoggedInStateChanged() {
 void PerfProvider::SuspendDone(const base::TimeDelta& sleep_duration) {
   // A zero value for the suspend duration indicates that the suspend was
   // canceled. Do not collect anything if that's the case.
-  if (sleep_duration == base::TimeDelta())
+  if (sleep_duration.is_zero())
     return;
 
   // Do not collect a profile unless logged in. The system behavior when closing
@@ -453,9 +564,10 @@ void PerfProvider::SuspendDone(const base::TimeDelta& sleep_duration) {
     return;
 
   // Collect a profile only 1/|sampling_factor| of the time, to avoid
-  // collecting too much data.
+  // collecting too much data. (0 means disable the trigger)
   const auto& resume_params = collection_params_.resume_from_suspend();
-  if (base::RandGenerator(resume_params.sampling_factor()) != 0)
+  if (resume_params.sampling_factor() == 0 ||
+      base::RandGenerator(resume_params.sampling_factor()) != 0)
     return;
 
   // Override any existing profiling.
@@ -480,9 +592,12 @@ void PerfProvider::OnSessionRestoreDone(int num_tabs_restored) {
 
   // Collect a profile only 1/|sampling_factor| of the time, to
   // avoid collecting too much data and potentially causing UI latency.
+  // (0 means disable the trigger)
   const auto& restore_params = collection_params_.restore_session();
-  if (base::RandGenerator(restore_params.sampling_factor()) != 0)
+  if (restore_params.sampling_factor() == 0 ||
+      base::RandGenerator(restore_params.sampling_factor()) != 0) {
     return;
+  }
 
   const auto min_interval = base::TimeDelta::FromSeconds(
       kMinIntervalBetweenSessionRestoreCollectionsInSec);
@@ -512,7 +627,9 @@ void PerfProvider::OnSessionRestoreDone(int num_tabs_restored) {
 }
 
 void PerfProvider::OnUserLoggedIn() {
-  login_time_ = base::TimeTicks::Now();
+  const base::TimeTicks now = base::TimeTicks::Now();
+  login_time_ = now;
+  next_profiling_interval_start_ = now;
   ScheduleIntervalCollection();
 }
 
@@ -526,14 +643,22 @@ void PerfProvider::ScheduleIntervalCollection() {
   if (timer_.IsRunning())
     return;
 
+  const base::TimeTicks now = base::TimeTicks::Now();
+
+  base::TimeTicks interval_end =
+      next_profiling_interval_start_ + collection_params_.periodic_interval();
+  if (now > interval_end) {
+    // We somehow missed at least one window. Start over.
+    next_profiling_interval_start_ = now;
+    interval_end = now + collection_params_.periodic_interval();
+  }
+
   // Pick a random time in the current interval.
   base::TimeTicks scheduled_time =
       next_profiling_interval_start_ +
       RandomTimeDelta(collection_params_.periodic_interval());
-
   // If the scheduled time has already passed in the time it took to make the
   // above calculations, trigger the collection event immediately.
-  base::TimeTicks now = base::TimeTicks::Now();
   if (scheduled_time < now)
     scheduled_time = now;
 
@@ -541,11 +666,11 @@ void PerfProvider::ScheduleIntervalCollection() {
                &PerfProvider::DoPeriodicCollection);
 
   // Update the profiling interval tracker to the start of the next interval.
-  next_profiling_interval_start_ += collection_params_.periodic_interval();
+  next_profiling_interval_start_ = interval_end;
 }
 
 void PerfProvider::CollectIfNecessary(
-    scoped_ptr<SampledProfile> sampled_profile) {
+    std::unique_ptr<SampledProfile> sampled_profile) {
   DCHECK(CalledOnValidThread());
 
   // Schedule another interval collection. This call makes sense regardless of
@@ -553,6 +678,12 @@ void PerfProvider::CollectIfNecessary(
   // been another type of trigger event, the interval timer would have been
   // halted, so it makes sense to reschedule a new interval collection.
   ScheduleIntervalCollection();
+
+  // Only allow one active collection.
+  if (perf_output_call_) {
+    AddToPerfHistogram(ALREADY_COLLECTING);
+    return;
+  }
 
   // Do not collect further data if we've already collected a substantial amount
   // of data, as indicated by |kCachedPerfDataProtobufSizeThreshold|.
@@ -567,29 +698,29 @@ void PerfProvider::CollectIfNecessary(
 
   // For privacy reasons, Chrome should only collect perf data if there is no
   // incognito session active (or gets spawned during the collection).
-  if (BrowserList::IsOffTheRecordSessionActive()) {
+  if (BrowserList::IsIncognitoSessionActive()) {
     AddToPerfHistogram(INCOGNITO_ACTIVE);
     return;
   }
 
-  scoped_ptr<WindowedIncognitoObserver> incognito_observer(
+  std::unique_ptr<WindowedIncognitoObserver> incognito_observer(
       new WindowedIncognitoObserver);
-
-  chromeos::DebugDaemonClient* client =
-      chromeos::DBusThreadManager::Get()->GetDebugDaemonClient();
 
   std::vector<std::string> command = base::SplitString(
       command_selector_.Select(), kPerfCommandDelimiter,
       base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
-  client->GetPerfOutput(
-      collection_params_.collection_duration().InSeconds(), command,
+  PerfSubcommand subcommand = GetPerfSubcommandType(command);
+
+  perf_output_call_.reset(new PerfOutputCall(
+      make_scoped_refptr(content::BrowserThread::GetBlockingPool()),
+      collection_params_.collection_duration(), command,
       base::Bind(&PerfProvider::ParseOutputProtoIfValid,
                  weak_factory_.GetWeakPtr(), base::Passed(&incognito_observer),
-                 base::Passed(&sampled_profile)));
+                 base::Passed(&sampled_profile), subcommand)));
 }
 
 void PerfProvider::DoPeriodicCollection() {
-  scoped_ptr<SampledProfile> sampled_profile(new SampledProfile);
+  std::unique_ptr<SampledProfile> sampled_profile(new SampledProfile);
   sampled_profile->set_trigger_event(SampledProfile::PERIODIC_COLLECTION);
 
   CollectIfNecessary(std::move(sampled_profile));
@@ -599,7 +730,7 @@ void PerfProvider::CollectPerfDataAfterResume(
     const base::TimeDelta& sleep_duration,
     const base::TimeDelta& time_after_resume) {
   // Fill out a SampledProfile protobuf that will contain the collected data.
-  scoped_ptr<SampledProfile> sampled_profile(new SampledProfile);
+  std::unique_ptr<SampledProfile> sampled_profile(new SampledProfile);
   sampled_profile->set_trigger_event(SampledProfile::RESUME_FROM_SUSPEND);
   sampled_profile->set_suspend_duration_ms(sleep_duration.InMilliseconds());
   sampled_profile->set_ms_after_resume(time_after_resume.InMilliseconds());
@@ -611,7 +742,7 @@ void PerfProvider::CollectPerfDataAfterSessionRestore(
     const base::TimeDelta& time_after_restore,
     int num_tabs_restored) {
   // Fill out a SampledProfile protobuf that will contain the collected data.
-  scoped_ptr<SampledProfile> sampled_profile(new SampledProfile);
+  std::unique_ptr<SampledProfile> sampled_profile(new SampledProfile);
   sampled_profile->set_trigger_event(SampledProfile::RESTORE_SESSION);
   sampled_profile->set_ms_after_restore(time_after_restore.InMilliseconds());
   sampled_profile->set_num_tabs_restored(num_tabs_restored);

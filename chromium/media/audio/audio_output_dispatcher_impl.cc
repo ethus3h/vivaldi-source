@@ -19,9 +19,7 @@ AudioOutputDispatcherImpl::AudioOutputDispatcherImpl(
     const AudioParameters& params,
     const std::string& output_device_id,
     const base::TimeDelta& close_delay)
-    : AudioOutputDispatcher(audio_manager,
-                            params,
-                            output_device_id),
+    : AudioOutputDispatcher(audio_manager, params, output_device_id),
       idle_proxies_(0),
       close_timer_(FROM_HERE,
                    close_delay,
@@ -29,12 +27,28 @@ AudioOutputDispatcherImpl::AudioOutputDispatcherImpl(
                    &AudioOutputDispatcherImpl::CloseAllIdleStreams),
       audio_log_(
           audio_manager->CreateAudioLog(AudioLogFactory::AUDIO_OUTPUT_STREAM)),
-      audio_stream_id_(0) {}
+      audio_stream_id_(0),
+      weak_factory_(this) {}
 
 AudioOutputDispatcherImpl::~AudioOutputDispatcherImpl() {
-  DCHECK_EQ(idle_proxies_, 0u);
-  DCHECK(proxy_to_physical_map_.empty());
-  DCHECK(idle_streams_.empty());
+  CHECK(task_runner_->BelongsToCurrentThread());
+
+  // Stop all active streams.
+  for (auto& iter : proxy_to_physical_map_) {
+    StopPhysicalStream(iter.second);
+  }
+
+  // Close all idle streams immediately.  The |close_timer_| will handle
+  // invalidating any outstanding tasks upon its destruction.
+  CloseAllIdleStreams();
+
+  // All idle physical streams must have been closed during shutdown.
+  CHECK(idle_streams_.empty());
+}
+
+AudioOutputProxy* AudioOutputDispatcherImpl::CreateStreamProxy() {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  return new AudioOutputProxy(weak_factory_.GetWeakPtr());
 }
 
 bool AudioOutputDispatcherImpl::OpenStream() {
@@ -83,15 +97,9 @@ void AudioOutputDispatcherImpl::StopStream(AudioOutputProxy* stream_proxy) {
 
   AudioStreamMap::iterator it = proxy_to_physical_map_.find(stream_proxy);
   DCHECK(it != proxy_to_physical_map_.end());
-  AudioOutputStream* physical_stream = it->second;
+  StopPhysicalStream(it->second);
   proxy_to_physical_map_.erase(it);
-
-  physical_stream->Stop();
-  audio_log_->OnStopped(audio_stream_ids_[physical_stream]);
   ++idle_proxies_;
-  idle_streams_.push_back(physical_stream);
-
-  close_timer_.Reset();
 }
 
 void AudioOutputDispatcherImpl::StreamVolumeSet(AudioOutputProxy* stream_proxy,
@@ -117,26 +125,18 @@ void AudioOutputDispatcherImpl::CloseStream(AudioOutputProxy* stream_proxy) {
   close_timer_.Reset();
 }
 
-void AudioOutputDispatcherImpl::Shutdown() {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-
-  // Close all idle streams immediately.  The |close_timer_| will handle
-  // invalidating any outstanding tasks upon its destruction.
-  CloseAllIdleStreams();
-
-  // No AudioOutputProxy objects should hold a reference to us when we get
-  // to this stage.
-  DCHECK(HasOneRef()) << "Only the AudioManager should hold a reference";
-}
-
 bool AudioOutputDispatcherImpl::HasOutputProxies() const {
   return idle_proxies_ || !proxy_to_physical_map_.empty();
 }
 
 bool AudioOutputDispatcherImpl::CreateAndOpenStream() {
   DCHECK(task_runner_->BelongsToCurrentThread());
+
+  const int stream_id = audio_stream_id_++;
   AudioOutputStream* stream = audio_manager_->MakeAudioOutputStream(
-      params_, device_id_);
+      params_, device_id_,
+      base::Bind(&AudioLog::OnLogMessage, base::Unretained(audio_log_.get()),
+                 stream_id));
   if (!stream)
     return false;
 
@@ -145,7 +145,6 @@ bool AudioOutputDispatcherImpl::CreateAndOpenStream() {
     return false;
   }
 
-  const int stream_id = audio_stream_id_++;
   audio_stream_ids_[stream] = stream_id;
   audio_log_->OnCreated(
       stream_id, params_, device_id_);
@@ -173,6 +172,14 @@ void AudioOutputDispatcherImpl::CloseIdleStreams(size_t keep_alive) {
     audio_stream_ids_.erase(it);
   }
   idle_streams_.erase(idle_streams_.begin() + keep_alive, idle_streams_.end());
+}
+
+void AudioOutputDispatcherImpl::StopPhysicalStream(AudioOutputStream* stream) {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  stream->Stop();
+  audio_log_->OnStopped(audio_stream_ids_[stream]);
+  idle_streams_.push_back(stream);
+  close_timer_.Reset();
 }
 
 }  // namespace media

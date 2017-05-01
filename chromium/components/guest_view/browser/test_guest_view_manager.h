@@ -7,21 +7,21 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_factory.h"
-#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 
 namespace guest_view {
 
 class TestGuestViewManager : public GuestViewManager {
  public:
-  TestGuestViewManager(
-      content::BrowserContext* context,
-      scoped_ptr<GuestViewManagerDelegate> delegate);
+  TestGuestViewManager(content::BrowserContext* context,
+                       std::unique_ptr<GuestViewManagerDelegate> delegate);
   ~TestGuestViewManager() override;
 
   void WaitForAllGuestsDeleted();
@@ -117,7 +117,7 @@ class TestGuestViewManagerFactory : public GuestViewManagerFactory {
 
   GuestViewManager* CreateGuestViewManager(
       content::BrowserContext* context,
-      scoped_ptr<GuestViewManagerDelegate> delegate) override;
+      std::unique_ptr<GuestViewManagerDelegate> delegate) override;
 
  private:
   TestGuestViewManager* test_guest_view_manager_;

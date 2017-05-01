@@ -4,15 +4,19 @@
 
 #include "device/bluetooth/bluetooth_adapter.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "build/build_config.h"
+#include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_discovery_session.h"
 #include "device/bluetooth/bluetooth_discovery_session_outcome.h"
+#include "device/bluetooth/bluetooth_remote_gatt_characteristic.h"
+#include "device/bluetooth/bluetooth_remote_gatt_descriptor.h"
+#include "device/bluetooth/bluetooth_remote_gatt_service.h"
 
 namespace device {
 
@@ -50,6 +54,17 @@ void BluetoothAdapter::RemoveObserver(BluetoothAdapter::Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
+bool BluetoothAdapter::HasObserver(BluetoothAdapter::Observer* observer) {
+  DCHECK(observer);
+  return observers_.HasObserver(observer);
+}
+
+std::unordered_map<BluetoothDevice*, BluetoothDevice::UUIDSet>
+BluetoothAdapter::RetrieveGattConnectedDevicesWithDiscoveryFilter(
+    const BluetoothDiscoveryFilter& discovery_filter) {
+  return std::unordered_map<BluetoothDevice*, BluetoothDevice::UUIDSet>();
+}
+
 void BluetoothAdapter::StartDiscoverySession(
     const DiscoverySessionCallback& callback,
     const ErrorCallback& error_callback) {
@@ -57,7 +72,7 @@ void BluetoothAdapter::StartDiscoverySession(
 }
 
 void BluetoothAdapter::StartDiscoverySessionWithFilter(
-    scoped_ptr<BluetoothDiscoveryFilter> discovery_filter,
+    std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
     const DiscoverySessionCallback& callback,
     const ErrorCallback& error_callback) {
   BluetoothDiscoveryFilter* ptr = discovery_filter.get();
@@ -69,12 +84,12 @@ void BluetoothAdapter::StartDiscoverySessionWithFilter(
                  weak_ptr_factory_.GetWeakPtr(), error_callback));
 }
 
-scoped_ptr<BluetoothDiscoveryFilter>
+std::unique_ptr<BluetoothDiscoveryFilter>
 BluetoothAdapter::GetMergedDiscoveryFilter() const {
   return GetMergedDiscoveryFilterHelper(nullptr, false);
 }
 
-scoped_ptr<BluetoothDiscoveryFilter>
+std::unique_ptr<BluetoothDiscoveryFilter>
 BluetoothAdapter::GetMergedDiscoveryFilterMasked(
     BluetoothDiscoveryFilter* masked_filter) const {
   return GetMergedDiscoveryFilterHelper(masked_filter, true);
@@ -94,10 +109,8 @@ BluetoothAdapter::DeviceList BluetoothAdapter::GetDevices() {
 
 BluetoothAdapter::ConstDeviceList BluetoothAdapter::GetDevices() const {
   ConstDeviceList devices;
-  for (DevicesMap::const_iterator iter = devices_.begin();
-       iter != devices_.end();
-       ++iter)
-    devices.push_back(iter->second);
+  for (const auto& device : devices_)
+    devices.push_back(device.second.get());
 
   return devices;
 }
@@ -112,13 +125,13 @@ const BluetoothDevice* BluetoothAdapter::GetDevice(
   std::string canonicalized_address =
       BluetoothDevice::CanonicalizeAddress(address);
   if (canonicalized_address.empty())
-    return NULL;
+    return nullptr;
 
-  DevicesMap::const_iterator iter = devices_.find(canonicalized_address);
+  auto iter = devices_.find(canonicalized_address);
   if (iter != devices_.end())
-    return iter->second;
+    return iter->second.get();
 
-  return NULL;
+  return nullptr;
 }
 
 void BluetoothAdapter::AddPairingDelegate(
@@ -155,6 +168,122 @@ BluetoothDevice::PairingDelegate* BluetoothAdapter::DefaultPairingDelegate() {
   return pairing_delegates_.front().first;
 }
 
+void BluetoothAdapter::NotifyAdapterPoweredChanged(bool powered) {
+  for (auto& observer : observers_)
+    observer.AdapterPoweredChanged(this, powered);
+}
+
+void BluetoothAdapter::NotifyDeviceChanged(BluetoothDevice* device) {
+  DCHECK(device);
+  DCHECK_EQ(device->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.DeviceChanged(this, device);
+}
+
+#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+void BluetoothAdapter::NotifyDevicePairedChanged(BluetoothDevice* device,
+                                                 bool new_paired_status) {
+  for (auto& observer : observers_)
+    observer.DevicePairedChanged(this, device, new_paired_status);
+}
+#endif
+
+void BluetoothAdapter::NotifyGattServiceAdded(
+    BluetoothRemoteGattService* service) {
+  DCHECK_EQ(service->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattServiceAdded(this, service->GetDevice(), service);
+}
+
+void BluetoothAdapter::NotifyGattServiceRemoved(
+    BluetoothRemoteGattService* service) {
+  DCHECK_EQ(service->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattServiceRemoved(this, service->GetDevice(), service);
+}
+
+void BluetoothAdapter::NotifyGattServiceChanged(
+    BluetoothRemoteGattService* service) {
+  DCHECK_EQ(service->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattServiceChanged(this, service);
+}
+
+void BluetoothAdapter::NotifyGattServicesDiscovered(BluetoothDevice* device) {
+  DCHECK(device->GetAdapter() == this);
+
+  for (auto& observer : observers_)
+    observer.GattServicesDiscovered(this, device);
+}
+
+void BluetoothAdapter::NotifyGattDiscoveryComplete(
+    BluetoothRemoteGattService* service) {
+  DCHECK_EQ(service->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattDiscoveryCompleteForService(this, service);
+}
+
+void BluetoothAdapter::NotifyGattCharacteristicAdded(
+    BluetoothRemoteGattCharacteristic* characteristic) {
+  DCHECK_EQ(characteristic->GetService()->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattCharacteristicAdded(this, characteristic);
+}
+
+void BluetoothAdapter::NotifyGattCharacteristicRemoved(
+    BluetoothRemoteGattCharacteristic* characteristic) {
+  DCHECK_EQ(characteristic->GetService()->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattCharacteristicRemoved(this, characteristic);
+}
+
+void BluetoothAdapter::NotifyGattDescriptorAdded(
+    BluetoothRemoteGattDescriptor* descriptor) {
+  DCHECK_EQ(
+      descriptor->GetCharacteristic()->GetService()->GetDevice()->GetAdapter(),
+      this);
+
+  for (auto& observer : observers_)
+    observer.GattDescriptorAdded(this, descriptor);
+}
+
+void BluetoothAdapter::NotifyGattDescriptorRemoved(
+    BluetoothRemoteGattDescriptor* descriptor) {
+  DCHECK_EQ(
+      descriptor->GetCharacteristic()->GetService()->GetDevice()->GetAdapter(),
+      this);
+
+  for (auto& observer : observers_)
+    observer.GattDescriptorRemoved(this, descriptor);
+}
+
+void BluetoothAdapter::NotifyGattCharacteristicValueChanged(
+    BluetoothRemoteGattCharacteristic* characteristic,
+    const std::vector<uint8_t>& value) {
+  DCHECK_EQ(characteristic->GetService()->GetDevice()->GetAdapter(), this);
+
+  for (auto& observer : observers_)
+    observer.GattCharacteristicValueChanged(this, characteristic, value);
+}
+
+void BluetoothAdapter::NotifyGattDescriptorValueChanged(
+    BluetoothRemoteGattDescriptor* descriptor,
+    const std::vector<uint8_t>& value) {
+  DCHECK_EQ(
+      descriptor->GetCharacteristic()->GetService()->GetDevice()->GetAdapter(),
+      this);
+
+  for (auto& observer : observers_)
+    observer.GattDescriptorValueChanged(this, descriptor, value);
+}
+
 BluetoothAdapter::BluetoothAdapter() : weak_ptr_factory_(this) {
 }
 
@@ -162,13 +291,13 @@ BluetoothAdapter::~BluetoothAdapter() {
 }
 
 void BluetoothAdapter::OnStartDiscoverySession(
-    scoped_ptr<BluetoothDiscoveryFilter> discovery_filter,
+    std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
     const DiscoverySessionCallback& callback) {
   VLOG(1) << "BluetoothAdapter::OnStartDiscoverySession";
   RecordBluetoothDiscoverySessionStartOutcome(
       UMABluetoothDiscoverySessionOutcome::SUCCESS);
 
-  scoped_ptr<BluetoothDiscoverySession> discovery_session(
+  std::unique_ptr<BluetoothDiscoverySession> discovery_session(
       new BluetoothDiscoverySession(scoped_refptr<BluetoothAdapter>(this),
                                     std::move(discovery_filter)));
   discovery_sessions_.insert(discovery_session.get());
@@ -206,15 +335,15 @@ void BluetoothAdapter::DeleteDeviceForTesting(const std::string& address) {
   devices_.erase(address);
 }
 
-scoped_ptr<BluetoothDiscoveryFilter>
+std::unique_ptr<BluetoothDiscoveryFilter>
 BluetoothAdapter::GetMergedDiscoveryFilterHelper(
     const BluetoothDiscoveryFilter* masked_filter,
     bool omit) const {
-  scoped_ptr<BluetoothDiscoveryFilter> result;
+  std::unique_ptr<BluetoothDiscoveryFilter> result;
   bool first_merge = true;
 
   std::set<BluetoothDiscoverySession*> temp(discovery_sessions_);
-  for (const auto& iter : temp) {
+  for (auto* iter : temp) {
     const BluetoothDiscoveryFilter* curr_filter = iter->GetDiscoveryFilter();
 
     if (!iter->IsActive())
@@ -231,8 +360,7 @@ BluetoothAdapter::GetMergedDiscoveryFilterHelper(
     if (first_merge) {
       first_merge = false;
       if (curr_filter) {
-        result.reset(new BluetoothDiscoveryFilter(
-            BluetoothDiscoveryFilter::Transport::TRANSPORT_DUAL));
+        result.reset(new BluetoothDiscoveryFilter(BLUETOOTH_TRANSPORT_DUAL));
         result->CopyFrom(*curr_filter);
       }
       continue;
@@ -242,6 +370,40 @@ BluetoothAdapter::GetMergedDiscoveryFilterHelper(
   }
 
   return result;
+}
+
+void BluetoothAdapter::RemoveTimedOutDevices() {
+  for (auto it = devices_.begin(); it != devices_.end();) {
+    BluetoothDevice* device = it->second.get();
+    if (device->IsPaired() || device->IsConnected() ||
+        device->IsGattConnected()) {
+      ++it;
+      continue;
+    }
+
+    base::Time last_update_time = device->GetLastUpdateTime();
+
+    bool device_expired =
+        (base::Time::NowFromSystemTime() - last_update_time) > timeoutSec;
+    VLOG(3) << "device: " << device->GetAddress()
+            << ", last_update: " << last_update_time
+            << ", exp: " << device_expired;
+
+    if (!device_expired) {
+      ++it;
+      continue;
+    }
+
+    VLOG(1) << "Removing device: " << device->GetAddress();
+    auto next = it;
+    next++;
+    std::unique_ptr<BluetoothDevice> removed_device = std::move(it->second);
+    devices_.erase(it);
+    it = next;
+
+    for (auto& observer : observers_)
+      observer.DeviceRemoved(this, removed_device.get());
+  }
 }
 
 // static
@@ -259,5 +421,9 @@ void BluetoothAdapter::RecordBluetoothDiscoverySessionStopOutcome(
       "Bluetooth.DiscoverySession.Stop.Outcome", static_cast<int>(outcome),
       static_cast<int>(UMABluetoothDiscoverySessionOutcome::COUNT));
 }
+
+// static
+const base::TimeDelta BluetoothAdapter::timeoutSec =
+    base::TimeDelta::FromSeconds(180);
 
 }  // namespace device

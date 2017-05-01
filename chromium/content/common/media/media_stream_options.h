@@ -13,29 +13,19 @@
 
 namespace content {
 
-// MediaStreamConstraint keys for constraints that are passed to getUserMedia.
-CONTENT_EXPORT extern const char kMediaStreamSource[];
-CONTENT_EXPORT extern const char kMediaStreamSourceId[];
-CONTENT_EXPORT extern const char kMediaStreamSourceInfoId[];
+// Names for media stream source capture types.
+// These are values of the "TrackControls.stream_source" field, and are
+// set via the "chromeMediaSource" constraint.
 CONTENT_EXPORT extern const char kMediaStreamSourceTab[];
 CONTENT_EXPORT extern const char kMediaStreamSourceScreen[];
 CONTENT_EXPORT extern const char kMediaStreamSourceDesktop[];
 CONTENT_EXPORT extern const char kMediaStreamSourceSystem[];
 
-// Experimental constraint to do device matching.  When this optional constraint
-// is set, WebRTC audio renderer will render audio from media streams to an
-// output device that belongs to the same hardware as the requested source
-// device belongs to.
-CONTENT_EXPORT extern const char kMediaStreamRenderToAssociatedSink[];
-
-// Controls whether the hotword audio stream is used on platforms that support
-// it.
-CONTENT_EXPORT extern const char kMediaStreamAudioHotword[];
-
 struct CONTENT_EXPORT TrackControls {
  public:
   TrackControls();
-  TrackControls(bool request);
+  explicit TrackControls(bool request);
+  explicit TrackControls(const TrackControls& other);
   ~TrackControls();
   bool requested;
 
@@ -43,17 +33,13 @@ struct CONTENT_EXPORT TrackControls {
   // Consider replacing with MediaStreamType enum variables.
   std::string stream_source;  // audio.kMediaStreamSource
 
-  // Device ID requests.
-  // The first set represents required devices - either grab one or fail.
-  // The second set represents optional devices - if we can't get one of
-  // these, we will grab the default device (if possible).
-  // The constraint names are "sourceId" and "chromeMediaSourceId".
-  std::vector<std::string> device_ids;
-  std::vector<std::string> alternate_device_ids;
+  // An empty string represents the default device.
+  // A nonempty string represents a specific device.
+  std::string device_id;
 };
 
 // StreamControls describes what is sent to the browser process
-// to the renderer process in order to control the opening of a device
+// from the renderer process in order to control the opening of a device
 // pair. This may result in opening one audio and/or one video device.
 // This has to be a struct with public members in order to allow it to
 // be sent in the IPC of media_stream_messages.h
@@ -67,6 +53,7 @@ struct CONTENT_EXPORT StreamControls {
   // Hotword functionality (chromeos only)
   // See crbug.com/564574 for discussion on possibly #ifdef'ing this out.
   bool hotword_enabled;  // kMediaStreamAudioHotword = "googHotword";
+  bool disable_local_echo;
 };
 
 // StreamDeviceInfo describes information about a device.

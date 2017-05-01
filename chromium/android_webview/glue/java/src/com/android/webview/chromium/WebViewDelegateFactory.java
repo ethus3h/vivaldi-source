@@ -59,8 +59,14 @@ class WebViewDelegateFactory {
         void invokeDrawGlFunctor(
                 View containerView, long nativeDrawGLFunctor, boolean waitForCompletion);
 
-        /** @see android.webkit.WebViewDelegate#callDrawGlFunction */
+        /** @see android.webkit.WebViewDelegate#callDrawGlFunction. Available API level 23 and
+         * below.
+         */
         void callDrawGlFunction(Canvas canvas, long nativeDrawGLFunctor);
+
+        /** @see android.webkit.WebViewDelegate#callDrawGlFunction. Available above API level 23
+         * only. */
+        void callDrawGlFunction(Canvas canvas, long nativeDrawGLFunctor, Runnable releasedRunnable);
 
         /** @see android.webkit.WebViewDelegate#detachDrawGlFunctor */
         void detachDrawGlFunctor(View containerView, long nativeDrawGLFunctor);
@@ -76,6 +82,9 @@ class WebViewDelegateFactory {
 
         /** @see android.webkit.WebViewDelegate#addWebViewAssetPath */
         void addWebViewAssetPath(Context context);
+
+        /** @see android.webkit.WebViewDelegate#isMultiProcessEnabled */
+        boolean isMultiProcessEnabled();
     }
 
     /**
@@ -104,7 +113,7 @@ class WebViewDelegateFactory {
      * A {@link WebViewDelegate com.android.webview.chromium.WebViewDelegate} that proxies requests
      * to a {@link android.webkit.WebViewDelegate android.webkit.WebViewDelegate}.
      */
-    private static class ProxyDelegate implements WebViewDelegate {
+    static class ProxyDelegate implements WebViewDelegate {
         android.webkit.WebViewDelegate mDelegate;
 
         ProxyDelegate(android.webkit.WebViewDelegate delegate) {
@@ -141,6 +150,12 @@ class WebViewDelegateFactory {
         @Override
         public void callDrawGlFunction(Canvas canvas, long nativeDrawGLFunctor) {
             mDelegate.callDrawGlFunction(canvas, nativeDrawGLFunctor);
+        }
+
+        @Override
+        public void callDrawGlFunction(
+                Canvas canvas, long nativeDrawGLFunctor, Runnable releasedRunnable) {
+            mDelegate.callDrawGlFunction(canvas, nativeDrawGLFunctor, releasedRunnable);
         }
 
         @Override
@@ -185,6 +200,11 @@ class WebViewDelegateFactory {
                     return getResources().getAssets();
                 }
             });
+        }
+
+        @Override
+        public boolean isMultiProcessEnabled() {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -305,6 +325,12 @@ class WebViewDelegateFactory {
         }
 
         @Override
+        public void callDrawGlFunction(
+                Canvas canvas, long nativeDrawGLFunctor, Runnable releasedRunnable) {
+            throw new RuntimeException("Call not supported");
+        }
+
+        @Override
         public void detachDrawGlFunctor(View containerView, long nativeDrawGLFunctor) {
             try {
                 Object viewRootImpl = mGetViewRootImplMethod.invoke(containerView);
@@ -364,6 +390,11 @@ class WebViewDelegateFactory {
             } catch (Exception e) {
                 throw new RuntimeException("Invalid reflection", e);
             }
+        }
+
+        @Override
+        public boolean isMultiProcessEnabled() {
+            throw new UnsupportedOperationException();
         }
     }
 }

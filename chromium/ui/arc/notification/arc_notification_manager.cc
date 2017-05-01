@@ -4,91 +4,236 @@
 
 #include "ui/arc/notification/arc_notification_manager.h"
 
+#include <memory>
+#include <utility>
+
+#include "ash/common/system/toast/toast_manager.h"
+#include "ash/common/wm_shell.h"
+#include "base/memory/ptr_util.h"
 #include "base/stl_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "components/arc/arc_bridge_service.h"
+#include "ui/arc/notification/arc_custom_notification_item.h"
 #include "ui/arc/notification/arc_notification_item.h"
 
 namespace arc {
 
-ArcNotificationManager::ArcNotificationManager(ArcBridgeService* arc_bridge,
+ArcNotificationManager::ArcNotificationManager(ArcBridgeService* bridge_service,
                                                const AccountId& main_profile_id)
-    : arc_bridge_(arc_bridge),
+    : ArcNotificationManager(bridge_service,
+                             main_profile_id,
+                             message_center::MessageCenter::Get()) {}
+
+ArcNotificationManager::ArcNotificationManager(
+    ArcBridgeService* bridge_service,
+    const AccountId& main_profile_id,
+    message_center::MessageCenter* message_center)
+    : ArcService(bridge_service),
       main_profile_id_(main_profile_id),
+      message_center_(message_center),
       binding_(this) {
-  // This must be initialized after ArcBridgeService.
-  DCHECK(arc_bridge_);
-  DCHECK_EQ(arc_bridge_, ArcBridgeService::Get());
-  arc_bridge_->AddObserver(this);
+  arc_bridge_service()->notifications()->AddObserver(this);
 }
 
 ArcNotificationManager::~ArcNotificationManager() {
-  // This should be free'd before ArcBridgeService.
-  DCHECK(ArcBridgeService::Get());
-  DCHECK_EQ(arc_bridge_, ArcBridgeService::Get());
-  arc_bridge_->RemoveObserver(this);
+  arc_bridge_service()->notifications()->RemoveObserver(this);
 }
 
-void ArcNotificationManager::OnNotificationsInstanceReady() {
-  NotificationsInstance* notifications_instance =
-      arc_bridge_->notifications_instance();
-  if (!notifications_instance) {
-    VLOG(2) << "Request to refresh app list when bridge service is not ready.";
-    return;
+void ArcNotificationManager::OnInstanceReady() {
+  DCHECK(!ready_);
+
+  auto* notifications_instance =
+      ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service()->notifications(), Init);
+  DCHECK(notifications_instance);
+
+  notifications_instance->Init(binding_.CreateInterfacePtrAndBind());
+  ready_ = true;
+}
+
+void ArcNotificationManager::OnInstanceClosed() {
+  DCHECK(ready_);
+  while (!items_.empty()) {
+    auto it = items_.begin();
+    std::unique_ptr<ArcNotificationItem> item = std::move(it->second);
+    items_.erase(it);
+    item->OnClosedFromAndroid();
   }
-
-  NotificationsHostPtr host;
-  binding_.Bind(mojo::GetProxy(&host));
-  notifications_instance->Init(std::move(host));
+  ready_ = false;
 }
 
-void ArcNotificationManager::OnNotificationPosted(ArcNotificationDataPtr data) {
-  ArcNotificationItem* item = items_.get(data->key);
-  if (!item) {
-    // Show a notification on the primary loged-in user's desktop.
+void ArcNotificationManager::OnNotificationPosted(
+    mojom::ArcNotificationDataPtr data) {
+  const std::string& key = data->key;
+  auto it = items_.find(key);
+  if (it == items_.end()) {
+    // Old client with version < 5 would have use_custom_notification default,
+    // which is false.
+    const bool use_custom_notification = data->use_custom_notification;
+    // Show a notification on the primary logged-in user's desktop.
     // TODO(yoshiki): Reconsider when ARC supports multi-user.
-    item = new ArcNotificationItem(this, message_center::MessageCenter::Get(),
-                                   data->key, main_profile_id_);
-    items_.set(data->key, make_scoped_ptr(item));
+    ArcNotificationItem* item =
+        use_custom_notification
+            ? new ArcCustomNotificationItem(this, message_center_, key,
+                                            main_profile_id_)
+            : new ArcNotificationItem(this, message_center_, key,
+                                      main_profile_id_);
+    // TODO(yoshiki): Use emplacement for performance when it's available.
+    auto result = items_.insert(std::make_pair(key, base::WrapUnique(item)));
+    DCHECK(result.second);
+    it = result.first;
   }
-  item->UpdateWithArcNotificationData(*data);
+  it->second->UpdateWithArcNotificationData(std::move(data));
 }
 
-void ArcNotificationManager::OnNotificationRemoved(const mojo::String& key) {
-  ItemMap::iterator it = items_.find(key.get());
+void ArcNotificationManager::OnNotificationRemoved(const std::string& key) {
+  auto it = items_.find(key);
   if (it == items_.end()) {
     VLOG(3) << "Android requests to remove a notification (key: " << key
             << "), but it is already gone.";
     return;
   }
 
-  scoped_ptr<ArcNotificationItem> item(items_.take_and_erase(it));
+  std::unique_ptr<ArcNotificationItem> item = std::move(it->second);
+  items_.erase(it);
   item->OnClosedFromAndroid();
 }
 
 void ArcNotificationManager::SendNotificationRemovedFromChrome(
     const std::string& key) {
-  ItemMap::iterator it = items_.find(key);
+  auto it = items_.find(key);
   if (it == items_.end()) {
     VLOG(3) << "Chrome requests to remove a notification (key: " << key
             << "), but it is already gone.";
     return;
   }
 
-  scoped_ptr<ArcNotificationItem> item(items_.take_and_erase(it));
+  // The removed ArcNotificationItem needs to live in this scope, since the
+  // given argument |key| may be a part of the removed item.
+  std::unique_ptr<ArcNotificationItem> item = std::move(it->second);
+  items_.erase(it);
 
-  arc_bridge_->notifications_instance()->SendNotificationEventToAndroid(
-      key, ARC_NOTIFICATION_EVENT_CLOSED);
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->notifications(), SendNotificationEventToAndroid);
+
+  // On shutdown, the ARC channel may quit earlier then notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "ARC Notification (key: " << key
+            << ") is closed, but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->SendNotificationEventToAndroid(
+      key, mojom::ArcNotificationEvent::CLOSED);
 }
 
 void ArcNotificationManager::SendNotificationClickedOnChrome(
     const std::string& key) {
-  if (!items_.contains(key)) {
+  if (items_.find(key) == items_.end()) {
     VLOG(3) << "Chrome requests to fire a click event on notification (key: "
             << key << "), but it is gone.";
     return;
   }
 
-  arc_bridge_->notifications_instance()->SendNotificationEventToAndroid(
-      key, ARC_NOTIFICATION_EVENT_BODY_CLICKED);
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->notifications(), SendNotificationEventToAndroid);
+
+  // On shutdown, the ARC channel may quit earlier then notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "ARC Notification (key: " << key
+            << ") is clicked, but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->SendNotificationEventToAndroid(
+      key, mojom::ArcNotificationEvent::BODY_CLICKED);
+}
+
+void ArcNotificationManager::SendNotificationButtonClickedOnChrome(
+    const std::string& key,
+    int button_index) {
+  if (items_.find(key) == items_.end()) {
+    VLOG(3) << "Chrome requests to fire a click event on notification (key: "
+            << key << "), but it is gone.";
+    return;
+  }
+
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->notifications(), SendNotificationEventToAndroid);
+
+  // On shutdown, the ARC channel may quit earlier then notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "ARC Notification (key: " << key
+            << ")'s button is clicked, but the ARC channel has already gone.";
+    return;
+  }
+
+  mojom::ArcNotificationEvent command;
+  switch (button_index) {
+    case 0:
+      command = mojom::ArcNotificationEvent::BUTTON_1_CLICKED;
+      break;
+    case 1:
+      command = mojom::ArcNotificationEvent::BUTTON_2_CLICKED;
+      break;
+    case 2:
+      command = mojom::ArcNotificationEvent::BUTTON_3_CLICKED;
+      break;
+    case 3:
+      command = mojom::ArcNotificationEvent::BUTTON_4_CLICKED;
+      break;
+    case 4:
+      command = mojom::ArcNotificationEvent::BUTTON_5_CLICKED;
+      break;
+    default:
+      VLOG(3) << "Invalid button index (key: " << key
+              << ", index: " << button_index << ").";
+      return;
+  }
+
+  notifications_instance->SendNotificationEventToAndroid(key, command);
+}
+
+void ArcNotificationManager::CreateNotificationWindow(const std::string& key) {
+  if (items_.find(key) == items_.end()) {
+    VLOG(3) << "Chrome requests to create window on notification (key: " << key
+            << "), but it is gone.";
+    return;
+  }
+
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->notifications(), CreateNotificationWindow);
+  if (!notifications_instance)
+    return;
+
+  notifications_instance->CreateNotificationWindow(key);
+}
+
+void ArcNotificationManager::CloseNotificationWindow(const std::string& key) {
+  if (items_.find(key) == items_.end()) {
+    VLOG(3) << "Chrome requests to close window on notification (key: " << key
+            << "), but it is gone.";
+    return;
+  }
+
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->notifications(), CloseNotificationWindow);
+  if (!notifications_instance)
+    return;
+
+  notifications_instance->CloseNotificationWindow(key);
+}
+
+void ArcNotificationManager::OnToastPosted(mojom::ArcToastDataPtr data) {
+  const base::string16 text16(
+      base::UTF8ToUTF16(data->text.has_value() ? *data->text : std::string()));
+  const base::string16 dismiss_text16(base::UTF8ToUTF16(
+      data->dismiss_text.has_value() ? *data->dismiss_text : std::string()));
+  ash::WmShell::Get()->toast_manager()->Show(
+      ash::ToastData(data->id, text16, data->duration, dismiss_text16));
+}
+
+void ArcNotificationManager::OnToastCancelled(mojom::ArcToastDataPtr data) {
+  ash::WmShell::Get()->toast_manager()->Cancel(data->id);
 }
 
 }  // namespace arc

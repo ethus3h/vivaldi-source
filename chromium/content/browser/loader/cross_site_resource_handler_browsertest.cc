@@ -5,9 +5,10 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -39,11 +40,12 @@ class TestResourceDispatcherHostDelegate
   using RequestDeferredHook = base::Callback<void(const base::Closure& resume)>;
   TestResourceDispatcherHostDelegate() : throttle_created_(false) {}
 
-  void RequestBeginning(net::URLRequest* request,
-                        ResourceContext* resource_context,
-                        AppCacheService* appcache_service,
-                        ResourceType resource_type,
-                        ScopedVector<ResourceThrottle>* throttles) override {
+  void RequestBeginning(
+      net::URLRequest* request,
+      ResourceContext* resource_context,
+      AppCacheService* appcache_service,
+      ResourceType resource_type,
+      std::vector<std::unique_ptr<ResourceThrottle>>* throttles) override {
     CHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
     ShellResourceDispatcherHostDelegate::RequestBeginning(
         request, resource_context, appcache_service, resource_type, throttles);
@@ -54,8 +56,8 @@ class TestResourceDispatcherHostDelegate
       ASSERT_FALSE(throttle_created_);
       throttle_created_ = true;
 
-      throttles->push_back(
-          new CallbackRunningResourceThrottle(request, this, run_on_start_));
+      throttles->push_back(base::MakeUnique<CallbackRunningResourceThrottle>(
+          request, this, run_on_start_));
     }
   }
 
@@ -97,7 +99,8 @@ class TestResourceDispatcherHostDelegate
     CallbackRunningResourceThrottle(net::URLRequest* request,
                                     TestResourceDispatcherHostDelegate* tracker,
                                     const RequestDeferredHook& run_on_start)
-        : request_(request),
+        : resumed_(false),
+          request_(request),
           tracker_(tracker),
           run_on_start_(run_on_start),
           weak_factory_(this) {}
@@ -106,7 +109,7 @@ class TestResourceDispatcherHostDelegate
       *defer = true;
       base::Closure resume_request_on_io_thread = base::Bind(
           base::IgnoreResult(&BrowserThread::PostTask), BrowserThread::IO,
-          FROM_HERE, base::Bind(&CallbackRunningResourceThrottle::Resume,
+          FROM_HERE, base::Bind(&CallbackRunningResourceThrottle::MarkAndResume,
                                 weak_factory_.GetWeakPtr()));
       BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
@@ -116,9 +119,12 @@ class TestResourceDispatcherHostDelegate
     ~CallbackRunningResourceThrottle() override {
       // If the request is deleted without being cancelled, its status will
       // indicate it succeeded, so have to check if the request is still pending
-      // as well.
+      // as well. If the request never even started, the throttle will never
+      // resume it. Check this condition as well to allow for early
+      // cancellation.
       tracker_->OnTrackedRequestDestroyed(!request_->is_pending() &&
-                                          request_->status().is_success());
+                                          request_->status().is_success() &&
+                                          resumed_);
     }
 
     // ResourceThrottle implementation:
@@ -127,7 +133,12 @@ class TestResourceDispatcherHostDelegate
     }
 
    private:
-    void Resume() { controller()->Resume(); }
+    void MarkAndResume() {
+      resumed_ = true;
+      Resume();
+    }
+
+    bool resumed_;
     net::URLRequest* request_;
     TestResourceDispatcherHostDelegate* tracker_;
     RequestDeferredHook run_on_start_;
@@ -163,7 +174,7 @@ class TestResourceDispatcherHostDelegate
   RequestDeferredHook run_on_start_;
 
   // This lives on the UI thread.
-  scoped_ptr<base::RunLoop> run_loop_;
+  std::unique_ptr<base::RunLoop> run_loop_;
 
   // Set on the IO thread while |run_loop_| is non-nullptr, read on the UI
   // thread after deleting run_loop_.
@@ -184,8 +195,8 @@ class CrossSiteResourceHandlerTest : public ContentBrowserTest {
             &CrossSiteResourceHandlerTest::InjectResourceDispatcherHostDelegate,
             base::Unretained(this)));
     host_resolver()->AddRule("*", "127.0.0.1");
-    ASSERT_TRUE(embedded_test_server()->Start());
     content::SetupCrossSiteRedirector(embedded_test_server());
+    ASSERT_TRUE(embedded_test_server()->Start());
   }
 
   void TearDownOnMainThread() override {

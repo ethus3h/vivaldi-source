@@ -21,6 +21,8 @@
 #include "snapshot/mac/process_types/internal.h"
 #include "util/mach/task_memory.h"
 
+#if !DOXYGEN
+
 namespace crashpad {
 namespace process_types {
 namespace internal {
@@ -64,7 +66,7 @@ size_t dyld_all_image_infos<Traits>::ExpectedSizeForVersion(
     return sizeof(dyld_all_image_infos<Traits>);
   }
   if (version >= 13) {
-    return offsetof(dyld_all_image_infos<Traits>, reserved);
+    return offsetof(dyld_all_image_infos<Traits>, infoArrayChangeTimestamp);
   }
   if (version >= 12) {
     return offsetof(dyld_all_image_infos<Traits>, sharedCacheUUID);
@@ -157,3 +159,5 @@ bool crashreporter_annotations_t<Traits>::ReadInto(
 }  // namespace internal
 }  // namespace process_types
 }  // namespace crashpad
+
+#endif  // !DOXYGEN

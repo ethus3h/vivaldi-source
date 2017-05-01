@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -643,7 +643,7 @@ static const GLEnums::EnumToString enum_to_string_table[] = {
         0x78F2, "GL_READ_WRITE_CHROMIUM",
     },
     {
-        0x78FA, "GL_RGB_YUV_420_CHROMIUM",
+        0x78FA, "GL_RGB_YCRCB_420_CHROMIUM",
     },
     {
         0x78FB, "GL_RGB_YCBCR_422_CHROMIUM",
@@ -3001,12 +3001,6 @@ static const GLEnums::EnumToString enum_to_string_table[] = {
         0x924A, "GL_OVERLAY_TRANSFORM_ROTATE_270_CHROMIUM",
     },
     {
-        0x924B, "GL_SUBSCRIBED_VALUES_BUFFER_CHROMIUM",
-    },
-    {
-        0x924C, "GL_MOUSE_POSITION_CHROMIUM",
-    },
-    {
         0x9250, "GL_SHADER_BINARY_DMP",
     },
     {
@@ -3457,10 +3451,10 @@ static const GLEnums::EnumToString enum_to_string_table[] = {
         1, "GL_ES_VERSION_2_0",
     },
     {
-        24, "GL_SYNC_TOKEN_SIZE_CHROMIUM",
+        16, "GL_MAILBOX_SIZE_CHROMIUM",
     },
     {
-        64, "GL_MAILBOX_SIZE_CHROMIUM",
+        24, "GL_SYNC_TOKEN_SIZE_CHROMIUM",
     },
 };
 

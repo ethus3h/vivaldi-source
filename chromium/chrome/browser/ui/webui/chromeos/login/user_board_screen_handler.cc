@@ -9,8 +9,8 @@
 
 namespace chromeos {
 
-UserBoardScreenHandler::UserBoardScreenHandler() : model_(nullptr) {
-}
+UserBoardScreenHandler::UserBoardScreenHandler()
+    : model_(nullptr), weak_factory_(this) {}
 
 UserBoardScreenHandler::~UserBoardScreenHandler() {
 }
@@ -64,7 +64,7 @@ void UserBoardScreenHandler::SetPublicSessionDisplayName(
 
 void UserBoardScreenHandler::SetPublicSessionLocales(
     const AccountId& account_id,
-    scoped_ptr<base::ListValue> locales,
+    std::unique_ptr<base::ListValue> locales,
     const std::string& default_locale,
     bool multiple_recommended_locales) {
   CallJS("login.AccountPickerScreen.setPublicSessionLocales", account_id,
@@ -102,6 +102,10 @@ void UserBoardScreenHandler::Bind(UserBoardModel& model) {
 void UserBoardScreenHandler::Unbind() {
   model_ = nullptr;
   BaseScreenHandler::SetBaseScreen(nullptr);
+}
+
+base::WeakPtr<UserBoardView> UserBoardScreenHandler::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 }  // namespace chromeos

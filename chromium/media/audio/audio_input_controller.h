@@ -8,23 +8,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
-#include "base/atomicops.h"
-#include "base/callback.h"
 #include "base/files/file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/synchronization/lock.h"
-#include "base/synchronization/waitable_event.h"
-#include "base/threading/thread.h"
-#include "base/timer/timer.h"
-#include "build/build_config.h"
+#include "base/memory/weak_ptr.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager_base.h"
-#include "media/audio/audio_parameters.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_parameters.h"
 
 // An AudioInputController controls an AudioInputStream and records data
 // from this input stream. The two main methods are Record() and Close() and
@@ -55,19 +47,12 @@
 //                   AudioManager::MakeAudioInputStream()
 //                        AudioInputStream::Open()
 //                                  .- - - - - - - - - - - - ->   OnError()
-//                          create the data timer
 //                                  .------------------------->  OnCreated()
-//                               kCreated
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Record() ==>                 DoRecord()
 //                      AudioInputStream::Start()
-//                                  .------------------------->  OnRecording()
-//                          start the data timer
-//                              kRecording
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Close() ==>                  DoClose()
-//                        delete the data timer
-//                           state_ = kClosed
 //                        AudioInputStream::Stop()
 //                        AudioInputStream::Close()
 //                          SyncWriter::Close()
@@ -86,15 +71,13 @@ namespace media {
 #define AUDIO_POWER_MONITORING
 #endif
 
-class AudioInputWriter;
+class AudioFileWriter;
 class UserInputMonitor;
 
 class MEDIA_EXPORT AudioInputController
-    : public base::RefCountedThreadSafe<AudioInputController>,
-      public AudioInputStream::AudioInputCallback {
+    : public base::RefCountedThreadSafe<AudioInputController> {
  public:
-
-  // Error codes to make native loggin more clear. These error codes are added
+  // Error codes to make native logging more clear. These error codes are added
   // to generic error strings to provide a higher degree of details.
   // Changing these values can lead to problems when matching native debug
   // logs with the actual cause of error.
@@ -111,9 +94,6 @@ class MEDIA_EXPORT AudioInputController
     // Native input stream reports an error. Exact reason differs between
     // platforms.
     STREAM_ERROR,  // = 3
-
-    // This can happen if a capture device has been removed or disabled.
-    NO_DATA_ERROR,  // = 4
   };
 
   // An event handler that receives events from the AudioInputController. The
@@ -121,11 +101,8 @@ class MEDIA_EXPORT AudioInputController
   class MEDIA_EXPORT EventHandler {
    public:
     virtual void OnCreated(AudioInputController* controller) = 0;
-    virtual void OnRecording(AudioInputController* controller) = 0;
     virtual void OnError(AudioInputController* controller,
                          ErrorCode error_code) = 0;
-    virtual void OnData(AudioInputController* controller,
-                        const AudioBus* data) = 0;
     virtual void OnLog(AudioInputController* controller,
                        const std::string& message) = 0;
 
@@ -155,6 +132,8 @@ class MEDIA_EXPORT AudioInputController
   class Factory {
    public:
     virtual AudioInputController* Create(
+        scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+        SyncWriter* sync_writer,
         AudioManager* audio_manager,
         EventHandler* event_handler,
         AudioParameters params,
@@ -172,6 +151,7 @@ class MEDIA_EXPORT AudioInputController
   static scoped_refptr<AudioInputController> Create(
       AudioManager* audio_manager,
       EventHandler* event_handler,
+      SyncWriter* sync_writer,
       const AudioParameters& params,
       const std::string& device_id,
       UserInputMonitor* user_input_monitor);
@@ -193,6 +173,7 @@ class MEDIA_EXPORT AudioInputController
       const std::string& device_id,
       // External synchronous writer for audio controller.
       SyncWriter* sync_writer,
+      std::unique_ptr<AudioFileWriter> debug_writer,
       UserInputMonitor* user_input_monitor,
       const bool agc_is_enabled);
 
@@ -207,6 +188,7 @@ class MEDIA_EXPORT AudioInputController
       AudioInputStream* stream,
       // External synchronous writer for audio controller.
       SyncWriter* sync_writer,
+      std::unique_ptr<AudioFileWriter> debug_writer,
       UserInputMonitor* user_input_monitor);
 
   // Starts recording using the created audio input stream.
@@ -227,31 +209,37 @@ class MEDIA_EXPORT AudioInputController
   // to muted and 1.0 to maximum volume.
   virtual void SetVolume(double volume);
 
-  // AudioInputCallback implementation. Threading details depends on the
-  // device-specific implementation.
-  void OnData(AudioInputStream* stream,
-              const AudioBus* source,
-              uint32_t hardware_delay_bytes,
-              double volume) override;
-  void OnError(AudioInputStream* stream) override;
-
-  bool SharedMemoryAndSyncSocketMode() const { return sync_writer_ != NULL; }
-
   // Enable debug recording of audio input.
-  void EnableDebugRecording(AudioInputWriter* input_writer);
+  virtual void EnableDebugRecording(const base::FilePath& file_name);
 
-  // Disbale debug recording of audio input. Must be called before owner of
-  // |input_writer| deletes it.
-  void DisableDebugRecording(const base::Closure& callback);
+  // Disable debug recording of audio input.
+  virtual void DisableDebugRecording();
 
  protected:
   friend class base::RefCountedThreadSafe<AudioInputController>;
 
-  // Internal state of the source.
-  enum State {
-    CREATED,
-    RECORDING,
-    CLOSED
+  // Used to log the result of capture startup.
+  // This was previously logged as a boolean with only the no callback and OK
+  // options. The enum order is kept to ensure backwards compatibility.
+  // Elements in this enum should not be deleted or rearranged; the only
+  // permitted operation is to add new elements before
+  // CAPTURE_STARTUP_RESULT_MAX and update CAPTURE_STARTUP_RESULT_MAX.
+  //
+  // The NO_DATA_CALLBACK enum has been replaced with NEVER_GOT_DATA,
+  // and there are also other histograms such as
+  // Media.Audio.InputStartupSuccessMac to cover issues similar
+  // to the ones the NO_DATA_CALLBACK was intended for.
+  enum CaptureStartupResult {
+    CAPTURE_STARTUP_NO_DATA_CALLBACK = 0,  // no longer used.
+    CAPTURE_STARTUP_OK = 1,
+    CAPTURE_STARTUP_CREATE_STREAM_FAILED = 2,
+    CAPTURE_STARTUP_OPEN_STREAM_FAILED = 3,
+    CAPTURE_STARTUP_NEVER_GOT_DATA = 4,
+    CAPTURE_STARTUP_STOPPED_EARLY = 5,
+    CAPTURE_STARTUP_CREATE_LOW_LATENCY_STREAM_FAILED = 6,
+    CAPTURE_STARTUP_OPEN_LOW_LATENCY_STREAM_FAILED = 7,
+    CAPTURE_STARTUP_RESULT_MAX =
+        CAPTURE_STARTUP_CREATE_LOW_LATENCY_STREAM_FAILED
   };
 
 #if defined(AUDIO_POWER_MONITORING)
@@ -274,12 +262,22 @@ class MEDIA_EXPORT AudioInputController
   };
 #endif
 
-  AudioInputController(EventHandler* handler,
+  AudioInputController(scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+                       EventHandler* handler,
                        SyncWriter* sync_writer,
+                       std::unique_ptr<AudioFileWriter> debug_writer,
                        UserInputMonitor* user_input_monitor,
                        const bool agc_is_enabled);
-  ~AudioInputController() override;
+  virtual ~AudioInputController();
 
+  const scoped_refptr<base::SingleThreadTaskRunner>& GetTaskRunnerForTesting()
+      const {
+    return task_runner_;
+  }
+
+  EventHandler* GetHandlerForTesting() const { return handler_; }
+
+ private:
   // Methods called on the audio thread (owned by the AudioManager).
   void DoCreate(AudioManager* audio_manager,
                 const AudioParameters& params,
@@ -287,27 +285,12 @@ class MEDIA_EXPORT AudioInputController
   void DoCreateForLowLatency(AudioManager* audio_manager,
                              const AudioParameters& params,
                              const std::string& device_id);
-  void DoCreateForStream(AudioInputStream* stream_to_control);
+  void DoCreateForStream(AudioInputStream* stream_to_control, bool low_latency);
   void DoRecord();
   void DoClose();
   void DoReportError();
   void DoSetVolume(double volume);
-  void DoOnData(scoped_ptr<AudioBus> data);
   void DoLogAudioLevels(float level_dbfs, int microphone_volume_percent);
-
-  // Method to check if we get recorded data after a stream was started,
-  // and log the result to UMA.
-  void FirstCheckForNoData();
-
-  // Method which ensures that OnError() is triggered when data recording
-  // times out. Called on the audio thread.
-  void DoCheckForNoData();
-
-  // Helper method that stops, closes, and NULL:s |*stream_|.
-  void DoStopCloseAndClearStream();
-
-  void SetDataIsActive(bool enabled);
-  bool GetDataIsActive();
 
 #if defined(AUDIO_POWER_MONITORING)
   // Updates the silence state, see enum SilenceState above for state
@@ -318,60 +301,64 @@ class MEDIA_EXPORT AudioInputController
   void LogSilenceState(SilenceState value);
 #endif
 
+  // Logs the result of creating an AudioInputController.
+  // Only logs once, even if it is called several times.
+  void LogCaptureStartupResult(CaptureStartupResult result);
+
   // Enable and disable debug recording of audio input. Called on the audio
   // thread.
-  void DoEnableDebugRecording(AudioInputWriter* input_writer);
+  void DoEnableDebugRecording(const base::FilePath& file_name);
   void DoDisableDebugRecording();
 
   // Called on the audio thread.
-  void WriteInputDataForDebugging(scoped_ptr<AudioBus> data);
+  void WriteInputDataForDebugging(std::unique_ptr<AudioBus> data);
+
+  // Called by the stream with log messages.
+  void LogMessage(const std::string& message);
+
+  // Called on the hw callback thread. Checks for keyboard input if
+  // user_input_monitor_ is set otherwise returns false.
+  bool CheckForKeyboardInput();
+
+  // Does power monitoring on supported platforms.
+  // Called on the hw callback thread.
+  // Returns true iff average power and mic volume was returned and should
+  // be posted to DoLogAudioLevels on the audio thread.
+  // Returns false if either power measurements are disabled or aren't needed
+  // right now (they're done periodically).
+  bool CheckAudioPower(const AudioBus* source,
+                       double volume,
+                       float* average_power_dbfs,
+                       int* mic_volume_percent);
 
   // Gives access to the task runner of the creating thread.
-  scoped_refptr<base::SingleThreadTaskRunner> creator_task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> const creator_task_runner_;
 
   // The task runner of audio-manager thread that this object runs on.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> const task_runner_;
 
   // Contains the AudioInputController::EventHandler which receives state
   // notifications from this class.
-  EventHandler* handler_;
+  EventHandler* const handler_;
 
   // Pointer to the audio input stream object.
+  // Only used on the audio thread.
   AudioInputStream* stream_;
 
-  // |no_data_timer_| is used to call OnError() when we stop receiving
-  // OnData() calls. This can occur when an audio input device is unplugged
-  // whilst recording on Windows.
-  // See http://crbug.com/79936 for details.
-  // This member is only touched by the audio thread.
-  scoped_ptr<base::Timer> no_data_timer_;
-
-  // This flag is used to signal that we are receiving OnData() calls, i.e,
-  // that data is active. It can be touched by the audio thread and by the
-  // low-level audio thread which calls OnData(). E.g. on Windows, the
-  // low-level audio thread is called wasapi_capture_thread.
-  base::subtle::Atomic32 data_is_active_;
-
-  // |state_| is written on the audio thread and is read on the hardware audio
-  // thread. These operations need to be locked. But lock is not required for
-  // reading on the audio input controller thread.
-  State state_;
-
-  base::Lock lock_;
-
   // SyncWriter is used only in low-latency mode for synchronous writing.
-  SyncWriter* sync_writer_;
+  SyncWriter* const sync_writer_;
 
   static Factory* factory_;
 
   double max_volume_;
 
-  UserInputMonitor* user_input_monitor_;
+  UserInputMonitor* const user_input_monitor_;
 
   const bool agc_is_enabled_;
 
 #if defined(AUDIO_POWER_MONITORING)
-  // Enabled in DoCrete() but not in DoCreateForStream().
+  // Will be set to true if an AGC is supported and enabled (see DoCreate and
+  // DoCreateForStream). By default set to false.
   bool power_measurement_is_enabled_;
 
   // Updated each time a power measurement is performed.
@@ -390,7 +377,30 @@ class MEDIA_EXPORT AudioInputController
   base::TimeTicks low_latency_create_time_;
 
   // Used for audio debug recordings. Accessed on audio thread.
-  AudioInputWriter* input_writer_;
+  const std::unique_ptr<AudioFileWriter> debug_writer_;
+
+  class AudioCallback;
+  // Holds a pointer to the callback object that receives audio data from
+  // the lower audio layer. Valid only while 'recording' (between calls to
+  // stream_->Start() and stream_->Stop()).
+  // The value of this pointer is only set and read on the audio thread while
+  // the callbacks themselves occur on the hw callback thread. More details
+  // in the AudioCallback class in the cc file.
+  std::unique_ptr<AudioCallback> audio_callback_;
+
+  // A weak pointer factory that we use when posting tasks to the audio thread
+  // that we want to be automatically discarded after Close() has been called
+  // and that we do not want to keep the AudioInputController instance alive
+  // beyond what is desired by the user of the instance (e.g.
+  // AudioInputRendererHost). An example of where this is important is when
+  // we fire error notifications from the hw callback thread, post them to
+  // the audio thread. In that case, we do not want the error notification to
+  // keep the AudioInputController alive for as long as the error notification
+  // is pending and then make a callback from an AudioInputController that has
+  // already been closed.
+  // The weak_ptr_factory_ and all outstanding weak pointers, are invalidated
+  // at the end of DoClose.
+  base::WeakPtrFactory<AudioInputController> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioInputController);
 };

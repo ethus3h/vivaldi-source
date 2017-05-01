@@ -38,28 +38,37 @@
 
 namespace blink {
 
-bool DOMWindowCSS::supports(const String& property, const String& value)
-{
-    CSSPropertyID unresolvedProperty = unresolvedCSSPropertyID(property);
-    if (unresolvedProperty == CSSPropertyInvalid)
-        return false;
-    ASSERT(CSSPropertyMetadata::isEnabledProperty(unresolvedProperty));
+bool DOMWindowCSS::supports(const String& property, const String& value) {
+  CSSPropertyID unresolvedProperty = unresolvedCSSPropertyID(property);
+  if (unresolvedProperty == CSSPropertyInvalid)
+    return false;
+  if (unresolvedProperty == CSSPropertyVariable) {
+    MutableStylePropertySet* dummyStyle =
+        MutableStylePropertySet::create(HTMLStandardMode);
+    bool isAnimationTainted = false;
+    return CSSParser::parseValueForCustomProperty(dummyStyle, "--valid",
+                                                  nullptr, value, false,
+                                                  nullptr, isAnimationTainted)
+        .didParse;
+  }
 
-    // This will return false when !important is present
-    RefPtrWillBeRawPtr<MutableStylePropertySet> dummyStyle = MutableStylePropertySet::create(HTMLStandardMode);
-    return CSSParser::parseValue(dummyStyle.get(), unresolvedProperty, value, false, 0);
+  ASSERT(CSSPropertyMetadata::isEnabledProperty(unresolvedProperty));
+
+  // This will return false when !important is present
+  MutableStylePropertySet* dummyStyle =
+      MutableStylePropertySet::create(HTMLStandardMode);
+  return CSSParser::parseValue(dummyStyle, unresolvedProperty, value, false)
+      .didParse;
 }
 
-bool DOMWindowCSS::supports(const String& conditionText)
-{
-    return CSSParser::parseSupportsCondition(conditionText);
+bool DOMWindowCSS::supports(const String& conditionText) {
+  return CSSParser::parseSupportsCondition(conditionText);
 }
 
-String DOMWindowCSS::escape(const String& ident)
-{
-    StringBuilder builder;
-    serializeIdentifier(ident, builder);
-    return builder.toString();
+String DOMWindowCSS::escape(const String& ident) {
+  StringBuilder builder;
+  serializeIdentifier(ident, builder);
+  return builder.toString();
 }
 
-}
+}  // namespace blink

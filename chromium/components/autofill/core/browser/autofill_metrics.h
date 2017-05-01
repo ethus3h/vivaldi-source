@@ -10,10 +10,10 @@
 
 #include "base/macros.h"
 #include "components/autofill/core/browser/autofill_client.h"
-#include "components/autofill/core/browser/autofill_download_manager.h"
 #include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 namespace base {
 class TimeDelta;
@@ -43,16 +43,33 @@ class AutofillMetrics {
     // All the required conditions were satisfied and the card upload prompt was
     // triggered.
     UPLOAD_OFFERED,
-    // No CVC was detected. We don't know whether a valid address was available
+    // No CVC was detected. We don't know whether any addresses were available
     // nor whether we would have been able to get upload details.
     UPLOAD_NOT_OFFERED_NO_CVC,
-    // A CVC was detected but no valid address was available (recently created
-    // or used, with a name matching the card, and with a non-empty zip code).
+    // A CVC was detected but no recently created or used address was available.
     // We don't know whether we would have been able to get upload details.
     UPLOAD_NOT_OFFERED_NO_ADDRESS,
-    // A CVC was detected and a valid address was available but the request to
-    // Payments for upload details failed.
+    // A CVC and one or more addresses were available but no name was found on
+    // either the card or the adress(es). We don't know whether the address(es)
+    // were otherwise valid nor whether we would have been able to get upload
+    // details.
+    UPLOAD_NOT_OFFERED_NO_NAME,
+    // A CVC, multiple addresses, and a name were available but the adresses had
+    // conflicting zip codes. We don't know whether we would have been able to
+    // get upload details.
+    UPLOAD_NOT_OFFERED_CONFLICTING_ZIPS,
+    // A CVC, one or more addresses, and a name were available but no zip code
+    // was found on any of the adress(es). We don't know whether we would have
+    // been able to get upload details.
+    UPLOAD_NOT_OFFERED_NO_ZIP_CODE,
+    // A CVC, one or more valid addresses, and a name were available but the
+    // request to Payments for upload details failed.
     UPLOAD_NOT_OFFERED_GET_UPLOAD_DETAILS_FAILED,
+    // A CVC and one or more addresses were available but the names on the card
+    // and/or the addresses didn't match. We don't know whether the address(es)
+    // were otherwise valid nor whether we would have been able to get upload
+    // details.
+    UPLOAD_NOT_OFFERED_CONFLICTING_NAMES,
     NUM_CARD_UPLOAD_DECISION_METRICS,
   };
 
@@ -243,6 +260,13 @@ class AutofillMetrics {
     NUM_FIELD_TYPE_QUALITY_METRICS,
   };
 
+  enum QualityMetricType {
+    TYPE_SUBMISSION = 0,      // Logged based on user's submitted data.
+    TYPE_NO_SUBMISSION,       // Logged based on user's entered data.
+    TYPE_AUTOCOMPLETE_BASED,  // Logged based on the value of autocomplete attr.
+    NUM_QUALITY_METRIC_TYPES,
+  };
+
   // Each of these is logged at most once per query to the server, which in turn
   // occurs at most once per page load.
   enum ServerQueryMetric {
@@ -359,6 +383,13 @@ class AutofillMetrics {
     FORM_EVENT_LOCAL_SUGGESTION_WILL_SUBMIT_ONCE,
     FORM_EVENT_SERVER_SUGGESTION_WILL_SUBMIT_ONCE,
     FORM_EVENT_MASKED_SERVER_CARD_SUGGESTION_WILL_SUBMIT_ONCE,
+    // A dropdown with suggestions was shown and a form was submitted after
+    // that.
+    FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE,
+    // A dropdown with suggestions was shown and a form is about to be
+    // submitted. If the submission is not interrupted by JavaScript, the "form
+    // submitted" event above will also be logged.
+    FORM_EVENT_SUGGESTION_SHOWN_WILL_SUBMIT_ONCE,
 
     NUM_FORM_EVENTS,
   };
@@ -384,13 +415,13 @@ class AutofillMetrics {
     // User chose to opt in (checked the checkbox when it was empty).
     // Only logged if there was an attempt to unmask.
     UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_IN,
-    // User did not opt in when he had the chance (left the checkbox unchecked).
-    // Only logged if there was an attempt to unmask.
+    // User did not opt in when they had the chance (left the checkbox
+    // unchecked).  Only logged if there was an attempt to unmask.
     UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_IN,
     // User chose to opt out (unchecked the checkbox when it was check).
     // Only logged if there was an attempt to unmask.
     UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_OUT,
-    // User did not opt out when he had a chance (left the checkbox checked).
+    // User did not opt out when they had a chance (left the checkbox checked).
     // Only logged if there was an attempt to unmask.
     UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_OUT,
     // The prompt was closed while chrome was unmasking the card (user pressed
@@ -488,7 +519,9 @@ class AutofillMetrics {
   };
 
   static void LogCardUploadDecisionMetric(CardUploadDecisionMetric metric);
-  static void LogCreditCardInfoBarMetric(InfoBarMetric metric);
+  static void LogCreditCardInfoBarMetric(InfoBarMetric metric,
+                                         bool is_uploading);
+  static void LogCreditCardFillingInfoBarMetric(InfoBarMetric metric);
   static void LogSaveCardPromptMetric(SaveCardPromptMetric metric,
                                       bool is_uploading,
                                       bool is_reshow);
@@ -505,45 +538,17 @@ class AutofillMetrics {
 
   static void LogHeuristicTypePrediction(FieldTypeQualityMetric metric,
                                          ServerFieldType field_type,
-                                         bool observed_submission);
+                                         QualityMetricType metric_type);
   static void LogOverallTypePrediction(FieldTypeQualityMetric metric,
                                        ServerFieldType field_type,
-                                       bool observed_submission);
+                                       QualityMetricType metric_type);
   static void LogServerTypePrediction(FieldTypeQualityMetric metric,
                                       ServerFieldType field_type,
-                                      bool observed_submission);
+                                      QualityMetricType metric_type);
 
   static void LogServerQueryMetric(ServerQueryMetric metric);
 
   static void LogUserHappinessMetric(UserHappinessMetric metric);
-
-  // Logs |state| to the dismissal states histogram.
-  static void LogDialogDismissalState(DialogDismissalState state);
-
-  // This should be called as soon as the user's signed-in status and Wallet
-  // item count is known.  Records that a user starting out in |user_state| is
-  // interacting with a dialog.
-  static void LogDialogInitialUserState(DialogInitialUserStateMetric user_type);
-
-  // Logs the time elapsed between the dialog being shown and when it is ready
-  // for user interaction.
-  static void LogDialogLatencyToShow(const base::TimeDelta& duration);
-
-  // Logs |event| to the popup events histogram.
-  static void LogDialogPopupEvent(DialogPopupEvent event);
-
-  // Logs |metric| to the security metrics histogram.
-  static void LogDialogSecurityMetric(DialogSecurityMetric metric);
-
-  // This should be called when the Autofill dialog is closed.  |duration|
-  // should be the time elapsed between the dialog being shown and it being
-  // closed.  |dismissal_action| should indicate whether the user dismissed
-  // the dialog by submitting the form data or by canceling.
-  static void LogDialogUiDuration(const base::TimeDelta& duration,
-                                  DialogDismissalAction dismissal_action);
-
-  // Logs |event| to the UI events histogram.
-  static void LogDialogUiEvent(DialogUiEvent event);
 
   // Logs |event| to the unmask prompt events histogram.
   static void LogUnmaskPromptEvent(UnmaskPromptEvent event);
@@ -568,23 +573,6 @@ class AutofillMetrics {
   // Logs |result| to the get real pan result histogram.
   static void LogUnmaskingDuration(const base::TimeDelta& duration,
                                    AutofillClient::PaymentsRpcResult result);
-
-  // Logs |metric| to the Wallet errors histogram.
-  static void LogWalletErrorMetric(WalletErrorMetric metric);
-
-  // Logs the network request time of Wallet API calls.
-  static void LogWalletApiCallDuration(WalletApiCallMetric metric,
-                                       const base::TimeDelta& duration);
-
-  // Logs that the Wallet API call corresponding to |metric| was malformed.
-  static void LogWalletMalformedResponseMetric(WalletApiCallMetric metric);
-
-  // Logs |required_action| to the required actions histogram.
-  static void LogWalletRequiredActionMetric(
-      WalletRequiredActionMetric required_action);
-
-  // Logs HTTP response codes recieved by wallet client.
-  static void LogWalletResponseCode(int response_code);
 
   // This should be called when a form that has been Autofilled is submitted.
   // |duration| should be the time elapsed between form load and submission.
@@ -617,6 +605,13 @@ class AutofillMetrics {
 
   // This should be called each time a new profile is launched.
   static void LogStoredProfileCount(size_t num_profiles);
+
+  // This should be called each time a new profile is launched.
+  static void LogStoredLocalCreditCardCount(size_t num_local_cards);
+
+  // This should be called each time a new profile is launched.
+  static void LogStoredServerCreditCardCounts(size_t num_masked_cards,
+                                              size_t num_unmasked_cards);
 
   // Log the number of profiles available when an autofillable form is
   // submitted.
@@ -651,11 +646,26 @@ class AutofillMetrics {
   // state of the form.
   static void LogAutofillFormSubmittedState(AutofillFormSubmittedState state);
 
-  // Log the compression ratio obtained by compressing with gzip. Logs for the
-  // query or upload request, depending on |type|.
-  static void LogPayloadCompressionRatio(
-      int compression_ratio,
-      AutofillDownloadManager::RequestType type);
+  // This should be called when determining the heuristic types for a form's
+  // fields.
+  static void LogDetermineHeuristicTypesTiming(const base::TimeDelta& duration);
+
+  // This should be called when parsing each form.
+  static void LogParseFormTiming(const base::TimeDelta& duration);
+
+  // Log how many profiles were considered for the deduplication process.
+  static void LogNumberOfProfilesConsideredForDedupe(size_t num_considered);
+
+  // Log how many profiles were removed as part of the deduplication process.
+  static void LogNumberOfProfilesRemovedDuringDedupe(size_t num_removed);
+
+  // Log whether the Autofill query on a credit card form is made in a secure
+  // context.
+  static void LogIsQueriedCreditCardFormSecure(bool is_secure);
+
+  // This should be called when the user selects the Form-Not-Secure warning
+  // suggestion to show an explanation of the warning.
+  static void LogShowedHttpNotSecureExplanation();
 
   // Utility to autofill form events in the relevant histograms depending on
   // the presence of server and/or local data.
@@ -671,7 +681,13 @@ class AutofillMetrics {
       is_local_data_available_ = is_local_data_available;
     }
 
+    inline void set_is_context_secure(bool is_context_secure) {
+      is_context_secure_ = is_context_secure;
+    }
+
     void OnDidInteractWithAutofillableForm();
+
+    void OnDidPollSuggestions(const FormFieldData& field);
 
     void OnDidShowSuggestions();
 
@@ -693,6 +709,7 @@ class AutofillMetrics {
     bool is_for_credit_card_;
     bool is_server_data_available_;
     bool is_local_data_available_;
+    bool is_context_secure_;
     bool has_logged_interacted_;
     bool has_logged_suggestions_shown_;
     bool has_logged_masked_server_card_suggestion_selected_;
@@ -701,6 +718,9 @@ class AutofillMetrics {
     bool has_logged_submitted_;
     bool logged_suggestion_filled_was_server_data_;
     bool logged_suggestion_filled_was_masked_server_card_;
+
+    // The last field that was polled for suggestions.
+    FormFieldData last_polled_field_;
   };
 
  private:

@@ -52,22 +52,14 @@ class LocalExtensionCacheTest : public testing::Test {
         pool_owner_->pool()->GetNamedSequenceToken("background"));
   }
 
-  base::FilePath CreateCacheDir(bool initialized) {
+  base::FilePath CreateCacheDir() {
     EXPECT_TRUE(cache_dir_.CreateUniqueTempDir());
-    if (initialized)
-      CreateFlagFile(cache_dir_.path());
-    return cache_dir_.path();
+    return cache_dir_.GetPath();
   }
 
   base::FilePath CreateTempDir() {
     EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
-    return temp_dir_.path();
-  }
-
-  void CreateFlagFile(const base::FilePath& dir) {
-    CreateFile(dir.Append(
-        extensions::LocalExtensionCache::kCacheReadyFlagFileName),
-        0, base::Time::Now());
+    return temp_dir_.GetPath();
   }
 
   void CreateExtensionFile(const base::FilePath& dir,
@@ -98,14 +90,13 @@ class LocalExtensionCacheTest : public testing::Test {
                                         base::FilePath* filename) {
     std::string data(size, 0);
 
-    crypto::SecureHash* hash =
+    std::unique_ptr<crypto::SecureHash> hash =
         crypto::SecureHash::Create(crypto::SecureHash::SHA256);
     hash->Update(data.c_str(), size);
     uint8_t output[crypto::kSHA256Length];
     hash->Finish(output, sizeof(output));
     const std::string hex_hash =
         base::ToLowerASCII(base::HexEncode(output, sizeof(output)));
-    delete hash;
 
     const base::FilePath file =
         GetExtensionFileName(dir, id, version, hex_hash);
@@ -139,7 +130,7 @@ class LocalExtensionCacheTest : public testing::Test {
  private:
   content::TestBrowserThreadBundle thread_bundle_;
 
-  scoped_ptr<base::SequencedWorkerPoolOwner> pool_owner_;
+  std::unique_ptr<base::SequencedWorkerPoolOwner> pool_owner_;
   scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
 
   base::ScopedTempDir cache_dir_;
@@ -153,7 +144,7 @@ static void SimpleCallback(bool* ptr) {
 }
 
 TEST_F(LocalExtensionCacheTest, Basic) {
-  base::FilePath cache_dir(CreateCacheDir(false));
+  base::FilePath cache_dir(CreateCacheDir());
 
   LocalExtensionCache cache(cache_dir,
                             1000,
@@ -163,9 +154,6 @@ TEST_F(LocalExtensionCacheTest, Basic) {
 
   bool initialized = false;
   cache.Init(true, base::Bind(&SimpleCallback, &initialized));
-
-  WaitForCompletion();
-  EXPECT_FALSE(initialized);
 
   base::FilePath file10, file01, file20, file30;
   CreateExtensionFile(cache_dir, kTestExtensionId1, "1.0", 100,
@@ -180,8 +168,6 @@ TEST_F(LocalExtensionCacheTest, Basic) {
   CreateExtensionFile(cache_dir, kTestExtensionId3, "3.0", 900,
                       base::Time::Now() - base::TimeDelta::FromDays(41),
                       &file30);
-
-  CreateFlagFile(cache_dir);
 
   WaitForCompletion();
   ASSERT_TRUE(initialized);
@@ -207,7 +193,7 @@ TEST_F(LocalExtensionCacheTest, Basic) {
 }
 
 TEST_F(LocalExtensionCacheTest, KeepHashed) {
-  base::FilePath cache_dir(CreateCacheDir(false));
+  base::FilePath cache_dir(CreateCacheDir());
 
   LocalExtensionCache cache(cache_dir, 1000, base::TimeDelta::FromDays(30),
                             background_task_runner());
@@ -215,9 +201,6 @@ TEST_F(LocalExtensionCacheTest, KeepHashed) {
 
   bool initialized = false;
   cache.Init(true, base::Bind(&SimpleCallback, &initialized));
-
-  WaitForCompletion();
-  EXPECT_FALSE(initialized);
 
   // Add three identical extensions with different hash sums
   const base::Time time = base::Time::Now() - base::TimeDelta::FromDays(1);
@@ -227,8 +210,6 @@ TEST_F(LocalExtensionCacheTest, KeepHashed) {
       cache_dir, kTestExtensionId1, "1.0", 100, time, &file1);
   const std::string hash2 = CreateSignedExtensionFile(
       cache_dir, kTestExtensionId1, "1.0", 123, time, &file2);
-
-  CreateFlagFile(cache_dir);
 
   WaitForCompletion();
   ASSERT_TRUE(initialized);
@@ -248,7 +229,7 @@ TEST_F(LocalExtensionCacheTest, KeepHashed) {
 }
 
 TEST_F(LocalExtensionCacheTest, KeepLatest) {
-  base::FilePath cache_dir(CreateCacheDir(false));
+  base::FilePath cache_dir(CreateCacheDir());
 
   LocalExtensionCache cache(cache_dir, 1000, base::TimeDelta::FromDays(30),
                             background_task_runner());
@@ -256,9 +237,6 @@ TEST_F(LocalExtensionCacheTest, KeepLatest) {
 
   bool initialized = false;
   cache.Init(true, base::Bind(&SimpleCallback, &initialized));
-
-  WaitForCompletion();
-  EXPECT_FALSE(initialized);
 
   // All extension files are hashed, but have different versions
   const base::Time time = base::Time::Now() - base::TimeDelta::FromDays(1);
@@ -269,8 +247,6 @@ TEST_F(LocalExtensionCacheTest, KeepLatest) {
       cache_dir, kTestExtensionId1, "2.0", 101, time, &file21);
   const std::string hash22 = CreateSignedExtensionFile(
       cache_dir, kTestExtensionId1, "2.0", 123, time, &file22);
-
-  CreateFlagFile(cache_dir);
 
   WaitForCompletion();
   ASSERT_TRUE(initialized);
@@ -288,7 +264,7 @@ TEST_F(LocalExtensionCacheTest, KeepLatest) {
 }
 
 TEST_F(LocalExtensionCacheTest, Complex) {
-  base::FilePath cache_dir(CreateCacheDir(false));
+  base::FilePath cache_dir(CreateCacheDir());
 
   LocalExtensionCache cache(cache_dir, 1000, base::TimeDelta::FromDays(30),
                             background_task_runner());
@@ -296,9 +272,6 @@ TEST_F(LocalExtensionCacheTest, Complex) {
 
   bool initialized = false;
   cache.Init(true, base::Bind(&SimpleCallback, &initialized));
-
-  WaitForCompletion();
-  EXPECT_FALSE(initialized);
 
   // Like in KeepHashed test, but with two different versions
   const base::Time time = base::Time::Now() - base::TimeDelta::FromDays(1);
@@ -313,8 +286,6 @@ TEST_F(LocalExtensionCacheTest, Complex) {
       cache_dir, kTestExtensionId1, "2.0", 104, time, &file21);
   const std::string hash22 = CreateSignedExtensionFile(
       cache_dir, kTestExtensionId1, "2.0", 105, time, &file22);
-
-  CreateFlagFile(cache_dir);
 
   WaitForCompletion();
   ASSERT_TRUE(initialized);
@@ -339,7 +310,7 @@ TEST_F(LocalExtensionCacheTest, Complex) {
   EXPECT_TRUE(cache.GetExtension(kTestExtensionId1, hash22, NULL, NULL));
 }
 
-static void OnPutExtension(scoped_ptr<base::RunLoop>* run_loop,
+static void OnPutExtension(std::unique_ptr<base::RunLoop>* run_loop,
                            const base::FilePath& file_path,
                            bool file_ownership_passed) {
   ASSERT_TRUE(*run_loop);
@@ -351,7 +322,7 @@ static void PutExtensionAndWait(LocalExtensionCache& cache,
                                 const std::string& expected_hash,
                                 const base::FilePath& path,
                                 const std::string& version) {
-  scoped_ptr<base::RunLoop> run_loop;
+  std::unique_ptr<base::RunLoop> run_loop;
   run_loop.reset(new base::RunLoop);
   cache.PutExtension(id, expected_hash, path, version,
                      base::Bind(&OnPutExtension, &run_loop));
@@ -359,7 +330,7 @@ static void PutExtensionAndWait(LocalExtensionCache& cache,
 }
 
 TEST_F(LocalExtensionCacheTest, PutExtensionCases) {
-  base::FilePath cache_dir(CreateCacheDir(false));
+  base::FilePath cache_dir(CreateCacheDir());
 
   LocalExtensionCache cache(cache_dir, 1000, base::TimeDelta::FromDays(30),
                             background_task_runner());
@@ -367,9 +338,6 @@ TEST_F(LocalExtensionCacheTest, PutExtensionCases) {
 
   bool initialized = false;
   cache.Init(true, base::Bind(&SimpleCallback, &initialized));
-
-  WaitForCompletion();
-  EXPECT_FALSE(initialized);
 
   // Initialize cache with several different files
   const base::Time time = base::Time::Now() - base::TimeDelta::FromDays(1);
@@ -382,15 +350,13 @@ TEST_F(LocalExtensionCacheTest, PutExtensionCases) {
                             &file2);
   CreateExtensionFile(cache_dir, kTestExtensionId3, "0.3", 300, time, &file3);
 
-  CreateFlagFile(cache_dir);
-
   WaitForCompletion();
   ASSERT_TRUE(initialized);
 
   // Create and initialize installation source directory.
   base::ScopedTempDir temp_dir;
   EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
-  const base::FilePath temp_path = temp_dir.path();
+  const base::FilePath temp_path = temp_dir.GetPath();
   std::string version;
 
   // Right now we have two files for the first extension

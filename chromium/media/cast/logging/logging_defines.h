@@ -13,12 +13,11 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "media/cast/common/frame_id.h"
 #include "media/cast/common/rtp_time.h"
 
 namespace media {
 namespace cast {
-
-static const uint32_t kFrameIdUnknown = 0xFFFFFFFF;
 
 enum CastLoggingEvent {
   UNKNOWN,
@@ -54,17 +53,20 @@ enum EventMediaType {
 
 struct FrameEvent {
   FrameEvent();
+  FrameEvent(const FrameEvent& other);
   ~FrameEvent();
 
   RtpTimeTicks rtp_timestamp;
-  uint32_t frame_id;
+  FrameId frame_id;
 
   // Resolution of the frame. Only set for video FRAME_CAPTURE_END events.
   int width;
   int height;
 
   // Size of encoded frame in bytes. Only set for FRAME_ENCODED event.
-  size_t size;
+  // Note: we use uint32_t instead of size_t for byte count because this struct
+  // is sent over IPC which could span 32 & 64 bit processes.
+  uint32_t size;
 
   // Time of event logged.
   base::TimeTicks timestamp;
@@ -97,10 +99,10 @@ struct PacketEvent {
   ~PacketEvent();
 
   RtpTimeTicks rtp_timestamp;
-  uint32_t frame_id;
+  FrameId frame_id;
   uint16_t max_packet_id;
   uint16_t packet_id;
-  size_t size;
+  uint32_t size;
 
   // Time of event logged.
   base::TimeTicks timestamp;

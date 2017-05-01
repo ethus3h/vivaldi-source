@@ -4,19 +4,23 @@
 
 #include "ui/views/controls/button/custom_button.h"
 
-#include "ui/accessibility/ax_view_state.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/animation/throb_animation.h"
-#include "ui/gfx/screen.h"
-#include "ui/views/animation/ink_drop_delegate.h"
+#include "ui/gfx/color_palette.h"
+#include "ui/native_theme/native_theme.h"
+#include "ui/views/animation/ink_drop_highlight.h"
+#include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/controls/button/blue_button.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/button/radio_button.h"
+#include "ui/views/controls/button/toggle_button.h"
+#include "ui/views/style/platform_style.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(USE_AURA)
@@ -26,20 +30,35 @@
 
 namespace views {
 
-// How long the hover animation takes if uninterrupted.
-static const int kHoverFadeDurationMs = 150;
+namespace {
 
-// static
-const char CustomButton::kViewClassName[] = "CustomButton";
+// How long the hover animation takes if uninterrupted.
+const int kHoverFadeDurationMs = 150;
+
+CustomButton::KeyClickAction GetKeyClickActionForEvent(
+    const ui::KeyEvent& event) {
+  if (event.key_code() == ui::VKEY_SPACE)
+    return PlatformStyle::kKeyClickActionOnSpace;
+  if (event.key_code() == ui::VKEY_RETURN &&
+      PlatformStyle::kReturnClicksFocusedControl)
+    return CustomButton::CLICK_ON_KEY_PRESS;
+  return CustomButton::CLICK_NONE;
+}
+
+}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // CustomButton, public:
 
 // static
+const char CustomButton::kViewClassName[] = "CustomButton";
+
+// static
 const CustomButton* CustomButton::AsCustomButton(const views::View* view) {
-  return AsCustomButton(const_cast<views::View*>(view));
+  return AsCustomButton(const_cast<View*>(view));
 }
 
+// static
 CustomButton* CustomButton::AsCustomButton(views::View* view) {
   if (view) {
     const char* classname = view->GetClassName();
@@ -48,6 +67,7 @@ CustomButton* CustomButton::AsCustomButton(views::View* view) {
         !strcmp(classname, ImageButton::kViewClassName) ||
         !strcmp(classname, LabelButton::kViewClassName) ||
         !strcmp(classname, RadioButton::kViewClassName) ||
+        !strcmp(classname, ToggleButton::kViewClassName) ||
         !strcmp(classname, MenuButton::kViewClassName)) {
       return static_cast<CustomButton*>(view);
     }
@@ -86,6 +106,8 @@ void CustomButton::SetState(ButtonState state) {
 }
 
 void CustomButton::StartThrobbing(int cycles_til_stop) {
+  if (!animate_on_state_change_)
+    return;
   is_throbbing_ = true;
   hover_animation_.StartThrobbing(cycles_til_stop);
 }
@@ -106,7 +128,7 @@ void CustomButton::SetHotTracked(bool is_hot_tracked) {
     SetState(is_hot_tracked ? STATE_HOVERED : STATE_NORMAL);
 
   if (is_hot_tracked)
-    NotifyAccessibilityEvent(ui::AX_EVENT_FOCUS, true);
+    NotifyAccessibilityEvent(ui::AX_EVENT_HOVER, true);
 }
 
 bool CustomButton::IsHotTracked() const {
@@ -116,20 +138,20 @@ bool CustomButton::IsHotTracked() const {
 ////////////////////////////////////////////////////////////////////////////////
 // CustomButton, View overrides:
 
-void CustomButton::Layout() {
-  Button::Layout();
-  if (ink_drop_delegate_)
-    ink_drop_delegate_->OnLayout();
-}
-
 void CustomButton::OnEnabledChanged() {
+  // TODO(bruthig): Is there any reason we are not calling
+  // Button::OnEnabledChanged() here?
   if (enabled() ? (state_ != STATE_DISABLED) : (state_ == STATE_DISABLED))
     return;
 
-  if (enabled())
-    SetState(ShouldEnterHoveredState() ? STATE_HOVERED : STATE_NORMAL);
-  else
+  if (enabled()) {
+    bool should_enter_hover_state = ShouldEnterHoveredState();
+    SetState(should_enter_hover_state ? STATE_HOVERED : STATE_NORMAL);
+    GetInkDrop()->SetHovered(should_enter_hover_state);
+  } else {
     SetState(STATE_DISABLED);
+    GetInkDrop()->SetHovered(false);
+  }
 }
 
 const char* CustomButton::GetClassName() const {
@@ -139,10 +161,10 @@ const char* CustomButton::GetClassName() const {
 bool CustomButton::OnMousePressed(const ui::MouseEvent& event) {
   if (state_ == STATE_DISABLED)
     return true;
-  if (ShouldEnterPushedState(event) && HitTestPoint(event.location())) {
+  if (state_ != STATE_PRESSED && ShouldEnterPushedState(event) &&
+      HitTestPoint(event.location())) {
     SetState(STATE_PRESSED);
-    if (ink_drop_delegate_)
-      ink_drop_delegate_->OnAction(views::InkDropState::ACTION_PENDING);
+    AnimateInkDrop(views::InkDropState::ACTION_PENDING, &event);
   }
   if (request_focus_on_press_)
     RequestFocus();
@@ -156,10 +178,24 @@ bool CustomButton::OnMousePressed(const ui::MouseEvent& event) {
 
 bool CustomButton::OnMouseDragged(const ui::MouseEvent& event) {
   if (state_ != STATE_DISABLED) {
-    if (HitTestPoint(event.location()))
-      SetState(ShouldEnterPushedState(event) ? STATE_PRESSED : STATE_HOVERED);
-    else
+    const bool should_enter_pushed = ShouldEnterPushedState(event);
+    const bool should_show_pending =
+        should_enter_pushed && notify_action_ == NOTIFY_ON_RELEASE && !InDrag();
+    if (HitTestPoint(event.location())) {
+      SetState(should_enter_pushed ? STATE_PRESSED : STATE_HOVERED);
+      if (should_show_pending &&
+          GetInkDrop()->GetTargetInkDropState() ==
+              views::InkDropState::HIDDEN) {
+        AnimateInkDrop(views::InkDropState::ACTION_PENDING, &event);
+      }
+    } else {
       SetState(STATE_NORMAL);
+      if (should_show_pending &&
+          GetInkDrop()->GetTargetInkDropState() ==
+              views::InkDropState::ACTION_PENDING) {
+        AnimateInkDrop(views::InkDropState::HIDDEN, &event);
+      }
+    }
   }
   return true;
 }
@@ -183,11 +219,14 @@ void CustomButton::OnMouseReleased(const ui::MouseEvent& event) {
 }
 
 void CustomButton::OnMouseCaptureLost() {
-  // Starting a drag results in a MouseCaptureLost, we need to ignore it.
-  if (state_ != STATE_DISABLED && !InDrag())
+  // Starting a drag results in a MouseCaptureLost. Reset button state.
+  // TODO(varkha): Reset the state even while in drag. The same logic may
+  // applies everywhere so gather any feedback and update.
+  if (state_ != STATE_DISABLED)
     SetState(STATE_NORMAL);
-  if (ink_drop_delegate_)
-    ink_drop_delegate_->OnAction(views::InkDropState::HIDDEN);
+  AnimateInkDrop(views::InkDropState::HIDDEN, nullptr /* event */);
+  GetInkDrop()->SetHovered(false);
+  Button::OnMouseCaptureLost();
 }
 
 void CustomButton::OnMouseEntered(const ui::MouseEvent& event) {
@@ -210,22 +249,31 @@ bool CustomButton::OnKeyPressed(const ui::KeyEvent& event) {
   if (state_ == STATE_DISABLED)
     return false;
 
-  // Space sets button state to pushed. Enter clicks the button. This matches
-  // the Windows native behavior of buttons, where Space clicks the button on
-  // KeyRelease and Enter clicks the button on KeyPressed.
-  if (event.key_code() == ui::VKEY_SPACE) {
-    SetState(STATE_PRESSED);
-  } else if (event.key_code() == ui::VKEY_RETURN) {
-    SetState(STATE_NORMAL);
-    NotifyClick(event);
-  } else {
-    return false;
+  switch (GetKeyClickActionForEvent(event)) {
+    case KeyClickAction::CLICK_ON_KEY_RELEASE:
+      SetState(STATE_PRESSED);
+      if (GetInkDrop()->GetTargetInkDropState() !=
+          InkDropState::ACTION_PENDING) {
+        AnimateInkDrop(InkDropState::ACTION_PENDING, nullptr /* event */);
+      }
+      return true;
+    case KeyClickAction::CLICK_ON_KEY_PRESS:
+      SetState(STATE_NORMAL);
+      NotifyClick(event);
+      return true;
+    case KeyClickAction::CLICK_NONE:
+      return false;
   }
-  return true;
+
+  NOTREACHED();
+  return false;
 }
 
 bool CustomButton::OnKeyReleased(const ui::KeyEvent& event) {
-  if ((state_ == STATE_DISABLED) || (event.key_code() != ui::VKEY_SPACE))
+  const bool click_button =
+      state_ == STATE_PRESSED &&
+      GetKeyClickActionForEvent(event) == KeyClickAction::CLICK_ON_KEY_RELEASE;
+  if (!click_button)
     return false;
 
   SetState(STATE_NORMAL);
@@ -272,6 +320,13 @@ bool CustomButton::AcceleratorPressed(const ui::Accelerator& accelerator) {
   return true;
 }
 
+bool CustomButton::SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) {
+  // If this button is focused and the user presses space or enter, don't let
+  // that be treated as an accelerator if there is a key click action
+  // corresponding to it.
+  return GetKeyClickActionForEvent(event) != KeyClickAction::CLICK_NONE;
+}
+
 void CustomButton::ShowContextMenu(const gfx::Point& p,
                                    ui::MenuSourceType source_type) {
   if (!context_menu_controller())
@@ -281,6 +336,10 @@ void CustomButton::ShowContextMenu(const gfx::Point& p,
   // we won't get a mouse exited and reset state. Reset it now to be sure.
   if (state_ != STATE_DISABLED)
     SetState(STATE_NORMAL);
+  if (hide_ink_drop_when_showing_context_menu_) {
+    GetInkDrop()->SetHovered(false);
+    AnimateInkDrop(InkDropState::HIDDEN, nullptr /* event */);
+  }
   View::ShowContextMenu(p, source_type);
 }
 
@@ -289,33 +348,47 @@ void CustomButton::OnDragDone() {
   // (since disabled buttons may still be able to be dragged).
   if (state_ != STATE_DISABLED)
     SetState(STATE_NORMAL);
-  if (ink_drop_delegate_)
-    ink_drop_delegate_->OnAction(InkDropState::HIDDEN);
+  AnimateInkDrop(InkDropState::HIDDEN, nullptr /* event */);
 }
 
-void CustomButton::GetAccessibleState(ui::AXViewState* state) {
-  Button::GetAccessibleState(state);
+void CustomButton::GetAccessibleNodeData(ui::AXNodeData* node_data) {
+  Button::GetAccessibleNodeData(node_data);
   switch (state_) {
     case STATE_HOVERED:
-      state->AddStateFlag(ui::AX_STATE_HOVERED);
+      node_data->AddStateFlag(ui::AX_STATE_HOVERED);
       break;
     case STATE_PRESSED:
-      state->AddStateFlag(ui::AX_STATE_PRESSED);
+      node_data->AddStateFlag(ui::AX_STATE_PRESSED);
       break;
     case STATE_DISABLED:
-      state->AddStateFlag(ui::AX_STATE_DISABLED);
+      node_data->AddStateFlag(ui::AX_STATE_DISABLED);
       break;
     case STATE_NORMAL:
     case STATE_COUNT:
-      // No additional accessibility state set for this button state.
+      // No additional accessibility node_data set for this button node_data.
       break;
+  }
+  if (enabled()) {
+    node_data->AddIntAttribute(ui::AX_ATTR_ACTION,
+                               ui::AX_SUPPORTED_ACTION_PRESS);
   }
 }
 
 void CustomButton::VisibilityChanged(View* starting_from, bool visible) {
+  Button::VisibilityChanged(starting_from, visible);
   if (state_ == STATE_DISABLED)
     return;
   SetState(visible && ShouldEnterHoveredState() ? STATE_HOVERED : STATE_NORMAL);
+}
+
+std::unique_ptr<InkDrop> CustomButton::CreateInkDrop() {
+  std::unique_ptr<views::InkDropImpl> ink_drop = CreateDefaultInkDropImpl();
+  ink_drop->SetShowHighlightOnFocus(true);
+  return std::move(ink_drop);
+}
+
+SkColor CustomButton::GetInkDropBaseColor() const {
+  return ink_drop_base_color_;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -326,23 +399,25 @@ void CustomButton::AnimationProgressed(const gfx::Animation* animation) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// CustomButton, views::InkDropHost implementation:
+// CustomButton, View overrides (public):
 
-void CustomButton::AddInkDropLayer(ui::Layer* ink_drop_layer) {
-  SetPaintToLayer(true);
-  SetFillsBoundsOpaquely(false);
-  layer()->Add(ink_drop_layer);
-  layer()->StackAtBottom(ink_drop_layer);
+void CustomButton::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  if (!details.is_add && state_ != STATE_DISABLED)
+    SetState(STATE_NORMAL);
 }
 
-void CustomButton::RemoveInkDropLayer(ui::Layer* ink_drop_layer) {
-  layer()->Remove(ink_drop_layer);
-  SetFillsBoundsOpaquely(true);
-  SetPaintToLayer(false);
-}
-
-gfx::Point CustomButton::CalculateInkDropCenter() const {
-  return GetLocalBounds().CenterPoint();
+void CustomButton::OnBlur() {
+  Button::OnBlur();
+  if (IsHotTracked() || state_ == STATE_PRESSED) {
+    SetState(STATE_NORMAL);
+    if (GetInkDrop()->GetTargetInkDropState() != views::InkDropState::HIDDEN)
+      AnimateInkDrop(views::InkDropState::HIDDEN, nullptr /* event */);
+    // TODO(bruthig) : Fix CustomButtons to work well when multiple input
+    // methods are interacting with a button. e.g. By animating to HIDDEN here
+    // it is possible for a Mouse Release to trigger an action however there
+    // would be no visual cue to the user that this will occur.
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -352,14 +427,13 @@ CustomButton::CustomButton(ButtonListener* listener)
     : Button(listener),
       state_(STATE_NORMAL),
       hover_animation_(this),
-      animate_on_state_change_(true),
       is_throbbing_(false),
       triggerable_event_flags_(ui::EF_LEFT_MOUSE_BUTTON),
-      request_focus_on_press_(true),
-      ink_drop_delegate_(nullptr),
+      request_focus_on_press_(false),
       notify_action_(NOTIFY_ON_RELEASE),
       has_ink_drop_action_on_click_(false),
-      ink_drop_action_on_click_(InkDropState::QUICK_ACTION) {
+      hide_ink_drop_when_showing_context_menu_(true),
+      ink_drop_base_color_(gfx::kPlaceholderColor) {
   hover_animation_.SetSlideDuration(kHoverFadeDurationMs);
 }
 
@@ -402,34 +476,24 @@ bool CustomButton::ShouldEnterHoveredState() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// CustomButton, View overrides (protected):
-
-void CustomButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  Button::OnBoundsChanged(previous_bounds);
-  if (ink_drop_delegate_)
-    ink_drop_delegate_->OnLayout();
-}
-
-void CustomButton::ViewHierarchyChanged(
-    const ViewHierarchyChangedDetails& details) {
-  if (!details.is_add && state_ != STATE_DISABLED)
-    SetState(STATE_NORMAL);
-}
-
-void CustomButton::OnBlur() {
-  if (IsHotTracked())
-    SetState(STATE_NORMAL);
-}
+// CustomButton, Button overrides (protected):
 
 void CustomButton::NotifyClick(const ui::Event& event) {
-  if (ink_drop_delegate() && has_ink_drop_action_on_click_)
-    ink_drop_delegate()->OnAction(ink_drop_action_on_click_);
+  if (has_ink_drop_action_on_click_) {
+    AnimateInkDrop(InkDropState::ACTION_TRIGGERED,
+                   ui::LocatedEvent::FromIfValid(&event));
+  }
   Button::NotifyClick(event);
 }
 
 void CustomButton::OnClickCanceled(const ui::Event& event) {
-  if (ink_drop_delegate())
-    ink_drop_delegate()->OnAction(views::InkDropState::HIDDEN);
+  if (GetInkDrop()->GetTargetInkDropState() ==
+          views::InkDropState::ACTION_PENDING ||
+      GetInkDrop()->GetTargetInkDropState() ==
+          views::InkDropState::ALTERNATE_ACTION_PENDING) {
+    AnimateInkDrop(views::InkDropState::HIDDEN,
+                   ui::LocatedEvent::FromIfValid(&event));
+  }
   Button::OnClickCanceled(event);
 }
 

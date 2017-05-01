@@ -5,13 +5,23 @@
 #ifndef UI_BASE_CLIPBOARD_CLIPBOARD_WIN_H_
 #define UI_BASE_CLIPBOARD_CLIPBOARD_WIN_H_
 
-#include "ui/base/clipboard/clipboard.h"
-
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "ui/base/clipboard/clipboard.h"
+
+namespace base {
+namespace win {
+class MessageWindow;
+}
+}
+
+namespace gfx {
+class Size;
+}
 
 namespace ui {
 
@@ -23,6 +33,7 @@ class ClipboardWin : public Clipboard {
   ~ClipboardWin() override;
 
   // Clipboard overrides:
+  void OnPreShutdown() override;
   uint64_t GetSequenceNumber(ClipboardType type) const override;
   bool IsFormatAvailable(const FormatType& format,
                          ClipboardType type) const override;
@@ -71,7 +82,7 @@ class ClipboardWin : public Clipboard {
   HWND GetClipboardWindow() const;
 
   // Mark this as mutable so const methods can still do lazy initialization.
-  mutable scoped_ptr<base::win::MessageWindow> clipboard_owner_;
+  mutable std::unique_ptr<base::win::MessageWindow> clipboard_owner_;
 
   DISALLOW_COPY_AND_ASSIGN(ClipboardWin);
 };

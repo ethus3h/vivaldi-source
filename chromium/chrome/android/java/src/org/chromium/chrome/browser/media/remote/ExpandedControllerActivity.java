@@ -26,12 +26,13 @@ import com.google.android.gms.cast.CastMediaControlIntent;
 
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.media.remote.RemoteVideoInfo.PlayerState;
+import org.chromium.chrome.browser.metrics.MediaNotificationUma;
 import org.chromium.third_party.android.media.MediaController;
 
 /**
  * The activity that's opened by clicking the video flinging (casting) notification.
  *
- * TODO(cimamoglu): Refactor to merge some common logic with {@link TransportControl}.
+ * TODO(aberent): Refactor to merge some common logic with {@link CastNotificationControl}.
  */
 public class ExpandedControllerActivity
         extends FragmentActivity implements MediaRouteController.UiListener {
@@ -133,6 +134,8 @@ public class ExpandedControllerActivity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        MediaNotificationUma.recordClickSource(getIntent());
 
         mMediaRouteController =
                 RemoteMediaPlayerController.instance().getCurrentlyPlayingMediaRouteController();
@@ -299,7 +302,7 @@ public class ExpandedControllerActivity
     }
 
     @Override
-    public void onPlaybackStateChanged(PlayerState oldState, PlayerState newState) {
+    public void onPlaybackStateChanged(PlayerState newState) {
         RemoteVideoInfo videoInfo = new RemoteVideoInfo(mVideoInfo);
         videoInfo.state = newState;
         setVideoInfo(videoInfo);

@@ -1,5 +1,9 @@
 # Linux `SUID` Sandbox
 
+*IMPORTANT NOTE: The Linux SUID sandbox is almost but not completely removed.
+See https://bugs.chromium.org/p/chromium/issues/detail?id=598454
+This page is mostly out-of-date.*
+
 With [r20110](https://crrev.com/20110), Chromium on Linux can now sandbox its
 renderers using a `SUID` helper binary. This is one of
 [our layer-1 sandboxing solutions](linux_sandboxing.md).
@@ -127,4 +131,4 @@ Chromium binary somewhere else you need to modify this string.
 *   [LinuxSUIDSandboxDevelopment](linux_suid_sandbox_development.md)
 *   [LinuxSandboxing](linux_sandboxing.md)
 *   General information on Chromium sandboxing:
-    http://dev.chromium.org/developers/design-documents/sandbox
+    https://dev.chromium.org/developers/design-documents/sandbox

@@ -53,6 +53,20 @@ class NearbyUrlsAdapter extends ArrayAdapter<PwsResult> {
     }
 
     /**
+     * Return true if we already know we have a given groupId.
+     * @param groupId The requested groupId
+     * @return true if a PwsResult is present that has the given groupId
+     */
+    public boolean hasGroupId(String groupId) {
+        for (int position = 0; position < getCount(); ++position) {
+            if (groupId.equals(getItem(position).groupId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get the view for an item in the data set.
      * @param position Index of the list view item within the array.
      * @param view The old view to reuse, if possible.
@@ -80,5 +94,22 @@ class NearbyUrlsAdapter extends ArrayAdapter<PwsResult> {
         iconImageView.setImageBitmap(iconBitmap);
 
         return view;
+    }
+
+    /**
+     * Gets whether the specified site URL is in the list.
+     * @param siteUrl A string containing the site URL.
+     * @return Boolean true if the specified site URL is already in the list.
+     */
+    public boolean hasSiteUrl(String siteUrl) {
+        int itemCount = getCount();
+        for (int position = 0; position < itemCount; ++position) {
+            PwsResult pwsResult = getItem(position);
+            if (siteUrl.equals(pwsResult.siteUrl)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

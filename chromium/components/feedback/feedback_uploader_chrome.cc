@@ -11,12 +11,14 @@
 #include "base/files/file_path.h"
 #include "base/task_runner_util.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/feedback/feedback_report.h"
 #include "components/feedback/feedback_switches.h"
 #include "components/feedback/feedback_uploader_delegate.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/storage_partition.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_fetcher.h"
 #include "url/gurl.h"
@@ -54,15 +56,22 @@ void FeedbackUploaderChrome::DispatchReport(const std::string& data) {
                                AsWeakPtr()),
               base::Bind(&FeedbackUploaderChrome::RetryReport, AsWeakPtr())))
           .release();
-
+  data_use_measurement::DataUseUserData::AttachToFetcher(
+      fetcher, data_use_measurement::DataUseUserData::FEEDBACK_UPLOADER);
   // Tell feedback server about the variation state of this install.
   net::HttpRequestHeaders headers;
-  variations::AppendVariationHeaders(
-      fetcher->GetOriginalURL(), context_->IsOffTheRecord(), false, &headers);
+  // Note: It's OK to pass |is_signed_in| false if it's unknown, as it does
+  // not affect transmission of experiments coming from the variations server.
+  bool is_signed_in = false;
+  variations::AppendVariationHeaders(fetcher->GetOriginalURL(),
+                                     context_->IsOffTheRecord(), false,
+                                     is_signed_in, &headers);
   fetcher->SetExtraRequestHeaders(headers.ToString());
 
   fetcher->SetUploadData(kProtoBufMimeType, data);
-  fetcher->SetRequestContext(context_->GetRequestContext());
+  fetcher->SetRequestContext(
+      content::BrowserContext::GetDefaultStoragePartition(context_)->
+          GetURLRequestContext());
   fetcher->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES |
                         net::LOAD_DO_NOT_SEND_COOKIES);
   fetcher->Start();

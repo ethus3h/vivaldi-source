@@ -9,15 +9,18 @@
 
 #include "base/macros.h"
 #include "base/memory/scoped_vector.h"
+#include "ui/gfx/native_widget_types.h"
 #include "ui/ozone/common/gpu/ozone_gpu_message_params.h"
+
+namespace display {
+struct GammaRampRGBEntry;
+}
 
 namespace ui {
 
 class DrmDeviceManager;
 class DrmDisplay;
 class ScreenManager;
-
-struct GammaRampRGBEntry;
 
 class DrmGpuDisplayManager {
  public:
@@ -29,6 +32,11 @@ class DrmGpuDisplayManager {
   // displays is refreshed.
   std::vector<DisplaySnapshot_Params> GetDisplays();
 
+  // Returns all scanout formats for |widget| representing a particular display
+  // controller or default display controller for kNullAcceleratedWidget.
+  void GetScanoutFormats(gfx::AcceleratedWidget widget,
+                         std::vector<gfx::BufferFormat>* scanout_formats);
+
   // Takes/releases the control of the DRM devices.
   bool TakeDisplayControl();
   void RelinquishDisplayControl();
@@ -37,9 +45,13 @@ class DrmGpuDisplayManager {
                         const DisplayMode_Params& mode,
                         const gfx::Point& origin);
   bool DisableDisplay(int64_t id);
-  bool GetHDCPState(int64_t display_id, HDCPState* state);
-  bool SetHDCPState(int64_t display_id, HDCPState state);
-  void SetGammaRamp(int64_t id, const std::vector<GammaRampRGBEntry>& lut);
+  bool GetHDCPState(int64_t display_id, display::HDCPState* state);
+  bool SetHDCPState(int64_t display_id, display::HDCPState state);
+  void SetColorCorrection(
+      int64_t id,
+      const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+      const std::vector<display::GammaRampRGBEntry>& gamma_lut,
+      const std::vector<float>& correction_matrix);
 
  private:
   DrmDisplay* FindDisplay(int64_t display_id);
@@ -47,13 +59,13 @@ class DrmGpuDisplayManager {
   // Notify ScreenManager of all the displays that were present before the
   // update but are gone after the update.
   void NotifyScreenManager(
-      const std::vector<scoped_ptr<DrmDisplay>>& new_displays,
-      const std::vector<scoped_ptr<DrmDisplay>>& old_displays) const;
+      const std::vector<std::unique_ptr<DrmDisplay>>& new_displays,
+      const std::vector<std::unique_ptr<DrmDisplay>>& old_displays) const;
 
   ScreenManager* screen_manager_;  // Not owned.
   DrmDeviceManager* drm_device_manager_;  // Not owned.
 
-  std::vector<scoped_ptr<DrmDisplay>> displays_;
+  std::vector<std::unique_ptr<DrmDisplay>> displays_;
 
   DISALLOW_COPY_AND_ASSIGN(DrmGpuDisplayManager);
 };

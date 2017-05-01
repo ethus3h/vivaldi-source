@@ -7,7 +7,6 @@
 
 #include "app/vivaldi_resources.h"
 
-#include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,13 +20,14 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/webui/options/advanced_options_utils.h"
+#include "chrome/browser/ui/webui/settings_utils.h"
 #include "chrome/browser/ui/webui/options/content_settings_handler.h"
 #include "chrome/common/importer/importer_data_types.h"
 #include "chrome/common/pref_names.h"
 
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -56,6 +56,8 @@
 #include "extensions/common/extension_messages.h"
 
 #include "extensions/schema/import_data.h"
+
+#include "components/strings/grit/components_strings.h"
 
 class Browser;
 
@@ -121,13 +123,14 @@ static struct ImportItemToStringMapping {
   { importer::COOKIES, "cookies" },
   { importer::SEARCH_ENGINES, "search" },
   { importer::NOTES, "notes" },
+  { importer::SPEED_DIAL, "speeddial" },
 };
 
 const size_t kImportItemToStringMappingLength =
     arraysize(import_item_string_mapping);
 
 const std::string ImportItemToString(importer::ImportItem item) {
-  for (int i = 0; i < kImportItemToStringMappingLength; i++) {
+  for (size_t i = 0; i < kImportItemToStringMappingLength; i++) {
     if (item == import_item_string_mapping[i].item) {
       return import_item_string_mapping[i].name;
     }
@@ -148,10 +151,10 @@ ImportDataEventRouter::~ImportDataEventRouter() {
 
 // Helper to actually dispatch an event to extension listeners.
 void ImportDataEventRouter::DispatchEvent(
-    const std::string &event_name, scoped_ptr<base::ListValue> event_args) {
+    const std::string &event_name, std::unique_ptr<base::ListValue> event_args) {
   EventRouter *event_router = EventRouter::Get(browser_context_);
   if (event_router) {
-    event_router->BroadcastEvent(make_scoped_ptr(
+    event_router->BroadcastEvent(base::WrapUnique(
         new extensions::Event(extensions::events::VIVALDI_EXTENSION_EVENT,
                               event_name, std::move(event_args))));
   }
@@ -169,6 +172,8 @@ ImportDataAPI::ImportDataAPI(content::BrowserContext *context)
       this, vivaldi::import_data::OnImportItemStarted::kEventName);
   event_router->RegisterObserver(
       this, vivaldi::import_data::OnImportItemEnded::kEventName);
+  event_router->RegisterObserver(
+      this, vivaldi::import_data::OnImportItemFailed::kEventName);
 }
 
 ImportDataAPI::~ImportDataAPI() {
@@ -221,6 +226,16 @@ void ImportDataAPI::ImportItemEnded(importer::ImportItem item) {
       vivaldi::import_data::OnImportItemEnded::kEventName,
       vivaldi::import_data::OnImportItemEnded::Create(item_name));
 }
+void ImportDataAPI::ImportItemFailed(importer::ImportItem item,
+                                     const std::string& error) {
+  // Ensure we get an error at the end.
+  import_succeeded_count_++;
+  const std::string item_name = ImportItemToString(item);
+
+  event_router_->DispatchEvent(
+      vivaldi::import_data::OnImportItemFailed::kEventName,
+      vivaldi::import_data::OnImportItemFailed::Create(item_name, error));
+}
 
 void ImportDataAPI::ImportEnded() {
   importer_host_->set_observer(NULL);
@@ -270,13 +285,13 @@ bool ImporterApiFunction::RunAsync() {
 }
 
 void ImporterApiFunction::SendAsyncResponse() {
-  base::MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->task_runner()->PostTask(
       FROM_HERE, base::Bind(&ImporterApiFunction::SendResponseToCallback,
                             base::Unretained(this)));
 }
 
 void ImporterApiFunction::Finished() {
-  std::vector<linked_ptr<vivaldi::import_data::ProfileItem>> nodes;
+  std::vector<vivaldi::import_data::ProfileItem> nodes;
 
   for (size_t i = 0; i < api_importer_list->count(); ++i) {
     const importer::SourceProfile& source_profile =
@@ -296,6 +311,7 @@ void ImporterApiFunction::Finished() {
         ((browser_services & importer::MASTER_PASSWORD) != 0);
     profile->search = ((browser_services & importer::SEARCH_ENGINES) != 0);
     profile->notes = ((browser_services & importer::NOTES) != 0);
+    profile->speeddial = ((browser_services & importer::SPEED_DIAL) != 0);
 
     profile->supports_standalone_import =
         (source_profile.importer_type == importer::TYPE_OPERA ||
@@ -319,7 +335,7 @@ void ImporterApiFunction::Finished() {
       profile->will_show_dialog_type = "none";
     }
 
-    std::vector<linked_ptr<vivaldi::import_data::UserProfileItem>> profileItems;
+    std::vector<vivaldi::import_data::UserProfileItem> profileItems;
 
     for (size_t i = 0; i < source_profile.user_profile_names.size(); ++i) {
       vivaldi::import_data::UserProfileItem* profItem =
@@ -330,15 +346,12 @@ void ImporterApiFunction::Finished() {
       profItem->profile_name =
           source_profile.user_profile_names.at(i).profileName;
 
-      linked_ptr<vivaldi::import_data::UserProfileItem> new_prof_node(profItem);
-
-      profileItems.push_back(new_prof_node);
+      profileItems.push_back(std::move(*profItem));
     }
 
-    profile->user_profiles = profileItems;
+    profile->user_profiles = std::move(profileItems);
 
-    linked_ptr<vivaldi::import_data::ProfileItem> new_node(profile);
-    nodes.push_back(new_node);
+    nodes.push_back(std::move(*profile));
   }
 
   results_ = vivaldi::import_data::GetProfiles::Results::Create(nodes);
@@ -374,7 +387,7 @@ bool ImportDataStartImportFunction::RunAsyncImpl() {
   api_importer_list =
       ProfileSingletonFactory::getInstance()->getInstance()->getImporterList();
 
-  scoped_ptr<vivaldi::import_data::StartImport::Params> params(
+  std::unique_ptr<vivaldi::import_data::StartImport::Params> params(
       vivaldi::import_data::StartImport::Params::Create(*args_));
 
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -414,6 +427,9 @@ bool ImportDataStartImportFunction::RunAsyncImpl() {
   source_profile.selected_profile_name = ids[7];
   if (params->master_password.get()) {
     source_profile.master_password = *params->master_password;
+  }
+  if (ids[8] == "true") {
+    selected_items |= importer::SPEED_DIAL;
   }
 
   int imported_items = (selected_items & supported_items);
@@ -535,63 +551,63 @@ void ImportDataStartImportFunction::StartImport(
 }
 
 ImportDataSetVivaldiAsDefaultBrowserFunction::
-    ImportDataSetVivaldiAsDefaultBrowserFunction() {
-  default_browser_worker_ = new ShellIntegration::DefaultBrowserWorker(this);
+    ImportDataSetVivaldiAsDefaultBrowserFunction()
+  : weak_ptr_factory_(this) {
+  default_browser_worker_ =
+    new shell_integration::DefaultBrowserWorker(
+      base::Bind(&ImportDataSetVivaldiAsDefaultBrowserFunction::
+                    OnDefaultBrowserWorkerFinished,
+                    weak_ptr_factory_.GetWeakPtr()));
 }
 
 ImportDataSetVivaldiAsDefaultBrowserFunction::
     ~ImportDataSetVivaldiAsDefaultBrowserFunction() {
-  if (default_browser_worker_.get())
-    default_browser_worker_->ObserverDestroyed();
+  Respond(ArgumentList(std::move(results_)));
 }
 
-// ShellIntegration::DefaultWebClientObserver implementation.
-void ImportDataSetVivaldiAsDefaultBrowserFunction::SetDefaultWebClientUIState(
-    ShellIntegration::DefaultWebClientUIState state) {
-  if (state == ShellIntegration::STATE_IS_DEFAULT) {
+void
+ImportDataSetVivaldiAsDefaultBrowserFunction::OnDefaultBrowserWorkerFinished(
+    shell_integration::DefaultWebClientState state) {
+  if (state == shell_integration::IS_DEFAULT) {
     results_ =
         vivaldi::import_data::SetVivaldiAsDefaultBrowser::Results::Create(
             "true");
-    SendResponse(true);  // Already default
     Release();
-  } else if (state == ShellIntegration::STATE_NOT_DEFAULT) {
-    if (ShellIntegration::CanSetAsDefaultBrowser() ==
-        ShellIntegration::SET_DEFAULT_NOT_ALLOWED) {
+  } else if (state == shell_integration::NOT_DEFAULT) {
+    if (shell_integration::CanSetAsDefaultBrowser() ==
+        shell_integration::SET_DEFAULT_NOT_ALLOWED) {
     } else {
       // Not default browser
       results_ =
           vivaldi::import_data::SetVivaldiAsDefaultBrowser::Results::Create(
               "false");
-      SendResponse(true);
       Release();
     }
-  } else if (state == ShellIntegration::STATE_UNKNOWN) {
+  } else if (state == shell_integration::UNKNOWN_DEFAULT) {
   } else {
     return;  // Still processing.
   }
 }
 
-bool ImportDataSetVivaldiAsDefaultBrowserFunction::
-    IsInteractiveSetDefaultPermitted() {
-  return true;
-}
-
 bool ImportDataSetVivaldiAsDefaultBrowserFunction::RunAsync() {
   AddRef();  // balanced from SetDefaultWebClientUIState()
   default_browser_worker_->StartSetAsDefault();
-  // SendResponse(true);
   return true;
 }
 
 ImportDataIsVivaldiDefaultBrowserFunction::
-    ImportDataIsVivaldiDefaultBrowserFunction() {
-  default_browser_worker_ = new ShellIntegration::DefaultBrowserWorker(this);
+    ImportDataIsVivaldiDefaultBrowserFunction()
+ : weak_ptr_factory_(this) {
+  default_browser_worker_ =
+    new shell_integration::DefaultBrowserWorker(
+      base::Bind(&ImportDataIsVivaldiDefaultBrowserFunction::
+                    OnDefaultBrowserWorkerFinished,
+                    weak_ptr_factory_.GetWeakPtr()));
 }
 
 ImportDataIsVivaldiDefaultBrowserFunction::
     ~ImportDataIsVivaldiDefaultBrowserFunction() {
-  if (default_browser_worker_.get())
-    default_browser_worker_->ObserverDestroyed();
+  Respond(ArgumentList(std::move(results_)));
 }
 
 bool ImportDataIsVivaldiDefaultBrowserFunction::RunAsync() {
@@ -600,32 +616,26 @@ bool ImportDataIsVivaldiDefaultBrowserFunction::RunAsync() {
   return true;
 }
 
-// ShellIntegration::DefaultWebClientObserver implementation.
-void ImportDataIsVivaldiDefaultBrowserFunction::SetDefaultWebClientUIState(
-    ShellIntegration::DefaultWebClientUIState state) {
-  if (state == ShellIntegration::STATE_IS_DEFAULT) {
+// shell_integration::DefaultWebClientObserver implementation.
+void ImportDataIsVivaldiDefaultBrowserFunction::OnDefaultBrowserWorkerFinished(
+    shell_integration::DefaultWebClientState state) {
+  if (state == shell_integration::IS_DEFAULT) {
     results_ =
         vivaldi::import_data::IsVivaldiDefaultBrowser::Results::Create("true");
-    SendResponse(true);  // Already default
     Release();
-  } else if (state == ShellIntegration::STATE_NOT_DEFAULT) {
-    if (ShellIntegration::CanSetAsDefaultBrowser() ==
-        ShellIntegration::SET_DEFAULT_NOT_ALLOWED) {
+  } else if (state == shell_integration::NOT_DEFAULT) {
+    if (shell_integration::CanSetAsDefaultBrowser() ==
+        shell_integration::SET_DEFAULT_NOT_ALLOWED) {
     } else {
       // Not default browser
       results_ = vivaldi::import_data::IsVivaldiDefaultBrowser::Results::Create(
           "false");
-      SendResponse(true);
       Release();
     }
-  } else if (state == ShellIntegration::STATE_UNKNOWN) {
+  } else if (state == shell_integration::UNKNOWN_DEFAULT) {
   } else {
     return;  // Still processing.
   }
-}
-bool ImportDataIsVivaldiDefaultBrowserFunction::
-    IsInteractiveSetDefaultPermitted() {
-  return true;
 }
 
 ImportDataLaunchNetworkSettingsFunction::
@@ -637,7 +647,7 @@ ImportDataLaunchNetworkSettingsFunction::
 }
 
 bool ImportDataLaunchNetworkSettingsFunction::RunAsync() {
-  options::AdvancedOptionsUtilities::ShowNetworkProxySettings(NULL);
+  settings_utils::ShowNetworkProxySettings(NULL);
   SendResponse(true);
   return true;
 }
@@ -679,7 +689,7 @@ ImportDataSetVivaldiLanguageFunction::~ImportDataSetVivaldiLanguageFunction() {
 }
 
 bool ImportDataSetVivaldiLanguageFunction::RunAsync() {
-  scoped_ptr<vivaldi::import_data::SetVivaldiLanguage::Params> params(
+  std::unique_ptr<vivaldi::import_data::SetVivaldiLanguage::Params> params(
       vivaldi::import_data::SetVivaldiLanguage::Params::Create(*args_));
 
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -702,7 +712,7 @@ ImportDataSetDefaultContentSettingsFunction::
 }
 
 bool ImportDataSetDefaultContentSettingsFunction::RunAsync() {
-  scoped_ptr<vivaldi::import_data::SetDefaultContentSettings::Params> params(
+  std::unique_ptr<vivaldi::import_data::SetDefaultContentSettings::Params> params(
       vivaldi::import_data::SetDefaultContentSettings::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
 
@@ -735,7 +745,7 @@ ImportDataGetDefaultContentSettingsFunction::
 }
 
 bool ImportDataGetDefaultContentSettingsFunction::RunAsync() {
-  scoped_ptr<vivaldi::import_data::GetDefaultContentSettings::Params> params(
+  std::unique_ptr<vivaldi::import_data::GetDefaultContentSettings::Params> params(
       vivaldi::import_data::GetDefaultContentSettings::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
   std::string& content_settings = params->content_setting;
@@ -766,7 +776,7 @@ ImportDataSetBlockThirdPartyCookiesFunction::
 }
 
 bool ImportDataSetBlockThirdPartyCookiesFunction::RunAsync() {
-  scoped_ptr<vivaldi::import_data::SetBlockThirdPartyCookies::Params> params(
+  std::unique_ptr<vivaldi::import_data::SetBlockThirdPartyCookies::Params> params(
       vivaldi::import_data::SetBlockThirdPartyCookies::Params::Create(*args_));
 
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -876,7 +886,7 @@ ImportDataSetStartupActionFunction::~ImportDataSetStartupActionFunction() {
 }
 
 bool ImportDataSetStartupActionFunction::RunAsync() {
-  scoped_ptr<vivaldi::import_data::SetStartupAction::Params> params(
+  std::unique_ptr<vivaldi::import_data::SetStartupAction::Params> params(
       vivaldi::import_data::SetStartupAction::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
   std::string& content_settings = params->startup;

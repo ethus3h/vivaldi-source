@@ -5,17 +5,34 @@
 #ifndef UI_VIEWS_TEST_PLATFORM_TEST_HELPER_H_
 #define UI_VIEWS_TEST_PLATFORM_TEST_HELPER_H_
 
+#include <memory>
+
+#include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 
 namespace views {
 
+class ViewsTestHelper;
+class Widget;
+
 class PlatformTestHelper {
  public:
+  using Factory = base::Callback<std::unique_ptr<PlatformTestHelper>(void)>;
   PlatformTestHelper() {}
   virtual ~PlatformTestHelper() {}
 
-  static scoped_ptr<PlatformTestHelper> Create();
+  static void set_factory(const Factory& factory);
+  static std::unique_ptr<PlatformTestHelper> Create();
+
+  static void SetIsMus();
+  static bool IsMus();
+
+  // Called once the ViewsTestHelper has been created, but before SetUp() is
+  // called.
+  virtual void OnTestHelperCreated(ViewsTestHelper* helper) {}
+
+  // Simulate an OS-level destruction of the native window held by |widget|.
+  virtual void SimulateNativeDestroy(Widget* widget);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(PlatformTestHelper);

@@ -7,7 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/android/jni_android.h"
+#include "base/android/scoped_java_ref.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "device/bluetooth/bluetooth_adapter_android.h"
@@ -27,11 +30,13 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   // The ChromeBluetoothDevice instance will hold a Java reference
   // to |bluetooth_device_wrapper|.
   //
-  // TODO(scheib): Return a scoped_ptr<>, but then adapter will need to handle
+  // TODO(scheib): Return a std::unique_ptr<>, but then adapter will need to
+  // handle
   // this correctly. http://crbug.com/506416
   static BluetoothDeviceAndroid* Create(
       BluetoothAdapterAndroid* adapter,
-      jobject bluetooth_device_wrapper);  // Java Type: bluetoothDeviceWrapper
+      const base::android::JavaRef<jobject>&
+          bluetooth_device_wrapper);  // Java Type: bluetoothDeviceWrapper
 
   ~BluetoothDeviceAndroid() override;
 
@@ -42,14 +47,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
   // Get owning BluetoothAdapter cast to BluetoothAdapterAndroid.
-  BluetoothAdapterAndroid* GetAdapter() {
+  BluetoothAdapterAndroid* GetAndroidAdapter() {
     return static_cast<BluetoothAdapterAndroid*>(adapter_);
   }
-
-  // Updates cached copy of advertised UUIDs discovered during a scan.
-  // Returns true if new UUIDs differed from cached values.
-  bool UpdateAdvertisedUUIDs(
-      jobject advertised_uuids);  // Java Type: List<ParcelUuid>
 
   // BluetoothDevice:
   uint32_t GetBluetoothClass() const override;
@@ -58,14 +58,13 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   uint16_t GetVendorID() const override;
   uint16_t GetProductID() const override;
   uint16_t GetDeviceID() const override;
+  uint16_t GetAppearance() const override;
+  base::Optional<std::string> GetName() const override;
   bool IsPaired() const override;
   bool IsConnected() const override;
   bool IsGattConnected() const override;
   bool IsConnectable() const override;
   bool IsConnecting() const override;
-  UUIDList GetUUIDs() const override;
-  int16_t GetInquiryRSSI() const override;
-  int16_t GetInquiryTxPower() const override;
   bool ExpectingPinCode() const override;
   bool ExpectingPasskey() const override;
   bool ExpectingConfirmation() const override;
@@ -118,7 +117,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   BluetoothDeviceAndroid(BluetoothAdapterAndroid* adapter);
 
   // BluetoothDevice:
-  std::string GetDeviceName() const override;
   void CreateGattConnectionImpl() override;
   void DisconnectGatt() override;
 

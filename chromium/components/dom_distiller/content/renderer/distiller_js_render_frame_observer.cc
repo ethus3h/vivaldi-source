@@ -7,10 +7,12 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/memory/ptr_util.h"
 #include "components/dom_distiller/content/common/distiller_page_notifier_service.mojom.h"
 #include "components/dom_distiller/content/renderer/distiller_page_notifier_service_impl.h"
-#include "content/public/common/service_registry.h"
 #include "content/public/renderer/render_frame.h"
+#include "mojo/public/cpp/bindings/strong_binding.h"
+#include "services/service_manager/public/cpp/interface_registry.h"
 #include "v8/include/v8.h"
 
 namespace dom_distiller {
@@ -26,20 +28,20 @@ DistillerJsRenderFrameObserver::DistillerJsRenderFrameObserver(
 DistillerJsRenderFrameObserver::~DistillerJsRenderFrameObserver() {}
 
 void DistillerJsRenderFrameObserver::DidStartProvisionalLoad() {
-  RegisterMojoService();
+  RegisterMojoInterface();
 }
 
 void DistillerJsRenderFrameObserver::DidFinishLoad() {
   // If no message about the distilled page was received at this point, there
-  // will not be one; remove the DistillerPageNotifierService from the registry.
+  // will not be one; remove the mojom::DistillerPageNotifierService from the
+  // registry.
   render_frame()
-      ->GetServiceRegistry()
-      ->RemoveService<DistillerPageNotifierService>();
+      ->GetInterfaceRegistry()
+      ->RemoveInterface<mojom::DistillerPageNotifierService>();
 }
 
 void DistillerJsRenderFrameObserver::DidCreateScriptContext(
     v8::Local<v8::Context> context,
-    int extension_group,
     int world_id) {
   if (world_id != distiller_isolated_world_id_ || !is_distiller_page_) {
     return;
@@ -50,20 +52,25 @@ void DistillerJsRenderFrameObserver::DidCreateScriptContext(
   native_javascript_handle_->AddJavaScriptObjectToFrame(context);
 }
 
-void DistillerJsRenderFrameObserver::RegisterMojoService() {
-  render_frame()->GetServiceRegistry()->AddService(base::Bind(
+void DistillerJsRenderFrameObserver::RegisterMojoInterface() {
+  render_frame()->GetInterfaceRegistry()->AddInterface(base::Bind(
       &DistillerJsRenderFrameObserver::CreateDistillerPageNotifierService,
       weak_factory_.GetWeakPtr()));
 }
 
 void DistillerJsRenderFrameObserver::CreateDistillerPageNotifierService(
-    mojo::InterfaceRequest<DistillerPageNotifierService> request) {
-  // This is strongly bound to and owned by the pipe.
-  new DistillerPageNotifierServiceImpl(this, std::move(request));
+    mojo::InterfaceRequest<mojom::DistillerPageNotifierService> request) {
+  mojo::MakeStrongBinding(
+      base::MakeUnique<DistillerPageNotifierServiceImpl>(this),
+      std::move(request));
 }
 
 void DistillerJsRenderFrameObserver::SetIsDistillerPage() {
   is_distiller_page_ = true;
+}
+
+void DistillerJsRenderFrameObserver::OnDestruct() {
+  delete this;
 }
 
 }  // namespace dom_distiller

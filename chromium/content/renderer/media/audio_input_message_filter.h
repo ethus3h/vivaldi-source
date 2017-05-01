@@ -7,9 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/id_map.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/shared_memory.h"
 #include "base/sync_socket.h"
 #include "build/build_config.h"
@@ -40,7 +41,8 @@ class CONTENT_EXPORT AudioInputMessageFilter : public IPC::MessageFilter {
   //
   // The returned object is not thread-safe, and must be used on
   // |io_task_runner|.
-  scoped_ptr<media::AudioInputIPC> CreateAudioInputIPC(int render_frame_id);
+  std::unique_ptr<media::AudioInputIPC> CreateAudioInputIPC(
+      int render_frame_id);
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner() const {
     return io_task_runner_;
@@ -58,7 +60,7 @@ class CONTENT_EXPORT AudioInputMessageFilter : public IPC::MessageFilter {
 
   // IPC::MessageFilter override. Called on |io_task_runner_|.
   bool OnMessageReceived(const IPC::Message& message) override;
-  void OnFilterAdded(IPC::Sender* sender) override;
+  void OnFilterAdded(IPC::Channel* channel) override;
   void OnFilterRemoved() override;
   void OnChannelClosing() override;
 
@@ -73,16 +75,12 @@ class CONTENT_EXPORT AudioInputMessageFilter : public IPC::MessageFilter {
                        uint32_t length,
                        uint32_t total_segments);
 
-  // Notification of volume property of an audio input stream.
-  void OnStreamVolume(int stream_id, double volume);
-
   // Received when internal state of browser process' audio input stream has
-  // changed.
-  void OnStreamStateChanged(int stream_id,
-                            media::AudioInputIPCDelegateState state);
+  // encountered an error.
+  void OnStreamError(int stream_id);
 
   // A map of stream ids to delegates.
-  IDMap<media::AudioInputIPCDelegate> delegates_;
+  IDMap<media::AudioInputIPCDelegate*> delegates_;
 
   // IPC sender for Send(), must only be accesed on |io_task_runner_|.
   IPC::Sender* sender_;

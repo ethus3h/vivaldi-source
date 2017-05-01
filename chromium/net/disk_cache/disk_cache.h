@@ -10,15 +10,16 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_split.h"
 #include "base/time/time.h"
 #include "net/base/cache_type.h"
 #include "net/base/completion_callback.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 
 namespace base {
@@ -59,7 +60,7 @@ NET_EXPORT int CreateCacheBackend(
     bool force,
     const scoped_refptr<base::SingleThreadTaskRunner>& thread,
     net::NetLog* net_log,
-    scoped_ptr<Backend>* backend,
+    std::unique_ptr<Backend>* backend,
     const net::CompletionCallback& callback);
 
 // The root interface for a disk cache instance.
@@ -149,12 +150,23 @@ class NET_EXPORT Backend {
   // Calculate the total size of the cache. The return value is the size in
   // bytes or a net error code. If this method returns ERR_IO_PENDING,
   // the |callback| will be invoked when the operation completes.
-  virtual int CalculateSizeOfAllEntries(
-      const CompletionCallback& callback) = 0;
+  virtual int CalculateSizeOfAllEntries(const CompletionCallback& callback) = 0;
+
+  // Calculate the size of all cache entries accessed between |initial_time| and
+  // |end_time|.
+  // The return value is the size in bytes or a net error code. The default
+  // implementation returns ERR_NOT_IMPLEMENTED and should only be overwritten
+  // if there is an efficient way for the backend to determine the size for a
+  // subset of the cache without reading the whole cache from disk.
+  // If this method returns ERR_IO_PENDING, the |callback| will be invoked when
+  // the operation completes.
+  virtual int CalculateSizeOfEntriesBetween(base::Time initial_time,
+                                            base::Time end_time,
+                                            const CompletionCallback& callback);
 
   // Returns an iterator which will enumerate all entries of the cache in an
   // undefined order.
-  virtual scoped_ptr<Iterator> CreateIterator() = 0;
+  virtual std::unique_ptr<Iterator> CreateIterator() = 0;
 
   // Return a list of cache statistics.
   virtual void GetStats(base::StringPairs* stats) = 0;
@@ -333,7 +345,7 @@ struct EntryDeleter {
 };
 
 // Automatically closes an entry when it goes out of scope.
-typedef scoped_ptr<Entry, EntryDeleter> ScopedEntryPtr;
+typedef std::unique_ptr<Entry, EntryDeleter> ScopedEntryPtr;
 
 }  // namespace disk_cache
 

@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -14,13 +15,13 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/sys_info.h"
 #include "base/test/histogram_tester.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "content/public/test/mock_special_storage_policy.h"
 #include "content/public/test/mock_storage_client.h"
@@ -67,8 +68,15 @@ const int kPerHostTemporaryPortion = QuotaManager::kPerHostTemporaryPortion;
 const GURL kTestEvictionOrigin = GURL("http://test.eviction.policy/result");
 
 // Returns a deterministic value for the amount of available disk space.
-int64_t GetAvailableDiskSpaceForTest(const base::FilePath&) {
+int64_t GetAvailableDiskSpaceForTest() {
   return kAvailableSpaceForApp + kMinimumPreserveForSystem;
+}
+
+bool GetVolumeInfoForTests(const base::FilePath&,
+                           uint64_t* available, uint64_t* total) {
+  *available = static_cast<uint64_t>(GetAvailableDiskSpaceForTest());
+  *total = *available * 2;
+  return true;
 }
 
 class TestEvictionPolicy : public storage::QuotaEvictionPolicy {
@@ -115,14 +123,14 @@ class QuotaManagerTest : public testing::Test {
 
  protected:
   void ResetQuotaManager(bool is_incognito) {
-    quota_manager_ = new QuotaManager(is_incognito, data_dir_.path(),
+    quota_manager_ = new QuotaManager(is_incognito, data_dir_.GetPath(),
                                       base::ThreadTaskRunnerHandle::Get().get(),
                                       base::ThreadTaskRunnerHandle::Get().get(),
                                       mock_special_storage_policy_.get());
     // Don't (automatically) start the eviction for testing.
     quota_manager_->eviction_disabled_ = true;
     // Don't query the hard disk for remaining capacity.
-    quota_manager_->get_disk_space_fn_ = &GetAvailableDiskSpaceForTest;
+    quota_manager_->get_volume_info_fn_= &GetVolumeInfoForTests;
     additional_callback_count_ = 0;
   }
 
@@ -445,7 +453,7 @@ class QuotaManagerTest : public testing::Test {
   const OriginInfoTableEntries& origin_info_entries() const {
     return origin_info_entries_;
   }
-  base::FilePath profile_path() const { return data_dir_.path(); }
+  base::FilePath profile_path() const { return data_dir_.GetPath(); }
   int status_callback_count() const { return status_callback_count_; }
   void reset_status_callback_count() { status_callback_count_ = 0; }
 
@@ -670,7 +678,7 @@ TEST_F(QuotaManagerTest, GetUsage_MultipleClients) {
       QuotaClient::kDatabase));
 
   const int64_t kTempQuotaBase =
-      GetAvailableDiskSpaceForTest(base::FilePath()) / kPerHostTemporaryPortion;
+      GetAvailableDiskSpaceForTest() / kPerHostTemporaryPortion;
 
   GetUsageAndQuotaForWebApps(GURL("http://foo.com/"), kTemp);
   base::RunLoop().RunUntilIdle();
@@ -1295,7 +1303,7 @@ TEST_F(QuotaManagerTest, GetAvailableSpaceTest) {
 
 TEST_F(QuotaManagerTest, SetTemporaryStorageEvictionPolicy) {
   quota_manager()->SetTemporaryStorageEvictionPolicy(
-      make_scoped_ptr(new TestEvictionPolicy));
+      base::WrapUnique(new TestEvictionPolicy));
 
   GetEvictionOrigin(kTemp);
   base::RunLoop().RunUntilIdle();
@@ -1482,8 +1490,7 @@ TEST_F(QuotaManagerTest, EvictOriginDataWithDeletionError) {
   for (iterator itr(origin_info_entries().begin()),
                 end(origin_info_entries().end());
        itr != end; ++itr) {
-    if (itr->type == kTemp &&
-        GURL("http://foo.com/") == itr->origin) {
+    if (itr->type == kTemp && itr->origin == "http://foo.com/") {
       found_origin_in_database = true;
       break;
     }

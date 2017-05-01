@@ -82,22 +82,22 @@ class TooltipControllerTest : public AshTestBase {
   }
 
  protected:
-  scoped_ptr<TooltipControllerTestHelper> helper_;
+  std::unique_ptr<TooltipControllerTestHelper> helper_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TooltipControllerTest);
 };
 
 TEST_F(TooltipControllerTest, NonNullTooltipClient) {
-  EXPECT_TRUE(aura::client::GetTooltipClient(Shell::GetPrimaryRootWindow())
-              != NULL);
+  EXPECT_TRUE(aura::client::GetTooltipClient(Shell::GetPrimaryRootWindow()) !=
+              NULL);
   EXPECT_EQ(base::string16(), helper_->GetTooltipText());
   EXPECT_EQ(NULL, helper_->GetTooltipWindow());
   EXPECT_FALSE(helper_->IsTooltipVisible());
 }
 
 TEST_F(TooltipControllerTest, HideTooltipWhenCursorHidden) {
-  scoped_ptr<views::Widget> widget(CreateNewWidgetOn(0));
+  std::unique_ptr<views::Widget> widget(CreateNewWidgetOn(0));
   TooltipTestView* view = new TooltipTestView;
   AddViewToWidgetAndResize(widget.get(), view);
   view->set_tooltip_text(base::ASCIIToUTF16("Tooltip Text"));
@@ -132,15 +132,15 @@ TEST_F(TooltipControllerTest, TooltipsOnMultiDisplayShouldNotCrash) {
 
   UpdateDisplay("1000x600,600x400");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  scoped_ptr<views::Widget> widget1(CreateNewWidgetWithBoundsOn(
-      0, gfx::Rect(10, 10, 100, 100)));
+  std::unique_ptr<views::Widget> widget1(
+      CreateNewWidgetWithBoundsOn(0, gfx::Rect(10, 10, 100, 100)));
   TooltipTestView* view1 = new TooltipTestView;
   AddViewToWidgetAndResize(widget1.get(), view1);
   view1->set_tooltip_text(base::ASCIIToUTF16("Tooltip Text for view 1"));
   EXPECT_EQ(widget1->GetNativeView()->GetRootWindow(), root_windows[0]);
 
-  scoped_ptr<views::Widget> widget2(CreateNewWidgetWithBoundsOn(
-      1, gfx::Rect(1200, 10, 100, 100)));
+  std::unique_ptr<views::Widget> widget2(
+      CreateNewWidgetWithBoundsOn(1, gfx::Rect(1200, 10, 100, 100)));
   TooltipTestView* view2 = new TooltipTestView;
   AddViewToWidgetAndResize(widget2.get(), view2);
   view2->set_tooltip_text(base::ASCIIToUTF16("Tooltip Text for view 2"));
@@ -156,12 +156,7 @@ TEST_F(TooltipControllerTest, TooltipsOnMultiDisplayShouldNotCrash) {
   // Get rid of secondary display. This destroy's the tooltip's aura window. If
   // we have handled this case, we will not crash in the following statement.
   UpdateDisplay("1000x600");
-#if !defined(OS_WIN)
-  // TODO(cpu): Detangle the window destruction notification. Currently
-  // the TooltipController::OnWindowDestroyed is not being called then the
-  // display is torn down so the tooltip is is still there.
   EXPECT_FALSE(helper_->IsTooltipVisible());
-#endif
   EXPECT_EQ(widget2->GetNativeView()->GetRootWindow(), root_windows[0]);
 
   // The tooltip should create a new aura window for itself, so we should still

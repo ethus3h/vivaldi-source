@@ -7,21 +7,21 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "net/base/address_list.h"
 #include "net/base/auth.h"
+#include "net/base/net_export.h"
 #include "net/dns/host_resolver.h"
-#include "net/dns/single_request_host_resolver.h"
 #include "net/ftp/ftp_ctrl_response_buffer.h"
 #include "net/ftp/ftp_response_info.h"
 #include "net/ftp/ftp_transaction.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
 
 namespace net {
 
@@ -39,7 +39,7 @@ class NET_EXPORT_PRIVATE FtpNetworkTransaction : public FtpTransaction {
   // FtpTransaction methods:
   int Start(const FtpRequestInfo* request_info,
             const CompletionCallback& callback,
-            const BoundNetLog& net_log) override;
+            const NetLogWithSource& net_log) override;
   int RestartWithAuth(const AuthCredentials& credentials,
                       const CompletionCallback& callback) override;
   int Read(IOBuffer* buf,
@@ -202,18 +202,19 @@ class NET_EXPORT_PRIVATE FtpNetworkTransaction : public FtpTransaction {
   CompletionCallback io_callback_;
   CompletionCallback user_callback_;
 
-  BoundNetLog net_log_;
+  NetLogWithSource net_log_;
   const FtpRequestInfo* request_;
   FtpResponseInfo response_;
 
   // Cancels the outstanding request on destruction.
-  SingleRequestHostResolver resolver_;
+  HostResolver* resolver_;
   AddressList addresses_;
+  std::unique_ptr<HostResolver::Request> resolve_request_;
 
   // User buffer passed to the Read method for control socket.
   scoped_refptr<IOBuffer> read_ctrl_buf_;
 
-  scoped_ptr<FtpCtrlResponseBuffer> ctrl_response_buffer_;
+  std::unique_ptr<FtpCtrlResponseBuffer> ctrl_response_buffer_;
 
   scoped_refptr<IOBuffer> read_data_buf_;
   int read_data_buf_len_;
@@ -249,8 +250,8 @@ class NET_EXPORT_PRIVATE FtpNetworkTransaction : public FtpTransaction {
 
   ClientSocketFactory* socket_factory_;
 
-  scoped_ptr<StreamSocket> ctrl_socket_;
-  scoped_ptr<StreamSocket> data_socket_;
+  std::unique_ptr<StreamSocket> ctrl_socket_;
+  std::unique_ptr<StreamSocket> data_socket_;
 
   State next_state_;
 

@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/global_error/global_error_service.h"
 
+#include <memory>
+
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -71,16 +73,16 @@ class MenuError : public BaseError {
 
 // Test adding errors to the global error service.
 TEST(GlobalErrorServiceTest, AddError) {
-  scoped_ptr<GlobalErrorService> service(new GlobalErrorService(NULL));
+  std::unique_ptr<GlobalErrorService> service(new GlobalErrorService(NULL));
   EXPECT_EQ(0u, service->errors().size());
 
   BaseError* error1 = new BaseError;
-  service->AddGlobalError(error1);
+  service->AddGlobalError(base::WrapUnique(error1));
   EXPECT_EQ(1u, service->errors().size());
   EXPECT_EQ(error1, service->errors()[0]);
 
   BaseError* error2 = new BaseError;
-  service->AddGlobalError(error2);
+  service->AddGlobalError(base::WrapUnique(error2));
   EXPECT_EQ(2u, service->errors().size());
   EXPECT_EQ(error1, service->errors()[0]);
   EXPECT_EQ(error2, service->errors()[1]);
@@ -93,20 +95,24 @@ TEST(GlobalErrorServiceTest, AddError) {
 
 // Test removing errors from the global error service.
 TEST(GlobalErrorServiceTest, RemoveError) {
-  scoped_ptr<GlobalErrorService> service(new GlobalErrorService(NULL));
+  std::unique_ptr<GlobalErrorService> service(new GlobalErrorService(NULL));
   BaseError error1;
-  service->AddGlobalError(&error1);
+  service->AddUnownedGlobalError(&error1);
   BaseError error2;
-  service->AddGlobalError(&error2);
+  service->AddUnownedGlobalError(&error2);
 
   EXPECT_EQ(2u, service->errors().size());
-  service->RemoveGlobalError(&error1);
+  service->RemoveUnownedGlobalError(&error1);
   EXPECT_EQ(1u, service->errors().size());
   EXPECT_EQ(&error2, service->errors()[0]);
-  service->RemoveGlobalError(&error2);
+  service->RemoveUnownedGlobalError(&error2);
   EXPECT_EQ(0u, service->errors().size());
 
   // Ensure that deleting the service does not delete the error objects.
+  //
+  // NB: If the service _does_ delete the error objects, then it called the
+  // delete operator on a stack-allocated object, which is undefined behavior,
+  // which we can't really use to prove anything. :(
   EXPECT_EQ(2, BaseError::count());
   service.reset();
   EXPECT_EQ(2, BaseError::count());
@@ -119,16 +125,16 @@ TEST(GlobalErrorServiceTest, GetMenuItem) {
   MenuError* error3 = new MenuError(3, GlobalError::SEVERITY_HIGH);
 
   GlobalErrorService service(NULL);
-  service.AddGlobalError(error1);
-  service.AddGlobalError(error2);
-  service.AddGlobalError(error3);
+  service.AddGlobalError(base::WrapUnique(error1));
+  service.AddGlobalError(base::WrapUnique(error2));
+  service.AddGlobalError(base::WrapUnique(error3));
 
   EXPECT_EQ(error2, service.GetGlobalErrorByMenuItemCommandID(2));
   EXPECT_EQ(error3, service.GetGlobalErrorByMenuItemCommandID(3));
   EXPECT_EQ(NULL, service.GetGlobalErrorByMenuItemCommandID(4));
 }
 
-// Test getting the error with the higest severity.
+// Test getting the error with the highest severity.
 TEST(GlobalErrorServiceTest, HighestSeverity) {
   MenuError* error1 = new MenuError(1, GlobalError::SEVERITY_LOW);
   MenuError* error2 = new MenuError(2, GlobalError::SEVERITY_MEDIUM);
@@ -137,18 +143,17 @@ TEST(GlobalErrorServiceTest, HighestSeverity) {
   GlobalErrorService service(NULL);
   EXPECT_EQ(NULL, service.GetHighestSeverityGlobalErrorWithAppMenuItem());
 
-  service.AddGlobalError(error1);
+  service.AddGlobalError(base::WrapUnique(error1));
   EXPECT_EQ(error1, service.GetHighestSeverityGlobalErrorWithAppMenuItem());
 
-  service.AddGlobalError(error2);
+  service.AddGlobalError(base::WrapUnique(error2));
   EXPECT_EQ(error2, service.GetHighestSeverityGlobalErrorWithAppMenuItem());
 
-  service.AddGlobalError(error3);
+  service.AddGlobalError(base::WrapUnique(error3));
   EXPECT_EQ(error3, service.GetHighestSeverityGlobalErrorWithAppMenuItem());
 
   // Remove the highest-severity error.
   service.RemoveGlobalError(error3);
-  delete error3;
 
   // Now error2 should be the next highest severity error.
   EXPECT_EQ(error2, service.GetHighestSeverityGlobalErrorWithAppMenuItem());

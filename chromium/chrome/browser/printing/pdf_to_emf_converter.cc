@@ -5,15 +5,20 @@
 #include "chrome/browser/printing/pdf_to_emf_converter.h"
 
 #include <stdint.h>
+#include <windows.h>
 
+#include <memory>
 #include <queue>
 #include <utility>
+#include <vector>
 
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/common/chrome_utility_messages.h"
 #include "chrome/common/chrome_utility_printing_messages.h"
 #include "chrome/grit/generated_resources.h"
@@ -25,13 +30,13 @@
 #include "printing/pdf_render_settings.h"
 #include "ui/base/l10n/l10n_util.h"
 
+using content::BrowserThread;
+
 namespace printing {
 
 namespace {
 
-using content::BrowserThread;
-
-class PdfToEmfConverterImpl;
+class PdfConverterImpl;
 
 // Allows to delete temporary directory after all temporary files created inside
 // are closed. Windows cannot delete directory with opened files. Directory is
@@ -43,7 +48,7 @@ class RefCountedTempDir
  public:
   RefCountedTempDir() { ignore_result(temp_dir_.CreateUniqueTempDir()); }
   bool IsValid() const { return temp_dir_.IsValid(); }
-  const base::FilePath& GetPath() const { return temp_dir_.path(); }
+  const base::FilePath& GetPath() const { return temp_dir_.GetPath(); }
 
  private:
   friend struct BrowserThread::DeleteOnThread<BrowserThread::FILE>;
@@ -54,8 +59,8 @@ class RefCountedTempDir
   DISALLOW_COPY_AND_ASSIGN(RefCountedTempDir);
 };
 
-typedef scoped_ptr<base::File, BrowserThread::DeleteOnFileThread>
-    ScopedTempFile;
+using ScopedTempFile =
+    std::unique_ptr<base::File, BrowserThread::DeleteOnFileThread>;
 
 // Wrapper for Emf to keep only file handle in memory, and load actual data only
 // on playback. Emf::InitFromFile() can play metafile directly from disk, but it
@@ -64,25 +69,29 @@ typedef scoped_ptr<base::File, BrowserThread::DeleteOnFileThread>
 class LazyEmf : public MetafilePlayer {
  public:
   LazyEmf(const scoped_refptr<RefCountedTempDir>& temp_dir, ScopedTempFile file)
-      : temp_dir_(temp_dir), file_(file.Pass()) {
+      : temp_dir_(temp_dir), file_(std::move(file)) {
     CHECK(file_);
   }
   ~LazyEmf() override { Close(); }
 
+ protected:
+  // MetafilePlayer:
   bool SafePlayback(HDC hdc) const override;
-  bool SaveTo(base::File* file) const override;
 
- private:
   void Close() const;
   bool LoadEmf(Emf* emf) const;
 
+ private:
   mutable scoped_refptr<RefCountedTempDir> temp_dir_;
   mutable ScopedTempFile file_;  // Mutable because of consts in base class.
+
+  bool GetDataAsVector(std::vector<char>* buffer) const override;
+  bool SaveTo(base::File* file) const override;
 
   DISALLOW_COPY_AND_ASSIGN(LazyEmf);
 };
 
-// Converts PDF into EMF.
+// Class for converting PDF to another format for printing (Emf, Postscript).
 // Class uses 3 threads: UI, IO and FILE.
 // Internal workflow is following:
 // 1. Create instance on the UI thread. (files_, settings_,)
@@ -95,33 +104,34 @@ class LazyEmf : public MetafilePlayer {
 //
 // All these steps work sequentially, so no data should be accessed
 // simultaneously by several threads.
-class PdfToEmfUtilityProcessHostClient
+class PdfConverterUtilityProcessHostClient
     : public content::UtilityProcessHostClient {
  public:
-  PdfToEmfUtilityProcessHostClient(
-      base::WeakPtr<PdfToEmfConverterImpl> converter,
+  PdfConverterUtilityProcessHostClient(
+      base::WeakPtr<PdfConverterImpl> converter,
       const PdfRenderSettings& settings);
 
   void Start(const scoped_refptr<base::RefCountedMemory>& data,
-             const PdfToEmfConverter::StartCallback& start_callback);
+             bool print_text_with_gdi,
+             const PdfConverter::StartCallback& start_callback);
 
   void GetPage(int page_number,
-               const PdfToEmfConverter::GetPageCallback& get_page_callback);
+               const PdfConverter::GetPageCallback& get_page_callback);
 
   void Stop();
 
   // UtilityProcessHostClient implementation.
   void OnProcessCrashed(int exit_code) override;
-  void OnProcessLaunchFailed() override;
-  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnProcessLaunchFailed(int exit_code) override;
 
- private:
+  // Needs to be public to handle ChromeUtilityHostMsg_PreCacheFontCharacters
+  // sync message replies.
+  bool Send(IPC::Message* msg);
+
+ protected:
   class GetPageCallbackData {
-    MOVE_ONLY_TYPE_FOR_CPP_03(GetPageCallbackData);
-
    public:
-    GetPageCallbackData(int page_number,
-                        PdfToEmfConverter::GetPageCallback callback)
+    GetPageCallbackData(int page_number, PdfConverter::GetPageCallback callback)
         : page_number_(page_number), callback_(callback) {}
 
     GetPageCallbackData(GetPageCallbackData&& other) {
@@ -131,45 +141,57 @@ class PdfToEmfUtilityProcessHostClient
     GetPageCallbackData& operator=(GetPageCallbackData&& rhs) {
       page_number_ = rhs.page_number_;
       callback_ = rhs.callback_;
-      emf_ = std::move(rhs.emf_);
+      file_ = std::move(rhs.file_);
       return *this;
     }
 
     int page_number() const { return page_number_; }
-    const PdfToEmfConverter::GetPageCallback& callback() const {
-      return callback_;
-    }
-    ScopedTempFile TakeEmf() { return emf_.Pass(); }
-    void set_emf(ScopedTempFile emf) { emf_ = emf.Pass(); }
+    const PdfConverter::GetPageCallback& callback() const { return callback_; }
+    ScopedTempFile TakeFile() { return std::move(file_); }
+    void set_file(ScopedTempFile file) { file_ = std::move(file); }
 
    private:
     int page_number_;
-    PdfToEmfConverter::GetPageCallback callback_;
-    ScopedTempFile emf_;
+
+    PdfConverter::GetPageCallback callback_;
+    ScopedTempFile file_;
+
+    DISALLOW_COPY_AND_ASSIGN(GetPageCallbackData);
   };
 
-  ~PdfToEmfUtilityProcessHostClient() override;
+  ~PdfConverterUtilityProcessHostClient() override;
 
-  bool Send(IPC::Message* msg);
+  // Helper functions: must be overridden by subclasses
+  // Set the process name
+  virtual base::string16 GetName() const = 0;
+  // Create a metafileplayer subclass file from a temporary file.
+  virtual std::unique_ptr<MetafilePlayer> GetFileFromTemp(
+      std::unique_ptr<base::File, content::BrowserThread::DeleteOnFileThread>
+          temp_file) = 0;
+  // Send the messages to Start, GetPage, and Stop.
+  virtual void SendStartMessage(IPC::PlatformFileForTransit transit,
+                                bool print_text_with_gdi) = 0;
+  virtual void SendGetPageMessage(int page_number,
+                                  IPC::PlatformFileForTransit transit) = 0;
+  virtual void SendStopMessage() = 0;
 
-  // Message handlers.
-  void OnProcessStarted();
+  // Message handlers:
   void OnPageCount(int page_count);
   void OnPageDone(bool success, float scale_factor);
 
   void OnFailed();
-  void OnTempPdfReady(ScopedTempFile pdf);
-  void OnTempEmfReady(GetPageCallbackData* callback_data, ScopedTempFile emf);
+  void OnTempPdfReady(bool print_text_with_gdi, ScopedTempFile pdf);
+  void OnTempFileReady(GetPageCallbackData* callback_data,
+                       ScopedTempFile temp_file);
 
   scoped_refptr<RefCountedTempDir> temp_dir_;
 
-  // Used to suppress callbacks after PdfToEmfConverterImpl is deleted.
-  base::WeakPtr<PdfToEmfConverterImpl> converter_;
+  // Used to suppress callbacks after PdfConverter is deleted.
+  base::WeakPtr<PdfConverterImpl> converter_;
   PdfRenderSettings settings_;
-  scoped_refptr<base::RefCountedMemory> data_;
 
   // Document loaded callback.
-  PdfToEmfConverter::StartCallback start_callback_;
+  PdfConverter::StartCallback start_callback_;
 
   // Process host for IPC.
   base::WeakPtr<content::UtilityProcessHost> utility_process_host_;
@@ -177,20 +199,49 @@ class PdfToEmfUtilityProcessHostClient
   // Queue of callbacks for GetPage() requests. Utility process should reply
   // with PageDone in the same order as requests were received.
   // Use containers that keeps element pointers valid after push() and pop().
-  typedef std::queue<GetPageCallbackData> GetPageCallbacks;
+  using GetPageCallbacks = std::queue<GetPageCallbackData>;
   GetPageCallbacks get_page_callbacks_;
+};
+
+// Converts PDF into Emf.
+class PdfToEmfUtilityProcessHostClient
+    : public PdfConverterUtilityProcessHostClient {
+ public:
+  PdfToEmfUtilityProcessHostClient(base::WeakPtr<PdfConverterImpl> converter,
+                                   const PdfRenderSettings& settings)
+      : PdfConverterUtilityProcessHostClient(converter, settings) {}
+
+  bool OnMessageReceived(const IPC::Message& message) override;
+
+ private:
+  ~PdfToEmfUtilityProcessHostClient() override;
+  // Helpers to send messages and set process name
+  base::string16 GetName() const override;
+  std::unique_ptr<MetafilePlayer> GetFileFromTemp(
+      std::unique_ptr<base::File, content::BrowserThread::DeleteOnFileThread>
+          temp_file) override;
+  void SendStartMessage(IPC::PlatformFileForTransit transit,
+                        bool print_text_with_gdi) override;
+  void SendGetPageMessage(int page_number,
+                          IPC::PlatformFileForTransit transit) override;
+  void SendStopMessage() override;
+
+  // Additional message handler needed for Pdf to Emf
+  void OnPreCacheFontCharacters(const LOGFONT& log_font,
+                                const base::string16& characters);
 
   DISALLOW_COPY_AND_ASSIGN(PdfToEmfUtilityProcessHostClient);
 };
 
-class PdfToEmfConverterImpl : public PdfToEmfConverter {
+class PdfConverterImpl : public PdfConverter {
  public:
-  PdfToEmfConverterImpl();
+  PdfConverterImpl();
 
-  ~PdfToEmfConverterImpl() override;
+  ~PdfConverterImpl() override;
 
   void Start(const scoped_refptr<base::RefCountedMemory>& data,
              const PdfRenderSettings& conversion_settings,
+             bool print_text_with_gdi,
              const StartCallback& start_callback) override;
 
   void GetPage(int page_number,
@@ -199,8 +250,25 @@ class PdfToEmfConverterImpl : public PdfToEmfConverter {
   // Helps to cancel callbacks if this object is destroyed.
   void RunCallback(const base::Closure& callback);
 
+ protected:
+  scoped_refptr<PdfConverterUtilityProcessHostClient> utility_client_;
+
  private:
-  scoped_refptr<PdfToEmfUtilityProcessHostClient> utility_client_;
+  DISALLOW_COPY_AND_ASSIGN(PdfConverterImpl);
+};
+
+class PdfToEmfConverterImpl : public PdfConverterImpl {
+ public:
+  PdfToEmfConverterImpl();
+
+  ~PdfToEmfConverterImpl() override;
+
+  void Start(const scoped_refptr<base::RefCountedMemory>& data,
+             const PdfRenderSettings& conversion_settings,
+             bool print_text_with_gdi,
+             const StartCallback& start_callback) override;
+
+ private:
   base::WeakPtrFactory<PdfToEmfConverterImpl> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PdfToEmfConverterImpl);
@@ -211,12 +279,12 @@ ScopedTempFile CreateTempFile(scoped_refptr<RefCountedTempDir>* temp_dir) {
     *temp_dir = new RefCountedTempDir();
   ScopedTempFile file;
   if (!(*temp_dir)->IsValid())
-    return file.Pass();
+    return file;
   base::FilePath path;
   if (!base::CreateTemporaryFileInDir((*temp_dir)->GetPath(), &path)) {
     PLOG(ERROR) << "Failed to create file in "
                 << (*temp_dir)->GetPath().value();
-    return file.Pass();
+    return file;
   }
   file.reset(new base::File(path,
                             base::File::FLAG_CREATE_ALWAYS |
@@ -228,7 +296,7 @@ ScopedTempFile CreateTempFile(scoped_refptr<RefCountedTempDir>* temp_dir) {
     PLOG(ERROR) << "Failed to create " << path.value();
     file.reset();
   }
-  return file.Pass();
+  return file;
 }
 
 ScopedTempFile CreateTempPdfFile(
@@ -241,21 +309,26 @@ ScopedTempFile CreateTempPdfFile(
       static_cast<int>(data->size()) !=
           pdf_file->WriteAtCurrentPos(data->front_as<char>(), data->size())) {
     pdf_file.reset();
-    return pdf_file.Pass();
+    return pdf_file;
   }
   pdf_file->Seek(base::File::FROM_BEGIN, 0);
-  return pdf_file.Pass();
+  return pdf_file;
 }
 
 bool LazyEmf::SafePlayback(HDC hdc) const {
   Emf emf;
   bool result = LoadEmf(&emf) && emf.SafePlayback(hdc);
-  // TODO(vitalybuka): Fix destruction of metafiles. For some reasons
-  // instances of Emf are not deleted. crbug.com/411683
+  // TODO(thestig): Fix destruction of metafiles. For some reasons
+  // instances of Emf are not deleted. https://crbug.com/260806
   // It's known that the Emf going to be played just once to a printer. So just
-  // release file here.
+  // release |file_| here.
   Close();
   return result;
+}
+
+bool LazyEmf::GetDataAsVector(std::vector<char>* buffer) const {
+  NOTREACHED();
+  return false;
 }
 
 bool LazyEmf::SaveTo(base::File* file) const {
@@ -265,7 +338,7 @@ bool LazyEmf::SaveTo(base::File* file) const {
 
 void LazyEmf::Close() const {
   file_.reset();
-  temp_dir_ = NULL;
+  temp_dir_ = nullptr;
 }
 
 bool LazyEmf::LoadEmf(Emf* emf) const {
@@ -279,28 +352,24 @@ bool LazyEmf::LoadEmf(Emf* emf) const {
   return emf->InitFromData(data.data(), data.size());
 }
 
-PdfToEmfUtilityProcessHostClient::PdfToEmfUtilityProcessHostClient(
-    base::WeakPtr<PdfToEmfConverterImpl> converter,
+PdfConverterUtilityProcessHostClient::PdfConverterUtilityProcessHostClient(
+    base::WeakPtr<PdfConverterImpl> converter,
     const PdfRenderSettings& settings)
-    : converter_(converter), settings_(settings) {
-}
+    : converter_(converter), settings_(settings) {}
 
-PdfToEmfUtilityProcessHostClient::~PdfToEmfUtilityProcessHostClient() {
-}
+PdfConverterUtilityProcessHostClient::~PdfConverterUtilityProcessHostClient() {}
 
-void PdfToEmfUtilityProcessHostClient::Start(
+void PdfConverterUtilityProcessHostClient::Start(
     const scoped_refptr<base::RefCountedMemory>& data,
-    const PdfToEmfConverter::StartCallback& start_callback) {
+    bool print_text_with_gdi,
+    const PdfConverter::StartCallback& start_callback) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
-    BrowserThread::PostTask(BrowserThread::IO,
-                            FROM_HERE,
-                            base::Bind(&PdfToEmfUtilityProcessHostClient::Start,
-                                       this,
-                                       data,
-                                       start_callback));
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        base::Bind(&PdfConverterUtilityProcessHostClient::Start, this, data,
+                   print_text_with_gdi, start_callback));
     return;
   }
-  data_ = data;
 
   // Store callback before any OnFailed() call to make it called on failure.
   start_callback_ = start_callback;
@@ -308,63 +377,48 @@ void PdfToEmfUtilityProcessHostClient::Start(
   // NOTE: This process _must_ be sandboxed, otherwise the pdf dll will load
   // gdiplus.dll, change how rendering happens, and not be able to correctly
   // generate when sent to a metafile DC.
-  utility_process_host_ =
-      content::UtilityProcessHost::Create(
-          this, base::MessageLoop::current()->task_runner())->AsWeakPtr();
-  utility_process_host_->SetName(l10n_util::GetStringUTF16(
-      IDS_UTILITY_PROCESS_EMF_CONVERTOR_NAME));
-  // Should reply with OnProcessStarted().
-  Send(new ChromeUtilityMsg_StartupPing);
-}
+  utility_process_host_ = content::UtilityProcessHost::Create(
+                              this, base::ThreadTaskRunnerHandle::Get())
+                              ->AsWeakPtr();
+  utility_process_host_->SetName(GetName());
 
-void PdfToEmfUtilityProcessHostClient::OnProcessStarted() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (!utility_process_host_)
-    return OnFailed();
-
-  scoped_refptr<base::RefCountedMemory> data = data_;
-  data_ = NULL;
   BrowserThread::PostTaskAndReplyWithResult(
-      BrowserThread::FILE,
-      FROM_HERE,
+      BrowserThread::FILE, FROM_HERE,
       base::Bind(&CreateTempPdfFile, data, &temp_dir_),
-      base::Bind(&PdfToEmfUtilityProcessHostClient::OnTempPdfReady, this));
+      base::Bind(&PdfConverterUtilityProcessHostClient::OnTempPdfReady, this,
+                 print_text_with_gdi));
 }
 
-void PdfToEmfUtilityProcessHostClient::OnTempPdfReady(ScopedTempFile pdf) {
+void PdfConverterUtilityProcessHostClient::OnTempPdfReady(
+    bool print_text_with_gdi,
+    ScopedTempFile pdf) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!utility_process_host_ || !pdf)
     return OnFailed();
-  base::ProcessHandle process = utility_process_host_->GetData().handle;
   // Should reply with OnPageCount().
-  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles(
-      IPC::GetFileHandleForProcess(pdf->GetPlatformFile(), process, false),
-      settings_));
+  SendStartMessage(
+      IPC::GetPlatformFileForTransit(pdf->GetPlatformFile(), false),
+      print_text_with_gdi);
 }
 
-void PdfToEmfUtilityProcessHostClient::OnPageCount(int page_count) {
+void PdfConverterUtilityProcessHostClient::OnPageCount(int page_count) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (start_callback_.is_null())
     return OnFailed();
-  BrowserThread::PostTask(BrowserThread::UI,
-                          FROM_HERE,
-                          base::Bind(&PdfToEmfConverterImpl::RunCallback,
-                                     converter_,
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+                          base::Bind(&PdfConverterImpl::RunCallback, converter_,
                                      base::Bind(start_callback_, page_count)));
   start_callback_.Reset();
 }
 
-void PdfToEmfUtilityProcessHostClient::GetPage(
+void PdfConverterUtilityProcessHostClient::GetPage(
     int page_number,
-    const PdfToEmfConverter::GetPageCallback& get_page_callback) {
+    const PdfConverter::GetPageCallback& get_page_callback) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
     BrowserThread::PostTask(
-        BrowserThread::IO,
-        FROM_HERE,
-        base::Bind(&PdfToEmfUtilityProcessHostClient::GetPage,
-                   this,
-                   page_number,
-                   get_page_callback));
+        BrowserThread::IO, FROM_HERE,
+        base::Bind(&PdfConverterUtilityProcessHostClient::GetPage, this,
+                   page_number, get_page_callback));
     return;
   }
 
@@ -375,96 +429,74 @@ void PdfToEmfUtilityProcessHostClient::GetPage(
     return OnFailed();
 
   BrowserThread::PostTaskAndReplyWithResult(
-      BrowserThread::FILE,
-      FROM_HERE,
-      base::Bind(&CreateTempFile, &temp_dir_),
-      base::Bind(&PdfToEmfUtilityProcessHostClient::OnTempEmfReady,
-                 this,
+      BrowserThread::FILE, FROM_HERE, base::Bind(&CreateTempFile, &temp_dir_),
+      base::Bind(&PdfConverterUtilityProcessHostClient::OnTempFileReady, this,
                  &get_page_callbacks_.back()));
 }
 
-void PdfToEmfUtilityProcessHostClient::OnTempEmfReady(
+void PdfConverterUtilityProcessHostClient::OnTempFileReady(
     GetPageCallbackData* callback_data,
-    ScopedTempFile emf) {
+    ScopedTempFile temp_file) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (!utility_process_host_ || !emf)
+  if (!utility_process_host_ || !temp_file)
     return OnFailed();
-  base::ProcessHandle process = utility_process_host_->GetData().handle;
   IPC::PlatformFileForTransit transit =
-      IPC::GetFileHandleForProcess(emf->GetPlatformFile(), process, false);
-  callback_data->set_emf(emf.Pass());
+      IPC::GetPlatformFileForTransit(temp_file->GetPlatformFile(), false);
+  callback_data->set_file(std::move(temp_file));
   // Should reply with OnPageDone().
-  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles_GetPage(
-      callback_data->page_number(), transit));
+  SendGetPageMessage(callback_data->page_number(), transit);
 }
 
-void PdfToEmfUtilityProcessHostClient::OnPageDone(bool success,
-                                                  float scale_factor) {
+void PdfConverterUtilityProcessHostClient::OnPageDone(bool success,
+                                                      float scale_factor) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (get_page_callbacks_.empty())
     return OnFailed();
   GetPageCallbackData& data = get_page_callbacks_.front();
-  scoped_ptr<MetafilePlayer> emf;
+  std::unique_ptr<MetafilePlayer> file;
 
   if (success) {
-    ScopedTempFile temp_emf = data.TakeEmf();
-    if (!temp_emf)  // Unexpected message from utility process.
+    ScopedTempFile temp_file = data.TakeFile();
+    if (!temp_file)  // Unexpected message from utility process.
       return OnFailed();
-    emf.reset(new LazyEmf(temp_dir_, temp_emf.Pass()));
+    file = GetFileFromTemp(std::move(temp_file));
   }
 
-  BrowserThread::PostTask(BrowserThread::UI,
-                          FROM_HERE,
-                          base::Bind(&PdfToEmfConverterImpl::RunCallback,
-                                     converter_,
-                                     base::Bind(data.callback(),
-                                                data.page_number(),
-                                                scale_factor,
-                                                base::Passed(&emf))));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      base::Bind(&PdfConverterImpl::RunCallback, converter_,
+                 base::Bind(data.callback(), data.page_number(), scale_factor,
+                            base::Passed(&file))));
   get_page_callbacks_.pop();
 }
 
-void PdfToEmfUtilityProcessHostClient::Stop() {
+void PdfConverterUtilityProcessHostClient::Stop() {
   if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
     BrowserThread::PostTask(
-        BrowserThread::IO,
-        FROM_HERE,
+        BrowserThread::IO, FROM_HERE,
         base::Bind(&PdfToEmfUtilityProcessHostClient::Stop, this));
     return;
   }
-  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles_Stop());
+  SendStopMessage();
 }
 
-void PdfToEmfUtilityProcessHostClient::OnProcessCrashed(int exit_code) {
+void PdfConverterUtilityProcessHostClient::OnProcessCrashed(int exit_code) {
   OnFailed();
 }
 
-void PdfToEmfUtilityProcessHostClient::OnProcessLaunchFailed() {
+void PdfConverterUtilityProcessHostClient::OnProcessLaunchFailed(
+    int exit_code) {
   OnFailed();
 }
 
-bool PdfToEmfUtilityProcessHostClient::OnMessageReceived(
-    const IPC::Message& message) {
-  bool handled = true;
-  IPC_BEGIN_MESSAGE_MAP(PdfToEmfUtilityProcessHostClient, message)
-    IPC_MESSAGE_HANDLER(ChromeUtilityHostMsg_ProcessStarted, OnProcessStarted)
-    IPC_MESSAGE_HANDLER(
-        ChromeUtilityHostMsg_RenderPDFPagesToMetafiles_PageCount, OnPageCount)
-    IPC_MESSAGE_HANDLER(ChromeUtilityHostMsg_RenderPDFPagesToMetafiles_PageDone,
-                        OnPageDone)
-    IPC_MESSAGE_UNHANDLED(handled = false)
-  IPC_END_MESSAGE_MAP()
-  return handled;
-}
-
-bool PdfToEmfUtilityProcessHostClient::Send(IPC::Message* msg) {
+bool PdfConverterUtilityProcessHostClient::Send(IPC::Message* msg) {
   if (utility_process_host_)
     return utility_process_host_->Send(msg);
   delete msg;
   return false;
 }
 
-void PdfToEmfUtilityProcessHostClient::OnFailed() {
+void PdfConverterUtilityProcessHostClient::OnFailed() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!start_callback_.is_null())
     OnPageCount(0);
@@ -473,8 +505,108 @@ void PdfToEmfUtilityProcessHostClient::OnFailed() {
   utility_process_host_.reset();
 }
 
-PdfToEmfConverterImpl::PdfToEmfConverterImpl() : weak_ptr_factory_(this) {
+// PDF to Emf
+PdfToEmfUtilityProcessHostClient::~PdfToEmfUtilityProcessHostClient() {}
+
+void PdfToEmfUtilityProcessHostClient::OnPreCacheFontCharacters(
+    const LOGFONT& font,
+    const base::string16& str) {
+  // TODO(scottmg): pdf/ppapi still require the renderer to be able to precache
+  // GDI fonts (http://crbug.com/383227), even when using DirectWrite.
+  // Eventually this shouldn't be added and should be moved to
+  // FontCacheDispatcher too. http://crbug.com/356346.
+
+  // First, comments from FontCacheDispatcher::OnPreCacheFont do apply here too.
+  // Except that for True Type fonts,
+  // GetTextMetrics will not load the font in memory.
+  // The only way windows seem to load properly, it is to create a similar
+  // device (like the one in which we print), then do an ExtTextOut,
+  // as we do in the printing thread, which is sandboxed.
+  HDC hdc = CreateEnhMetaFile(nullptr, nullptr, nullptr, nullptr);
+  HFONT font_handle = CreateFontIndirect(&font);
+  DCHECK(font_handle != nullptr);
+
+  HGDIOBJ old_font = SelectObject(hdc, font_handle);
+  DCHECK(old_font != nullptr);
+
+  ExtTextOut(hdc, 0, 0, ETO_GLYPH_INDEX, 0, str.c_str(), str.length(), nullptr);
+
+  SelectObject(hdc, old_font);
+  DeleteObject(font_handle);
+
+  HENHMETAFILE metafile = CloseEnhMetaFile(hdc);
+
+  if (metafile)
+    DeleteEnhMetaFile(metafile);
 }
+
+bool PdfToEmfUtilityProcessHostClient::OnMessageReceived(
+    const IPC::Message& message) {
+  bool handled = true;
+  IPC_BEGIN_MESSAGE_MAP(PdfToEmfUtilityProcessHostClient, message)
+    IPC_MESSAGE_HANDLER(
+        ChromeUtilityHostMsg_RenderPDFPagesToMetafiles_PageCount, OnPageCount)
+    IPC_MESSAGE_HANDLER(ChromeUtilityHostMsg_RenderPDFPagesToMetafiles_PageDone,
+                        OnPageDone)
+    IPC_MESSAGE_HANDLER(ChromeUtilityHostMsg_PreCacheFontCharacters,
+                        OnPreCacheFontCharacters)
+    IPC_MESSAGE_UNHANDLED(handled = false)
+  IPC_END_MESSAGE_MAP()
+  return handled;
+}
+
+base::string16 PdfToEmfUtilityProcessHostClient::GetName() const {
+  return l10n_util::GetStringUTF16(IDS_UTILITY_PROCESS_EMF_CONVERTOR_NAME);
+}
+
+std::unique_ptr<MetafilePlayer>
+PdfToEmfUtilityProcessHostClient::GetFileFromTemp(
+    std::unique_ptr<base::File, content::BrowserThread::DeleteOnFileThread>
+        temp_file) {
+  return base::MakeUnique<LazyEmf>(temp_dir_, std::move(temp_file));
+}
+
+void PdfToEmfUtilityProcessHostClient::SendGetPageMessage(
+    int page_number,
+    IPC::PlatformFileForTransit transit) {
+  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles_GetPage(page_number,
+                                                              transit));
+}
+
+void PdfToEmfUtilityProcessHostClient::SendStartMessage(
+    IPC::PlatformFileForTransit transit,
+    bool print_text_with_gdi) {
+  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles(transit, settings_,
+                                                      print_text_with_gdi));
+}
+
+void PdfToEmfUtilityProcessHostClient::SendStopMessage() {
+  Send(new ChromeUtilityMsg_RenderPDFPagesToMetafiles_Stop());
+}
+
+// Pdf Converter Impl and subclasses
+PdfConverterImpl::PdfConverterImpl() {}
+
+PdfConverterImpl::~PdfConverterImpl() {}
+
+void PdfConverterImpl::Start(const scoped_refptr<base::RefCountedMemory>& data,
+                             const PdfRenderSettings& conversion_settings,
+                             bool print_text_with_gdi,
+                             const StartCallback& start_callback) {
+  DCHECK(!utility_client_.get());
+}
+
+void PdfConverterImpl::GetPage(int page_number,
+                               const GetPageCallback& get_page_callback) {
+  utility_client_->GetPage(page_number, get_page_callback);
+}
+
+void PdfConverterImpl::RunCallback(const base::Closure& callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  callback.Run();
+}
+
+PdfToEmfConverterImpl::PdfToEmfConverterImpl() : weak_ptr_factory_(this) {}
 
 PdfToEmfConverterImpl::~PdfToEmfConverterImpl() {
   if (utility_client_.get())
@@ -484,31 +616,21 @@ PdfToEmfConverterImpl::~PdfToEmfConverterImpl() {
 void PdfToEmfConverterImpl::Start(
     const scoped_refptr<base::RefCountedMemory>& data,
     const PdfRenderSettings& conversion_settings,
+    bool print_text_with_gdi,
     const StartCallback& start_callback) {
   DCHECK(!utility_client_.get());
   utility_client_ = new PdfToEmfUtilityProcessHostClient(
       weak_ptr_factory_.GetWeakPtr(), conversion_settings);
-  utility_client_->Start(data, start_callback);
-}
-
-void PdfToEmfConverterImpl::GetPage(int page_number,
-                                    const GetPageCallback& get_page_callback) {
-  utility_client_->GetPage(page_number, get_page_callback);
-}
-
-void PdfToEmfConverterImpl::RunCallback(const base::Closure& callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  callback.Run();
+  utility_client_->Start(data, print_text_with_gdi, start_callback);
 }
 
 }  // namespace
 
-PdfToEmfConverter::~PdfToEmfConverter() {
-}
+PdfConverter::~PdfConverter() {}
 
 // static
-scoped_ptr<PdfToEmfConverter> PdfToEmfConverter::CreateDefault() {
-  return scoped_ptr<PdfToEmfConverter>(new PdfToEmfConverterImpl());
+std::unique_ptr<PdfConverter> PdfConverter::CreatePdfToEmfConverter() {
+  return base::MakeUnique<PdfToEmfConverterImpl>();
 }
 
 }  // namespace printing

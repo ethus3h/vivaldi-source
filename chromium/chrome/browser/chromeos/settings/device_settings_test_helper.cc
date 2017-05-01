@@ -14,6 +14,7 @@
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/cryptohome/cryptohome_parameters.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "content/public/browser/browser_thread.h"
@@ -109,9 +110,12 @@ bool DeviceSettingsTestHelper::IsScreenLocked() const { return false; }
 void DeviceSettingsTestHelper::EmitLoginPromptVisible() {}
 
 void DeviceSettingsTestHelper::RestartJob(
-    const std::vector<std::string>& argv) {}
+    int socket_fd,
+    const std::vector<std::string>& argv,
+    const VoidDBusMethodCallback& callback) {}
 
-void DeviceSettingsTestHelper::StartSession(const std::string& user_email) {}
+void DeviceSettingsTestHelper::StartSession(
+    const cryptohome::Identification& cryptohome_id) {}
 
 void DeviceSettingsTestHelper::StopSession() {}
 
@@ -135,13 +139,16 @@ void DeviceSettingsTestHelper::RetrieveDevicePolicy(
   device_policy_.retrieve_callbacks_.push_back(callback);
 }
 
-void DeviceSettingsTestHelper::RetrievePolicyForUser(
-    const std::string& username,
-    const RetrievePolicyCallback& callback) {
+std::string DeviceSettingsTestHelper::BlockingRetrieveDevicePolicy() {
+  return device_policy_.policy_blob_;
 }
 
+void DeviceSettingsTestHelper::RetrievePolicyForUser(
+    const cryptohome::Identification& cryptohome_id,
+    const RetrievePolicyCallback& callback) {}
+
 std::string DeviceSettingsTestHelper::BlockingRetrievePolicyForUser(
-    const std::string& username) {
+    const cryptohome::Identification& cryptohome_id) {
   return "";
 }
 
@@ -152,6 +159,11 @@ void DeviceSettingsTestHelper::RetrieveDeviceLocalAccountPolicy(
       callback);
 }
 
+std::string DeviceSettingsTestHelper::BlockingRetrieveDeviceLocalAccountPolicy(
+    const std::string& account_id) {
+  return "";
+}
+
 void DeviceSettingsTestHelper::StoreDevicePolicy(
     const std::string& policy_blob,
     const StorePolicyCallback& callback) {
@@ -160,10 +172,9 @@ void DeviceSettingsTestHelper::StoreDevicePolicy(
 }
 
 void DeviceSettingsTestHelper::StorePolicyForUser(
-    const std::string& username,
+    const cryptohome::Identification& cryptohome_id,
     const std::string& policy_blob,
-    const StorePolicyCallback& callback) {
-}
+    const StorePolicyCallback& callback) {}
 
 void DeviceSettingsTestHelper::StoreDeviceLocalAccountPolicy(
     const std::string& account_id,
@@ -174,7 +185,7 @@ void DeviceSettingsTestHelper::StoreDeviceLocalAccountPolicy(
 }
 
 void DeviceSettingsTestHelper::SetFlagsForUser(
-    const std::string& account_id,
+    const cryptohome::Identification& cryptohome_id,
     const std::vector<std::string>& flags) {}
 
 void DeviceSettingsTestHelper::GetServerBackedStateKeys(
@@ -183,13 +194,34 @@ void DeviceSettingsTestHelper::GetServerBackedStateKeys(
 void DeviceSettingsTestHelper::CheckArcAvailability(
     const ArcCallback& callback) {}
 
-void DeviceSettingsTestHelper::StartArcInstance(const std::string& socket_path,
-                                                const ArcCallback& callback) {}
+void DeviceSettingsTestHelper::StartArcInstance(
+    const cryptohome::Identification& cryptohome_id,
+    bool disable_boot_completed_broadcast,
+    const StartArcInstanceCallback& callback) {}
 
 void DeviceSettingsTestHelper::StopArcInstance(const ArcCallback& callback) {}
 
+void DeviceSettingsTestHelper::PrioritizeArcInstance(
+    const ArcCallback& callback) {}
+
+void DeviceSettingsTestHelper::SetArcCpuRestriction(
+    login_manager::ContainerCpuRestrictionState restriction_state,
+    const ArcCallback& callback) {}
+
+void DeviceSettingsTestHelper::EmitArcBooted() {}
+
+void DeviceSettingsTestHelper::GetArcStartTime(
+    const GetArcStartTimeCallback& callback) {}
+
+void DeviceSettingsTestHelper::RemoveArcData(
+    const cryptohome::Identification& cryptohome_id,
+    const ArcCallback& callback) {}
+
 DeviceSettingsTestHelper::PolicyState::PolicyState()
     : store_result_(true) {}
+
+DeviceSettingsTestHelper::PolicyState::PolicyState(const PolicyState& other) =
+    default;
 
 DeviceSettingsTestHelper::PolicyState::~PolicyState() {}
 

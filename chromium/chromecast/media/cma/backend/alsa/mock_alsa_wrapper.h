@@ -5,10 +5,10 @@
 #ifndef CHROMECAST_MEDIA_CMA_BACKEND_ALSA_MOCK_ALSA_WRAPPER_H_
 #define CHROMECAST_MEDIA_CMA_BACKEND_ALSA_MOCK_ALSA_WRAPPER_H_
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "chromecast/media/cma/backend/alsa/alsa_wrapper.h"
 #include "media/audio/alsa/alsa_wrapper.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -70,8 +70,11 @@ class MockAlsaWrapper : public AlsaWrapper {
   MOCK_METHOD2(PcmStatus, int(snd_pcm_t* handle, snd_pcm_status_t* status));
   MOCK_METHOD1(PcmStatusGetDelay,
                snd_pcm_sframes_t(const snd_pcm_status_t* obj));
+  MOCK_METHOD1(PcmStatusGetAvail,
+               snd_pcm_uframes_t(const snd_pcm_status_t* obj));
   MOCK_METHOD2(PcmStatusGetHtstamp,
                void(const snd_pcm_status_t* obj, snd_htimestamp_t* ptr));
+  MOCK_METHOD1(PcmStatusGetState, snd_pcm_state_t(const snd_pcm_status_t* obj));
 
   MOCK_METHOD1(PcmHwParamsMalloc, int(snd_pcm_hw_params_t** ptr));
   MOCK_METHOD1(PcmHwParamsFree, void(snd_pcm_hw_params_t* obj));
@@ -112,7 +115,7 @@ class MockAlsaWrapper : public AlsaWrapper {
                int(snd_pcm_t* handle,
                    snd_pcm_hw_params_t* params,
                    snd_pcm_format_t format));
-  MOCK_METHOD4(PcmHwParamsTestRateNear,
+  MOCK_METHOD4(PcmHwParamsTestRate,
                int(snd_pcm_t* handle,
                    snd_pcm_hw_params_t* params,
                    unsigned int rate,
@@ -140,15 +143,17 @@ class MockAlsaWrapper : public AlsaWrapper {
                int(snd_pcm_t* handle, snd_pcm_sw_params_t* obj, int val));
   MOCK_METHOD2(PcmSwParams, int(snd_pcm_t* handle, snd_pcm_sw_params_t* obj));
 
-  // Getters for test control.
+  // Getters/setters for test control.
   snd_pcm_state_t state();
+  void set_state(snd_pcm_state_t state);
+  void set_avail(snd_pcm_uframes_t avail);
   const std::vector<uint8_t>& data();
 
  private:
   class FakeAlsaWrapper;
 
   // Certain calls will be delegated to this class.
-  scoped_ptr<FakeAlsaWrapper> fake_;
+  std::unique_ptr<FakeAlsaWrapper> fake_;
 
   DISALLOW_COPY_AND_ASSIGN(MockAlsaWrapper);
 };

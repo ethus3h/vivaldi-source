@@ -7,7 +7,7 @@
 #import <WebKit/WebKit.h>
 
 #include "base/logging.h"
-#include "base/mac/scoped_nsobject.h"
+#import "base/mac/scoped_nsobject.h"
 
 namespace {
 
@@ -37,7 +37,6 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
 
 @implementation CRWWebViewContentView
 
-@synthesize webViewType = _webViewType;
 @synthesize shouldUseInsetForTopPadding = _shouldUseInsetForTopPadding;
 
 - (instancetype)initWithWebView:(UIView*)webView
@@ -49,9 +48,6 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
     DCHECK([scrollView isDescendantOfView:webView]);
     _webView.reset([webView retain]);
     _scrollView.reset([scrollView retain]);
-    _webViewType = [webView isKindOfClass:[WKWebView class]]
-                       ? web::WK_WEB_VIEW_TYPE
-                       : web::UI_WEB_VIEW_TYPE;
   }
   return self;
 }
@@ -81,6 +77,10 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
                                             blue:kBackgroundRGBComponents[2]
                                            alpha:1.0];
   }
+}
+
+- (BOOL)becomeFirstResponder {
+  return [_webView becomeFirstResponder];
 }
 
 - (void)setFrame:(CGRect)frame {
@@ -119,15 +119,13 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
 }
 
 - (CGFloat)topContentPadding {
-  BOOL isSettingWebViewFrame = self.webViewType == web::WK_WEB_VIEW_TYPE &&
-                               !self.shouldUseInsetForTopPadding;
+  BOOL isSettingWebViewFrame = !self.shouldUseInsetForTopPadding;
   return isSettingWebViewFrame ? _topContentPadding
                                : [_scrollView contentInset].top;
 }
 
 - (void)setTopContentPadding:(CGFloat)newTopPadding {
-  if (self.webViewType == web::WK_WEB_VIEW_TYPE &&
-      !self.shouldUseInsetForTopPadding) {
+  if (!self.shouldUseInsetForTopPadding) {
     if (_topContentPadding != newTopPadding) {
       // Update the content offset of the scroll view to match the padding
       // that will be included in the frame.
@@ -139,6 +137,13 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
       // Update web view frame immediately to make |topContentPadding|
       // animatable.
       [self updateWebViewFrame];
+      // Setting WKWebView frame can mistakenly reset contentOffset. Change it
+      // back to the initial value if necessary.
+      // TODO(crbug.com/645857): Remove this workaround once WebKit bug is
+      // fixed.
+      if ([_scrollView contentOffset].y != contentOffset.y) {
+        [_scrollView setContentOffset:contentOffset];
+      }
     }
   } else {
     UIEdgeInsets inset = [_scrollView contentInset];

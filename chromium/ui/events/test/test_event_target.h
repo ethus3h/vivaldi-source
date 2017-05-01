@@ -7,19 +7,15 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "ui/events/event_target.h"
 
 typedef std::vector<std::string> HandlerSequenceRecorder;
-
-namespace gfx {
-class Point;
-}
 
 namespace ui {
 namespace test {
@@ -30,8 +26,8 @@ class TestEventTarget : public EventTarget,
   TestEventTarget();
   ~TestEventTarget() override;
 
-  void AddChild(scoped_ptr<TestEventTarget> child);
-  scoped_ptr<TestEventTarget> RemoveChild(TestEventTarget* child);
+  void AddChild(std::unique_ptr<TestEventTarget> child);
+  std::unique_ptr<TestEventTarget> RemoveChild(TestEventTarget* child);
 
   TestEventTarget* parent() { return parent_; }
 
@@ -39,10 +35,10 @@ class TestEventTarget : public EventTarget,
     mark_events_as_handled_ = handle;
   }
 
-  TestEventTarget* child_at(int index) { return children_[index]; }
+  TestEventTarget* child_at(int index) { return children_[index].get(); }
   size_t child_count() const { return children_.size(); }
 
-  void SetEventTargeter(scoped_ptr<EventTargeter> targeter);
+  void SetEventTargeter(std::unique_ptr<EventTargeter> targeter);
 
   bool DidReceiveEvent(ui::EventType type) const;
   void ResetReceivedEvents();
@@ -63,7 +59,7 @@ class TestEventTarget : public EventTarget,
   // EventTarget:
   bool CanAcceptEvent(const ui::Event& event) override;
   EventTarget* GetParentTarget() override;
-  scoped_ptr<EventTargetIterator> GetChildIterator() const override;
+  std::unique_ptr<EventTargetIterator> GetChildIterator() const override;
 
   // EventHandler:
   void OnEvent(Event* event) override;
@@ -72,8 +68,8 @@ class TestEventTarget : public EventTarget,
   void set_parent(TestEventTarget* parent) { parent_ = parent; }
 
   TestEventTarget* parent_;
-  ScopedVector<TestEventTarget> children_;
-  scoped_ptr<EventTargeter> targeter_;
+  std::vector<std::unique_ptr<TestEventTarget>> children_;
+  std::unique_ptr<EventTargeter> targeter_;
   bool mark_events_as_handled_;
 
   std::set<ui::EventType> received_;

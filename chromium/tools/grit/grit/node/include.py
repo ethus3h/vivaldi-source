@@ -7,16 +7,20 @@
 """
 
 import os
+import sys
 
-import grit.format.html_inline
-import grit.format.rc_header
-import grit.format.rc
-
-from grit.node import base
+from grit import exception
 from grit import util
+import grit.format.gzip_string
+import grit.format.html_inline
+import grit.format.rc
+import grit.format.rc_header
+from grit.format import minifier
+from grit.node import base
 
 class IncludeNode(base.Node):
   """An <include> element."""
+
   def __init__(self):
     super(IncludeNode, self).__init__()
 
@@ -35,9 +39,9 @@ class IncludeNode(base.Node):
       filename = self.ToRealPath(self.GetInputPath())
       self._flattened_data = (
           grit.format.html_inline.InlineToString(filename, self,
+              preprocess_only=False,
               allow_external_script=allow_external_script))
     return self._flattened_data
-
   def MandatoryAttributes(self):
     return ['name', 'type', 'file']
 
@@ -47,6 +51,7 @@ class IncludeNode(base.Node):
             'filenameonly': 'false',
             'mkoutput': 'false',
             'flattenhtml': 'false',
+            'compress': 'false',
             'allowexternalscript': 'false',
             'relativepath': 'false',
             'use_base_dir': 'true',
@@ -59,8 +64,14 @@ class IncludeNode(base.Node):
 
     # We have no control over code that calles ToRealPath later, so convert
     # the path to be relative against our basedir.
-    if self.attrs.get('use_base_dir', 'true') != 'true':
+    if self.attrs.get('use_base_dir', 'true') not in ['true', 'false']:
+      if "${" not in self.attrs['file']:
+        self.attrs['file'] = util.PathSearcher.LocatePath(
+          os.path.join(self.attrs.get('use_base_dir', self.attrs['file'])))
       return os.path.relpath(self.attrs['file'], self.GetRoot().GetBaseDir())
+
+    if "${" not in self.attrs['file']:
+      self.attrs['file'] = util.PathSearcher.LocatePath(self.attrs['file'])
 
     return self.attrs['file']
 
@@ -83,12 +94,24 @@ class IncludeNode(base.Node):
     from grit.format import rc_header
     id_map = rc_header.GetIds(self.GetRoot())
     id = id_map[self.GetTextualIds()[0]]
+    filename = self.ToRealPath(self.GetInputPath())
     if self.attrs['flattenhtml'] == 'true':
       allow_external_script = self.attrs['allowexternalscript'] == 'true'
       data = self._GetFlattenedData(allow_external_script=allow_external_script)
     else:
-      filename = self.ToRealPath(self.GetInputPath())
       data = util.ReadFile(filename, util.BINARY)
+    # Note that the minifier will only do anything if a minifier command
+    # has been set in the command line.
+    data = minifier.Minify(data, filename)
+    use_gzip = self.attrs.get('compress', '') == 'gzip'
+    if use_gzip and self.GetRoot().target_platform != 'ios':
+      # We only use rsyncable compression on Linux.
+      # We exclude ChromeOS since ChromeOS bots are Linux based but do not have
+      # the --rsyncable option built in for gzip. See crbug.com/617950.
+      if sys.platform == 'linux2' and 'chromeos' not in self.GetRoot().defines:
+        data = grit.format.gzip_string.GzipStringRsyncable(data)
+      else:
+        data = grit.format.gzip_string.GzipString(data)
 
     # Include does not care about the encoding, because it only returns binary
     # data.

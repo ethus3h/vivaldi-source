@@ -5,11 +5,12 @@
 #include "components/autofill/core/browser/phone_field.h"
 
 #include <string.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -92,6 +93,11 @@ const PhoneField::Parser PhoneField::kPhoneFieldGrammars[] = {
     {REGEX_PREFIX_SEPARATOR, FIELD_PHONE, 0},
     {REGEX_SUFFIX_SEPARATOR, FIELD_SUFFIX, 0},
     {REGEX_SEPARATOR, FIELD_NONE, 0},
+    // Area code: <ac>:3 Prefix: <prefix>:3 Suffix: <suffix>:4 (Ext: <ext>)?
+    {REGEX_AREA, FIELD_AREA_CODE, 3},
+    {REGEX_PREFIX, FIELD_PHONE, 3},
+    {REGEX_SUFFIX, FIELD_SUFFIX, 4},
+    {REGEX_SEPARATOR, FIELD_NONE, 0},
     // Phone: <ac> Prefix: <phone> Suffix: <suffix> (Ext: <ext>)?
     {REGEX_PHONE, FIELD_AREA_CODE, 0},
     {REGEX_PREFIX, FIELD_PHONE, 0},
@@ -124,7 +130,7 @@ const PhoneField::Parser PhoneField::kPhoneFieldGrammars[] = {
 };
 
 // static
-scoped_ptr<FormField> PhoneField::Parse(AutofillScanner* scanner) {
+std::unique_ptr<FormField> PhoneField::Parse(AutofillScanner* scanner) {
   if (scanner->IsEnd())
     return nullptr;
 
@@ -177,7 +183,7 @@ scoped_ptr<FormField> PhoneField::Parse(AutofillScanner* scanner) {
     return nullptr;
   }
 
-  scoped_ptr<PhoneField> phone_field(new PhoneField);
+  std::unique_ptr<PhoneField> phone_field(new PhoneField);
   for (int i = 0; i < FIELD_MAX; ++i)
     phone_field->parsed_phone_fields_[i] = parsed_fields[i];
 
@@ -202,25 +208,24 @@ scoped_ptr<FormField> PhoneField::Parse(AutofillScanner* scanner) {
   return std::move(phone_field);
 }
 
-bool PhoneField::ClassifyField(ServerFieldTypeMap* map) const {
-  bool ok = true;
-
+void PhoneField::AddClassifications(
+    FieldCandidatesMap* field_candidates) const {
   DCHECK(parsed_phone_fields_[FIELD_PHONE]);  // Phone was correctly parsed.
 
   if ((parsed_phone_fields_[FIELD_COUNTRY_CODE]) ||
       (parsed_phone_fields_[FIELD_AREA_CODE]) ||
       (parsed_phone_fields_[FIELD_SUFFIX])) {
     if (parsed_phone_fields_[FIELD_COUNTRY_CODE]) {
-      ok = ok && AddClassification(parsed_phone_fields_[FIELD_COUNTRY_CODE],
-                                   PHONE_HOME_COUNTRY_CODE,
-                                   map);
+      AddClassification(parsed_phone_fields_[FIELD_COUNTRY_CODE],
+                        PHONE_HOME_COUNTRY_CODE, kBasePhoneParserScore,
+                        field_candidates);
     }
 
     ServerFieldType field_number_type = PHONE_HOME_NUMBER;
     if (parsed_phone_fields_[FIELD_AREA_CODE]) {
-      ok = ok && AddClassification(parsed_phone_fields_[FIELD_AREA_CODE],
-                                   PHONE_HOME_CITY_CODE,
-                                   map);
+      AddClassification(parsed_phone_fields_[FIELD_AREA_CODE],
+                        PHONE_HOME_CITY_CODE, kBasePhoneParserScore,
+                        field_candidates);
     } else if (parsed_phone_fields_[FIELD_COUNTRY_CODE]) {
       // Only if we can find country code without city code, it means the phone
       // number include city code.
@@ -228,23 +233,25 @@ bool PhoneField::ClassifyField(ServerFieldTypeMap* map) const {
     }
     // We tag the prefix as PHONE_HOME_NUMBER, then when filling the form
     // we fill only the prefix depending on the size of the input field.
-    ok = ok && AddClassification(parsed_phone_fields_[FIELD_PHONE],
-                                 field_number_type,
-                                 map);
+    AddClassification(parsed_phone_fields_[FIELD_PHONE], field_number_type,
+                      kBasePhoneParserScore, field_candidates);
     // We tag the suffix as PHONE_HOME_NUMBER, then when filling the form
     // we fill only the suffix depending on the size of the input field.
     if (parsed_phone_fields_[FIELD_SUFFIX]) {
-      ok = ok && AddClassification(parsed_phone_fields_[FIELD_SUFFIX],
-                                   PHONE_HOME_NUMBER,
-                                   map);
+      AddClassification(parsed_phone_fields_[FIELD_SUFFIX], PHONE_HOME_NUMBER,
+                        kBasePhoneParserScore, field_candidates);
     }
   } else {
-    ok = AddClassification(parsed_phone_fields_[FIELD_PHONE],
-                           PHONE_HOME_WHOLE_NUMBER,
-                           map);
+    AddClassification(parsed_phone_fields_[FIELD_PHONE],
+                      PHONE_HOME_WHOLE_NUMBER, kBasePhoneParserScore,
+                      field_candidates);
   }
 
-  return ok;
+  if (parsed_phone_fields_[FIELD_EXTENSION]) {
+    AddClassification(parsed_phone_fields_[FIELD_EXTENSION],
+                      PHONE_HOME_EXTENSION, kBasePhoneParserScore,
+                      field_candidates);
+  }
 }
 
 PhoneField::PhoneField() {

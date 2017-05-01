@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/chromeos/login/screens/update_screen.h"
+
+#include <memory>
+
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/prefs/pref_service.h"
+#include "base/run_loop.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/screens/mock_base_screen_delegate.h"
 #include "chrome/browser/chromeos/login/screens/mock_error_screen.h"
 #include "chrome/browser/chromeos/login/screens/network_error.h"
-#include "chrome/browser/chromeos/login/screens/update_screen.h"
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/login/test/wizard_in_process_browser_test.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
@@ -20,6 +22,7 @@
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_update_engine_client.h"
 #include "chromeos/network/portal_detector/network_portal_detector.h"
+#include "components/prefs/pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -41,16 +44,16 @@ const char kStubWifiGuid[] = "wlan0";
 
 class UpdateScreenTest : public WizardInProcessBrowserTest {
  public:
-  UpdateScreenTest() : WizardInProcessBrowserTest("update"),
-                       fake_update_engine_client_(NULL),
-                       network_portal_detector_(NULL) {
-  }
+  UpdateScreenTest()
+      : WizardInProcessBrowserTest(OobeScreen::SCREEN_OOBE_UPDATE),
+        fake_update_engine_client_(nullptr),
+        network_portal_detector_(nullptr) {}
 
  protected:
   void SetUpInProcessBrowserTestFixture() override {
     fake_update_engine_client_ = new FakeUpdateEngineClient;
     chromeos::DBusThreadManager::GetSetterForTesting()->SetUpdateEngineClient(
-        scoped_ptr<UpdateEngineClient>(fake_update_engine_client_));
+        std::unique_ptr<UpdateEngineClient>(fake_update_engine_client_));
 
     WizardInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
 
@@ -117,9 +120,9 @@ class UpdateScreenTest : public WizardInProcessBrowserTest {
   }
 
   FakeUpdateEngineClient* fake_update_engine_client_;
-  scoped_ptr<MockBaseScreenDelegate> mock_base_screen_delegate_;
-  scoped_ptr<MockNetworkErrorView> mock_network_error_view_;
-  scoped_ptr<MockErrorScreen> mock_error_screen_;
+  std::unique_ptr<MockBaseScreenDelegate> mock_base_screen_delegate_;
+  std::unique_ptr<MockNetworkErrorView> mock_network_error_view_;
+  std::unique_ptr<MockErrorScreen> mock_error_screen_;
   UpdateScreen* update_screen_;
   NetworkPortalDetectorTestImpl* network_portal_detector_;
 
@@ -177,10 +180,11 @@ IN_PROC_BROWSER_TEST_F(UpdateScreenTest, TestUpdateAvailable) {
   // UpdateStatusChanged(status) calls RebootAfterUpdate().
   EXPECT_EQ(1, fake_update_engine_client_->reboot_after_update_call_count());
   // Check that OOBE will resume back at this screen.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(StartupUtils::IsOobeCompleted());
-  EXPECT_EQ(update_screen_->GetName(),
-      g_browser_process->local_state()->GetString(prefs::kOobeScreenPending));
+  EXPECT_EQ(update_screen_->screen_id(),
+            GetOobeScreenFromName(g_browser_process->local_state()->GetString(
+                prefs::kOobeScreenPending)));
 }
 
 IN_PROC_BROWSER_TEST_F(UpdateScreenTest, TestErrorIssuingUpdateCheck) {
@@ -353,7 +357,7 @@ IN_PROC_BROWSER_TEST_F(UpdateScreenTest, TestVoidNetwork) {
               MockSetErrorState(NetworkError::ERROR_STATE_OFFLINE,
                                 std::string())).Times(1);
   EXPECT_CALL(*mock_base_screen_delegate_, ShowErrorScreen()).Times(1);
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   NotifyPortalDetectionCompleted();
 }
 
@@ -401,7 +405,7 @@ IN_PROC_BROWSER_TEST_F(UpdateScreenTest, TestAPReselection) {
                      _)).Times(1);
 
   update_screen_->OnConnectRequested();
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace chromeos

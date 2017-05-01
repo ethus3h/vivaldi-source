@@ -28,11 +28,13 @@ var WebViewImpl = require('webView').WebViewImpl;
 var WEB_VIEW_API_METHODS = [
   // Vivaldi methods
   'addToThumbnailService',
+  'allowBlockedInsecureContent',
   'discardPage',
+  'getFocusedElementInfo',
   'getPageHistory',
   'getThumbnail',
   'getThumbnailFromService',
-  'isFocusedElementEditable',
+  'resetGestureState',
   'setIsFullscreen',
   'setVisible',
   'showPageInfo',
@@ -104,11 +106,25 @@ WebViewImpl.prototype.discardPage = function () {
   WebViewPrivate.discardPage(this.guest.getId());
 };
 
-WebViewImpl.prototype.isFocusedElementEditable = function (callback) {
+WebViewImpl.prototype.allowBlockedInsecureContent = function () {
   if (!this.guest.getId()) {
     return;
   }
-  WebViewPrivate.isFocusedElementEditable(this.guest.getId(), callback);
+  WebViewPrivate.allowBlockedInsecureContent(this.guest.getId());
+};
+
+WebViewImpl.prototype.getFocusedElementInfo = function (callback) {
+  if (!this.guest.getId()) {
+    return;
+  }
+  WebViewPrivate.getFocusedElementInfo(this.guest.getId(), callback);
+};
+
+WebViewImpl.prototype.resetGestureState = function () {
+  if (!this.guest.getId()) {
+    return;
+  }
+  WebViewPrivate.resetGestureState(this.guest.getId());
 };
 
 // -----------------------------------------------------------------------------

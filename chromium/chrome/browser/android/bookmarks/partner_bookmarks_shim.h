@@ -7,9 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/supports_user_data.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -19,7 +20,6 @@ class PrefService;
 
 namespace content {
 class BrowserContext;
-class WebContents;
 }
 
 namespace user_prefs {
@@ -93,8 +93,9 @@ class PartnerBookmarksShim : public base::SupportsUserData::Data {
   const bookmarks::BookmarkNode* GetPartnerBookmarksRoot() const;
 
   // Sets the root node of the partner bookmarks and notifies any observers that
-  // the shim has now been loaded.  Takes ownership of |root_node|.
-  void SetPartnerBookmarksRoot(bookmarks::BookmarkNode* root_node);
+  // the shim has now been loaded.
+  void SetPartnerBookmarksRoot(
+      std::unique_ptr<bookmarks::BookmarkNode> root_node);
 
   // Used as a "unique" identifier of the partner bookmark node for the purposes
   // of node deletion and title editing. Two bookmarks with the same URLs and
@@ -133,7 +134,7 @@ class PartnerBookmarksShim : public base::SupportsUserData::Data {
   void ReloadNodeMapping();
   void SaveNodeMapping();
 
-  scoped_ptr<bookmarks::BookmarkNode> partner_bookmarks_root_;
+  std::unique_ptr<bookmarks::BookmarkNode> partner_bookmarks_root_;
   PrefService* prefs_;
   NodeRenamingMap node_rename_remove_map_;
 

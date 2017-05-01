@@ -27,6 +27,7 @@
 #include "content/public/common/content_switches.h"
 #include "extensions/common/switches.h"
 #include "google_apis/gaia/gaia_switches.h"
+#include "media/media_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/vector_icons_public.h"
@@ -54,11 +55,10 @@ void ShowBadFlagsPrompt(Browser* browser) {
     switches::kSingleProcess,
 
     // These flags disable or undermine the Same Origin Policy.
-    switches::kTrustedSpdyProxy,
     translate::switches::kTranslateSecurityOrigin,
 
     // These flags undermine HTTPS / connection security.
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
     switches::kDisableWebRtcEncryption,
 #endif
     switches::kIgnoreCertificateErrors,
@@ -66,7 +66,6 @@ void ShowBadFlagsPrompt(Browser* browser) {
     invalidation::switches::kSyncAllowInsecureXmppConnection,
 
     // These flags change the URLs that handle PII.
-    autofill::switches::kWalletSecureServiceUrl,
     switches::kGaiaUrl,
     translate::switches::kTranslateScriptURL,
 
@@ -87,12 +86,6 @@ void ShowBadFlagsPrompt(Browser* browser) {
     // This flag allows people to whitelist certain origins as secure, even
     // if they are not.
     switches::kUnsafelyTreatInsecureOriginAsSecure,
-
-    // This flag enables Web Bluetooth. Since the UI for Web Bluetooth is
-    // not yet implemented, websites could take control over paired devices
-    // without the users knowledge, so we need to show a warning for when
-    // the flag is enabled.
-    switches::kEnableWebBluetooth,
 
     NULL
   };
@@ -129,7 +122,7 @@ void MaybeShowInvalidUserDataDirWarningDialog() {
     if (locale.empty())
       locale = kUserDataDirDialogFallbackLocale;
     ui::ResourceBundle::InitSharedInstanceWithLocale(
-        locale, NULL, ui::ResourceBundle::LOAD_COMMON_RESOURCES);
+        locale, NULL, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
   }
 
   const base::string16& title =
@@ -142,7 +135,7 @@ void MaybeShowInvalidUserDataDirWarningDialog() {
     ResourceBundle::CleanupSharedInstance();
 
   // More complex dialogs cannot be shown before the earliest calls here.
-  ShowMessageBox(NULL, title, message, chrome::MESSAGE_BOX_TYPE_WARNING);
+  ShowWarningMessageBox(NULL, title, message);
 }
 
 }  // namespace chrome

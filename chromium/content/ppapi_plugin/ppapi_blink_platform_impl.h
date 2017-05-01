@@ -7,8 +7,9 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "content/child/blink_platform_impl.h"
 
@@ -25,7 +26,6 @@ class PpapiBlinkPlatformImpl : public BlinkPlatformImpl {
   // BlinkPlatformImpl methods:
   blink::WebThread* currentThread() override;
   blink::WebClipboard* clipboard() override;
-  blink::WebMimeRegistry* mimeRegistry() override;
   blink::WebFileUtilities* fileUtilities() override;
   blink::WebSandboxSupport* sandboxSupport() override;
   virtual bool sandboxEnabled();
@@ -43,7 +43,9 @@ class PpapiBlinkPlatformImpl : public BlinkPlatformImpl {
   blink::WebString defaultLocale() override;
   blink::WebThemeEngine* themeEngine() override;
   blink::WebURLLoader* createURLLoader() override;
-  void getPluginList(bool refresh, blink::WebPluginListBuilder*) override;
+  void getPluginList(bool refresh,
+                     const blink::WebSecurityOrigin& mainFrameOrigin,
+                     blink::WebPluginListBuilder*) override;
   blink::WebData loadResource(const char* name) override;
   blink::WebStorageNamespace* createLocalStorageNamespace() override;
   virtual void dispatchStorageEvent(const blink::WebString& key,
@@ -56,7 +58,7 @@ class PpapiBlinkPlatformImpl : public BlinkPlatformImpl {
  private:
 #if !defined(OS_ANDROID) && !defined(OS_WIN)
   class SandboxSupport;
-  scoped_ptr<SandboxSupport> sandbox_support_;
+  std::unique_ptr<SandboxSupport> sandbox_support_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(PpapiBlinkPlatformImpl);

@@ -16,13 +16,13 @@
 #include <unistd.h>
 
 #include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
-#include "base/template_util.h"
 #include "base/third_party/valgrind/valgrind.h"
 #include "build/build_config.h"
 #include "sandbox/linux/services/namespace_utils.h"
@@ -94,9 +94,9 @@ bool ChrootToSafeEmptyDir() {
   // /proc/tid directory for the thread (since /proc may not be aware of the
   // PID namespace). With a process, we can just use /proc/self.
   pid_t pid = -1;
-  char stack_buf[PTHREAD_STACK_MIN];
+  char stack_buf[PTHREAD_STACK_MIN] ALIGNAS(16);
 #if defined(ARCH_CPU_X86_FAMILY) || defined(ARCH_CPU_ARM_FAMILY) || \
-    defined(ARCH_CPU_MIPS64_FAMILY) || defined(ARCH_CPU_MIPS_FAMILY)
+    defined(ARCH_CPU_MIPS_FAMILY)
   // The stack grows downward.
   void* stack = stack_buf + sizeof(stack_buf);
 #else
@@ -148,6 +148,18 @@ int CapabilityToKernelValue(Credentials::Capability cap) {
 
   LOG(FATAL) << "Invalid Capability: " << static_cast<int>(cap);
   return 0;
+}
+
+void SetGidAndUidMaps(gid_t gid, uid_t uid) {
+  if (NamespaceUtils::KernelSupportsDenySetgroups()) {
+    PCHECK(NamespaceUtils::DenySetgroups());
+  }
+  DCHECK(GetRESIds(NULL, NULL));
+  const char kGidMapFile[] = "/proc/self/gid_map";
+  const char kUidMapFile[] = "/proc/self/uid_map";
+  PCHECK(NamespaceUtils::WriteToIdMapFile(kGidMapFile, gid));
+  PCHECK(NamespaceUtils::WriteToIdMapFile(kUidMapFile, uid));
+  DCHECK(GetRESIds(NULL, NULL));
 }
 
 }  // namespace.
@@ -253,8 +265,14 @@ bool Credentials::CanCreateProcessInNewUserNS() {
   return false;
 #endif
 
-  // This is roughly a fork().
-  const pid_t pid = sys_clone(CLONE_NEWUSER | SIGCHLD, 0, 0, 0, 0);
+  uid_t uid;
+  gid_t gid;
+  if (!GetRESIds(&uid, &gid)) {
+    return false;
+  }
+
+  const pid_t pid =
+      base::ForkWithFlags(CLONE_NEWUSER | SIGCHLD, nullptr, nullptr);
 
   if (pid == -1) {
     CheckCloneNewUserErrno(errno);
@@ -262,20 +280,28 @@ bool Credentials::CanCreateProcessInNewUserNS() {
   }
 
   // The parent process could have had threads. In the child, these threads
-  // have disappeared. Make sure to not do anything in the child, as this is a
-  // fragile execution environment.
+  // have disappeared.
   if (pid == 0) {
-    _exit(kExitSuccess);
+    // unshare() requires the effective uid and gid to have a mapping in the
+    // parent namespace.
+    SetGidAndUidMaps(gid, uid);
+
+    // Make sure we drop CAP_SYS_ADMIN.
+    CHECK(sandbox::Credentials::DropAllCapabilities());
+
+    // Ensure we have unprivileged use of CLONE_NEWUSER.  Debian
+    // Jessie explicitly forbids this case.  See:
+    // add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by-default.patch
+    _exit(!!sys_unshare(CLONE_NEWUSER));
   }
 
   // Always reap the child.
   int status = -1;
   PCHECK(HANDLE_EINTR(waitpid(pid, &status, 0)) == pid);
-  CHECK(WIFEXITED(status));
-  CHECK_EQ(kExitSuccess, WEXITSTATUS(status));
 
-  // clone(2) succeeded, we can use CLONE_NEWUSER.
-  return true;
+  // clone(2) succeeded.  Now return true only if the system grants
+  // unprivileged use of CLONE_NEWUSER as well.
+  return WIFEXITED(status) && WEXITSTATUS(status) == kExitSuccess;
 }
 
 bool Credentials::MoveToNewUserNS() {
@@ -296,18 +322,9 @@ bool Credentials::MoveToNewUserNS() {
     return false;
   }
 
-  if (NamespaceUtils::KernelSupportsDenySetgroups()) {
-    PCHECK(NamespaceUtils::DenySetgroups());
-  }
-
   // The current {r,e,s}{u,g}id is now an overflow id (c.f.
   // /proc/sys/kernel/overflowuid). Setup the uid and gid maps.
-  DCHECK(GetRESIds(NULL, NULL));
-  const char kGidMapFile[] = "/proc/self/gid_map";
-  const char kUidMapFile[] = "/proc/self/uid_map";
-  PCHECK(NamespaceUtils::WriteToIdMapFile(kGidMapFile, gid));
-  PCHECK(NamespaceUtils::WriteToIdMapFile(kUidMapFile, uid));
-  DCHECK(GetRESIds(NULL, NULL));
+  SetGidAndUidMaps(gid, uid);
   return true;
 }
 
@@ -315,10 +332,14 @@ bool Credentials::DropFileSystemAccess(int proc_fd) {
   CHECK_LE(0, proc_fd);
 
   CHECK(ChrootToSafeEmptyDir());
-  CHECK(!base::DirectoryExists(base::FilePath("/proc")));
+  CHECK(!HasFileSystemAccess());
   CHECK(!ProcUtil::HasOpenDirectory(proc_fd));
   // We never let this function fail.
   return true;
+}
+
+bool Credentials::HasFileSystemAccess() {
+  return base::DirectoryExists(base::FilePath("/proc"));
 }
 
 pid_t Credentials::ForkAndDropCapabilitiesInChild() {

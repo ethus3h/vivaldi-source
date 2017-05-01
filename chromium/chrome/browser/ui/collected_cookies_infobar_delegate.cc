@@ -10,14 +10,13 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/vector_icons_public.h"
 
 // static
 void CollectedCookiesInfoBarDelegate::Create(InfoBarService* infobar_service) {
-  infobar_service->AddInfoBar(
-      infobar_service->CreateConfirmInfoBar(scoped_ptr<ConfirmInfoBarDelegate>(
+  infobar_service->AddInfoBar(infobar_service->CreateConfirmInfoBar(
+      std::unique_ptr<ConfirmInfoBarDelegate>(
           new CollectedCookiesInfoBarDelegate())));
 }
 
@@ -38,16 +37,8 @@ CollectedCookiesInfoBarDelegate::GetIdentifier() const {
   return COLLECTED_COOKIES_INFOBAR_DELEGATE;
 }
 
-int CollectedCookiesInfoBarDelegate::GetIconId() const {
-  return IDR_INFOBAR_COOKIE;
-}
-
 gfx::VectorIconId CollectedCookiesInfoBarDelegate::GetVectorIconId() const {
-#if defined(OS_MACOSX)
-  return gfx::VectorIconId::VECTOR_ICON_NONE;
-#else
   return gfx::VectorIconId::COOKIE;
-#endif
 }
 
 base::string16 CollectedCookiesInfoBarDelegate::GetMessageText() const {
@@ -67,6 +58,6 @@ base::string16 CollectedCookiesInfoBarDelegate::GetButtonLabel(
 bool CollectedCookiesInfoBarDelegate::Accept() {
   content::WebContents* web_contents =
       InfoBarService::WebContentsFromInfoBar(infobar());
-  web_contents->GetController().Reload(true);
+  web_contents->GetController().Reload(content::ReloadType::NORMAL, true);
   return true;
 }

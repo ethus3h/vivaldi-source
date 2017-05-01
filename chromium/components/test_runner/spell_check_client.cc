@@ -6,38 +6,25 @@
 
 #include <stddef.h>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
+#include "base/logging.h"
 #include "base/macros.h"
 #include "components/test_runner/mock_grammar_check.h"
+#include "components/test_runner/test_runner.h"
 #include "components/test_runner/web_test_delegate.h"
-#include "components/test_runner/web_test_proxy.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebKit.h"
 #include "third_party/WebKit/public/web/WebTextCheckingCompletion.h"
 #include "third_party/WebKit/public/web/WebTextCheckingResult.h"
 
 namespace test_runner {
 
-namespace {
-
-class HostMethodTask : public WebMethodTask<SpellCheckClient> {
- public:
-  typedef void (SpellCheckClient::*CallbackMethodType)();
-  HostMethodTask(SpellCheckClient* object, CallbackMethodType callback)
-      : WebMethodTask<SpellCheckClient>(object), callback_(callback) {}
-
-  ~HostMethodTask() override {}
-
-  void RunIfValid() override { (object_->*callback_)(); }
-
- private:
-  CallbackMethodType callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(HostMethodTask);
-};
-
-}  // namespace
-
-SpellCheckClient::SpellCheckClient(WebTestProxyBase* web_test_proxy)
-    : last_requested_text_checking_completion_(0),
-      web_test_proxy_(web_test_proxy) {
+SpellCheckClient::SpellCheckClient(TestRunner* test_runner)
+    : last_requested_text_checking_completion_(nullptr),
+      test_runner_(test_runner),
+      weak_factory_(this) {
+  DCHECK(test_runner);
 }
 
 SpellCheckClient::~SpellCheckClient() {
@@ -47,42 +34,29 @@ void SpellCheckClient::SetDelegate(WebTestDelegate* delegate) {
   delegate_ = delegate;
 }
 
+void SpellCheckClient::SetEnabled(bool enabled) {
+  enabled_ = enabled;
+}
+
+void SpellCheckClient::Reset() {
+  enabled_ = false;
+  resolved_callback_.Reset();
+}
+
 // blink::WebSpellCheckClient
-void SpellCheckClient::spellCheck(
+void SpellCheckClient::checkSpelling(
     const blink::WebString& text,
     int& misspelled_offset,
     int& misspelled_length,
     blink::WebVector<blink::WebString>* optional_suggestions) {
+  if (!enabled_) {
+    misspelled_offset = 0;
+    misspelled_length = 0;
+    return;
+  }
+
   // Check the spelling of the given text.
   spell_check_.SpellCheckWord(text, &misspelled_offset, &misspelled_length);
-}
-
-void SpellCheckClient::checkTextOfParagraph(
-    const blink::WebString& text,
-    blink::WebTextCheckingTypeMask mask,
-    blink::WebVector<blink::WebTextCheckingResult>* web_results) {
-  std::vector<blink::WebTextCheckingResult> results;
-  if (mask & blink::WebTextCheckingTypeSpelling) {
-    size_t offset = 0;
-    base::string16 data = text;
-    while (offset < data.length()) {
-      int misspelled_position = 0;
-      int misspelled_length = 0;
-      spell_check_.SpellCheckWord(
-          data.substr(offset), &misspelled_position, &misspelled_length);
-      if (!misspelled_length)
-        break;
-      blink::WebTextCheckingResult result;
-      result.decoration = blink::WebTextDecorationTypeSpelling;
-      result.location = offset + misspelled_position;
-      result.length = misspelled_length;
-      results.push_back(result);
-      offset += misspelled_position + misspelled_length;
-    }
-  }
-  if (mask & blink::WebTextCheckingTypeGrammar)
-    MockGrammarCheck::CheckGrammarOfString(text, &results);
-  web_results->assign(results);
 }
 
 void SpellCheckClient::requestCheckingOfText(
@@ -90,14 +64,18 @@ void SpellCheckClient::requestCheckingOfText(
     const blink::WebVector<uint32_t>& markers,
     const blink::WebVector<unsigned>& marker_offsets,
     blink::WebTextCheckingCompletion* completion) {
-  if (text.isEmpty()) {
-    if (completion)
+  if (!enabled_ || text.isEmpty()) {
+    if (completion) {
       completion->didCancelCheckingText();
+      RequestResolved();
+    }
     return;
   }
 
-  if (last_requested_text_checking_completion_)
+  if (last_requested_text_checking_completion_) {
     last_requested_text_checking_completion_->didCancelCheckingText();
+    RequestResolved();
+  }
 
   last_requested_text_checking_completion_ = completion;
   last_requested_text_check_string_ = text;
@@ -105,7 +83,16 @@ void SpellCheckClient::requestCheckingOfText(
     FinishLastTextCheck();
   else
     delegate_->PostDelayedTask(
-        new HostMethodTask(this, &SpellCheckClient::FinishLastTextCheck), 0);
+        base::Bind(&SpellCheckClient::FinishLastTextCheck,
+                   weak_factory_.GetWeakPtr()),
+        0);
+}
+
+void SpellCheckClient::cancelAllPendingRequests() {
+  if (!last_requested_text_checking_completion_)
+    return;
+  last_requested_text_checking_completion_->didCancelCheckingText();
+  last_requested_text_checking_completion_ = nullptr;
 }
 
 void SpellCheckClient::FinishLastTextCheck() {
@@ -139,8 +126,41 @@ void SpellCheckClient::FinishLastTextCheck() {
   }
   last_requested_text_checking_completion_->didFinishCheckingText(results);
   last_requested_text_checking_completion_ = 0;
+  RequestResolved();
 
-  web_test_proxy_->PostSpellCheckEvent(blink::WebString("FinishLastTextCheck"));
+  if (test_runner_->shouldDumpSpellCheckCallbacks())
+    delegate_->PrintMessage("SpellCheckEvent: FinishLastTextCheck\n");
+}
+
+void SpellCheckClient::SetSpellCheckResolvedCallback(
+    v8::Local<v8::Function> callback) {
+  resolved_callback_.Reset(blink::mainThreadIsolate(), callback);
+}
+
+void SpellCheckClient::RemoveSpellCheckResolvedCallback() {
+  resolved_callback_.Reset();
+}
+
+void SpellCheckClient::RequestResolved() {
+  if (resolved_callback_.IsEmpty())
+    return;
+
+  v8::Isolate* isolate = blink::mainThreadIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  blink::WebFrame* frame = test_runner_->mainFrame();
+  if (!frame || frame->isWebRemoteFrame())
+    return;
+
+  v8::Local<v8::Context> context = frame->mainWorldScriptContext();
+  if (context.IsEmpty())
+    return;
+
+  v8::Context::Scope context_scope(context);
+
+  frame->callFunctionEvenIfScriptDisabled(
+      v8::Local<v8::Function>::New(isolate, resolved_callback_),
+      context->Global(), 0, nullptr);
 }
 
 }  // namespace test_runner

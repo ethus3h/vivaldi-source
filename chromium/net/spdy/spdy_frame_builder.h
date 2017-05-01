@@ -8,12 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_piece.h"
 #include "base/sys_byteorder.h"
 #include "net/base/net_export.h"
+#include "net/spdy/spdy_bug_tracker.h"
 #include "net/spdy/spdy_protocol.h"
 
 namespace net {
@@ -30,7 +31,7 @@ class SpdyFramer;
 class NET_EXPORT_PRIVATE SpdyFrameBuilder {
  public:
   // Initializes a SpdyFrameBuilder with a buffer of given size
-  SpdyFrameBuilder(size_t size, SpdyMajorVersion version);
+  explicit SpdyFrameBuilder(size_t size);
 
   ~SpdyFrameBuilder();
 
@@ -50,37 +51,27 @@ class NET_EXPORT_PRIVATE SpdyFrameBuilder {
   // GetWriteableBuffer() above.
   bool Seek(size_t length);
 
-  // Populates this frame with a SPDY control frame header using
-  // version-specific information from the |framer| and length information from
-  // capacity_. The given type must be a control frame type.
-  // Used only for SPDY versions <4.
-  bool WriteControlFrameHeader(const SpdyFramer& framer,
-                               SpdyFrameType type,
-                               uint8_t flags);
-
-  // Populates this frame with a SPDY data frame header using version-specific
-  // information from the |framer| and length information from capacity_.
-  bool WriteDataFrameHeader(const SpdyFramer& framer,
-                            SpdyStreamId stream_id,
-                            uint8_t flags);
-
-  // Populates this frame with a SPDY4/HTTP2 frame prefix using
-  // version-specific information from the |framer| and length information from
-  // capacity_. The given type must be a control frame type.
-  // Used only for SPDY versions >=4.
+  // Populates this frame with a HTTP2 frame prefix using length information
+  // from |capacity_|. The given type must be a control frame type.
   bool BeginNewFrame(const SpdyFramer& framer,
                      SpdyFrameType type,
                      uint8_t flags,
                      SpdyStreamId stream_id);
 
+  // Populates this frame with a HTTP2 frame prefix with length information.
+  // The given type must be a control frame type.
+  bool BeginNewFrame(const SpdyFramer& framer,
+                     SpdyFrameType type,
+                     uint8_t flags,
+                     SpdyStreamId stream_id,
+                     size_t length);
+
   // Takes the buffer from the SpdyFrameBuilder.
-  SpdyFrame* take() {
-    if (version_ > SPDY3) {
-      DLOG_IF(DFATAL, SpdyConstants::GetFrameMaximumSize(version_) < length_)
-          << "Frame length " << length_
-          << " is longer than the maximum allowed length.";
-    }
-    SpdyFrame* rv = new SpdyFrame(buffer_.release(), length(), true);
+  SpdySerializedFrame take() {
+    SPDY_BUG_IF(kMaxFrameSizeLimit < length_)
+        << "Frame length " << length_
+        << " is longer than the maximum possible allowed length.";
+    SpdySerializedFrame rv(buffer_.release(), length(), true);
     capacity_ = 0;
     length_ = 0;
     offset_ = 0;
@@ -130,7 +121,6 @@ class NET_EXPORT_PRIVATE SpdyFrameBuilder {
 
   // Update (in-place) the flags field in the frame being built to reflect the
   // given flags value.
-  // Used only for SPDY versions >=4.
   bool OverwriteFlags(const SpdyFramer& framer, uint8_t flags);
 
  private:
@@ -138,12 +128,10 @@ class NET_EXPORT_PRIVATE SpdyFrameBuilder {
   // write of given size, in bytes.
   bool CanWrite(size_t length) const;
 
-  scoped_ptr<char[]> buffer_;
+  std::unique_ptr<char[]> buffer_;
   size_t capacity_;  // Allocation size of payload, set by constructor.
   size_t length_;    // Length of the latest frame in the buffer.
   size_t offset_;    // Position at which the latest frame begins.
-
-  const SpdyMajorVersion version_;
 };
 
 }  // namespace net

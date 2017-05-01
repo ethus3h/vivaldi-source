@@ -28,6 +28,7 @@ void EnumerateVideoDecodeAcceleratorSupportedProfile(
   enumerator->AddInt("maxResolutionHeight", profile.max_resolution.height());
   enumerator->AddInt("minResolutionWidth", profile.min_resolution.width());
   enumerator->AddInt("minResolutionHeight", profile.min_resolution.height());
+  enumerator->AddBool("encrypted_only", profile.encrypted_only);
   enumerator->EndVideoDecodeAcceleratorSupportedProfile();
 }
 
@@ -51,6 +52,9 @@ namespace gpu {
 VideoDecodeAcceleratorCapabilities::VideoDecodeAcceleratorCapabilities()
     : flags(0) {}
 
+VideoDecodeAcceleratorCapabilities::VideoDecodeAcceleratorCapabilities(
+    const VideoDecodeAcceleratorCapabilities& other) = default;
+
 VideoDecodeAcceleratorCapabilities::~VideoDecodeAcceleratorCapabilities() {}
 
 GPUInfo::GPUDevice::GPUDevice()
@@ -67,19 +71,27 @@ GPUInfo::GPUInfo()
       lenovo_dcute(false),
       adapter_luid(0),
       gl_reset_notification_strategy(0),
-      can_lose_context(false),
       software_rendering(false),
       direct_rendering(true),
       sandboxed(false),
       process_crash_count(0),
       in_process_gpu(true),
+      passthrough_cmd_decoder(false),
       basic_info_state(kCollectInfoNone),
       context_info_state(kCollectInfoNone),
 #if defined(OS_WIN)
       dx_diagnostics_info_state(kCollectInfoNone),
 #endif
-      jpeg_decode_accelerator_supported(false) {
+      jpeg_decode_accelerator_supported(false)
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+      ,
+      system_visual(0),
+      rgba_visual(0)
+#endif
+{
 }
+
+GPUInfo::GPUInfo(const GPUInfo& other) = default;
 
 GPUInfo::~GPUInfo() { }
 
@@ -89,7 +101,7 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     bool optimus;
     bool amd_switchable;
     bool lenovo_dcute;
-    Version display_link_version;
+    base::Version display_link_version;
     GPUDevice gpu;
     std::vector<GPUDevice> secondary_gpus;
     uint64_t adapter_luid;
@@ -109,12 +121,12 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     std::string gl_ws_version;
     std::string gl_ws_extensions;
     uint32_t gl_reset_notification_strategy;
-    bool can_lose_context;
     bool software_rendering;
     bool direct_rendering;
     bool sandboxed;
     int process_crash_count;
     bool in_process_gpu;
+    bool passthrough_cmd_decoder;
     CollectInfoResult basic_info_state;
     CollectInfoResult context_info_state;
 #if defined(OS_WIN)
@@ -125,6 +137,10 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     VideoEncodeAcceleratorSupportedProfiles
         video_encode_accelerator_supported_profiles;
     bool jpeg_decode_accelerator_supported;
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+    VisualID system_visual;
+    VisualID rgba_visual;
+#endif
   };
 
   // If this assert fails then most likely something below needs to be updated.
@@ -168,13 +184,13 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
   enumerator->AddInt(
       "glResetNotificationStrategy",
       static_cast<int>(gl_reset_notification_strategy));
-  enumerator->AddBool("can_lose_context", can_lose_context);
   // TODO(kbr): add performance_stats.
   enumerator->AddBool("softwareRendering", software_rendering);
   enumerator->AddBool("directRendering", direct_rendering);
   enumerator->AddBool("sandboxed", sandboxed);
   enumerator->AddInt("processCrashCount", process_crash_count);
   enumerator->AddBool("inProcessGpu", in_process_gpu);
+  enumerator->AddBool("passthroughCmdDecoder", passthrough_cmd_decoder);
   enumerator->AddInt("basicInfoState", basic_info_state);
   enumerator->AddInt("contextInfoState", context_info_state);
 #if defined(OS_WIN)
@@ -190,6 +206,10 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     EnumerateVideoEncodeAcceleratorSupportedProfile(profile, enumerator);
   enumerator->AddBool("jpegDecodeAcceleratorSupported",
       jpeg_decode_accelerator_supported);
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+  enumerator->AddInt64("systemVisual", system_visual);
+  enumerator->AddInt64("rgbaVisual", rgba_visual);
+#endif
   enumerator->EndAuxAttributes();
 }
 

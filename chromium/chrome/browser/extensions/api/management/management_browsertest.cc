@@ -8,7 +8,6 @@
 #include "base/bind_helpers.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
@@ -25,6 +24,8 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
+#include "components/policy/policy_constants.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_view_host.h"
@@ -38,7 +39,6 @@
 #include "extensions/browser/updater/extension_downloader.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "net/url_request/test_url_request_interceptor.h"
-#include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using content::BrowserThread;
@@ -292,7 +292,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
 
   // Note: This interceptor gets requests on the IO thread.
   net::LocalHostTestURLRequestInterceptor interceptor(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
       BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
           base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 
@@ -336,8 +336,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
   ASSERT_EQ("2.0", extension->VersionString());
   ASSERT_TRUE(notification_listener.started());
   ASSERT_TRUE(notification_listener.finished());
-  ASSERT_TRUE(ContainsKey(notification_listener.updates(),
-                          "ogjcoiohnmldgjemafoockdghcjciccf"));
+  ASSERT_TRUE(base::ContainsKey(notification_listener.updates(),
+                                "ogjcoiohnmldgjemafoockdghcjciccf"));
   notification_listener.Reset();
 
   // Now try doing an update to version 3, which has been incorrectly
@@ -352,8 +352,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
   ASSERT_TRUE(WaitForExtensionInstallError());
   ASSERT_TRUE(notification_listener.started());
   ASSERT_TRUE(notification_listener.finished());
-  ASSERT_TRUE(ContainsKey(notification_listener.updates(),
-                          "ogjcoiohnmldgjemafoockdghcjciccf"));
+  ASSERT_TRUE(base::ContainsKey(notification_listener.updates(),
+                                "ogjcoiohnmldgjemafoockdghcjciccf"));
 
   // Make sure the extension state is the same as before.
   ASSERT_EQ(size_before + 1, registry->enabled_extensions().size());
@@ -382,7 +382,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
 
   // Note: This interceptor gets requests on the IO thread.
   net::LocalHostTestURLRequestInterceptor interceptor(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
       BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
           base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 
@@ -436,8 +436,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   listener2.WaitUntilSatisfied();
   ASSERT_TRUE(notification_listener.started());
   ASSERT_TRUE(notification_listener.finished());
-  ASSERT_TRUE(ContainsKey(notification_listener.updates(),
-                          "ogjcoiohnmldgjemafoockdghcjciccf"));
+  ASSERT_TRUE(base::ContainsKey(notification_listener.updates(),
+                                "ogjcoiohnmldgjemafoockdghcjciccf"));
   notification_listener.Reset();
 }
 
@@ -451,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalUrlUpdate) {
 
   // Note: This interceptor gets requests on the IO thread.
   net::LocalHostTestURLRequestInterceptor interceptor(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
       BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
           base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 
@@ -547,7 +547,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
 
   // Note: This interceptor gets requests on the IO thread.
   net::LocalHostTestURLRequestInterceptor interceptor(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
       BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
           base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 
@@ -572,11 +572,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
       kExtensionId, "http://localhost/autoupdate/manifest"));
   PolicyMap policies;
   policies.Set(policy::key::kExtensionInstallForcelist,
-               policy::POLICY_LEVEL_MANDATORY,
-               policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               forcelist.DeepCopy(),
-               NULL);
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, forcelist.CreateDeepCopy(),
+               nullptr);
   extensions::TestExtensionRegistryObserver install_observer(registry);
   UpdateProviderPolicy(policies);
   install_observer.WaitForExtensionWillBeInstalled();
@@ -624,15 +622,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
       browser()->profile())->extension_service();
   ExtensionRegistry* registry = ExtensionRegistry::Get(browser()->profile());
   const char kExtensionId[] = "ogjcoiohnmldgjemafoockdghcjciccf";
-  extensions::ExtensionUpdater::CheckParams params;
-  service->updater()->set_default_check_params(params);
   const size_t size_before = registry->enabled_extensions().size();
   base::FilePath basedir = test_data_dir_.AppendASCII("autoupdate");
   ASSERT_TRUE(registry->disabled_extensions().is_empty());
 
   // Note: This interceptor gets requests on the IO thread.
   net::LocalHostTestURLRequestInterceptor interceptor(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
       BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
           base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 
@@ -663,11 +659,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
       kExtensionId, "http://localhost/autoupdate/manifest"));
   PolicyMap policies;
   policies.Set(policy::key::kExtensionInstallForcelist,
-               policy::POLICY_LEVEL_MANDATORY,
-               policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               forcelist.DeepCopy(),
-               NULL);
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, forcelist.CreateDeepCopy(),
+               nullptr);
   extensions::TestExtensionRegistryObserver install_observer(registry);
   UpdateProviderPolicy(policies);
   install_observer.WaitForExtensionWillBeInstalled();
@@ -706,11 +700,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   // Install the policy again. It should overwrite the extension's location,
   // and force enable it too.
   policies.Set(policy::key::kExtensionInstallForcelist,
-               policy::POLICY_LEVEL_MANDATORY,
-               policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               forcelist.DeepCopy(),
-               NULL);
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, forcelist.CreateDeepCopy(),
+               nullptr);
 
   extensions::TestExtensionRegistryObserver extension_observer(registry);
   UpdateProviderPolicy(policies);

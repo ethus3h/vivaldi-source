@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
-#include "base/prefs/pref_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google/google_brand.h"
@@ -22,13 +21,15 @@
 #include "components/google/core/browser/google_url_tracker.h"
 #include "components/google/core/browser/google_util.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/prefs/pref_service.h"
 #include "components/search/search.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "rlz/features/features.h"
 #include "ui/base/device_form_factor.h"
 #include "url/gurl.h"
 
-#if defined(ENABLE_RLZ)
+#if BUILDFLAG(ENABLE_RLZ)
 #include "components/rlz/rlz_tracker.h"
 #endif
 
@@ -74,7 +75,7 @@ base::string16 UIThreadSearchTermsData::GetRlzParameterValue(
   DCHECK(!BrowserThread::IsThreadInitialized(BrowserThread::UI) ||
       BrowserThread::CurrentlyOn(BrowserThread::UI));
   base::string16 rlz_string;
-#if defined(ENABLE_RLZ)
+#if BUILDFLAG(ENABLE_RLZ)
   // For organic brandcodes do not use rlz at all. Empty brandcode usually
   // means a chromium install. This is ok.
   std::string brand;
@@ -84,10 +85,8 @@ base::string16 UIThreadSearchTermsData::GetRlzParameterValue(
     // value has been cached. This normally would mean that at most one omnibox
     // search might not send the RLZ data but this is not really a problem.
     rlz_lib::AccessPoint access_point = rlz::RLZTracker::ChromeOmnibox();
-#if !defined(OS_IOS)
     if (from_app_list)
       access_point = rlz::RLZTracker::ChromeAppList();
-#endif
     rlz::RLZTracker::GetAccessPointRlz(access_point, &rlz_string);
   }
 #endif
@@ -125,9 +124,8 @@ std::string UIThreadSearchTermsData::GetSuggestRequestIdentifier() const {
   return "chrome-ext-ansg";
 }
 
-std::string UIThreadSearchTermsData::InstantExtendedEnabledParam(
-    bool for_search) const {
-  return search::InstantExtendedEnabledParam(for_search);
+std::string UIThreadSearchTermsData::InstantExtendedEnabledParam() const {
+  return search::InstantExtendedEnabledParam();
 }
 
 std::string UIThreadSearchTermsData::ForceInstantResultsParam(
@@ -148,11 +146,6 @@ std::string UIThreadSearchTermsData::GoogleImageSearchSource() const {
   if (!modifier.empty())
     version += " " + modifier;
   return version;
-}
-
-std::string UIThreadSearchTermsData::GetAcceptLanguages() const {
-  return profile_ ? profile_->GetPrefs()->GetString(prefs::kAcceptLanguages)
-                  : std::string();
 }
 
 // static

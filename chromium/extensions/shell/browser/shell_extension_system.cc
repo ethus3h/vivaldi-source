@@ -8,6 +8,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/ptr_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
@@ -22,6 +23,8 @@
 #include "extensions/browser/quota_service.h"
 #include "extensions/browser/runtime_data.h"
 #include "extensions/browser/service_worker_manager.h"
+#include "extensions/browser/value_store/value_store_factory_impl.h"
+#include "extensions/common/api/app_runtime.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/file_util.h"
 
@@ -36,7 +39,9 @@ void PerformApplicationShutdown()
 }
 
 ShellExtensionSystem::ShellExtensionSystem(BrowserContext* browser_context)
-    : browser_context_(browser_context), weak_factory_(this) {}
+    : browser_context_(browser_context),
+      store_factory_(new ValueStoreFactoryImpl(browser_context->GetPath())),
+      weak_factory_(this) {}
 
 ShellExtensionSystem::~ShellExtensionSystem() {
 }
@@ -56,6 +61,13 @@ const Extension* ShellExtensionSystem::LoadApp(const base::FilePath& app_dir) {
     return nullptr;
   }
 
+  // Log warnings.
+  if (extension->install_warnings().size()) {
+    LOG(WARNING) << "Warnings loading extension at " << app_dir.value() << ":";
+    for (const auto& warning : extension->install_warnings())
+      LOG(WARNING) << warning.message;
+  }
+
   // TODO(jamescook): We may want to do some of these things here:
   // * Create a PermissionsUpdater.
   // * Call PermissionsUpdater::GrantActivePermissions().
@@ -72,7 +84,7 @@ const Extension* ShellExtensionSystem::LoadApp(const base::FilePath& app_dir) {
           weak_factory_.GetWeakPtr(), extension));
 
   content::NotificationService::current()->Notify(
-      extensions::NOTIFICATION_EXTENSION_LOADED_DEPRECATED,
+      NOTIFICATION_EXTENSION_LOADED_DEPRECATED,
       content::Source<BrowserContext>(browser_context_),
       content::Details<const Extension>(extension.get()));
 
@@ -83,7 +95,7 @@ void ShellExtensionSystem::Init() {
   // Inform the rest of the extensions system to start.
   ready_.Signal();
   content::NotificationService::current()->Notify(
-      extensions::NOTIFICATION_EXTENSIONS_READY_DEPRECATED,
+      NOTIFICATION_EXTENSIONS_READY_DEPRECATED,
       content::Source<BrowserContext>(browser_context_),
       content::NotificationService::NoDetails());
 }
@@ -96,8 +108,8 @@ void ShellExtensionSystem::LaunchApp(const ExtensionId& extension_id) {
   const Extension* extension = ExtensionRegistry::Get(browser_context_)
                                    ->enabled_extensions()
                                    .GetByID(extension_id);
-  AppRuntimeEventRouter::DispatchOnLaunchedEvent(
-      browser_context_, extension, extensions::SOURCE_UNTRACKED);
+  AppRuntimeEventRouter::DispatchOnLaunchedEvent(browser_context_, extension,
+                                                 SOURCE_UNTRACKED, nullptr);
 }
 
 void ShellExtensionSystem::Shutdown() {
@@ -139,6 +151,10 @@ StateStore* ShellExtensionSystem::rules_store() {
   return nullptr;
 }
 
+scoped_refptr<ValueStoreFactory> ShellExtensionSystem::store_factory() {
+  return store_factory_;
+}
+
 InfoMap* ShellExtensionSystem::info_map() {
   if (!info_map_.get())
     info_map_ = new InfoMap;
@@ -156,11 +172,11 @@ AppSorting* ShellExtensionSystem::app_sorting() {
 void ShellExtensionSystem::RegisterExtensionWithRequestContexts(
     const Extension* extension,
     const base::Closure& callback) {
-  BrowserThread::PostTaskAndReply(BrowserThread::IO, FROM_HERE,
-                                  base::Bind(&InfoMap::AddExtension, info_map(),
-                                             make_scoped_refptr(extension),
-                                             base::Time::Now(), false, false),
-                                  callback);
+  BrowserThread::PostTaskAndReply(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(&InfoMap::AddExtension, info_map(),
+                 base::RetainedRef(extension), base::Time::Now(), false, false),
+      callback);
 }
 
 void ShellExtensionSystem::UnregisterExtensionWithRequestContexts(
@@ -176,9 +192,9 @@ ContentVerifier* ShellExtensionSystem::content_verifier() {
   return nullptr;
 }
 
-scoped_ptr<ExtensionSet> ShellExtensionSystem::GetDependentExtensions(
+std::unique_ptr<ExtensionSet> ShellExtensionSystem::GetDependentExtensions(
     const Extension* extension) {
-  return make_scoped_ptr(new ExtensionSet());
+  return base::MakeUnique<ExtensionSet>();
 }
 
 void ShellExtensionSystem::InstallUpdate(const std::string& extension_id,

@@ -4,7 +4,7 @@
 
 package org.chromium.android_webview.test;
 
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.test.util.CommonResources;
@@ -187,6 +187,7 @@ public class NavigationHistoryTest extends AwTestBase {
         assertEquals(0, list.getCurrentEntryIndex());
     }
 
+    @SmallTest
     public void testFavicon() throws Throwable {
         mWebServer.setResponseBase64("/" + CommonResources.FAVICON_FILENAME,
                 CommonResources.FAVICON_DATA_BASE64, CommonResources.getImagePngHeaders(false));

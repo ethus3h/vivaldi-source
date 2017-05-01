@@ -10,11 +10,11 @@
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/infobars/infobar_service.h"
-#include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_cocoa.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #include "chrome/browser/ui/cocoa/infobars/mock_confirm_infobar_delegate.h"
-#include "chrome/browser/ui/cocoa/run_loop_testing.h"
+#include "chrome/browser/ui/cocoa/test/cocoa_profile_test.h"
+#include "chrome/browser/ui/cocoa/test/run_loop_testing.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #import "content/public/browser/web_contents.h"
@@ -93,7 +93,7 @@ class ConfirmInfoBarControllerTest : public CocoaProfileTest,
         WebContents::Create(WebContents::CreateParams(profile())));
    InfoBarService::CreateForWebContents(web_contents_.get());
 
-   scoped_ptr<infobars::InfoBarDelegate> delegate(
+   std::unique_ptr<infobars::InfoBarDelegate> delegate(
        new MockConfirmInfoBarDelegate(this));
    infobar_ = new InfoBarCocoa(std::move(delegate));
     infobar_->SetOwner(InfoBarService::FromWebContents(web_contents_.get()));
@@ -140,7 +140,7 @@ class ConfirmInfoBarControllerTest : public CocoaProfileTest,
     controller_.reset();
   }
 
-  scoped_ptr<WebContents> web_contents_;
+  std::unique_ptr<WebContents> web_contents_;
   InfoBarCocoa* infobar_;  // Weak, will delete itself.
   bool delegate_closed_;
 };

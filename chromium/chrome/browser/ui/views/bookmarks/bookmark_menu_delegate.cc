@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_delegate.h"
 
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -19,9 +18,9 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/bookmarks/managed/managed_bookmark_service.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/theme_resources.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/window_open_disposition.h"
@@ -29,6 +28,7 @@
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/widget/tooltip_manager.h"
 #include "ui/views/widget/widget.h"
 
 using base::UserMetricsAction;
@@ -118,7 +118,7 @@ void BookmarkMenuDelegate::SetPageNavigator(PageNavigator* navigator) {
 }
 
 const BookmarkModel* BookmarkMenuDelegate::GetBookmarkModel() const {
-  return BookmarkModelFactory::GetForProfile(profile_);
+  return BookmarkModelFactory::GetForBrowserContext(profile_);
 }
 
 bookmarks::ManagedBookmarkService*
@@ -146,19 +146,10 @@ base::string16 BookmarkMenuDelegate::GetTooltipText(
 
   const BookmarkNode* node = i->second;
   if (node->is_url()) {
-    std::string temp;
-    base::string16 nickname;
-    base::string16 description;
-	base::Time created_time = node->date_added();
-    base::Time visited_time = node->date_visited();
-
-    nickname = node->GetNickName();
-    description = node->GetDescription();
-
+    const views::TooltipManager* tooltip_manager = parent_->GetTooltipManager();
     return BookmarkBarView::CreateToolTipForURLAndTitle(
-        parent_, screen_loc, node->url(), node->GetTitle(), profile_,
-        &nickname, &description, &created_time, &visited_time
-        );
+        tooltip_manager->GetMaxWidth(screen_loc),
+        tooltip_manager->GetFontList(), node->url(), node->GetTitle());
   }
   return base::string16();
 }
@@ -188,7 +179,8 @@ bool BookmarkMenuDelegate::ShouldExecuteCommandWithoutClosingMenu(
     int id,
     const ui::Event& event) {
   return (event.flags() & ui::EF_LEFT_MOUSE_BUTTON) &&
-         ui::DispositionFromEventFlags(event.flags()) == NEW_BACKGROUND_TAB;
+         ui::DispositionFromEventFlags(event.flags()) ==
+             WindowOpenDisposition::NEW_BACKGROUND_TAB;
 }
 
 bool BookmarkMenuDelegate::GetDropFormats(
@@ -331,7 +323,6 @@ bool BookmarkMenuDelegate::ShowContextMenu(MenuItemView* source,
       ShouldCloseOnRemove(node)));
   context_menu_->set_observer(this);
   context_menu_->RunMenuAt(p, source_type);
-  context_menu_.reset(nullptr);
   return true;
 }
 
@@ -443,6 +434,10 @@ void BookmarkMenuDelegate::DidRemoveBookmarks() {
   GetBookmarkModel()->AddObserver(this);
   DCHECK(is_mutating_model_);
   is_mutating_model_ = false;
+}
+
+void BookmarkMenuDelegate::OnContextMenuClosed() {
+  context_menu_.reset();
 }
 
 bool BookmarkMenuDelegate::ShouldCloseOnRemove(const BookmarkNode* node) const {

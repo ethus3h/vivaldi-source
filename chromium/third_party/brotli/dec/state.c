@@ -1,23 +1,15 @@
 /* Copyright 2015 Google Inc. All Rights Reserved.
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-   http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+   Distributed under MIT license.
+   See file LICENSE for detail or copy at https://opensource.org/licenses/MIT
 */
 
-#include "./huffman.h"
 #include "./state.h"
 
-#include <stdlib.h>
-#include <string.h>
+#include <stdlib.h>  /* free, malloc */
+
+#include <brotli/types.h>
+#include "./huffman.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -33,11 +25,11 @@ static void DefaultFreeFunc(void* opaque, void* address) {
   free(address);
 }
 
-void BrotliStateInit(BrotliState* s) {
-  BrotliStateInitWithCustomAllocators(s, 0, 0, 0);
+void BrotliDecoderStateInit(BrotliDecoderState* s) {
+  BrotliDecoderStateInitWithCustomAllocators(s, 0, 0, 0);
 }
 
-void BrotliStateInitWithCustomAllocators(BrotliState* s,
+void BrotliDecoderStateInitWithCustomAllocators(BrotliDecoderState* s,
     brotli_alloc_func alloc_func, brotli_free_func free_func, void* opaque) {
   if (!alloc_func) {
     s->alloc_func = DefaultAllocFunc;
@@ -68,6 +60,9 @@ void BrotliStateInitWithCustomAllocators(BrotliState* s,
   s->block_type_trees = NULL;
   s->block_len_trees = NULL;
   s->ringbuffer = NULL;
+  s->ringbuffer_size = 0;
+  s->new_ringbuffer_size = 0;
+  s->ringbuffer_mask = 0;
 
   s->context_map = NULL;
   s->context_modes = NULL;
@@ -84,11 +79,11 @@ void BrotliStateInitWithCustomAllocators(BrotliState* s,
   s->distance_hgroup.codes = NULL;
   s->distance_hgroup.htrees = NULL;
 
-
   s->custom_dict = NULL;
   s->custom_dict_size = 0;
 
   s->is_last_metablock = 0;
+  s->should_wrap_ringbuffer = 0;
   s->window_bits = 0;
   s->max_distance = 0;
   s->dist_rb[0] = 16;
@@ -102,17 +97,10 @@ void BrotliStateInitWithCustomAllocators(BrotliState* s,
   /* Make small negative indexes addressable. */
   s->symbol_lists = &s->symbols_lists_array[BROTLI_HUFFMAN_MAX_CODE_LENGTH + 1];
 
-  s->mtf_upper_bound = 255;
-
-  s->legacy_input_buffer = 0;
-  s->legacy_output_buffer = 0;
-  s->legacy_input_len = 0;
-  s->legacy_output_len = 0;
-  s->legacy_input_pos = 0;
-  s->legacy_output_pos = 0;
+  s->mtf_upper_bound = 63;
 }
 
-void BrotliStateMetablockBegin(BrotliState* s) {
+void BrotliDecoderStateMetablockBegin(BrotliDecoderState* s) {
   s->meta_block_remaining_len = 0;
   s->block_length[0] = 1U << 28;
   s->block_length[1] = 1U << 28;
@@ -130,7 +118,6 @@ void BrotliStateMetablockBegin(BrotliState* s) {
   s->context_modes = NULL;
   s->dist_context_map = NULL;
   s->context_map_slice = NULL;
-  s->literal_htree_index = 0;
   s->literal_htree = NULL;
   s->dist_context_map_slice = NULL;
   s->dist_htree_index = 0;
@@ -144,52 +131,44 @@ void BrotliStateMetablockBegin(BrotliState* s) {
   s->distance_hgroup.htrees = NULL;
 }
 
-void BrotliStateCleanupAfterMetablock(BrotliState* s) {
+void BrotliDecoderStateCleanupAfterMetablock(BrotliDecoderState* s) {
   BROTLI_FREE(s, s->context_modes);
   BROTLI_FREE(s, s->context_map);
   BROTLI_FREE(s, s->dist_context_map);
 
-  BrotliHuffmanTreeGroupRelease(s, &s->literal_hgroup);
-  BrotliHuffmanTreeGroupRelease(s, &s->insert_copy_hgroup);
-  BrotliHuffmanTreeGroupRelease(s, &s->distance_hgroup);
+  BrotliDecoderHuffmanTreeGroupRelease(s, &s->literal_hgroup);
+  BrotliDecoderHuffmanTreeGroupRelease(s, &s->insert_copy_hgroup);
+  BrotliDecoderHuffmanTreeGroupRelease(s, &s->distance_hgroup);
 }
 
-void BrotliStateCleanup(BrotliState* s) {
-  BrotliStateCleanupAfterMetablock(s);
+void BrotliDecoderStateCleanup(BrotliDecoderState* s) {
+  BrotliDecoderStateCleanupAfterMetablock(s);
 
   BROTLI_FREE(s, s->ringbuffer);
   BROTLI_FREE(s, s->block_type_trees);
-  BROTLI_FREE(s, s->legacy_input_buffer);
-  BROTLI_FREE(s, s->legacy_output_buffer);
 }
 
-int BrotliStateIsStreamStart(const BrotliState* s) {
-  return (s->state == BROTLI_STATE_UNINITED &&
-      BrotliGetAvailableBits(&s->br) == 0);
-}
-
-int BrotliStateIsStreamEnd(const BrotliState* s) {
-  return s->state == BROTLI_STATE_DONE;
-}
-
-void BrotliHuffmanTreeGroupInit(BrotliState* s, HuffmanTreeGroup* group,
-    uint32_t alphabet_size, uint32_t ntrees) {
+BROTLI_BOOL BrotliDecoderHuffmanTreeGroupInit(BrotliDecoderState* s,
+    HuffmanTreeGroup* group, uint32_t alphabet_size, uint32_t ntrees) {
   /* Pack two allocations into one */
-  const size_t code_size =
-      sizeof(HuffmanCode) * (size_t)(ntrees * BROTLI_HUFFMAN_MAX_TABLE_SIZE);
-  const size_t htree_size = sizeof(HuffmanCode*) * (size_t)ntrees;
-  char *p = (char*)BROTLI_ALLOC(s, code_size + htree_size);
+  const size_t max_table_size = kMaxHuffmanTableSize[(alphabet_size + 31) >> 5];
+  const size_t code_size = sizeof(HuffmanCode) * ntrees * max_table_size;
+  const size_t htree_size = sizeof(HuffmanCode*) * ntrees;
+  /* Pointer alignment is, hopefully, wider than sizeof(HuffmanCode). */
+  HuffmanCode** p = (HuffmanCode**)BROTLI_ALLOC(s, code_size + htree_size);
   group->alphabet_size = (uint16_t)alphabet_size;
   group->num_htrees = (uint16_t)ntrees;
-  group->codes = (HuffmanCode*)p;
-  group->htrees = (HuffmanCode**)(p + code_size);
+  group->htrees = (HuffmanCode**)p;
+  group->codes = (HuffmanCode*)(&p[ntrees]);
+  return !!p;
 }
 
-void BrotliHuffmanTreeGroupRelease(BrotliState* s, HuffmanTreeGroup* group) {
-  BROTLI_FREE(s, group->codes);
+void BrotliDecoderHuffmanTreeGroupRelease(
+    BrotliDecoderState* s, HuffmanTreeGroup* group) {
+  BROTLI_FREE(s, group->htrees);
   group->htrees = NULL;
 }
 
 #if defined(__cplusplus) || defined(c_plusplus)
-} /* extern "C" */
+}  /* extern "C" */
 #endif

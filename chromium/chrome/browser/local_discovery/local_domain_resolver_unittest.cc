@@ -5,8 +5,9 @@
 #include <stdint.h>
 
 #include "base/location.h"
+#include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/local_discovery/service_discovery_client_impl.h"
 #include "net/dns/mdns_client_impl.h"
 #include "net/dns/mock_mdns_socket_factory.h"
@@ -69,27 +70,26 @@ class LocalDomainResolverTest : public testing::Test {
     mdns_client_.StartListening(&socket_factory_);
   }
 
-  std::string IPAddressToStringWithEmpty(const net::IPAddressNumber& address) {
-    if (address.empty()) return "";
-    return net::IPAddressToString(address);
+  std::string IPAddressToStringWithInvalid(const net::IPAddress& address) {
+    if (!address.IsValid())
+      return "";
+    return address.ToString();
   }
 
   void AddressCallback(bool resolved,
-                       const net::IPAddressNumber& address_ipv4,
-                       const net::IPAddressNumber& address_ipv6) {
-      AddressCallbackInternal(resolved,
-                              IPAddressToStringWithEmpty(address_ipv4),
-                              IPAddressToStringWithEmpty(address_ipv6));
+                       const net::IPAddress& address_ipv4,
+                       const net::IPAddress& address_ipv6) {
+    AddressCallbackInternal(resolved,
+                            IPAddressToStringWithInvalid(address_ipv4),
+                            IPAddressToStringWithInvalid(address_ipv6));
   }
 
   void RunFor(base::TimeDelta time_period) {
-    base::CancelableCallback<void()> callback(
-        base::Bind(&base::MessageLoop::QuitWhenIdle,
-                   base::Unretained(base::MessageLoop::current())));
+    base::RunLoop run_loop;
+    base::CancelableCallback<void()> callback(run_loop.QuitWhenIdleClosure());
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE, callback.callback(), time_period);
-
-    base::MessageLoop::current()->Run();
+    run_loop.Run();
     callback.Cancel();
   }
 

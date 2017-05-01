@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/app_modal/chrome_javascript_native_dialog_factory.h"
+#include "chrome/browser/ui/javascript_dialogs/chrome_javascript_native_dialog_factory.h"
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "components/app_modal/javascript_dialog_manager.h"
 #include "components/app_modal/javascript_native_dialog_factory.h"
@@ -24,6 +25,11 @@
 #include "ui/aura/window.h"
 #endif
 
+#include "app/vivaldi_apptools.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
+
 namespace {
 
 #if !defined(USE_X11) || defined(OS_CHROMEOS)
@@ -37,7 +43,7 @@ class ChromeJavaScriptAppModalDialogViews
   ~ChromeJavaScriptAppModalDialogViews() override {}
 
  private:
-  scoped_ptr<AppModalDialogHelper> helper_;
+  std::unique_ptr<AppModalDialogHelper> helper_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeJavaScriptAppModalDialogViews);
 };
@@ -63,8 +69,23 @@ class ChromeJavaScriptNativeDialogViewsFactory
         dialog->web_contents());
     gfx::NativeWindow parent_window =
         dialog->web_contents()->GetTopLevelNativeWindow();
+
+    if (vivaldi::IsVivaldiRunning()) {
+      // NOTE(andre@vivaldi.com) : There are no toplevelnative window in Vivaldi
+      // since we use WebViews.
+      content::WebContents* web_contents = dialog->web_contents();
+      Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
+      if (!browser) {
+        browser = chrome::FindBrowserWithProfile(
+            Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+      }
+      // There must be a browser here, otherwise there would not be a
+      // browsercontext.
+      parent_window = browser->window()->GetNativeWindow();
+    }
+
 #if defined(USE_AURA)
-    if (!parent_window->GetRootWindow()) {
+    if (parent_window && !parent_window->GetRootWindow()) {
       // When we are part of a WebContents that isn't actually being displayed
       // on the screen, we can't actually attach to it.
       parent_window = NULL;
@@ -80,7 +101,6 @@ class ChromeJavaScriptNativeDialogViewsFactory
 }  // namespace
 
 void InstallChromeJavaScriptNativeDialogFactory() {
-  app_modal::JavaScriptDialogManager::GetInstance()->
-      SetNativeDialogFactory(
-          make_scoped_ptr(new ChromeJavaScriptNativeDialogViewsFactory));
+  app_modal::JavaScriptDialogManager::GetInstance()->SetNativeDialogFactory(
+      base::WrapUnique(new ChromeJavaScriptNativeDialogViewsFactory));
 }

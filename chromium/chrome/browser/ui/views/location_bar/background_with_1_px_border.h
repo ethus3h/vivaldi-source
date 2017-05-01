@@ -22,6 +22,12 @@ class View;
 // that the border is one pixel regardless of display scaling.
 class BackgroundWith1PxBorder : public views::Background {
  public:
+  // Corner radius of the inside edge of the roundrect border stroke.
+  static constexpr int kCornerRadius = 2;
+
+  // The thickness of the location bar's border in DIP.
+  static constexpr int kLocationBarBorderThicknessDip = 1;
+
   BackgroundWith1PxBorder(SkColor background, SkColor border);
 
   void Paint(gfx::Canvas* canvas, views::View* view) const override;

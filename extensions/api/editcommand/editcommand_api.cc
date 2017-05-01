@@ -22,8 +22,7 @@ using content::WebContents;
 // Returns the active web content for the app window so that we can access
 // any elemenent in the UI was well as the document area.
 static WebContents* webContents() {
-  Browser* browser = chrome::FindLastActiveWithHostDesktopType(
-      chrome::GetActiveDesktop());
+  Browser* browser = chrome::FindLastActive();
   WebContents* web_contents = browser ?
       browser->tab_strip_model()->GetActiveWebContents() : nullptr;
   AppWindow* appWindow = web_contents ?
@@ -41,7 +40,7 @@ EditcommandExecuteFunction::~EditcommandExecuteFunction() {
 bool EditcommandExecuteFunction::RunAsync() {
   WebContents* web_contents = webContents();
   if (web_contents) {
-    scoped_ptr<vivaldi::editcommand::Execute::Params> params(
+    std::unique_ptr<vivaldi::editcommand::Execute::Params> params(
       vivaldi::editcommand::Execute::Params::Create(*args_));
 
     if (params->command == "undo")
@@ -58,6 +57,7 @@ bool EditcommandExecuteFunction::RunAsync() {
       web_contents->SelectAll();
   }
 
+  SendResponse(true);
   return true;
 }
 

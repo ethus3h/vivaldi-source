@@ -10,17 +10,17 @@
 
 #include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/media_galleries/fileapi/device_media_async_file_util.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_validator_factory.h"
 #include "chrome/browser/media_galleries/fileapi/media_path_filter.h"
 #include "chrome/browser/media_galleries/fileapi/native_media_file_util.h"
@@ -50,9 +50,9 @@
 #include "chrome/browser/media_galleries/fileapi/picasa_file_util.h"
 #endif  // defined(OS_WIN) || defined(OS_MACOSX)
 
-#if defined(OS_MACOSX)
-#include "chrome/browser/media_galleries/fileapi/iphoto_file_util.h"
-#endif  // defined(OS_MACOSX)
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
+#include "chrome/browser/media_galleries/fileapi/device_media_async_file_util.h"
+#endif
 
 using storage::FileSystemContext;
 using storage::FileSystemURL;
@@ -60,6 +60,11 @@ using storage::FileSystemURL;
 namespace {
 
 const char kMediaGalleryMountPrefix[] = "media_galleries-";
+
+#if DCHECK_IS_ON()
+base::LazyInstance<base::SequenceChecker>::Leaky g_media_sequence_checker =
+    LAZY_INSTANCE_INITIALIZER;
+#endif
 
 void OnPreferencesInit(
     const content::ResourceRequestInfo::WebContentsGetter& web_contents_getter,
@@ -135,23 +140,20 @@ MediaFileSystemBackend::MediaFileSystemBackend(
       media_task_runner_(media_task_runner),
       media_path_filter_(new MediaPathFilter),
       media_copy_or_move_file_validator_factory_(new MediaFileValidatorFactory),
-      native_media_file_util_(
-          new NativeMediaFileUtil(media_path_filter_.get())),
+      native_media_file_util_(new NativeMediaFileUtil(media_path_filter_.get()))
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
+      ,
       device_media_async_file_util_(
           DeviceMediaAsyncFileUtil::Create(profile_path_,
                                            APPLY_MEDIA_FILE_VALIDATION))
+#endif
 #if defined(OS_WIN) || defined(OS_MACOSX)
       ,
       picasa_file_util_(new picasa::PicasaFileUtil(media_path_filter_.get())),
       itunes_file_util_(new itunes::ITunesFileUtil(media_path_filter_.get())),
       picasa_file_util_used_(false),
       itunes_file_util_used_(false)
-#endif  // defined(OS_WIN) || defined(OS_MACOSX)
-#if defined(OS_MACOSX)
-      ,
-      iphoto_file_util_(new iphoto::IPhotoFileUtil(media_path_filter_.get())),
-      iphoto_file_util_used_(false)
-#endif  // defined(OS_MACOSX)
+#endif
 {
 }
 
@@ -159,11 +161,10 @@ MediaFileSystemBackend::~MediaFileSystemBackend() {
 }
 
 // static
-bool MediaFileSystemBackend::CurrentlyOnMediaTaskRunnerThread() {
-  base::SequencedWorkerPool* pool = content::BrowserThread::GetBlockingPool();
-  base::SequencedWorkerPool::SequenceToken media_sequence_token =
-      pool->GetNamedSequenceToken(kMediaTaskRunnerName);
-  return pool->IsRunningSequenceOnCurrentThread(media_sequence_token);
+void MediaFileSystemBackend::AssertCurrentlyOnMediaSequence() {
+#if DCHECK_IS_ON()
+  DCHECK(g_media_sequence_checker.Get().CalledOnValidSequence());
+#endif
 }
 
 // static
@@ -236,9 +237,6 @@ bool MediaFileSystemBackend::CanHandleType(storage::FileSystemType type) const {
     case storage::kFileSystemTypePicasa:
     case storage::kFileSystemTypeItunes:
 #endif  // defined(OS_WIN) || defined(OS_MACOSX)
-#if defined(OS_MACOSX)
-    case storage::kFileSystemTypeIphoto:
-#endif  // defined(OS_MACOSX)
       return true;
     default:
       return false;
@@ -268,8 +266,10 @@ storage::AsyncFileUtil* MediaFileSystemBackend::GetAsyncFileUtil(
   switch (type) {
     case storage::kFileSystemTypeNativeMedia:
       return native_media_file_util_.get();
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
     case storage::kFileSystemTypeDeviceMedia:
       return device_media_async_file_util_.get();
+#endif
 #if defined(OS_WIN) || defined(OS_MACOSX)
     case storage::kFileSystemTypeItunes:
       if (!itunes_file_util_used_) {
@@ -284,14 +284,6 @@ storage::AsyncFileUtil* MediaFileSystemBackend::GetAsyncFileUtil(
       }
       return picasa_file_util_.get();
 #endif  // defined(OS_WIN) || defined(OS_MACOSX)
-#if defined(OS_MACOSX)
-    case storage::kFileSystemTypeIphoto:
-      if (!iphoto_file_util_used_) {
-        media_galleries::UsageCount(media_galleries::IPHOTO_FILE_SYSTEM_USED);
-        iphoto_file_util_used_ = true;
-      }
-      return iphoto_file_util_.get();
-#endif  // defined(OS_MACOSX)
     default:
       NOTREACHED();
   }
@@ -312,7 +304,6 @@ MediaFileSystemBackend::GetCopyOrMoveFileValidatorFactory(
   switch (type) {
     case storage::kFileSystemTypeNativeMedia:
     case storage::kFileSystemTypeDeviceMedia:
-    case storage::kFileSystemTypeIphoto:
     case storage::kFileSystemTypeItunes:
       if (!media_copy_or_move_file_validator_factory_) {
         *error_code = base::File::FILE_ERROR_SECURITY;
@@ -329,7 +320,7 @@ storage::FileSystemOperation* MediaFileSystemBackend::CreateFileSystemOperation(
     const FileSystemURL& url,
     FileSystemContext* context,
     base::File::Error* error_code) const {
-  scoped_ptr<storage::FileSystemOperationContext> operation_context(
+  std::unique_ptr<storage::FileSystemOperationContext> operation_context(
       new storage::FileSystemOperationContext(context,
                                               media_task_runner_.get()));
   return storage::FileSystemOperation::Create(url, context,
@@ -338,10 +329,10 @@ storage::FileSystemOperation* MediaFileSystemBackend::CreateFileSystemOperation(
 
 bool MediaFileSystemBackend::SupportsStreaming(
     const storage::FileSystemURL& url) const {
-  if (url.type() == storage::kFileSystemTypeDeviceMedia) {
-    DCHECK(device_media_async_file_util_);
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
+  if (url.type() == storage::kFileSystemTypeDeviceMedia)
     return device_media_async_file_util_->SupportsStreaming(url);
-  }
+#endif
 
   return false;
 }
@@ -351,45 +342,41 @@ bool MediaFileSystemBackend::HasInplaceCopyImplementation(
   DCHECK(type == storage::kFileSystemTypeNativeMedia ||
          type == storage::kFileSystemTypeDeviceMedia ||
          type == storage::kFileSystemTypeItunes ||
-         type == storage::kFileSystemTypePicasa ||
-         type == storage::kFileSystemTypeIphoto);
+         type == storage::kFileSystemTypePicasa);
   return true;
 }
 
-scoped_ptr<storage::FileStreamReader>
+std::unique_ptr<storage::FileStreamReader>
 MediaFileSystemBackend::CreateFileStreamReader(
     const FileSystemURL& url,
     int64_t offset,
     int64_t max_bytes_to_read,
     const base::Time& expected_modification_time,
     FileSystemContext* context) const {
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
   if (url.type() == storage::kFileSystemTypeDeviceMedia) {
-    DCHECK(device_media_async_file_util_);
-    scoped_ptr<storage::FileStreamReader> reader =
+    std::unique_ptr<storage::FileStreamReader> reader =
         device_media_async_file_util_->GetFileStreamReader(
             url, offset, expected_modification_time, context);
     DCHECK(reader);
     return reader;
   }
+#endif
 
-  return scoped_ptr<storage::FileStreamReader>(
+  return std::unique_ptr<storage::FileStreamReader>(
       storage::FileStreamReader::CreateForLocalFile(
-          context->default_file_task_runner(),
-          url.path(),
-          offset,
+          context->default_file_task_runner(), url.path(), offset,
           expected_modification_time));
 }
 
-scoped_ptr<storage::FileStreamWriter>
+std::unique_ptr<storage::FileStreamWriter>
 MediaFileSystemBackend::CreateFileStreamWriter(
     const FileSystemURL& url,
     int64_t offset,
     FileSystemContext* context) const {
-  return scoped_ptr<storage::FileStreamWriter>(
+  return std::unique_ptr<storage::FileStreamWriter>(
       storage::FileStreamWriter::CreateForLocalFile(
-          context->default_file_task_runner(),
-          url.path(),
-          offset,
+          context->default_file_task_runner(), url.path(), offset,
           storage::FileStreamWriter::OPEN_EXISTING_FILE));
 }
 

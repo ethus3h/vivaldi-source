@@ -4,10 +4,10 @@
 
 #include "components/metrics/leak_detector/call_stack_table.h"
 
+#include <memory>
 #include <set>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/metrics/leak_detector/call_stack_manager.h"
 #include "components/metrics/leak_detector/custom_allocator.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -104,7 +104,7 @@ class CallStackTableTest : public ::testing::Test {
   const CallStack* stack3_;
 
  private:
-  scoped_ptr<CallStackManager> manager_;
+  std::unique_ptr<CallStackManager> manager_;
 
   DISALLOW_COPY_AND_ASSIGN(CallStackTableTest);
 };
@@ -300,6 +300,158 @@ TEST_F(CallStackTableTest, DetectLeak) {
   // CallStack object's address.
   EXPECT_EQ(stack0_, leaks[0].call_stack());
   EXPECT_EQ(stack1_, leaks[1].call_stack());
+}
+
+TEST_F(CallStackTableTest, GetTopCallStacks) {
+  CallStackTable table(kDefaultLeakThreshold);
+
+  // Add a bunch of entries.
+  for (int i = 0; i < 60; ++i)
+    table.Add(stack0_);
+  for (int i = 0; i < 50; ++i)
+    table.Add(stack1_);
+  for (int i = 0; i < 64; ++i)
+    table.Add(stack2_);
+  for (int i = 0; i < 72; ++i)
+    table.Add(stack3_);
+
+  // Get the call sites ordered from least to greatest number of entries.
+  RankedSet top_four(4);
+  table.GetTopCallStacks(&top_four);
+  ASSERT_EQ(4U, top_four.size());
+  auto iter = top_four.begin();
+  EXPECT_EQ(72, iter->count);
+  EXPECT_EQ(stack3_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(64, iter->count);
+  EXPECT_EQ(stack2_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(60, iter->count);
+  EXPECT_EQ(stack0_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(50, iter->count);
+  EXPECT_EQ(stack1_, iter->value.call_stack());
+
+  // Get the top three call sites ordered from least to greatest number of
+  // entries.
+  RankedSet top_three(3);
+  table.GetTopCallStacks(&top_three);
+  ASSERT_EQ(3U, top_three.size());
+  iter = top_three.begin();
+  EXPECT_EQ(72, iter->count);
+  EXPECT_EQ(stack3_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(64, iter->count);
+  EXPECT_EQ(stack2_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(60, iter->count);
+  EXPECT_EQ(stack0_, iter->value.call_stack());
+
+  // Get the top two call sites ordered from least to greatest number of
+  // entries.
+  RankedSet top_two(2);
+  table.GetTopCallStacks(&top_two);
+  ASSERT_EQ(2U, top_two.size());
+  iter = top_two.begin();
+  EXPECT_EQ(72, iter->count);
+  EXPECT_EQ(stack3_, iter->value.call_stack());
+  ++iter;
+  EXPECT_EQ(64, iter->count);
+  EXPECT_EQ(stack2_, iter->value.call_stack());
+}
+
+TEST_F(CallStackTableTest, GetLastUptrendInfo) {
+  CallStackTable table(kDefaultLeakThreshold);
+
+  // Add some |stack0_| and |stack1_|.
+  for (int i = 0; i < 60; ++i)
+    table.Add(stack0_);
+  for (int i = 0; i < 60; ++i)
+    table.Add(stack1_);
+  table.UpdateLastDropInfo(100);
+
+  size_t timestamp_delta;
+  uint32_t count_delta;
+  table.GetLastUptrendInfo(stack0_, 100, &timestamp_delta, &count_delta);
+  EXPECT_EQ(0U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  // Remove |stack0_| and add |stack1_|.
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack0_);
+  for (int i = 0; i < 30; ++i)
+    table.Add(stack1_);
+  table.UpdateLastDropInfo(200);
+
+  table.GetLastUptrendInfo(stack0_, 200, &timestamp_delta, &count_delta);
+  EXPECT_EQ(0U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  table.GetLastUptrendInfo(stack1_, 200, &timestamp_delta, &count_delta);
+  EXPECT_EQ(100U, timestamp_delta);
+  EXPECT_EQ(30U, count_delta);
+
+  // Check if previous drop of |stack0_| was recorded and introduce |stack2_|.
+  for (int i = 0; i < 30; ++i)
+    table.Add(stack0_);
+  for (int i = 0; i < 60; ++i)
+    table.Add(stack2_);
+  table.UpdateLastDropInfo(300);
+
+  table.GetLastUptrendInfo(stack0_, 300, &timestamp_delta, &count_delta);
+  EXPECT_EQ(100U, timestamp_delta);
+  EXPECT_EQ(30U, count_delta);
+
+  table.GetLastUptrendInfo(stack2_, 300, &timestamp_delta, &count_delta);
+  EXPECT_EQ(0U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  // Introduce more variation between updates. Decrease |stack2_| to 0.
+  // All the history for |stack2_| should be forgotten.
+  for (int i = 0; i < 30; ++i)
+    table.Add(stack0_);
+  for (int i = 0; i < 40; ++i)
+    table.Remove(stack0_);
+  for (int i = 0; i < 40; ++i)
+    table.Add(stack1_);
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack1_);
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack2_);
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack2_);
+  table.UpdateLastDropInfo(400);
+
+  table.GetLastUptrendInfo(stack0_, 400, &timestamp_delta, &count_delta);
+  EXPECT_EQ(0U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  table.GetLastUptrendInfo(stack1_, 400, &timestamp_delta, &count_delta);
+  EXPECT_EQ(300U, timestamp_delta);
+  EXPECT_EQ(40U, count_delta);
+
+  table.GetLastUptrendInfo(stack2_, 400, &timestamp_delta, &count_delta);
+  EXPECT_EQ(400U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  // Make a 0-sum sequence for |stack0_|. Introduce |stack2_| again.
+  for (int i = 0; i < 30; ++i)
+    table.Add(stack0_);
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack0_);
+  for (int i = 0; i < 40; ++i)
+    table.Add(stack2_);
+  for (int i = 0; i < 30; ++i)
+    table.Remove(stack2_);
+  table.UpdateLastDropInfo(500);
+
+  table.GetLastUptrendInfo(stack0_, 500, &timestamp_delta, &count_delta);
+  EXPECT_EQ(100U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
+
+  table.GetLastUptrendInfo(stack2_, 500, &timestamp_delta, &count_delta);
+  EXPECT_EQ(0U, timestamp_delta);
+  EXPECT_EQ(0U, count_delta);
 }
 
 }  // namespace leak_detector

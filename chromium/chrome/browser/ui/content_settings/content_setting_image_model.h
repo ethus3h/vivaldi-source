@@ -28,8 +28,8 @@ class ContentSettingImageModel {
   virtual ~ContentSettingImageModel() {}
 
   // Generates a vector of all image models to be used within one window.
-  static ScopedVector<ContentSettingImageModel>
-      GenerateContentSettingImageModels();
+  static std::vector<std::unique_ptr<ContentSettingImageModel>>
+  GenerateContentSettingImageModels();
 
   // Notifies this model that its setting might have changed and it may need to
   // update its visibility, icon and tooltip.
@@ -52,8 +52,9 @@ class ContentSettingImageModel {
   bool is_visible() const { return is_visible_; }
 
 #if defined(OS_MACOSX)
-  const gfx::Image& raster_icon() const { return raster_icon_; }
-  int raster_icon_id() const { return raster_icon_id_; }
+  // Calls UpdateFromWebContents() and returns true if the icon has changed.
+  bool UpdateFromWebContentsAndCheckIfIconChanged(
+      content::WebContents* web_contents);
 #endif
 
   gfx::Image GetIcon(SkColor nearby_text_color) const;
@@ -65,11 +66,10 @@ class ContentSettingImageModel {
 
  protected:
   ContentSettingImageModel();
-  void SetIconByResourceId(int id);
 
   void set_icon_by_vector_id(gfx::VectorIconId id, gfx::VectorIconId badge_id) {
-    vector_icon_id_ = id;
-    vector_icon_badge_id_ = badge_id;
+    icon_id_ = id;
+    icon_badge_id_ = badge_id;
   }
 
   void set_visible(bool visible) { is_visible_ = visible; }
@@ -81,13 +81,8 @@ class ContentSettingImageModel {
  private:
   bool is_visible_;
 
-  // |raster_icon_id_| and |raster_icon_| are only used for pre-MD.
-  int raster_icon_id_;
-  gfx::Image raster_icon_;
-
-  // Vector icons are used for MD.
-  gfx::VectorIconId vector_icon_id_;
-  gfx::VectorIconId vector_icon_badge_id_;
+  gfx::VectorIconId icon_id_;
+  gfx::VectorIconId icon_badge_id_;
   int explanatory_string_id_;
   base::string16 tooltip_;
 
@@ -108,8 +103,8 @@ class ContentSettingSimpleImageModel : public ContentSettingImageModel {
   void SetAnimationHasRun(content::WebContents* web_contents) override;
 
   // Factory method. Used only for testing.
-  static scoped_ptr<ContentSettingImageModel> CreateForContentTypeForTesting(
-      ContentSettingsType content_type);
+  static std::unique_ptr<ContentSettingImageModel>
+  CreateForContentTypeForTesting(ContentSettingsType content_type);
 
  protected:
   ContentSettingsType content_type() { return content_type_; }
@@ -118,6 +113,26 @@ class ContentSettingSimpleImageModel : public ContentSettingImageModel {
   ContentSettingsType content_type_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSettingSimpleImageModel);
+};
+
+// Image model for subresource filter icons in the location bar.
+class ContentSettingSubresourceFilterImageModel
+    : public ContentSettingImageModel {
+ public:
+  ContentSettingSubresourceFilterImageModel();
+
+  void UpdateFromWebContents(content::WebContents* web_contents) override;
+
+  ContentSettingBubbleModel* CreateBubbleModel(
+      ContentSettingBubbleModel::Delegate* delegate,
+      content::WebContents* web_contents,
+      Profile* profile) override;
+
+  bool ShouldRunAnimation(content::WebContents* web_contents) override;
+  void SetAnimationHasRun(content::WebContents* web_contents) override;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(ContentSettingSubresourceFilterImageModel);
 };
 
 #endif  // CHROME_BROWSER_UI_CONTENT_SETTINGS_CONTENT_SETTING_IMAGE_MODEL_H_

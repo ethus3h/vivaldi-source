@@ -7,6 +7,8 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <memory>
+#include <utility>
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -471,6 +473,8 @@ Media::Media(const std::string& custom_display_name,
       custom_display_name(custom_display_name),
       vendor_id(vendor_id) {}
 
+Media::Media(const Media& other) = default;
+
 bool Media::MatchBySize() {
   const MediaDefinition* media = FindMediaBySize(width_um, height_um);
   if (!media)
@@ -732,11 +736,12 @@ class PageRangeTraits : public ItemsTraits<kOptionPageRange> {
       base::ListValue* list = new base::ListValue;
       dict->Set(kPageRangeInterval, list);
       for (size_t i = 0; i < option.size(); ++i) {
-        base::DictionaryValue* interval = new base::DictionaryValue;
-        list->Append(interval);
+        std::unique_ptr<base::DictionaryValue> interval(
+            new base::DictionaryValue);
         interval->SetInteger(kPageRangeStart, option[i].start);
         if (option[i].end < kMaxPageNumber)
           interval->SetInteger(kPageRangeEnd, option[i].end);
+        list->Append(std::move(interval));
       }
     }
   }

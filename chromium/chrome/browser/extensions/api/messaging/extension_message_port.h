@@ -7,6 +7,7 @@
 
 #include "base/macros.h"
 #include "chrome/browser/extensions/api/messaging/message_service.h"
+#include "extensions/common/api/messaging/port_id.h"
 
 class GURL;
 
@@ -29,24 +30,30 @@ class ExtensionMessagePort : public MessageService::MessagePort {
  public:
   // Create a port that is tied to frame(s) in a single tab.
   ExtensionMessagePort(base::WeakPtr<MessageService> message_service,
-                       int port_id,
+                       const PortId& port_id,
                        const std::string& extension_id,
                        content::RenderFrameHost* rfh,
                        bool include_child_frames);
   // Create a port that is tied to all frames of an extension, possibly spanning
   // multiple tabs, including the invisible background page, popups, etc.
   ExtensionMessagePort(base::WeakPtr<MessageService> message_service,
-                       int port_id,
+                       const PortId& port_id,
                        const std::string& extension_id,
                        content::RenderProcessHost* extension_process);
   ~ExtensionMessagePort() override;
+
+  // Checks whether the frames to which this port is tied at its construction
+  // are still aware of this port's existence. Frames that don't know about
+  // the port are removed from the set of frames. This should be used for opener
+  // ports because the frame may be navigated before the port was initialized.
+  void RevalidatePort();
 
   // MessageService::MessagePort:
   void RemoveCommonFrames(const MessagePort& port) override;
   bool HasFrame(content::RenderFrameHost* rfh) const override;
   bool IsValidPort() override;
   void DispatchOnConnect(const std::string& channel_name,
-                         scoped_ptr<base::DictionaryValue> source_tab,
+                         std::unique_ptr<base::DictionaryValue> source_tab,
                          int source_frame_id,
                          int guest_process_id,
                          int guest_render_frame_routing_id,
@@ -75,11 +82,11 @@ class ExtensionMessagePort : public MessageService::MessagePort {
   void CloseChannel();
 
   // Send a IPC message to the renderer for all registered frames.
-  void SendToPort(scoped_ptr<IPC::Message> msg);
+  void SendToPort(std::unique_ptr<IPC::Message> msg);
 
   base::WeakPtr<MessageService> weak_message_service_;
 
-  int port_id_;
+  const PortId port_id_;
   std::string extension_id_;
   content::BrowserContext* browser_context_;
   // Only for receivers in an extension process.
@@ -98,7 +105,7 @@ class ExtensionMessagePort : public MessageService::MessagePort {
   bool did_create_port_;
 
   ExtensionHost* background_host_ptr_;  // used in IncrementLazyKeepaliveCount
-  scoped_ptr<FrameTracker> frame_tracker_;
+  std::unique_ptr<FrameTracker> frame_tracker_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionMessagePort);
 };

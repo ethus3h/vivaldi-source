@@ -16,7 +16,7 @@
 using bookmarks::BookmarkModel;
 using net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES;
 using net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES;
-using net::registry_controlled_domains::GetRegistryLength;
+using net::registry_controlled_domains::GetCanonicalHostRegistryLength;
 
 namespace {
 
@@ -26,11 +26,11 @@ const int kSHA256ByteSize = 32;
 const size_t kUrlLengthLimit = 20 * 1024 * 1024; // 20M
 const size_t kUrlLengthWidth = 8;
 
-void StripTopLevelDomain(std::string* host) {
-  size_t registry_length = GetRegistryLength(
-      *host, EXCLUDE_UNKNOWN_REGISTRIES, EXCLUDE_PRIVATE_REGISTRIES);
+void StripTopLevelDomain(std::string* canonical_host) {
+  size_t registry_length = GetCanonicalHostRegistryLength(
+      *canonical_host, EXCLUDE_UNKNOWN_REGISTRIES, EXCLUDE_PRIVATE_REGISTRIES);
   if (registry_length != 0 && registry_length != std::string::npos)
-    host->erase(host->length() - (registry_length + 1));
+    canonical_host->erase(canonical_host->length() - (registry_length + 1));
 }
 
 void StripCommonSubDomains(std::string* host) {
@@ -51,6 +51,9 @@ DeltaFileEntryWithData::DeltaFileEntryWithData(DeltaFileEntry entry)
     : entry_(entry),
       data_set_(false),
       is_bookmark_(false) {}
+
+DeltaFileEntryWithData::DeltaFileEntryWithData(
+    const DeltaFileEntryWithData& other) = default;
 
 DeltaFileEntryWithData::~DeltaFileEntryWithData() {}
 
@@ -110,7 +113,7 @@ std::string DeltaFileEntryWithData::Url() const {
 base::string16 DeltaFileEntryWithData::Title() const {
   if (!Valid()) return base::UTF8ToUTF16("");
   if (is_bookmark_ && !bookmark_title_.empty()) return bookmark_title_;
-  if (data_.title().empty()) return base::UTF8ToUTF16(data_.url().host());
+  if (data_.title().empty()) return base::UTF8ToUTF16(data_.url().host_piece());
   return data_.title();
 }
 

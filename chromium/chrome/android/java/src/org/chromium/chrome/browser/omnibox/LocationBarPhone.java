@@ -10,11 +10,9 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Rect;
 import android.text.Selection;
-import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -31,8 +29,6 @@ import org.chromium.chrome.browser.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.omaha.UpdateMenuItemHelper;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.util.ColorUtils;
-import org.chromium.chrome.browser.util.FeatureUtilities;
 import org.chromium.chrome.browser.widget.TintedImageButton;
 import org.chromium.ui.UiUtils;
 
@@ -52,8 +48,6 @@ public class LocationBarPhone extends LocationBarLayout {
     private ImageView mMenuBadge;
     private View mMenuButtonWrapper;
     private int mIncognitoBadgePadding;
-    private boolean mVoiceSearchEnabled;
-    private boolean mUrlFocusChangeInProgress;
     private float mUrlFocusChangePercent;
     private Runnable mKeyboardResizeModeTask;
     private ObjectAnimator mOmniboxBackgroundAnimator;
@@ -73,7 +67,7 @@ public class LocationBarPhone extends LocationBarLayout {
     protected void onFinishInflate() {
         super.onFinishInflate();
 
-        mFirstVisibleFocusedView = findViewById(R.id.url_container);
+        mFirstVisibleFocusedView = findViewById(R.id.url_bar);
         mIncognitoBadge = findViewById(R.id.incognito_badge);
         mIncognitoBadgePadding =
                 getResources().getDimensionPixelSize(R.dimen.location_bar_incognito_badge_padding);
@@ -90,10 +84,7 @@ public class LocationBarPhone extends LocationBarLayout {
         mMenuBadge = (ImageView) findViewById(R.id.document_menu_badge);
         mMenuButtonWrapper = findViewById(R.id.document_menu_button_wrapper);
 
-        if (hasVisibleViewsAfterUrlBarWhenUnfocused()) mUrlActionsContainer.setVisibility(VISIBLE);
-        if (!showMenuButtonInOmnibox()) {
-            ((ViewGroup) mMenuButtonWrapper.getParent()).removeView(mMenuButtonWrapper);
-        }
+        ((ViewGroup) mMenuButtonWrapper.getParent()).removeView(mMenuButtonWrapper);
     }
 
     @Override
@@ -142,44 +133,22 @@ public class LocationBarPhone extends LocationBarLayout {
     }
 
     /**
-     * @return Whether there are visible views that are aligned following the Url Bar when it
-     *         does not have foucs.
-     */
-    public boolean hasVisibleViewsAfterUrlBarWhenUnfocused() {
-        return showMenuButtonInOmnibox();
-    }
-
-    /**
-     * @return Whether the menu should be shown in the omnibox instead of outside of it.
-     */
-    public boolean showMenuButtonInOmnibox() {
-        // When we show tab switching button, we prefer to show menu right to the tab switcher
-        // button.
-        return !FeatureUtilities.isTabSwitchingEnabled(getContext());
-    }
-
-    /**
      * Updates percentage of current the URL focus change animation.
      * @param percent 1.0 is 100% focused, 0 is completely unfocused.
      */
     public void setUrlFocusChangePercent(float percent) {
         mUrlFocusChangePercent = percent;
 
-        if (percent > 0f && !hasVisibleViewsAfterUrlBarWhenUnfocused()) {
+        if (percent > 0f) {
             mUrlActionsContainer.setVisibility(VISIBLE);
-        } else if (percent == 0f && !mUrlFocusChangeInProgress
-                && !hasVisibleViewsAfterUrlBarWhenUnfocused()) {
+        } else if (percent == 0f && !isUrlFocusChangeInProgress()) {
             // If a URL focus change is in progress, then it will handle setting the visibility
             // correctly after it completes.  If done here, it would cause the URL to jump due
             // to a badly timed layout call.
             mUrlActionsContainer.setVisibility(GONE);
         }
 
-        mDeleteButton.setAlpha(percent);
-        mMicButton.setAlpha(percent);
-        if (showMenuButtonInOmnibox()) mMenuButtonWrapper.setAlpha(1f - percent);
-
-        updateDeleteButtonVisibility();
+        updateButtonVisibility();
     }
 
     @Override
@@ -194,20 +163,20 @@ public class LocationBarPhone extends LocationBarLayout {
             setFocusable(false);
             setFocusableInTouchMode(false);
         }
-        mUrlFocusChangeInProgress = true;
+        setUrlFocusChangeInProgress(true);
         super.onUrlFocusChange(hasFocus);
     }
 
     @Override
     protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
         boolean needsCanvasRestore = false;
-        if (child == mUrlContainer && mUrlActionsContainer.getVisibility() == VISIBLE) {
+        if (child == mUrlBar && mUrlActionsContainer.getVisibility() == VISIBLE) {
             canvas.save();
 
             // Clip the URL bar contents to ensure they do not draw under the URL actions during
             // focus animations.  Based on the RTL state of the location bar, the url actions
             // container can be on the left or right side, so clip accordingly.
-            if (mUrlContainer.getLeft() < mUrlActionsContainer.getLeft()) {
+            if (mUrlBar.getLeft() < mUrlActionsContainer.getLeft()) {
                 canvas.clipRect(0, 0, (int) mUrlActionsContainer.getX(), getBottom());
             } else {
                 canvas.clipRect(mUrlActionsContainer.getX() + mUrlActionsContainer.getWidth(),
@@ -220,11 +189,6 @@ public class LocationBarPhone extends LocationBarLayout {
             canvas.restore();
         }
         return retVal;
-    }
-
-    @Override
-    protected boolean isUrlFocusChangeInProgress() {
-        return mUrlFocusChangeInProgress;
     }
 
     /**
@@ -275,9 +239,7 @@ public class LocationBarPhone extends LocationBarLayout {
                 };
                 postDelayed(mKeyboardResizeModeTask, KEYBOARD_MODE_CHANGE_DELAY_MS);
             }
-            if (!hasVisibleViewsAfterUrlBarWhenUnfocused()) {
-                mUrlActionsContainer.setVisibility(GONE);
-            }
+            mUrlActionsContainer.setVisibility(GONE);
         } else {
             if (mKeyboardResizeModeTask != null) {
                 removeCallbacks(mKeyboardResizeModeTask);
@@ -295,8 +257,7 @@ public class LocationBarPhone extends LocationBarLayout {
                 getSuggestionList().invalidateSuggestionViews();
             }
         }
-        mUrlFocusChangeInProgress = false;
-        updateDeleteButtonVisibility();
+        setUrlFocusChangeInProgress(false);
 
         NewTabPage ntp = getToolbarDataProvider().getNewTabPageForCurrentTab();
         if (hasFocus && ntp != null && ntp.isLocationBarShownInNTP()) {
@@ -305,27 +266,9 @@ public class LocationBarPhone extends LocationBarLayout {
     }
 
     @Override
-    protected boolean shouldShowDeleteButton() {
-        boolean hasText = !TextUtils.isEmpty(mUrlBar.getText());
-        return hasText && (mUrlBar.hasFocus() || mUrlFocusChangeInProgress);
-    }
-
-    @Override
-    protected void updateDeleteButtonVisibility() {
-        boolean enabled = shouldShowDeleteButton();
-        mDeleteButton.setEnabled(enabled);
-        mDeleteButton.setVisibility(enabled ? VISIBLE : INVISIBLE);
-
-        boolean showMicButton = mVoiceSearchEnabled && !enabled
-                && (mUrlBar.hasFocus() || mUrlFocusChangeInProgress
-                        || mUrlFocusChangePercent > 0f);
-        mMicButton.setVisibility(showMicButton ? VISIBLE : INVISIBLE);
-    }
-
-    @Override
-    public void updateMicButtonState() {
-        mVoiceSearchEnabled = isVoiceSearchEnabled();
+    protected void updateButtonVisibility() {
         updateDeleteButtonVisibility();
+        updateMicButtonVisiblity(mUrlFocusChangePercent);
     }
 
     @Override
@@ -355,25 +298,11 @@ public class LocationBarPhone extends LocationBarLayout {
         boolean isIncognito = tab != null && tab.isIncognito();
         mIncognitoBadge.setVisibility(isIncognito ? VISIBLE : GONE);
         updateIncognitoBadgePadding();
-
-        if (showMenuButtonInOmnibox()) {
-            boolean useLightDrawables = shouldUseLightDrawables();
-            ColorStateList dark = ApiCompatibilityUtils.getColorStateList(getResources(),
-                    R.color.dark_mode_tint);
-            ColorStateList white = ApiCompatibilityUtils.getColorStateList(getResources(),
-                    R.color.light_mode_tint);
-            mMenuButton.setTint(useLightDrawables ? white : dark);
-
-            if (mShowMenuBadge) {
-                mMenuBadge.setImageResource(useLightDrawables ? R.drawable.badge_update_light
-                        : R.drawable.badge_update_dark);
-            }
-        }
     }
 
     @Override
     protected boolean shouldAnimateIconChanges() {
-        return super.shouldAnimateIconChanges() || mUrlFocusChangeInProgress;
+        return super.shouldAnimateIconChanges() || isUrlFocusChangeInProgress();
     }
 
     @Override
@@ -383,59 +312,15 @@ public class LocationBarPhone extends LocationBarLayout {
     }
 
     /**
-     * Displays the update app menu badge.
-     */
-    public void showAppMenuUpdateBadge(boolean animate) {
-        if (!showMenuButtonInOmnibox()) return;
-
-        mShowMenuBadge = true;
-        mMenuBadge.setImageResource(shouldUseLightDrawables()
-                ? R.drawable.badge_update_light : R.drawable.badge_update_dark);
-
-        if (!animate || mIsMenuBadgeAnimationRunning) {
-            mMenuBadge.setVisibility(View.VISIBLE);
-            return;
-        }
-
-        // Set initial states.
-        mMenuBadge.setAlpha(0.f);
-        mMenuBadge.setVisibility(View.VISIBLE);
-
-        mMenuBadgeAnimatorSet = UpdateMenuItemHelper.createShowUpdateBadgeAnimation(
-                mMenuButton, mMenuBadge);
-
-        mMenuBadgeAnimatorSet.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationStart(Animator animation) {
-                mIsMenuBadgeAnimationRunning = true;
-            }
-
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
-
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
-        });
-
-        mMenuBadgeAnimatorSet.start();
-    }
-
-    /**
      * Remove the update menu app menu badge.
      */
     public void removeAppMenuUpdateBadge(boolean animate) {
         boolean wasShowingMenuBadge = mShowMenuBadge;
         mShowMenuBadge = false;
-        if (!animate || !wasShowingMenuBadge) {
-            if (showMenuButtonInOmnibox()) {
-                mMenuBadge.setVisibility(View.GONE);
-            }
-            return;
-        }
+        mMenuButton.setContentDescription(getResources().getString(
+                R.string.accessibility_toolbar_btn_menu));
+
+        if (!animate || !wasShowingMenuBadge) return;
 
         if (mIsMenuBadgeAnimationRunning && mMenuBadgeAnimatorSet != null) {
             mMenuBadgeAnimatorSet.cancel();
@@ -471,17 +356,5 @@ public class LocationBarPhone extends LocationBarLayout {
         if (mIsMenuBadgeAnimationRunning && mMenuBadgeAnimatorSet != null) {
             mMenuBadgeAnimatorSet.cancel();
         }
-    }
-
-    private boolean shouldUseLightDrawables() {
-        Tab tab = getCurrentTab();
-        boolean isIncognito = tab != null && tab.isIncognito();
-        boolean useLightDrawables = isIncognito;
-        if (getToolbarDataProvider().isUsingBrandColor()) {
-            int currentPrimaryColor = getToolbarDataProvider().getPrimaryColor();
-            useLightDrawables |=
-                    ColorUtils.shoudUseLightForegroundOnBackground(currentPrimaryColor);
-        }
-        return useLightDrawables;
     }
 }

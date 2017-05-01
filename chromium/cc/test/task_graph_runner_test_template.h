@@ -63,7 +63,7 @@ class TaskGraphRunnerTestBase {
     // Overridden from Task:
     void RunOnWorkerThread() override;
 
-    virtual void CompleteOnOriginThread();
+    virtual void OnTaskCompleted();
 
    protected:
     ~FakeTaskImpl() override {}
@@ -84,7 +84,7 @@ class TaskGraphRunnerTestBase {
         : FakeTaskImpl(test, namespace_index, id) {}
 
     // Overridden from FakeTaskImpl:
-    void CompleteOnOriginThread() override {}
+    void OnTaskCompleted() override {}
 
    private:
     ~FakeDependentTaskImpl() override {}
@@ -111,7 +111,7 @@ class TaskGraphRunnerTest : public TaskGraphRunnerTestBase,
     SetTaskGraphRunner(delegate_.GetTaskGraphRunner());
 
     for (int i = 0; i < kNamespaceCount; ++i)
-      namespace_token_[i] = task_graph_runner_->GetNamespaceToken();
+      namespace_token_[i] = task_graph_runner_->GenerateNamespaceToken();
   }
   void TearDown() override { delegate_.StopTaskGraphRunner(); }
 

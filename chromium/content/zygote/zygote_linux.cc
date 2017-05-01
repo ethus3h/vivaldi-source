@@ -37,16 +37,16 @@
 #include "content/common/set_process_title.h"
 #include "content/common/zygote_commands_linux.h"
 #include "content/public/common/content_descriptors.h"
+#include "content/public/common/mojo_channel_switches.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/common/sandbox_linux.h"
 #include "content/public/common/send_zygote_child_ping_linux.h"
 #include "content/public/common/zygote_fork_delegate_linux.h"
 #include "ipc/ipc_channel.h"
-#include "ipc/ipc_switches.h"
 #include "sandbox/linux/services/credentials.h"
 #include "sandbox/linux/services/namespace_sandbox.h"
 
-// See http://code.google.com/p/chromium/wiki/LinuxZygote
+// See https://chromium.googlesource.com/chromium/src/+/master/docs/linux_zygote.md
 
 namespace content {
 
@@ -108,7 +108,7 @@ bool Zygote::ProcessRequests() {
   // A SOCK_SEQPACKET socket is installed in fd 3. We get commands from the
   // browser on it.
   // A SOCK_DGRAM is installed in fd 5. This is the sandbox IPC channel.
-  // See http://code.google.com/p/chromium/wiki/LinuxSandboxIPC
+  // See https://chromium.googlesource.com/chromium/src/+/master/docs/linux_sandbox_ipc.md
 
   // We need to accept SIGCHLD, even though our handler is a no-op because
   // otherwise we cannot wait on children. (According to POSIX 2001.)
@@ -237,14 +237,14 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
 
   if (len == 0 || (len == -1 && errno == ECONNRESET)) {
     // EOF from the browser. We should die.
-    // TODO(earthdok): call __sanititizer_cov_dump() here to obtain code
+    // TODO(eugenis): call __sanititizer_cov_dump() here to obtain code
     // coverage for the Zygote. Currently it's not possible because of
     // confusion over who is responsible for closing the file descriptor.
     for (int fd : extra_fds_) {
       PCHECK(0 == IGNORE_EINTR(close(fd)));
     }
 #if !defined(SANITIZER_COVERAGE)
-    // TODO(earthdok): add watchdog thread before using this in builds not
+    // TODO(eugenis): add watchdog thread before using this in builds not
     // using sanitizer coverage.
     CHECK(extra_children_.empty());
 #endif
@@ -300,7 +300,6 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
   return false;
 }
 
-// TODO(jln): remove callers to this broken API. See crbug.com/274855.
 void Zygote::HandleReapRequest(int fd, base::PickleIterator iter) {
   base::ProcessId child;
 
@@ -431,13 +430,13 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
   base::ScopedFD read_pipe, write_pipe;
   base::ProcessId pid = 0;
   if (helper) {
-    int ipc_channel_fd = LookUpFd(fd_mapping, kPrimaryIPCChannel);
-    if (ipc_channel_fd < 0) {
-      DLOG(ERROR) << "Failed to find kPrimaryIPCChannel in FD mapping";
+    int mojo_channel_fd = LookUpFd(fd_mapping, kMojoIPCChannel);
+    if (mojo_channel_fd < 0) {
+      DLOG(ERROR) << "Failed to find kMojoIPCChannel in FD mapping";
       return -1;
     }
     std::vector<int> fds;
-    fds.push_back(ipc_channel_fd);  // kBrowserFDIndex
+    fds.push_back(mojo_channel_fd);  // kBrowserFDIndex
     fds.push_back(pid_oracle.get());  // kPIDOracleFDIndex
     pid = helper->Fork(process_type, fds, channel_id);
 
@@ -563,8 +562,9 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
   base::GlobalDescriptors::Mapping mapping;
   std::string process_type;
   std::string channel_id;
-  const std::string channel_id_prefix = std::string("--")
-      + switches::kProcessChannelID + std::string("=");
+  const std::string channel_id_prefix = std::string("--") +
+                                        switches::kServiceRequestChannelToken +
+                                        std::string("=");
 
   if (!iter.ReadString(&process_type))
     return -1;

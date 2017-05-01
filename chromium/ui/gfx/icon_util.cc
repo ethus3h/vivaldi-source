@@ -4,19 +4,20 @@
 
 #include "ui/gfx/icon_util.h"
 
+#include <memory>
+
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/resource_util.h"
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_hdc.h"
 #include "skia/ext/image_operations.h"
+#include "skia/ext/skia_utils_win.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/gfx/gdi_util.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_family.h"
@@ -204,7 +205,7 @@ base::win::ScopedHICON IconUtil::CreateHICONFromSkBitmap(
       PixelsHaveAlpha(static_cast<const uint32_t*>(bitmap.getPixels()),
                       bitmap.width() * bitmap.height());
 
-  scoped_ptr<uint8_t[]> mask_bits;
+  std::unique_ptr<uint8_t[]> mask_bits;
   if (!bitmap_has_alpha_channel) {
     // Bytes per line with paddings to make it word alignment.
     size_t bytes_per_line = (bitmap.width() + 0xF) / 16 * 2;
@@ -246,7 +247,7 @@ SkBitmap* IconUtil::CreateSkBitmapFromHICON(HICON icon, const gfx::Size& s) {
 }
 
 // static
-scoped_ptr<gfx::ImageFamily> IconUtil::CreateImageFamilyFromIconResource(
+std::unique_ptr<gfx::ImageFamily> IconUtil::CreateImageFamilyFromIconResource(
     HMODULE module,
     int resource_id) {
   // Read the resource directly so we can get the icon image sizes. This data
@@ -262,7 +263,7 @@ scoped_ptr<gfx::ImageFamily> IconUtil::CreateImageFamilyFromIconResource(
 
   const GRPICONDIR* icon_dir =
       reinterpret_cast<const GRPICONDIR*>(icon_dir_data);
-  scoped_ptr<gfx::ImageFamily> result(new gfx::ImageFamily);
+  std::unique_ptr<gfx::ImageFamily> result(new gfx::ImageFamily);
   for (size_t i = 0; i < icon_dir->idCount; ++i) {
     const GRPICONDIRENTRY* entry = &icon_dir->idEntries[i];
     if (entry->bWidth != 0 || entry->bHeight != 0) {
@@ -274,7 +275,7 @@ scoped_ptr<gfx::ImageFamily> IconUtil::CreateImageFamilyFromIconResource(
       base::win::ScopedHICON icon_handle(static_cast<HICON>(LoadImage(
           module, MAKEINTRESOURCE(resource_id), IMAGE_ICON, entry->bWidth,
           entry->bHeight, LR_DEFAULTCOLOR | LR_DEFAULTSIZE)));
-      scoped_ptr<SkBitmap> bitmap(
+      std::unique_ptr<SkBitmap> bitmap(
           IconUtil::CreateSkBitmapFromHICON(icon_handle.get()));
       result->Add(gfx::Image::CreateFrom1xBitmap(*bitmap));
     } else {
@@ -310,7 +311,11 @@ SkBitmap* IconUtil::CreateSkBitmapFromHICON(HICON icon) {
   if (!::GetObject(icon_info.hbmMask, sizeof(bitmap_info), &bitmap_info))
     return NULL;
 
-  gfx::Size icon_size(bitmap_info.bmWidth, bitmap_info.bmHeight);
+  // For non-color cursors, the mask contains both an AND and an XOR mask and
+  // the height includes both. Thus, the mask width is the same as image width,
+  // but we need to divide mask height by 2 to get the image height.
+  const int height = bitmap_info.bmHeight / (icon_info.hbmColor ? 1 : 2);
+  gfx::Size icon_size(bitmap_info.bmWidth, height);
   return new SkBitmap(CreateSkBitmapFromHICONHelper(icon, icon_size));
 }
 
@@ -319,7 +324,7 @@ base::win::ScopedHICON IconUtil::CreateCursorFromDIB(const gfx::Size& icon_size,
                                                      const void* dib_bits,
                                                      size_t dib_size) {
   BITMAPINFO icon_bitmap_info = {};
-  gfx::CreateBitmapHeader(
+  skia::CreateBitmapHeader(
       icon_size.width(),
       icon_size.height(),
       reinterpret_cast<BITMAPINFOHEADER*>(&icon_bitmap_info));
@@ -364,6 +369,14 @@ base::win::ScopedHICON IconUtil::CreateCursorFromDIB(const gfx::Size& icon_size,
   return base::win::ScopedHICON(CreateIconIndirect(&ii));
 }
 
+gfx::Point IconUtil::GetHotSpotFromHICON(HICON icon) {
+  ScopedICONINFO icon_info;
+  gfx::Point hotspot;
+  if (::GetIconInfo(icon, &icon_info))
+    hotspot = gfx::Point(icon_info.xHotspot, icon_info.yHotspot);
+
+  return hotspot;
+}
 SkBitmap IconUtil::CreateSkBitmapFromHICONHelper(HICON icon,
                                                  const gfx::Size& s) {
   DCHECK(icon);
@@ -412,7 +425,7 @@ SkBitmap IconUtil::CreateSkBitmapFromHICONHelper(HICON icon,
 
   // Capture boolean opacity. We may not use it if we find out the bitmap has
   // an alpha channel.
-  scoped_ptr<bool[]> opaque(new bool[num_pixels]);
+  std::unique_ptr<bool[]> opaque(new bool[num_pixels]);
   for (size_t i = 0; i < num_pixels; ++i)
     opaque[i] = !bits[i];
 

@@ -6,24 +6,14 @@
 
 namespace blink {
 
-void NeedsFinalizer::trace(Visitor* visitor)
+void NeedsFinalizer::Trace(Visitor* visitor)
 {
-    A::trace(visitor);
+    A::Trace(visitor);
 }
 
-void DoesNotNeedFinalizer::trace(Visitor* visitor)
+void DoesNotNeedFinalizer::Trace(Visitor* visitor)
 {
-    A::trace(visitor);
-}
-
-void GCedClassWithAScriptWrappableBase::trace(Visitor* visitor)
-{
-    A::trace(visitor);
-}
-
-void GCedClassWithAScriptWrappableAndAFinalizableBase::trace(Visitor* visitor)
-{
-    GCedClassWithAScriptWrappableBase::trace(visitor);
+    A::Trace(visitor);
 }
 
 }

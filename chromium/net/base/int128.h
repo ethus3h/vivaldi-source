@@ -11,6 +11,8 @@
 
 #include "net/base/net_export.h"
 
+namespace net {
+
 struct uint128_pod;
 
 // An unsigned 128-bit integer type. Thread-compatible.
@@ -63,6 +65,10 @@ class uint128 {
   uint128(float v);
   uint128(double v);
 };
+
+inline uint128 MakeUint128(uint64_t top, uint64_t bottom) {
+  return uint128(top, bottom);
+}
 
 // This is a POD form of uint128 which can be used for static variables which
 // need to be operated on as uint128.
@@ -337,5 +343,7 @@ inline uint128& uint128::operator--() {
   *this -= 1;
   return *this;
 }
+
+}  //  namespace net
 
 #endif  // NET_BASE_INT128_H_

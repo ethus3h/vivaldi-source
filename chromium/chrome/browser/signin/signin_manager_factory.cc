@@ -4,7 +4,6 @@
 
 #include "chrome/browser/signin/signin_manager_factory.h"
 
-#include "base/prefs/pref_registry_simple.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,7 +14,12 @@
 #include "chrome/browser/signin/local_auth.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/signin/core/browser/signin_manager.h"
+
+#include "app/vivaldi_apptools.h"
+#include "sync/vivaldi_signin_manager.h"
+#include "sync/vivaldi_signin_manager_factory.h"
 
 SigninManagerFactory::SigninManagerFactory()
     : BrowserContextKeyedServiceFactory(
@@ -24,7 +28,6 @@ SigninManagerFactory::SigninManagerFactory()
   DependsOn(ChromeSigninClientFactory::GetInstance());
   DependsOn(GaiaCookieManagerServiceFactory::GetInstance());
   DependsOn(ProfileOAuth2TokenServiceFactory::GetInstance());
-  DependsOn(AccountFetcherServiceFactory::GetInstance());
   DependsOn(AccountTrackerServiceFactory::GetInstance());
 }
 
@@ -77,6 +80,10 @@ const SigninManager* SigninManagerFactory::GetForProfileIfExists(
 
 // static
 SigninManagerFactory* SigninManagerFactory::GetInstance() {
+#if defined(VIVALDI_BUILD)
+  if(vivaldi::IsVivaldiRunning())
+    return vivaldi::VivaldiSigninManagerFactory::GetInstance();
+#endif
   return base::Singleton<SigninManagerFactory>::get();
 }
 
@@ -101,7 +108,8 @@ void SigninManagerFactory::RemoveObserver(Observer* observer) {
 
 void SigninManagerFactory::NotifyObserversOfSigninManagerCreationForTesting(
     SigninManagerBase* manager) {
-  FOR_EACH_OBSERVER(Observer, observer_list_, SigninManagerCreated(manager));
+  for (Observer& observer : observer_list_)
+    observer.SigninManagerCreated(manager);
 }
 
 KeyedService* SigninManagerFactory::BuildServiceInstanceFor(
@@ -123,7 +131,8 @@ KeyedService* SigninManagerFactory::BuildServiceInstanceFor(
   AccountFetcherServiceFactory::GetForProfile(profile);
 #endif
   service->Initialize(g_browser_process->local_state());
-  FOR_EACH_OBSERVER(Observer, observer_list_, SigninManagerCreated(service));
+  for (Observer& observer : observer_list_)
+    observer.SigninManagerCreated(service);
   return service;
 }
 
@@ -131,7 +140,9 @@ void SigninManagerFactory::BrowserContextShutdown(
     content::BrowserContext* context) {
   SigninManagerBase* manager = static_cast<SigninManagerBase*>(
       GetServiceForBrowserContext(context, false));
-  if (manager)
-    FOR_EACH_OBSERVER(Observer, observer_list_, SigninManagerShutdown(manager));
+  if (manager) {
+    for (Observer& observer : observer_list_)
+      observer.SigninManagerShutdown(manager);
+  }
   BrowserContextKeyedServiceFactory::BrowserContextShutdown(context);
 }

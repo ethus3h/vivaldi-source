@@ -11,6 +11,8 @@
 
 #include "base/bind.h"
 #include "base/guid.h"
+#include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "dbus/bus.h"
@@ -45,7 +47,8 @@ TestService::TestService(const Options& options)
       service_name_(options.service_name),
       request_ownership_options_(options.request_ownership_options),
       dbus_task_runner_(options.dbus_task_runner),
-      on_name_obtained_(false, false),
+      on_name_obtained_(base::WaitableEvent::ResetPolicy::AUTOMATIC,
+                        base::WaitableEvent::InitialState::NOT_SIGNALED),
       num_exported_methods_(0),
       send_immediate_properties_changed_(false),
       has_ownership_(false),
@@ -73,10 +76,9 @@ bool TestService::WaitUntilServiceIsStarted() {
 }
 
 void TestService::ShutdownAndBlock() {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::ShutdownAndBlockInternal,
-                 base::Unretained(this)));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::ShutdownAndBlockInternal,
+                            base::Unretained(this)));
 }
 
 bool TestService::HasDBusThread() {
@@ -91,19 +93,15 @@ void TestService::ShutdownAndBlockInternal() {
 }
 
 void TestService::SendTestSignal(const std::string& message) {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::SendTestSignalInternal,
-                 base::Unretained(this),
-                 message));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::SendTestSignalInternal,
+                            base::Unretained(this), message));
 }
 
 void TestService::SendTestSignalFromRoot(const std::string& message) {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::SendTestSignalFromRootInternal,
-                 base::Unretained(this),
-                 message));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::SendTestSignalFromRootInternal,
+                            base::Unretained(this), message));
 }
 
 void TestService::SendTestSignalInternal(const std::string& message) {
@@ -130,11 +128,9 @@ void TestService::SendTestSignalFromRootInternal(const std::string& message) {
 }
 
 void TestService::RequestOwnership(base::Callback<void(bool)> callback) {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::RequestOwnershipInternal,
-                 base::Unretained(this),
-                 callback));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::RequestOwnershipInternal,
+                            base::Unretained(this), callback));
 }
 
 void TestService::RequestOwnershipInternal(
@@ -201,7 +197,7 @@ void TestService::OnExported(const std::string& interface_name,
   }
 }
 
-void TestService::Run(base::MessageLoop* message_loop) {
+void TestService::Run(base::RunLoop* run_loop) {
   Bus::Options bus_options;
   bus_options.bus_type = Bus::SESSION;
   bus_options.connection_type = Bus::PRIVATE;
@@ -301,7 +297,7 @@ void TestService::Run(base::MessageLoop* message_loop) {
   if (num_methods != kNumMethodsToExport) {
     LOG(ERROR) << "The number of methods does not match";
   }
-  message_loop->Run();
+  run_loop->Run();
 }
 
 void TestService::Echo(MethodCall* method_call,
@@ -309,11 +305,11 @@ void TestService::Echo(MethodCall* method_call,
   MessageReader reader(method_call);
   std::string text_message;
   if (!reader.PopString(&text_message)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
-  scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+  std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
   MessageWriter writer(response.get());
   writer.AppendString(text_message);
   response_sender.Run(std::move(response));
@@ -328,17 +324,15 @@ void TestService::SlowEcho(MethodCall* method_call,
 void TestService::AsyncEcho(MethodCall* method_call,
                             ExportedObject::ResponseSender response_sender) {
   // Schedule a call to Echo() to send an asynchronous response after we return.
-  message_loop()->PostDelayedTask(FROM_HERE,
-                                  base::Bind(&TestService::Echo,
-                                             base::Unretained(this),
-                                             method_call,
-                                             response_sender),
-                                  TestTimeouts::tiny_timeout());
+  message_loop()->task_runner()->PostDelayedTask(
+      FROM_HERE, base::Bind(&TestService::Echo, base::Unretained(this),
+                            method_call, response_sender),
+      TestTimeouts::tiny_timeout());
 }
 
 void TestService::BrokenMethod(MethodCall* method_call,
                                ExportedObject::ResponseSender response_sender) {
-  response_sender.Run(scoped_ptr<Response>());
+  response_sender.Run(std::unique_ptr<Response>());
 }
 
 
@@ -348,11 +342,11 @@ void TestService::GetAllProperties(
   MessageReader reader(method_call);
   std::string interface;
   if (!reader.PopString(&interface)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
-  scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+  std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
   MessageWriter writer(response.get());
 
   AddPropertiesToWriter(&writer);
@@ -365,20 +359,20 @@ void TestService::GetProperty(MethodCall* method_call,
   MessageReader reader(method_call);
   std::string interface;
   if (!reader.PopString(&interface)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
   std::string name;
   if (!reader.PopString(&name)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
   if (name == "Name") {
     // Return the previous value for the "Name" property:
     // Variant<"TestService">
-    scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+    std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
     MessageWriter writer(response.get());
 
     writer.AppendVariantOfString("TestService");
@@ -387,7 +381,7 @@ void TestService::GetProperty(MethodCall* method_call,
   } else if (name == "Version") {
     // Return a new value for the "Version" property:
     // Variant<20>
-    scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+    std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
     MessageWriter writer(response.get());
 
     writer.AppendVariantOfInt16(20);
@@ -396,7 +390,7 @@ void TestService::GetProperty(MethodCall* method_call,
   } else if (name == "Methods") {
     // Return the previous value for the "Methods" property:
     // Variant<["Echo", "SlowEcho", "AsyncEcho", "BrokenMethod"]>
-    scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+    std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
     MessageWriter writer(response.get());
     MessageWriter variant_writer(NULL);
     MessageWriter variant_array_writer(NULL);
@@ -414,7 +408,7 @@ void TestService::GetProperty(MethodCall* method_call,
   } else if (name == "Objects") {
     // Return the previous value for the "Objects" property:
     // Variant<[objectpath:"/TestObjectPath"]>
-    scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+    std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
     MessageWriter writer(response.get());
     MessageWriter variant_writer(NULL);
     MessageWriter variant_array_writer(NULL);
@@ -429,7 +423,7 @@ void TestService::GetProperty(MethodCall* method_call,
   } else if (name == "Bytes") {
     // Return the previous value for the "Bytes" property:
     // Variant<[0x54, 0x65, 0x73, 0x74]>
-    scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+    std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
     MessageWriter writer(response.get());
     MessageWriter variant_writer(NULL);
     MessageWriter variant_array_writer(NULL);
@@ -442,7 +436,7 @@ void TestService::GetProperty(MethodCall* method_call,
     response_sender.Run(std::move(response));
   } else {
     // Return error.
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 }
@@ -452,24 +446,24 @@ void TestService::SetProperty(MethodCall* method_call,
   MessageReader reader(method_call);
   std::string interface;
   if (!reader.PopString(&interface)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
   std::string name;
   if (!reader.PopString(&name)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
   if (name != "Name") {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
   std::string value;
   if (!reader.PopVariantOfString(&value)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
@@ -485,7 +479,7 @@ void TestService::PerformAction(
   std::string action;
   ObjectPath object_path;
   if (!reader.PopString(&action) || !reader.PopObjectPath(&object_path)) {
-    response_sender.Run(scoped_ptr<Response>());
+    response_sender.Run(std::unique_ptr<Response>());
     return;
   }
 
@@ -509,14 +503,14 @@ void TestService::PerformAction(
     SendPropertyInvalidatedSignal();
   }
 
-  scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+  std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
   response_sender.Run(std::move(response));
 }
 
 void TestService::PerformActionResponse(
     MethodCall* method_call,
     ExportedObject::ResponseSender response_sender) {
-  scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+  std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
   response_sender.Run(std::move(response));
 }
 
@@ -540,7 +534,7 @@ void TestService::OwnershipRegained(
 void TestService::GetManagedObjects(
     MethodCall* method_call,
     ExportedObject::ResponseSender response_sender) {
-  scoped_ptr<Response> response = Response::FromMethodCall(method_call);
+  std::unique_ptr<Response> response = Response::FromMethodCall(method_call);
   MessageWriter writer(response.get());
 
   // The managed objects response is a dictionary of object paths identifying
@@ -646,11 +640,9 @@ void TestService::AddPropertiesToWriter(MessageWriter* writer) {
 }
 
 void TestService::AddObject(const ObjectPath& object_path) {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::AddObjectInternal,
-                 base::Unretained(this),
-                 object_path));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::AddObjectInternal,
+                            base::Unretained(this), object_path));
 }
 
 void TestService::AddObjectInternal(const ObjectPath& object_path) {
@@ -672,10 +664,9 @@ void TestService::AddObjectInternal(const ObjectPath& object_path) {
 }
 
 void TestService::RemoveObject(const ObjectPath& object_path) {
-  message_loop()->PostTask(FROM_HERE,
-                           base::Bind(&TestService::RemoveObjectInternal,
-                                      base::Unretained(this),
-                                      object_path));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::RemoveObjectInternal,
+                            base::Unretained(this), object_path));
 }
 
 void TestService::RemoveObjectInternal(const ObjectPath& object_path) {
@@ -692,11 +683,9 @@ void TestService::RemoveObjectInternal(const ObjectPath& object_path) {
 }
 
 void TestService::SendPropertyChangedSignal(const std::string& name) {
-  message_loop()->PostTask(
-      FROM_HERE,
-      base::Bind(&TestService::SendPropertyChangedSignalInternal,
-                 base::Unretained(this),
-                 name));
+  message_loop()->task_runner()->PostTask(
+      FROM_HERE, base::Bind(&TestService::SendPropertyChangedSignalInternal,
+                            base::Unretained(this), name));
 }
 
 void TestService::SendPropertyChangedSignalInternal(const std::string& name) {
@@ -723,7 +712,7 @@ void TestService::SendPropertyChangedSignalInternal(const std::string& name) {
 }
 
 void TestService::SendPropertyInvalidatedSignal() {
-  message_loop()->PostTask(
+  message_loop()->task_runner()->PostTask(
       FROM_HERE, base::Bind(&TestService::SendPropertyInvalidatedSignalInternal,
                             base::Unretained(this)));
 }

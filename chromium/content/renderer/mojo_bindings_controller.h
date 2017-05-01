@@ -12,13 +12,11 @@
 #include "content/public/renderer/render_frame_observer_tracker.h"
 #include "mojo/public/cpp/system/core.h"
 
-namespace gin {
-class PerContextData;
-}
-
 namespace content {
 
 class MojoContextState;
+
+enum class MojoBindingsType { FOR_WEB_UI, FOR_LAYOUT_TESTS, FOR_HEADLESS };
 
 // MojoBindingsController is responsible for enabling the renderer side of mojo
 // bindings. It creates (and destroys) a MojoContextState at the appropriate
@@ -28,7 +26,10 @@ class MojoBindingsController
     : public RenderFrameObserver,
       public RenderFrameObserverTracker<MojoBindingsController> {
  public:
-  explicit MojoBindingsController(RenderFrame* render_frame);
+  MojoBindingsController(RenderFrame* render_frame,
+                         MojoBindingsType bindings_type);
+  void RunScriptsAtDocumentStart();
+  void RunScriptsAtDocumentReady();
 
  private:
   ~MojoBindingsController() override;
@@ -40,9 +41,10 @@ class MojoBindingsController
   // RenderFrameObserver overrides:
   void WillReleaseScriptContext(v8::Local<v8::Context> context,
                                 int world_id) override;
-  void DidFinishDocumentLoad() override;
-  void DidCreateDocumentElement() override;
   void DidClearWindowObject() override;
+  void OnDestruct() override;
+
+  const MojoBindingsType bindings_type_;
 
   DISALLOW_COPY_AND_ASSIGN(MojoBindingsController);
 };

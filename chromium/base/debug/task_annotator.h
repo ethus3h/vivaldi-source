@@ -28,7 +28,7 @@ class BASE_EXPORT TaskAnnotator {
 
   // Run a previously queued task. |queue_function| should match what was
   // passed into |DidQueueTask| for this task.
-  void RunTask(const char* queue_function, const PendingTask& pending_task);
+  void RunTask(const char* queue_function, PendingTask* pending_task);
 
  private:
   // Creates a process-wide unique ID to represent this task in trace events.
@@ -38,11 +38,6 @@ class BASE_EXPORT TaskAnnotator {
 
   DISALLOW_COPY_AND_ASSIGN(TaskAnnotator);
 };
-
-#define TRACE_TASK_EXECUTION(run_function, task)           \
-  TRACE_EVENT2("toplevel", (run_function), "src_file",     \
-               (task).posted_from.file_name(), "src_func", \
-               (task).posted_from.function_name());
 
 }  // namespace debug
 }  // namespace base

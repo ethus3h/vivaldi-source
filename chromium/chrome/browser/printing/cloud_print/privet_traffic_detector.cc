@@ -8,17 +8,19 @@
 
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/sys_byteorder.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_interfaces.h"
 #include "net/dns/dns_protocol.h"
 #include "net/dns/dns_response.h"
 #include "net/dns/mdns_client.h"
-#include "net/log/net_log.h"
-#include "net/udp/datagram_server_socket.h"
-#include "net/udp/udp_server_socket.h"
+#include "net/log/net_log_source.h"
+#include "net/socket/datagram_server_socket.h"
+#include "net/socket/udp_server_socket.h"
 
 namespace {
 
@@ -42,8 +44,7 @@ void GetNetworkListOnFileThread(
     }
   }
 
-  net::IPAddressNumber localhost_prefix(4, 0);
-  localhost_prefix[0] = 127;
+  net::IPAddress localhost_prefix(127, 0, 0, 0);
   ip4_networks.push_back(
       net::NetworkInterface("lo",
                             "lo",
@@ -64,13 +65,12 @@ PrivetTrafficDetector::PrivetTrafficDetector(
     net::AddressFamily address_family,
     const base::Closure& on_traffic_detected)
     : on_traffic_detected_(on_traffic_detected),
-      callback_runner_(base::MessageLoop::current()->task_runner()),
+      callback_runner_(base::ThreadTaskRunnerHandle::Get()),
       address_family_(address_family),
       io_buffer_(
           new net::IOBufferWithSize(net::dns_protocol::kMaxMulticastSize)),
       restart_attempts_(kMaxRestartAttempts),
-      weak_ptr_factory_(this) {
-}
+      weak_ptr_factory_(this) {}
 
 void PrivetTrafficDetector::Start() {
   content::BrowserThread::PostTask(
@@ -131,10 +131,11 @@ int PrivetTrafficDetector::Bind() {
   }
   start_time_ = base::Time::Now();
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  socket_.reset(new net::UDPServerSocket(NULL, net::NetLog::Source()));
+  socket_.reset(new net::UDPServerSocket(NULL, net::NetLogSource()));
   net::IPEndPoint multicast_addr = net::GetMDnsIPEndPoint(address_family_);
-  net::IPAddressNumber address_any(multicast_addr.address().size());
-  net::IPEndPoint bind_endpoint(address_any, multicast_addr.port());
+  net::IPEndPoint bind_endpoint(
+      net::IPAddress::AllZeros(multicast_addr.address().size()),
+      multicast_addr.port());
   socket_->AllowAddressReuse();
   int rv = socket_->Listen(bind_endpoint);
   if (rv < net::OK)
@@ -145,8 +146,8 @@ int PrivetTrafficDetector::Bind() {
 
 bool PrivetTrafficDetector::IsSourceAcceptable() const {
   for (size_t i = 0; i < networks_.size(); ++i) {
-    if (net::IPNumberMatchesPrefix(recv_addr_.address(), networks_[i].address,
-                                   networks_[i].prefix_length)) {
+    if (net::IPAddressMatchesPrefix(recv_addr_.address(), networks_[i].address,
+                                    networks_[i].prefix_length)) {
       return true;
     }
   }

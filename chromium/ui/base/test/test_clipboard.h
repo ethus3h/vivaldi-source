@@ -27,6 +27,7 @@ class TestClipboard : public Clipboard {
   static Clipboard* CreateForCurrentThread();
 
   // Clipboard overrides.
+  void OnPreShutdown() override;
   uint64_t GetSequenceNumber(ClipboardType type) const override;
   bool IsFormatAvailable(const FormatType& format,
                          ClipboardType type) const override;
@@ -68,6 +69,7 @@ class TestClipboard : public Clipboard {
  private:
   struct DataStore {
     DataStore();
+    DataStore(const DataStore& other);
     ~DataStore();
     void Clear();
     uint64_t sequence_number;

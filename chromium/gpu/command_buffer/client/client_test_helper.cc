@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "gpu/command_buffer/client/cmd_buffer_helper.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -18,34 +20,33 @@ using ::testing::Invoke;
 
 namespace gpu {
 
-MockCommandBufferBase::MockCommandBufferBase() : put_offset_(0) {
-}
+MockCommandBufferBase::MockCommandBufferBase() : put_offset_(0) {}
 
-MockCommandBufferBase::~MockCommandBufferBase() {
-}
-
-bool MockCommandBufferBase::Initialize() {
-  return true;
-}
+MockCommandBufferBase::~MockCommandBufferBase() {}
 
 CommandBuffer::State MockCommandBufferBase::GetLastState() {
   return state_;
-}
-
-int32_t MockCommandBufferBase::GetLastToken() {
-  return state_.token;
 }
 
 void MockCommandBufferBase::SetGetOffset(int32_t get_offset) {
   state_.get_offset = get_offset;
 }
 
-void MockCommandBufferBase::WaitForTokenInRange(int32_t start, int32_t end) {}
+void MockCommandBufferBase::SetReleaseCount(uint64_t release_count) {
+  state_.release_count = release_count;
+}
 
-void MockCommandBufferBase::WaitForGetOffsetInRange(int32_t start,
-                                                    int32_t end) {
+CommandBuffer::State MockCommandBufferBase::WaitForTokenInRange(int32_t start,
+                                                                int32_t end) {
+  return state_;
+}
+
+CommandBuffer::State MockCommandBufferBase::WaitForGetOffsetInRange(
+    int32_t start,
+    int32_t end) {
   state_.get_offset = put_offset_;
   OnFlush();
+  return state_;
 }
 
 void MockCommandBufferBase::SetGetBuffer(int transfer_buffer_id) {
@@ -72,7 +73,7 @@ scoped_refptr<gpu::Buffer> MockCommandBufferBase::CreateTransferBuffer(
   *id = GetNextFreeTransferBufferId();
   if (*id >= 0) {
     int32_t ndx = *id - kTransferBufferBaseId;
-    scoped_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
+    std::unique_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
     shared_memory->CreateAndMapAnonymous(size);
     transfer_buffer_buffers_[ndx] =
         MakeBufferFromSharedMemory(std::move(shared_memory), size);
@@ -127,8 +128,7 @@ MockClientCommandBuffer::MockClientCommandBuffer() {
   DelegateToFake();
 }
 
-MockClientCommandBuffer::~MockClientCommandBuffer() {
-}
+MockClientCommandBuffer::~MockClientCommandBuffer() {}
 
 void MockClientCommandBuffer::Flush(int32_t put_offset) {
   FlushHelper(put_offset);
@@ -140,30 +140,24 @@ void MockClientCommandBuffer::OrderingBarrier(int32_t put_offset) {
 
 void MockClientCommandBuffer::DelegateToFake() {
   ON_CALL(*this, DestroyTransferBuffer(_))
-      .WillByDefault(Invoke(
-          this, &MockCommandBufferBase::DestroyTransferBufferHelper));
+      .WillByDefault(
+          Invoke(this, &MockCommandBufferBase::DestroyTransferBufferHelper));
 }
 
 MockClientCommandBufferMockFlush::MockClientCommandBufferMockFlush() {
   DelegateToFake();
 }
 
-MockClientCommandBufferMockFlush::~MockClientCommandBufferMockFlush() {
-}
+MockClientCommandBufferMockFlush::~MockClientCommandBufferMockFlush() {}
 
 void MockClientCommandBufferMockFlush::DelegateToFake() {
   MockClientCommandBuffer::DelegateToFake();
   ON_CALL(*this, Flush(_))
-      .WillByDefault(Invoke(
-          this, &MockCommandBufferBase::FlushHelper));
+      .WillByDefault(Invoke(this, &MockCommandBufferBase::FlushHelper));
 }
 
-MockClientGpuControl::MockClientGpuControl() {
-}
+MockClientGpuControl::MockClientGpuControl() {}
 
-MockClientGpuControl::~MockClientGpuControl() {
-}
+MockClientGpuControl::~MockClientGpuControl() {}
 
 }  // namespace gpu
-
-

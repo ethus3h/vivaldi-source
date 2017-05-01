@@ -9,11 +9,17 @@
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/time/time.h"
+#include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
+#include "net/log/net_log_with_source.h"
 #include "net/socket/next_proto.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/stream_socket.h"
+#include "net/test/gtest_util.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using net::test::IsOk;
 
 namespace net {
 
@@ -41,16 +47,14 @@ class FakeStreamSocket : public StreamSocket {
 
   int GetLocalAddress(IPEndPoint* address) const override { return ERR_FAILED; }
 
-  const BoundNetLog& NetLog() const override { return bound_net_log_; }
+  const NetLogWithSource& NetLog() const override { return net_log_; }
 
   void SetSubresourceSpeculation() override { return; }
   void SetOmniboxSpeculation() override { return; }
 
   bool WasEverUsed() const override { return false; }
 
-  bool UsingTCPFastOpen() const override { return false; }
-
-  bool WasNpnNegotiated() const override { return false; }
+  bool WasAlpnNegotiated() const override { return false; }
 
   NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
 
@@ -87,7 +91,7 @@ class FakeStreamSocket : public StreamSocket {
   int SetSendBufferSize(int32_t size) override { return ERR_FAILED; }
 
  private:
-  BoundNetLog bound_net_log_;
+  NetLogWithSource net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeStreamSocket);
 };
@@ -138,9 +142,7 @@ class WebSocketEndpointLockManagerTest : public ::testing::Test {
   WebSocketEndpointLockManager* instance() const { return instance_; }
 
   IPEndPoint DummyEndpoint() {
-    IPAddressNumber ip_address_number;
-    CHECK(ParseIPLiteralToNumber("127.0.0.1", &ip_address_number));
-    return IPEndPoint(ip_address_number, 80);
+    return IPEndPoint(IPAddress::IPv4Localhost(), 80);
   }
 
   void UnlockDummyEndpoint(int times) {
@@ -162,7 +164,7 @@ TEST_F(WebSocketEndpointLockManagerTest, GetInstanceWorks) {
 
 TEST_F(WebSocketEndpointLockManagerTest, LockEndpointReturnsOkOnce) {
   FakeWaiter waiters[2];
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
 
@@ -171,7 +173,7 @@ TEST_F(WebSocketEndpointLockManagerTest, LockEndpointReturnsOkOnce) {
 
 TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockNotCalledOnOk) {
   FakeWaiter waiter;
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiter));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiter), IsOk());
   RunUntilIdle();
   EXPECT_FALSE(waiter.called());
 
@@ -180,7 +182,7 @@ TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockNotCalledOnOk) {
 
 TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockNotCalledImmediately) {
   FakeWaiter waiters[2];
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
   RunUntilIdle();
@@ -191,7 +193,7 @@ TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockNotCalledImmediately) {
 
 TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockCalledWhenUnlocked) {
   FakeWaiter waiters[2];
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
   instance()->UnlockEndpoint(DummyEndpoint());
@@ -204,7 +206,8 @@ TEST_F(WebSocketEndpointLockManagerTest, GotEndpointLockCalledWhenUnlocked) {
 TEST_F(WebSocketEndpointLockManagerTest,
        EndpointUnlockedIfWaiterAlreadyDeleted) {
   FakeWaiter first_lock_holder;
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &first_lock_holder));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &first_lock_holder),
+              IsOk());
 
   {
     FakeWaiter short_lived_waiter;
@@ -216,7 +219,8 @@ TEST_F(WebSocketEndpointLockManagerTest,
   RunUntilIdle();
 
   FakeWaiter second_lock_holder;
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &second_lock_holder));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &second_lock_holder),
+              IsOk());
 
   UnlockDummyEndpoint(1);
 }
@@ -224,7 +228,7 @@ TEST_F(WebSocketEndpointLockManagerTest,
 TEST_F(WebSocketEndpointLockManagerTest, RememberSocketWorks) {
   FakeWaiter waiters[2];
   FakeStreamSocket dummy_socket;
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
 
@@ -242,7 +246,7 @@ TEST_F(WebSocketEndpointLockManagerTest, SocketAssociationForgottenOnUnlock) {
   FakeWaiter waiter;
   FakeStreamSocket dummy_socket;
 
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiter));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiter), IsOk());
   instance()->RememberSocket(&dummy_socket, DummyEndpoint());
   instance()->UnlockEndpoint(DummyEndpoint());
   RunUntilIdle();
@@ -254,7 +258,7 @@ TEST_F(WebSocketEndpointLockManagerTest, SocketAssociationForgottenOnUnlock) {
 TEST_F(WebSocketEndpointLockManagerTest, NextWaiterCanCallRememberSocketAgain) {
   FakeWaiter waiters[2];
   FakeStreamSocket dummy_sockets[2];
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
 
@@ -273,7 +277,7 @@ TEST_F(WebSocketEndpointLockManagerTest,
   FakeWaiter waiters[3];
   FakeStreamSocket dummy_socket;
 
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
   EXPECT_EQ(ERR_IO_PENDING,
@@ -291,7 +295,7 @@ TEST_F(WebSocketEndpointLockManagerTest,
 // UnlockEndpoint() should always be asynchronous.
 TEST_F(WebSocketEndpointLockManagerTest, UnlockEndpointIsAsynchronous) {
   FakeWaiter waiters[2];
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &waiters[0]));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &waiters[0]), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &waiters[1]));
 
@@ -318,7 +322,7 @@ TEST_F(WebSocketEndpointLockManagerTest, UnlockEndpointIsDelayed) {
   instance()->SetUnlockDelayForTesting(unlock_delay);
   FakeWaiter fake_waiter;
   BlockingWaiter blocking_waiter;
-  EXPECT_EQ(OK, instance()->LockEndpoint(DummyEndpoint(), &fake_waiter));
+  EXPECT_THAT(instance()->LockEndpoint(DummyEndpoint(), &fake_waiter), IsOk());
   EXPECT_EQ(ERR_IO_PENDING,
             instance()->LockEndpoint(DummyEndpoint(), &blocking_waiter));
 

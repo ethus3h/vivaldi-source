@@ -6,7 +6,6 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_TESTS_RECT_BLINK_H_
 
 #include "base/logging.h"
-#include "mojo/public/interfaces/bindings/tests/rect.mojom.h"
 
 namespace mojo {
 namespace test {
@@ -52,6 +51,12 @@ class RectBlink {
 
   int computeArea() const { return width_ * height_; }
 
+  bool operator==(const RectBlink& other) const {
+    return (x() == other.x() && y() == other.y() && width() == other.width() &&
+            height() == other.height());
+  }
+  bool operator!=(const RectBlink& other) const { return !(*this == other); }
+
  private:
   int x_ = 0;
   int y_ = 0;
@@ -60,26 +65,19 @@ class RectBlink {
 };
 
 }  // namespace test
+}  // namespace mojo
+
+namespace std {
 
 template <>
-struct StructTraits<test::Rect, test::RectBlink> {
-  static int x(const test::RectBlink& r) { return r.x(); }
-  static int y(const test::RectBlink& r) { return r.y(); }
-  static int width(const test::RectBlink& r) { return r.width(); }
-  static int height(const test::RectBlink& r) { return r.height(); }
-
-  static bool Read(test::Rect::Reader r, test::RectBlink* out) {
-    if (r.x() < 0 || r.y() < 0 || r.width() < 0 || r.height() < 0) {
-      return false;
-    }
-    out->setX(r.x());
-    out->setY(r.y());
-    out->setWidth(r.width());
-    out->setHeight(r.height());
-    return true;
+struct hash<mojo::test::RectBlink> {
+  size_t operator()(const mojo::test::RectBlink& value) {
+    // Terrible hash function:
+    return (std::hash<int>()(value.x()) ^ std::hash<int>()(value.y()) ^
+            std::hash<int>()(value.width()) ^ std::hash<int>()(value.height()));
   }
 };
 
-}  // namespace mojo
+}  // namespace std
 
 #endif  // MOJO_PUBLIC_CPP_BINDINGS_TESTS_RECT_BLINK_H_

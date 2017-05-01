@@ -4,11 +4,12 @@
 
 #include "chrome/browser/engagement/site_engagement_helper.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/test/histogram_tester.h"
 #include "base/timer/mock_timer.h"
 #include "base/values.h"
+#include "chrome/browser/engagement/site_engagement_score.h"
 #include "chrome/browser/engagement/site_engagement_service.h"
-#include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
@@ -20,61 +21,69 @@
 
 class SiteEngagementHelperTest : public ChromeRenderViewHostTestHarness {
  public:
-  SiteEngagementHelper* GetHelper(content::WebContents* web_contents) {
-    SiteEngagementHelper::CreateForWebContents(web_contents);
-    SiteEngagementHelper* helper =
-        SiteEngagementHelper::FromWebContents(web_contents);
+  void SetUp() override {
+    ChromeRenderViewHostTestHarness::SetUp();
+    SiteEngagementScore::SetParamValuesForTesting();
+  }
+
+  SiteEngagementService::Helper* GetHelper(content::WebContents* web_contents) {
+    SiteEngagementService::Helper::CreateForWebContents(web_contents);
+    SiteEngagementService::Helper* helper =
+        SiteEngagementService::Helper::FromWebContents(web_contents);
 
     DCHECK(helper);
     return helper;
   }
 
-  void TrackingStarted(SiteEngagementHelper* helper) {
+  void TrackingStarted(SiteEngagementService::Helper* helper) {
     helper->input_tracker_.TrackingStarted();
     helper->media_tracker_.TrackingStarted();
   }
 
   // Simulate a user interaction event and handle it.
-  void HandleUserInput(SiteEngagementHelper* helper,
+  void HandleUserInput(SiteEngagementService::Helper* helper,
                        blink::WebInputEvent::Type type) {
     helper->input_tracker_.DidGetUserInteraction(type);
   }
 
   // Simulate a user interaction event and handle it. Reactivates tracking
   // immediately.
-  void HandleUserInputAndRestartTracking(SiteEngagementHelper* helper,
+  void HandleUserInputAndRestartTracking(SiteEngagementService::Helper* helper,
                                          blink::WebInputEvent::Type type) {
     helper->input_tracker_.DidGetUserInteraction(type);
     helper->input_tracker_.TrackingStarted();
   }
 
-  void HandleMediaPlaying(SiteEngagementHelper* helper, bool is_hidden) {
+  void HandleMediaPlaying(SiteEngagementService::Helper* helper,
+                          bool is_hidden) {
     helper->RecordMediaPlaying(is_hidden);
   }
 
-  void MediaStartedPlaying(SiteEngagementHelper* helper) {
+  void MediaStartedPlaying(SiteEngagementService::Helper* helper) {
     helper->media_tracker_.MediaStartedPlaying(
+        content::WebContentsObserver::MediaPlayerInfo(false),
         content::WebContentsObserver::MediaPlayerId(nullptr, 1));
   }
 
-  void MediaStoppedPlaying(SiteEngagementHelper* helper) {
+  void MediaStoppedPlaying(SiteEngagementService::Helper* helper) {
     helper->media_tracker_.MediaStoppedPlaying(
+        content::WebContentsObserver::MediaPlayerInfo(false),
         content::WebContentsObserver::MediaPlayerId(nullptr, 1));
   }
 
   // Set a pause timer on the input tracker for test purposes.
-  void SetInputTrackerPauseTimer(SiteEngagementHelper* helper,
-                                 scoped_ptr<base::Timer> timer) {
+  void SetInputTrackerPauseTimer(SiteEngagementService::Helper* helper,
+                                 std::unique_ptr<base::Timer> timer) {
     helper->input_tracker_.SetPauseTimerForTesting(std::move(timer));
   }
 
   // Set a pause timer on the input tracker for test purposes.
-  void SetMediaTrackerPauseTimer(SiteEngagementHelper* helper,
-                                 scoped_ptr<base::Timer> timer) {
+  void SetMediaTrackerPauseTimer(SiteEngagementService::Helper* helper,
+                                 std::unique_ptr<base::Timer> timer) {
     helper->media_tracker_.SetPauseTimerForTesting(std::move(timer));
   }
 
-  bool IsTrackingInput(SiteEngagementHelper* helper) {
+  bool IsTrackingInput(SiteEngagementService::Helper* helper) {
     return helper->input_tracker_.is_tracking();
   }
 
@@ -83,7 +92,7 @@ class SiteEngagementHelperTest : public ChromeRenderViewHostTestHarness {
                          std::string());
     int pending_id = controller().GetPendingEntry()->GetUniqueID();
     content::WebContentsTester::For(web_contents())
-        ->TestDidNavigate(web_contents()->GetMainFrame(), 1, pending_id, true,
+        ->TestDidNavigate(web_contents()->GetMainFrame(), pending_id, true,
                           url, ui::PAGE_TRANSITION_TYPED);
   }
 
@@ -92,9 +101,8 @@ class SiteEngagementHelperTest : public ChromeRenderViewHostTestHarness {
     GURL url2("http://www.google.com/");
     content::WebContents* contents = web_contents();
 
-    SiteEngagementHelper* helper = GetHelper(contents);
-    SiteEngagementService* service =
-        SiteEngagementServiceFactory::GetForProfile(profile());
+    SiteEngagementService::Helper* helper = GetHelper(contents);
+    SiteEngagementService* service = SiteEngagementService::Get(profile());
     DCHECK(service);
 
     // Check that navigation triggers engagement.
@@ -141,12 +149,12 @@ TEST_F(SiteEngagementHelperTest, MouseDownEventEngagementAccumulation) {
   UserInputAccumulation(blink::WebInputEvent::MouseDown);
 }
 
-TEST_F(SiteEngagementHelperTest, MouseWheelEventEngagementAccumulation) {
-  UserInputAccumulation(blink::WebInputEvent::MouseWheel);
+TEST_F(SiteEngagementHelperTest, ScrollEventEngagementAccumulation) {
+  UserInputAccumulation(blink::WebInputEvent::GestureScrollBegin);
 }
 
-TEST_F(SiteEngagementHelperTest, GestureEngagementAccumulation) {
-  UserInputAccumulation(blink::WebInputEvent::GestureTapDown);
+TEST_F(SiteEngagementHelperTest, TouchEngagementAccumulation) {
+  UserInputAccumulation(blink::WebInputEvent::TouchStart);
 }
 
 TEST_F(SiteEngagementHelperTest, MediaEngagementAccumulation) {
@@ -154,9 +162,8 @@ TEST_F(SiteEngagementHelperTest, MediaEngagementAccumulation) {
   GURL url2("http://www.google.com/");
   content::WebContents* contents = web_contents();
 
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SiteEngagementService* service =
-      SiteEngagementServiceFactory::GetForProfile(profile());
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SiteEngagementService* service = SiteEngagementService::Get(profile());
   DCHECK(service);
 
   Navigate(url1);
@@ -207,10 +214,9 @@ TEST_F(SiteEngagementHelperTest, MediaEngagement) {
   content::WebContents* contents = web_contents();
 
   base::MockTimer* media_tracker_timer = new base::MockTimer(true, false);
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SetMediaTrackerPauseTimer(helper, make_scoped_ptr(media_tracker_timer));
-  SiteEngagementService* service =
-      SiteEngagementServiceFactory::GetForProfile(profile());
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SetMediaTrackerPauseTimer(helper, base::WrapUnique(media_tracker_timer));
+  SiteEngagementService* service = SiteEngagementService::Get(profile());
   DCHECK(service);
 
   Navigate(url1);
@@ -279,9 +285,8 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   GURL url2("http://www.google.com/");
   content::WebContents* contents = web_contents();
 
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SiteEngagementService* service =
-      SiteEngagementServiceFactory::GetForProfile(profile());
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SiteEngagementService* service = SiteEngagementService::Get(profile());
   DCHECK(service);
 
   base::HistogramTester histograms;
@@ -296,22 +301,25 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   EXPECT_DOUBLE_EQ(0.5, service->GetScore(url1));
   EXPECT_EQ(0, service->GetScore(url2));
   histograms.ExpectTotalCount(SiteEngagementMetrics::kEngagementTypeHistogram,
-                              1);
+                              2);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_NAVIGATION, 1);
+  histograms.ExpectBucketCount(
+      SiteEngagementMetrics::kEngagementTypeHistogram,
+      SiteEngagementMetrics::ENGAGEMENT_FIRST_DAILY_ENGAGEMENT, 1);
 
   HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::RawKeyDown);
   HandleUserInputAndRestartTracking(helper,
-                                    blink::WebInputEvent::GestureTapDown);
+                                    blink::WebInputEvent::TouchStart);
   HandleUserInputAndRestartTracking(helper,
-                                    blink::WebInputEvent::GestureTapDown);
+                                    blink::WebInputEvent::TouchStart);
   HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::RawKeyDown);
   HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::MouseDown);
 
   EXPECT_DOUBLE_EQ(0.75, service->GetScore(url1));
   EXPECT_EQ(0, service->GetScore(url2));
   histograms.ExpectTotalCount(SiteEngagementMetrics::kEngagementTypeHistogram,
-                              6);
+                              7);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_NAVIGATION, 1);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
@@ -321,22 +329,26 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_TOUCH_GESTURE,
                                2);
+  histograms.ExpectBucketCount(
+      SiteEngagementMetrics::kEngagementTypeHistogram,
+      SiteEngagementMetrics::ENGAGEMENT_FIRST_DAILY_ENGAGEMENT, 1);
 
-  HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::MouseWheel);
+  HandleUserInputAndRestartTracking(helper,
+                                    blink::WebInputEvent::GestureScrollBegin);
   HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::MouseDown);
   HandleMediaPlaying(helper, true);
   HandleUserInputAndRestartTracking(helper,
-                                    blink::WebInputEvent::GestureTapDown);
+                                    blink::WebInputEvent::TouchStart);
   HandleMediaPlaying(helper, false);
 
   EXPECT_DOUBLE_EQ(0.93, service->GetScore(url1));
   EXPECT_EQ(0, service->GetScore(url2));
   histograms.ExpectTotalCount(SiteEngagementMetrics::kEngagementTypeHistogram,
-                              11);
+                              12);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_MOUSE, 2);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
-                               SiteEngagementMetrics::ENGAGEMENT_WHEEL, 1);
+                               SiteEngagementMetrics::ENGAGEMENT_SCROLL, 1);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_TOUCH_GESTURE,
                                3);
@@ -346,6 +358,9 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_MEDIA_HIDDEN,
                                1);
+  histograms.ExpectBucketCount(
+      SiteEngagementMetrics::kEngagementTypeHistogram,
+      SiteEngagementMetrics::ENGAGEMENT_FIRST_DAILY_ENGAGEMENT, 1);
 
   Navigate(url2);
   TrackingStarted(helper);
@@ -355,14 +370,14 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   EXPECT_DOUBLE_EQ(1.43, service->GetTotalEngagementPoints());
 
   HandleUserInputAndRestartTracking(helper,
-                                    blink::WebInputEvent::GestureTapDown);
+                                    blink::WebInputEvent::TouchStart);
   HandleUserInputAndRestartTracking(helper, blink::WebInputEvent::RawKeyDown);
 
   EXPECT_DOUBLE_EQ(0.93, service->GetScore(url1));
   EXPECT_DOUBLE_EQ(0.6, service->GetScore(url2));
   EXPECT_DOUBLE_EQ(1.53, service->GetTotalEngagementPoints());
   histograms.ExpectTotalCount(SiteEngagementMetrics::kEngagementTypeHistogram,
-                              14);
+                              16);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_NAVIGATION, 2);
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
@@ -370,6 +385,9 @@ TEST_F(SiteEngagementHelperTest, MixedInputEngagementAccumulation) {
   histograms.ExpectBucketCount(SiteEngagementMetrics::kEngagementTypeHistogram,
                                SiteEngagementMetrics::ENGAGEMENT_TOUCH_GESTURE,
                                4);
+  histograms.ExpectBucketCount(
+      SiteEngagementMetrics::kEngagementTypeHistogram,
+      SiteEngagementMetrics::ENGAGEMENT_FIRST_DAILY_ENGAGEMENT, 2);
 }
 
 TEST_F(SiteEngagementHelperTest, CheckTimerAndCallbacks) {
@@ -379,12 +397,11 @@ TEST_F(SiteEngagementHelperTest, CheckTimerAndCallbacks) {
 
   base::MockTimer* input_tracker_timer = new base::MockTimer(true, false);
   base::MockTimer* media_tracker_timer = new base::MockTimer(true, false);
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SetInputTrackerPauseTimer(helper, make_scoped_ptr(input_tracker_timer));
-  SetMediaTrackerPauseTimer(helper, make_scoped_ptr(media_tracker_timer));
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SetInputTrackerPauseTimer(helper, base::WrapUnique(input_tracker_timer));
+  SetMediaTrackerPauseTimer(helper, base::WrapUnique(media_tracker_timer));
 
-  SiteEngagementService* service =
-      SiteEngagementServiceFactory::GetForProfile(profile());
+  SiteEngagementService* service = SiteEngagementService::Get(profile());
   DCHECK(service);
 
   Navigate(url1);
@@ -426,7 +443,7 @@ TEST_F(SiteEngagementHelperTest, CheckTimerAndCallbacks) {
   EXPECT_TRUE(media_tracker_timer->IsRunning());
 
   // Timer should start running again after input.
-  HandleUserInput(helper, blink::WebInputEvent::GestureTapDown);
+  HandleUserInput(helper, blink::WebInputEvent::TouchStart);
   EXPECT_TRUE(input_tracker_timer->IsRunning());
   EXPECT_FALSE(IsTrackingInput(helper));
   EXPECT_TRUE(media_tracker_timer->IsRunning());
@@ -487,9 +504,9 @@ TEST_F(SiteEngagementHelperTest, ShowAndHide) {
 
   base::MockTimer* input_tracker_timer = new base::MockTimer(true, false);
   base::MockTimer* media_tracker_timer = new base::MockTimer(true, false);
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SetInputTrackerPauseTimer(helper, make_scoped_ptr(input_tracker_timer));
-  SetMediaTrackerPauseTimer(helper, make_scoped_ptr(media_tracker_timer));
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SetInputTrackerPauseTimer(helper, base::WrapUnique(input_tracker_timer));
+  SetMediaTrackerPauseTimer(helper, base::WrapUnique(media_tracker_timer));
 
   Navigate(url1);
   input_tracker_timer->Fire();
@@ -538,8 +555,8 @@ TEST_F(SiteEngagementHelperTest, SingleTabNavigation) {
   content::WebContents* contents = web_contents();
 
   base::MockTimer* input_tracker_timer = new base::MockTimer(true, false);
-  SiteEngagementHelper* helper = GetHelper(contents);
-  SetInputTrackerPauseTimer(helper, make_scoped_ptr(input_tracker_timer));
+  SiteEngagementService::Helper* helper = GetHelper(contents);
+  SetInputTrackerPauseTimer(helper, base::WrapUnique(input_tracker_timer));
 
   // Navigation should start the initial delay timer.
   Navigate(url1);

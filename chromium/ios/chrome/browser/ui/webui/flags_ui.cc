@@ -8,30 +8,26 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/bind_helpers.h"
 #include "base/macros.h"
-#include "base/memory/ref_counted_memory.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "components/flags_ui/flags_ui_constants.h"
 #include "components/flags_ui/flags_ui_pref_names.h"
 #include "components/flags_ui/pref_service_flags_storage.h"
+#include "components/grit/components_resources.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/strings/grit/components_chromium_strings.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/version_info/version_info.h"
-#include "grit/components_chromium_strings.h"
-#include "grit/components_google_chrome_strings.h"
-#include "grit/components_resources.h"
-#include "grit/components_scaled_resources.h"
-#include "grit/components_strings.h"
 #include "ios/chrome/browser/about_flags.h"
 #include "ios/chrome/browser/application_context.h"
+#include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/chrome_url_constants.h"
-#include "ios/public/provider/chrome/browser/browser_state/chrome_browser_state.h"
-#include "ios/public/provider/web/web_ui_ios.h"
-#include "ios/public/provider/web/web_ui_ios_message_handler.h"
 #include "ios/web/public/web_ui_ios_data_source.h"
-#include "ios/web/public/web_ui_ios_data_source.h"
+#include "ios/web/public/webui/web_ui_ios.h"
+#include "ios/web/public/webui/web_ui_ios_message_handler.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -114,7 +110,7 @@ class FlagsDOMHandler : public web::WebUIIOSMessageHandler {
   void HandleResetAllFlags(const base::ListValue* args);
 
  private:
-  scoped_ptr<flags_ui::FlagsStorage> flags_storage_;
+  std::unique_ptr<flags_ui::FlagsStorage> flags_storage_;
   flags_ui::FlagAccess access_;
   bool experimental_features_requested_;
 
@@ -159,8 +155,8 @@ void FlagsDOMHandler::HandleRequestExperimentalFeatures(
 
   base::DictionaryValue results;
 
-  scoped_ptr<base::ListValue> supported_features(new base::ListValue);
-  scoped_ptr<base::ListValue> unsupported_features(new base::ListValue);
+  std::unique_ptr<base::ListValue> supported_features(new base::ListValue);
+  std::unique_ptr<base::ListValue> unsupported_features(new base::ListValue);
   GetFlagFeatureEntries(flags_storage_.get(), access_, supported_features.get(),
                         unsupported_features.get());
   results.Set(flags_ui::kSupportedFeatures, supported_features.release());
@@ -217,7 +213,7 @@ BaseFlagsUI::BaseFlagsUI(web::WebUIIOS* web_ui, FlagsUIKind flags_ui_kind)
 
 void BaseFlagsUI::Initialize(web::WebUIIOS* web_ui, FlagsUIKind flags_ui_kind) {
   FlagsDOMHandler* handler = new FlagsDOMHandler();
-  web_ui->AddMessageHandler(handler);
+  web_ui->AddMessageHandler(base::WrapUnique(handler));
 
   flags_ui::FlagAccess flag_access = flags_ui::kOwnerAccessToFlags;
   if (flags_ui_kind == FLAGS_UI_APPLE)
@@ -232,13 +228,6 @@ void BaseFlagsUI::Initialize(web::WebUIIOS* web_ui, FlagsUIKind flags_ui_kind) {
 }
 
 BaseFlagsUI::~BaseFlagsUI() {}
-
-// static
-base::RefCountedMemory* BaseFlagsUI::GetFaviconResourceBytes(
-    ui::ScaleFactor scale_factor) {
-  return ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
-      IDR_FLAGS_FAVICON, scale_factor);
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 //

@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H
-#define CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H
+#ifndef CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H_
+#define CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H_
+
+#include <memory>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 
 class AppShimHostManager;
 
@@ -30,7 +31,7 @@ class AppShimHostManagerTestApi {
   const base::FilePath& directory_in_tmp();
 
   void SetExtensionAppShimHandler(
-      scoped_ptr<apps::ExtensionAppShimHandler> handler);
+      std::unique_ptr<apps::ExtensionAppShimHandler> handler);
 
  private:
   AppShimHostManager* host_manager_;  // Not owned.
@@ -40,4 +41,4 @@ class AppShimHostManagerTestApi {
 
 }  // namespace test
 
-#endif  // CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H
+#endif  // CHROME_BROWSER_APPS_APP_SHIM_TEST_APP_SHIM_HOST_MANAGER_TEST_API_MAC_H_

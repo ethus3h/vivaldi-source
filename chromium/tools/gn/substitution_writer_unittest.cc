@@ -43,7 +43,7 @@ TEST(SubstitutionWriter, ApplyPatternToSource) {
                             nullptr, &err));
 
   SourceFile result = SubstitutionWriter::ApplyPatternToSource(
-      setup.settings(), pattern, SourceFile("//foo/bar/myfile.txt"));
+      nullptr, setup.settings(), pattern, SourceFile("//foo/bar/myfile.txt"));
   ASSERT_EQ("//out/Debug/gen/foo/bar/myfile.tmp", result.value());
 }
 
@@ -56,7 +56,7 @@ TEST(SubstitutionWriter, ApplyPatternToSourceAsOutputFile) {
                             nullptr, &err));
 
   OutputFile result = SubstitutionWriter::ApplyPatternToSourceAsOutputFile(
-      setup.settings(), pattern, SourceFile("//foo/bar/myfile.txt"));
+      nullptr, setup.settings(), pattern, SourceFile("//foo/bar/myfile.txt"));
   ASSERT_EQ("gen/foo/bar/myfile.tmp", result.value());
 }
 
@@ -73,7 +73,8 @@ TEST(SubstitutionWriter, WriteNinjaVariablesForSource) {
 
   std::ostringstream out;
   SubstitutionWriter::WriteNinjaVariablesForSource(
-      setup.settings(), SourceFile("//foo/bar/baz.txt"), types, options, out);
+      nullptr, setup.settings(), SourceFile("//foo/bar/baz.txt"), types,
+      options, out);
 
   // The "source" should be skipped since that will expand to $in which is
   // implicit.
@@ -103,10 +104,17 @@ TEST(SubstitutionWriter, WriteWithNinjaVariables) {
 
 TEST(SubstitutionWriter, SourceSubstitutions) {
   TestWithScope setup;
+  Err err;
+
+  Target target(setup.settings(), Label(SourceDir("//foo/bar/"), "baz"));
+  target.set_output_type(Target::STATIC_LIBRARY);
+  target.SetToolchain(setup.toolchain());
+  ASSERT_TRUE(target.OnResolved(&err));
 
   // Call to get substitutions relative to the build dir.
   #define GetRelSubst(str, what) \
       SubstitutionWriter::GetSourceSubstitution( \
+          &target, \
           setup.settings(), \
           SourceFile(str), \
           what, \
@@ -116,6 +124,7 @@ TEST(SubstitutionWriter, SourceSubstitutions) {
   // Call to get absolute directory substitutions.
   #define GetAbsSubst(str, what) \
       SubstitutionWriter::GetSourceSubstitution( \
+          &target, \
           setup.settings(), \
           SourceFile(str), \
           what, \
@@ -174,6 +183,11 @@ TEST(SubstitutionWriter, SourceSubstitutions) {
 
   EXPECT_EQ(".",
             GetRelSubst("//baz.txt", SUBSTITUTION_SOURCE_ROOT_RELATIVE_DIR));
+
+  EXPECT_EQ("baz.txt",
+      GetRelSubst("//foo/bar/baz.txt", SUBSTITUTION_SOURCE_TARGET_RELATIVE));
+  EXPECT_EQ("baz.txt",
+      GetAbsSubst("//foo/bar/baz.txt", SUBSTITUTION_SOURCE_TARGET_RELATIVE));
 
   #undef GetAbsSubst
   #undef GetRelSubst
@@ -268,4 +282,56 @@ TEST(SubstitutionWriter, LinkerSubstitutions) {
   OutputFile output = SubstitutionWriter::ApplyPatternToLinkerAsOutputFile(
       &target, tool, pattern);
   EXPECT_EQ("./libbaz.so", output.value());
+
+  // Output extensions can be overridden.
+  target.set_output_extension("extension");
+  EXPECT_EQ(".extension",
+            SubstitutionWriter::GetLinkerSubstitution(
+                &target, tool, SUBSTITUTION_OUTPUT_EXTENSION));
+  target.set_output_extension("");
+  EXPECT_EQ("",
+            SubstitutionWriter::GetLinkerSubstitution(
+                &target, tool, SUBSTITUTION_OUTPUT_EXTENSION));
+
+  // Output directory is tested in a separate test below.
+}
+
+TEST(SubstitutionWriter, OutputDir) {
+  TestWithScope setup;
+  Err err;
+
+  // This tool has an output directory pattern and uses that for the
+  // output name.
+  Tool tool;
+  SubstitutionPattern out_dir_pattern;
+  ASSERT_TRUE(out_dir_pattern.Parse("{{root_out_dir}}/{{target_output_name}}",
+                                    nullptr, &err));
+  tool.set_default_output_dir(out_dir_pattern);
+  tool.SetComplete();
+
+  // Default target with no output dir overrides.
+  Target target(setup.settings(), Label(SourceDir("//foo/"), "baz"));
+  target.set_output_type(Target::EXECUTABLE);
+  target.SetToolchain(setup.toolchain());
+  ASSERT_TRUE(target.OnResolved(&err));
+
+  // The output should expand the default from the patterns in the tool.
+  SubstitutionPattern output_name;
+  ASSERT_TRUE(output_name.Parse("{{output_dir}}/{{target_output_name}}.exe",
+                                nullptr, &err));
+  EXPECT_EQ("./baz/baz.exe",
+            SubstitutionWriter::ApplyPatternToLinkerAsOutputFile(
+                &target, &tool, output_name).value());
+
+  // Override the output name to the root build dir.
+  target.set_output_dir(SourceDir("//out/Debug/"));
+  EXPECT_EQ("./baz.exe",
+            SubstitutionWriter::ApplyPatternToLinkerAsOutputFile(
+                &target, &tool, output_name).value());
+
+  // Override the output name to a new subdirectory.
+  target.set_output_dir(SourceDir("//out/Debug/foo/bar"));
+  EXPECT_EQ("foo/bar/baz.exe",
+            SubstitutionWriter::ApplyPatternToLinkerAsOutputFile(
+                &target, &tool, output_name).value());
 }

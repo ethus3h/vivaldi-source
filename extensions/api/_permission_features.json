@@ -16,6 +16,7 @@
 
 {
   "autoUpdate": {
+    "vivaldi": true,
     "channel": "stable",
     "extension_types": [ "platform_app" ],
     "whitelist": [
@@ -44,7 +45,7 @@
       "mpognobbkildjkofajifpdfhcoklimli" // Vivaldi
     ]
   },
-  "historySearch": {
+  "historyPrivate": {
     "vivaldi": true,
     "channel": "stable",
     "extension_types": [ "platform_app" ],
@@ -114,6 +115,14 @@
     "extension_types": [ "platform_app" ],
     "whitelist": [
       "mpognobbkildjkofajifpdfhcoklimli" // Vivaldi
+    ]
+  },
+  "sync": {
+   "vivaldi": true,
+   "channel": "stable",
+    "extension_types": ["platform_app"],
+    "whitelist": [
+      "mpognobbkildjkofajifpdfhcoklimli"   // Vivaldi
     ]
   },
   "thumbnails": {

@@ -3,7 +3,8 @@
  *           (C) 2000 Antti Koivisto (koivisto@kde.org)
  *           (C) 2000 Dirk Mueller (mueller@kde.org)
  *           (C) 2004 Allan Sandfeld Jensen (kde@carewolf.com)
- * Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009 Apple Inc. All rights
+ * reserved.
  * Copyright (C) 2009 Google Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -27,8 +28,9 @@
 #define PaintInfo_h
 
 #include "core/CoreExport.h"
-// TODO(jchaffraix): Once we unify PaintBehavior and PaintLayerFlags, we should move
-// PaintLayerFlags to PaintPhase and rename it. Thus removing the need for this #include.#include "core/paint/PaintLayerPaintingInfo.h"
+// TODO(jchaffraix): Once we unify PaintBehavior and PaintLayerFlags, we should
+// move PaintLayerFlags to PaintPhase and rename it. Thus removing the need for
+// this #include "core/paint/PaintLayerPaintingInfo.h"
 #include "core/paint/PaintLayerPaintingInfo.h"
 #include "core/paint/PaintPhase.h"
 #include "platform/geometry/IntRect.h"
@@ -45,87 +47,92 @@
 
 namespace blink {
 
-class LayoutInline;
 class LayoutBoxModelObject;
-class LayoutObject;
-class PaintInvalidationState;
 
 struct CORE_EXPORT PaintInfo {
-    PaintInfo(GraphicsContext& newContext, const IntRect& cullRect, PaintPhase newPhase, GlobalPaintFlags globalPaintFlags, PaintLayerFlags paintFlags,
-        LayoutObject* newPaintingRoot = nullptr, const LayoutBoxModelObject* newPaintContainer = nullptr)
-        : context(newContext)
-        , phase(newPhase)
-        , paintingRoot(newPaintingRoot)
-        , m_cullRect(cullRect)
-        , m_paintContainer(newPaintContainer)
-        , m_paintFlags(paintFlags)
-        , m_globalPaintFlags(globalPaintFlags)
-    {
-    }
+  PaintInfo(GraphicsContext& newContext,
+            const IntRect& cullRect,
+            PaintPhase newPhase,
+            GlobalPaintFlags globalPaintFlags,
+            PaintLayerFlags paintFlags,
+            const LayoutBoxModelObject* newPaintContainer = nullptr)
+      : context(newContext),
+        phase(newPhase),
+        m_cullRect(cullRect),
+        m_paintContainer(newPaintContainer),
+        m_paintFlags(paintFlags),
+        m_globalPaintFlags(globalPaintFlags) {}
 
-    PaintInfo(GraphicsContext& newContext, const PaintInfo& copyOtherFieldsFrom)
-        : context(newContext)
-        , phase(copyOtherFieldsFrom.phase)
-        , paintingRoot(copyOtherFieldsFrom.paintingRoot)
-        , m_cullRect(copyOtherFieldsFrom.m_cullRect)
-        , m_paintContainer(copyOtherFieldsFrom.m_paintContainer)
-        , m_paintFlags(copyOtherFieldsFrom.m_paintFlags)
-        , m_globalPaintFlags(copyOtherFieldsFrom.m_globalPaintFlags)
-    { }
+  PaintInfo(GraphicsContext& newContext, const PaintInfo& copyOtherFieldsFrom)
+      : context(newContext),
+        phase(copyOtherFieldsFrom.phase),
+        m_cullRect(copyOtherFieldsFrom.m_cullRect),
+        m_paintContainer(copyOtherFieldsFrom.m_paintContainer),
+        m_paintFlags(copyOtherFieldsFrom.m_paintFlags),
+        m_globalPaintFlags(copyOtherFieldsFrom.m_globalPaintFlags) {}
 
-    // Creates a PaintInfo for painting descendants. See comments about the paint phases
-    // in PaintPhase.h for details.
-    // TODO(wangxianzhu): Actually use this method.
-    PaintInfo forDescendants() const
-    {
-        PaintInfo result(*this);
-        if (phase == PaintPhaseDescendantOutlinesOnly)
-            result.phase = PaintPhaseOutline;
-        else if (phase == PaintPhaseDescendantBlockBackgroundsOnly)
-            result.phase = PaintPhaseBlockBackground;
-        return result;
-    }
+  // Creates a PaintInfo for painting descendants. See comments about the paint
+  // phases in PaintPhase.h for details.
+  PaintInfo forDescendants() const {
+    PaintInfo result(*this);
+    if (phase == PaintPhaseDescendantOutlinesOnly)
+      result.phase = PaintPhaseOutline;
+    else if (phase == PaintPhaseDescendantBlockBackgroundsOnly)
+      result.phase = PaintPhaseBlockBackground;
+    return result;
+  }
 
-    void updatePaintingRootForChildren(const LayoutObject*);
+  bool isRenderingClipPathAsMaskImage() const {
+    return m_paintFlags & PaintLayerPaintingRenderingClipPathAsMask;
+  }
+  bool isRenderingResourceSubtree() const {
+    return m_paintFlags & PaintLayerPaintingRenderingResourceSubtree;
+  }
 
-    bool shouldPaintWithinRoot(const LayoutObject*) const;
+  bool skipRootBackground() const {
+    return m_paintFlags & PaintLayerPaintingSkipRootBackground;
+  }
+  bool paintRootBackgroundOnly() const {
+    return m_paintFlags & PaintLayerPaintingRootBackgroundOnly;
+  }
 
-    bool isRenderingClipPathAsMaskImage() const { return m_paintFlags & PaintLayerPaintingRenderingClipPathAsMask; }
+  bool isPrinting() const { return m_globalPaintFlags & GlobalPaintPrinting; }
 
-    bool skipRootBackground() const { return m_paintFlags & PaintLayerPaintingSkipRootBackground; }
-    bool paintRootBackgroundOnly() const { return m_paintFlags & PaintLayerPaintingRootBackgroundOnly; }
+  DisplayItem::Type displayItemTypeForClipping() const {
+    return DisplayItem::paintPhaseToClipBoxType(phase);
+  }
 
-    bool isPrinting() const { return m_globalPaintFlags & GlobalPaintPrinting; }
+  const LayoutBoxModelObject* paintContainer() const {
+    return m_paintContainer;
+  }
 
-    DisplayItem::Type displayItemTypeForClipping() const { return DisplayItem::paintPhaseToClipBoxType(phase); }
+  GlobalPaintFlags getGlobalPaintFlags() const { return m_globalPaintFlags; }
 
-    const LayoutBoxModelObject* paintContainer() const { return m_paintContainer; }
+  PaintLayerFlags paintFlags() const { return m_paintFlags; }
 
-    GlobalPaintFlags globalPaintFlags() const { return m_globalPaintFlags; }
+  const CullRect& cullRect() const { return m_cullRect; }
 
-    PaintLayerFlags paintFlags() const { return m_paintFlags; }
+  void updateCullRect(const AffineTransform& localToParentTransform);
 
-    const CullRect& cullRect() const { return m_cullRect; }
+  // FIXME: Introduce setters/getters at some point. Requires a lot of changes
+  // throughout layout/.
+  GraphicsContext& context;
+  PaintPhase phase;
 
-    void updateCullRect(const AffineTransform& localToParentTransform);
+ private:
+  CullRect m_cullRect;
+  const LayoutBoxModelObject* m_paintContainer;  // the box model object that
+                                                 // originates the current
+                                                 // painting
 
-    // FIXME: Introduce setters/getters at some point. Requires a lot of changes throughout layout/.
-    GraphicsContext& context;
-    PaintPhase phase;
-    LayoutObject* paintingRoot; // used to draw just one element and its visual kids
+  const PaintLayerFlags m_paintFlags;
+  const GlobalPaintFlags m_globalPaintFlags;
 
-private:
-    CullRect m_cullRect;
-    const LayoutBoxModelObject* m_paintContainer; // the box model object that originates the current painting
-
-    const PaintLayerFlags m_paintFlags;
-    const GlobalPaintFlags m_globalPaintFlags;
-
-    // TODO(chrishtr): temporary while we implement CullRect everywhere.
-    friend class SVGPaintContext;
-    friend class SVGShapePainter;
+  // TODO(chrishtr): temporary while we implement CullRect everywhere.
+  friend class SVGPaintContext;
+  friend class SVGShapePainter;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // PaintInfo_h
+#endif  // PaintInfo_h

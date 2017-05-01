@@ -48,8 +48,7 @@ class LocationBar {
   // Focuses the location bar.  Optionally also selects its contents.
   virtual void FocusLocation(bool select_all) = 0;
 
-  // Clears the location bar, inserts an annoying little "?" turd and sets
-  // focus to it.
+  // Puts the user into keyword mode with their default search provider.
   virtual void FocusSearch() = 0;
 
   // Updates the state of the images showing the content settings status.
@@ -100,6 +99,12 @@ class LocationBar {
 
   // Checks if any extension has requested that the bookmark star be hidden.
   bool IsBookmarkStarHiddenByExtension() const;
+
+  // If |url| is an extension URL, returns the name of the associated extension,
+  // with whitespace collapsed. Otherwise, returns empty string. |web_contents|
+  // is used to get at the extension registry.
+  static base::string16 GetExtensionName(const GURL& url,
+                                         content::WebContents* web_contents);
 
  private:
   Profile* profile_;

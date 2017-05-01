@@ -23,15 +23,12 @@ namespace signin {
 const char kSignInPromoQueryKeyAccessPoint[] = "access_point";
 const char kSignInPromoQueryKeyAutoClose[] = "auto_close";
 const char kSignInPromoQueryKeyContinue[] = "continue";
+const char kSignInPromoQueryKeyForceKeepData[] = "force_keep_data";
 const char kSignInPromoQueryKeyReason[] = "reason";
 const char kSignInPromoQueryKeySource[] = "source";
 const char kSignInPromoQueryKeyConstrained[] = "constrained";
 const char kSignInPromoQueryKeyShowAccountManagement[] =
     "showAccountManagement";
-
-// Returns true if the sign in promo should be visible.
-// |profile| is the profile of the tab the promo would be shown on.
-bool ShouldShowPromo(Profile* profile);
 
 // Returns true if we should show the sign in promo at startup.
 bool ShouldShowPromoAtStartup(Profile* profile, bool is_new_profile);

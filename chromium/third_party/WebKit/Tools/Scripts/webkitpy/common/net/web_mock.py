@@ -30,15 +30,16 @@ import StringIO
 
 
 class MockWeb(object):
+
     def __init__(self, urls=None):
         self.urls = urls or {}
         self.urls_fetched = []
 
-    def get_binary(self, url, convert_404_to_None=False):
+    def get_binary(self, url, return_none_on_404=False):
         self.urls_fetched.append(url)
         if url in self.urls:
             return self.urls[url]
-        return "MOCK Web result, convert 404 to None=%s" % convert_404_to_None
+        return "MOCK Web result, convert 404 to None=%s" % return_none_on_404
 
 
 # FIXME: Classes which are using Browser probably want to use Web instead.

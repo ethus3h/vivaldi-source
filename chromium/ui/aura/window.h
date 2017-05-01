@@ -8,12 +8,13 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "base/strings/string16.h"
 #include "ui/aura/aura_export.h"
@@ -30,23 +31,23 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/wm/public/window_types.h"
 
-namespace gfx {
+namespace display {
 class Display;
+}
+
+namespace gfx {
 class Transform;
-class Vector2d;
 }
 
 namespace ui {
-class EventHandler;
 class Layer;
-class TextInputClient;
-class Texture;
 }
 
 namespace aura {
 
 class LayoutManager;
 class WindowDelegate;
+class WindowPort;
 class WindowObserver;
 class WindowTreeHost;
 
@@ -70,6 +71,9 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
                            public ui::EventTarget,
                            public ui::GestureConsumer {
  public:
+  // Initial value of id() for newly created windows.
+  static constexpr int kInitialId = -1;
+
   // Used when stacking windows.
   enum StackDirection {
     STACK_ABOVE,
@@ -79,6 +83,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   typedef std::vector<Window*> Windows;
 
   explicit Window(WindowDelegate* delegate);
+  Window(WindowDelegate* delegate, std::unique_ptr<WindowPort> port);
   ~Window() override;
 
   // Initializes the window. This creates the window's layer.
@@ -98,10 +103,10 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   int id() const { return id_; }
   void set_id(int id) { id_ = id; }
 
-  const std::string& name() const { return name_; }
+  const std::string& GetName() const;
   void SetName(const std::string& name);
 
-  const base::string16 title() const { return title_; }
+  const base::string16& GetTitle() const;
   void SetTitle(const base::string16& title);
 
   bool transparent() const { return transparent_; }
@@ -129,10 +134,6 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   const WindowTreeHost* GetHost() const;
   void set_host(WindowTreeHost* host) { host_ = host; }
   bool IsRootWindow() const { return !!host_; }
-
-  // The Window does not own this object.
-  void set_user_data(void* user_data) { user_data_ = user_data; }
-  void* user_data() const { return user_data_; }
 
   // Changes the visibility of the window.
   void Show();
@@ -162,8 +163,8 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
 
   // Sets a new event-targeter for the window, and returns the previous
   // event-targeter.
-  scoped_ptr<ui::EventTargeter> SetEventTargeter(
-      scoped_ptr<ui::EventTargeter> targeter);
+  std::unique_ptr<ui::EventTargeter> SetEventTargeter(
+      std::unique_ptr<ui::EventTargeter> targeter);
 
   // Changes the bounds of the window. If present, the window's parent's
   // LayoutManager may adjust the bounds.
@@ -172,7 +173,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Changes the bounds of the window in the screen coordintates.
   // If present, the window's parent's LayoutManager may adjust the bounds.
   void SetBoundsInScreen(const gfx::Rect& new_bounds_in_screen_coords,
-                         const gfx::Display& dst_display);
+                         const display::Display& dst_display);
 
   // Returns the target bounds of the window. If the window's layer is
   // not animating, it simply returns the current bounds.
@@ -260,7 +261,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Returns the topmost Window with a delegate containing |local_point|.
   Window* GetTopWindowContainingPoint(const gfx::Point& local_point);
 
-  // Returns this window's toplevel window (the highest-up-the-tree anscestor
+  // Returns this window's toplevel window (the highest-up-the-tree ancestor
   // that has a delegate set).  The toplevel window may be |this|.
   Window* GetToplevelWindow();
 
@@ -307,6 +308,9 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   template<typename T>
   void ClearProperty(const WindowProperty<T>* property);
 
+  // Returns the value of all properties with a non-default value.
+  std::set<const void*> GetAllPropertKeys() const;
+
   // NativeWidget::[GS]etNativeWindowProperty use strings as keys, and this is
   // difficult to change while retaining compatibility with other platforms.
   // TODO(benrg): Find a better solution.
@@ -334,10 +338,13 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   void RemoveOrDestroyChildren();
 
  private:
-  friend class test::WindowTestApi;
   friend class LayoutManager;
+  friend class PropertyConverter;
+  friend class WindowPort;
   friend class WindowTargeter;
   friend class subtle::PropertyHelper;
+  friend class test::WindowTestApi;
+
   // Called by the public {Set,Get,Clear}Property functions.
   int64_t SetPropertyInternal(const void* key,
                               const char* name,
@@ -438,26 +445,28 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // |source|.
   void NotifyAncestorWindowTransformed(Window* source);
 
-  // Invoked when the bounds of the window changes. This may be invoked directly
-  // by us, or from the closure returned by PrepareForLayerBoundsChange() after
-  // the bounds of the layer has changed. |old_bounds| is the previous bounds.
-  void OnWindowBoundsChanged(const gfx::Rect& old_bounds);
-
   // Overridden from ui::LayerDelegate:
   void OnPaintLayer(const ui::PaintContext& context) override;
   void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override;
-  base::Closure PrepareForLayerBoundsChange() override;
+  void OnLayerBoundsChanged(const gfx::Rect& old_bounds) override;
 
   // Overridden from ui::EventTarget:
   bool CanAcceptEvent(const ui::Event& event) override;
   EventTarget* GetParentTarget() override;
-  scoped_ptr<ui::EventTargetIterator> GetChildIterator() const override;
+  std::unique_ptr<ui::EventTargetIterator> GetChildIterator() const override;
   ui::EventTargeter* GetEventTargeter() override;
   void ConvertEventToTarget(ui::EventTarget* target,
                             ui::LocatedEvent* event) override;
 
   // Updates the layer name based on the window's name and id.
   void UpdateLayerName();
+
+  // Window owns its corresponding WindowPort, but the ref is held as a raw
+  // pointer in |port_| so that it can still be accessed during destruction.
+  // This is important as deleting the WindowPort may result in trying to lookup
+  // the WindowPort associated with the Window.
+  std::unique_ptr<WindowPort> port_owner_;
+  WindowPort* port_;
 
   // Bounds of this window relative to the parent. This is cached as the bounds
   // of the Layer and Window are not necessarily the same. In particular bounds
@@ -487,17 +496,12 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   bool visible_;
 
   int id_;
-  std::string name_;
-
-  base::string16 title_;
 
   // Whether layer is initialized as non-opaque.
   bool transparent_;
 
-  scoped_ptr<LayoutManager> layout_manager_;
-  scoped_ptr<ui::EventTargeter> targeter_;
-
-  void* user_data_;
+  std::unique_ptr<LayoutManager> layout_manager_;
+  std::unique_ptr<ui::EventTargeter> targeter_;
 
   // Makes the window pass all events through to any windows behind it.
   bool ignore_events_;

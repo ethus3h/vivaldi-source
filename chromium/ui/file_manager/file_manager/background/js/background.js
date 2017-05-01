@@ -74,14 +74,18 @@ function FileBrowserBackground() {
   this.driveSyncHandler = new DriveSyncHandler(this.progressCenter);
 
   /**
+   * @type {!importer.DispositionChecker.CheckerFunction}
+   */
+  this.dispositionChecker_ = importer.DispositionChecker.createChecker(
+      this.historyLoader, this.tracker);
+
+  /**
    * Provides support for scaning media devices as part of Cloud Import.
    * @type {!importer.MediaScanner}
    */
   this.mediaScanner = new importer.DefaultMediaScanner(
       importer.createMetadataHashcode,
-      importer.DispositionChecker.createChecker(
-          this.historyLoader,
-          this.tracker),
+      this.dispositionChecker_,
       importer.DefaultDirectoryWatcher.create);
 
   /**
@@ -92,6 +96,7 @@ function FileBrowserBackground() {
   this.mediaImportHandler = new importer.MediaImportHandler(
       this.progressCenter,
       this.historyLoader,
+      this.dispositionChecker_,
       this.tracker);
 
   /**
@@ -154,7 +159,7 @@ FileBrowserBackground.prototype.ready = function(callback) {
  */
 FileBrowserBackground.prototype.handleViewEvent_ =
     function(event) {
-  VolumeManager.getInstance()
+  volumeManagerFactory.getInstance()
       .then(
           /**
            * Retrieves the root file entry of the volume on the requested
@@ -187,7 +192,7 @@ FileBrowserBackground.prototype.handleViewEvent_ =
  */
 FileBrowserBackground.prototype.navigateToVolumeWhenReady_ =
     function(volumeId, opt_directoryPath) {
-  VolumeManager.getInstance()
+  volumeManagerFactory.getInstance()
       .then(
           /**
            * Retrieves the root file entry of the volume on the requested
@@ -290,15 +295,16 @@ var FILE_MANAGER_WINDOW_CREATE_OPTIONS = {
   bounds: {
     left: Math.round(window.screen.availWidth * 0.1),
     top: Math.round(window.screen.availHeight * 0.1),
-    width: Math.round(window.screen.availWidth * 0.8),
-    height: Math.round(window.screen.availHeight * 0.8)
+    // We choose 1000px as default window width to fit 4 columns in grid view,
+    // as long as the width doesn't exceed 80% of the screen width.
+    width: Math.min(Math.round(window.screen.availWidth * 0.8), 1000),
+    height: Math.min(Math.round(window.screen.availHeight * 0.8), 600)
   },
   frame: {
-    color: '#1976d2'
+    color: '#254fae'
   },
   minWidth: 480,
-  minHeight: 300,
-  hidden: true
+  minHeight: 300
 };
 
 /**
@@ -461,6 +467,7 @@ FileBrowserBackground.prototype.onExecute_ = function(action, details) {
  * @override
  */
 FileBrowserBackground.prototype.onLaunched_ = function() {
+  metrics.startInterval('Load.BackgroundLaunch');
   this.initializationPromise_.then(function() {
     if (nextFileManagerWindowID == 0) {
       // The app just launched. Remove window state records that are not needed
@@ -474,7 +481,9 @@ FileBrowserBackground.prototype.onLaunched_ = function() {
         }
       });
     }
-    launchFileManager(null, undefined, LaunchType.FOCUS_ANY_OR_CREATE);
+    launchFileManager(
+        null, undefined, LaunchType.FOCUS_ANY_OR_CREATE,
+        function() { metrics.recordInterval('Load.BackgroundLaunch'); });
   });
 };
 
@@ -506,10 +515,13 @@ FileBrowserBackground.prototype.onRestarted_ = function() {
       if (items.hasOwnProperty(key)) {
         var match = key.match(FILES_ID_PATTERN);
         if (match) {
+          metrics.startInterval('Load.BackgroundRestart');
           var id = Number(match[1]);
           try {
             var appState = /** @type {Object} */ (JSON.parse(items[key]));
-            launchFileManager(appState, id);
+            launchFileManager(appState, id, undefined, function() {
+              metrics.recordInterval('Load.BackgroundRestart');
+            });
           } catch (e) {
             console.error('Corrupt launch data for ' + id);
           }
@@ -625,3 +637,4 @@ FileBrowserBackground.prototype.initContextMenu_ = function() {
  * @type {FileBrowserBackground}
  */
 window.background = new FileBrowserBackground();
+metrics.recordInterval('Load.BackgroundScript');

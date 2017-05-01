@@ -6,9 +6,6 @@
  * @fileoverview
  * 'settings-reset-profile-banner' is the banner shown for clearing profile
  * settings.
- *
- * @group Chrome Settings Elements
- * @element settings-reset-profile-banner
  */
 Polymer({
   is: 'settings-reset-profile-banner',
@@ -22,23 +19,22 @@ Polymer({
 
   /** @private */
   onCloseTap_: function() {
-    chrome.send('onHideResetProfileBanner');
+    settings.ResetBrowserProxyImpl.getInstance().onHideResetProfileBanner();
     this.remove();
   },
 
   /**
-   * Creates and shows a <settings-reset-profile-dialog>.
+   * Shows a <settings-reset-profile-dialog>.
+   * @param {!Event} e
    * @private
    */
-  showDialog_: function(dialogName) {
+  showDialog_: function(e) {
+    e.preventDefault();
     this.showResetProfileDialog_ = true;
-    this.async(function() {
-      var dialog = this.$$('settings-reset-profile-dialog');
-      dialog.open();
-    }.bind(this));
   },
 
-  onResetDone_: function() {
+  /** @private */
+  onDialogClose_: function() {
     this.showResetProfileDialog_ = false;
   },
 });

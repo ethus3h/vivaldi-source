@@ -5,15 +5,16 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/macros.h"
+#include "base/memory/shared_memory_handle.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_utils.h"
-#include "ipc/ipc_switches.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ipc/ipc_sync_message.h"
 #include "tools/ipc_fuzzer/fuzzer/fuzzer.h"
@@ -154,8 +155,8 @@ struct FuzzTraits<unsigned short> {
 };
 
 template <>
-struct FuzzTraits<char> {
-  static bool Fuzz(char* p, Fuzzer* fuzzer) {
+struct FuzzTraits<signed char> {
+  static bool Fuzz(signed char* p, Fuzzer* fuzzer) {
     fuzzer->FuzzUChar(reinterpret_cast<unsigned char*>(p));
     return true;
   }
@@ -211,58 +212,52 @@ struct FuzzTraits<base::string16> {
 
 // Specializations for tuples.
 template <>
-struct FuzzTraits<base::Tuple<>> {
-  static bool Fuzz(base::Tuple<>* p, Fuzzer* fuzzer) {
-    return true;
-  }
+struct FuzzTraits<std::tuple<>> {
+  static bool Fuzz(std::tuple<>* p, Fuzzer* fuzzer) { return true; }
 };
 
 template <class A>
-struct FuzzTraits<base::Tuple<A>> {
-  static bool Fuzz(base::Tuple<A>* p, Fuzzer* fuzzer) {
-    return FuzzParam(&base::get<0>(*p), fuzzer);
+struct FuzzTraits<std::tuple<A>> {
+  static bool Fuzz(std::tuple<A>* p, Fuzzer* fuzzer) {
+    return FuzzParam(&std::get<0>(*p), fuzzer);
   }
 };
 
 template <class A, class B>
-struct FuzzTraits<base::Tuple<A, B>> {
-  static bool Fuzz(base::Tuple<A, B>* p, Fuzzer* fuzzer) {
-    return
-        FuzzParam(&base::get<0>(*p), fuzzer) &&
-        FuzzParam(&base::get<1>(*p), fuzzer);
+struct FuzzTraits<std::tuple<A, B>> {
+  static bool Fuzz(std::tuple<A, B>* p, Fuzzer* fuzzer) {
+    return FuzzParam(&std::get<0>(*p), fuzzer) &&
+           FuzzParam(&std::get<1>(*p), fuzzer);
   }
 };
 
 template <class A, class B, class C>
-struct FuzzTraits<base::Tuple<A, B, C>> {
-  static bool Fuzz(base::Tuple<A, B, C>* p, Fuzzer* fuzzer) {
-    return
-        FuzzParam(&base::get<0>(*p), fuzzer) &&
-        FuzzParam(&base::get<1>(*p), fuzzer) &&
-        FuzzParam(&base::get<2>(*p), fuzzer);
+struct FuzzTraits<std::tuple<A, B, C>> {
+  static bool Fuzz(std::tuple<A, B, C>* p, Fuzzer* fuzzer) {
+    return FuzzParam(&std::get<0>(*p), fuzzer) &&
+           FuzzParam(&std::get<1>(*p), fuzzer) &&
+           FuzzParam(&std::get<2>(*p), fuzzer);
   }
 };
 
 template <class A, class B, class C, class D>
-struct FuzzTraits<base::Tuple<A, B, C, D>> {
-  static bool Fuzz(base::Tuple<A, B, C, D>* p, Fuzzer* fuzzer) {
-    return
-        FuzzParam(&base::get<0>(*p), fuzzer) &&
-        FuzzParam(&base::get<1>(*p), fuzzer) &&
-        FuzzParam(&base::get<2>(*p), fuzzer) &&
-        FuzzParam(&base::get<3>(*p), fuzzer);
+struct FuzzTraits<std::tuple<A, B, C, D>> {
+  static bool Fuzz(std::tuple<A, B, C, D>* p, Fuzzer* fuzzer) {
+    return FuzzParam(&std::get<0>(*p), fuzzer) &&
+           FuzzParam(&std::get<1>(*p), fuzzer) &&
+           FuzzParam(&std::get<2>(*p), fuzzer) &&
+           FuzzParam(&std::get<3>(*p), fuzzer);
   }
 };
 
 template <class A, class B, class C, class D, class E>
-struct FuzzTraits<base::Tuple<A, B, C, D, E>> {
-  static bool Fuzz(base::Tuple<A, B, C, D, E>* p, Fuzzer* fuzzer) {
-    return
-        FuzzParam(&base::get<0>(*p), fuzzer) &&
-        FuzzParam(&base::get<1>(*p), fuzzer) &&
-        FuzzParam(&base::get<2>(*p), fuzzer) &&
-        FuzzParam(&base::get<3>(*p), fuzzer) &&
-        FuzzParam(&base::get<4>(*p), fuzzer);
+struct FuzzTraits<std::tuple<A, B, C, D, E>> {
+  static bool Fuzz(std::tuple<A, B, C, D, E>* p, Fuzzer* fuzzer) {
+    return FuzzParam(&std::get<0>(*p), fuzzer) &&
+           FuzzParam(&std::get<1>(*p), fuzzer) &&
+           FuzzParam(&std::get<2>(*p), fuzzer) &&
+           FuzzParam(&std::get<3>(*p), fuzzer) &&
+           FuzzParam(&std::get<4>(*p), fuzzer);
   }
 };
 
@@ -452,6 +447,18 @@ struct FuzzTraits<base::NullableString16> {
   }
 };
 
+#if defined(OS_WIN) || defined(OS_MACOSX)
+template <>
+struct FuzzTraits<base::SharedMemoryHandle> {
+  static bool Fuzz(base::SharedMemoryHandle* p, Fuzzer* fuzzer) {
+    // This generates an invalid SharedMemoryHandle. Generating a valid
+    // SharedMemoryHandle requires setting/knowing state in both the sending and
+    // receiving process, which is not currently possible.
+    return true;
+  }
+};
+#endif  // defined(OS_WIN) || defined(OS_MACOSX)
+
 template <>
 struct FuzzTraits<base::Time> {
   static bool Fuzz(base::Time* p, Fuzzer* fuzzer) {
@@ -497,36 +504,36 @@ struct FuzzTraits<base::ListValue> {
     if (fuzzer->ShouldGenerate())
       list_length = g_depth > 3 ? 0 : RandInRange(8);
     for (size_t index = 0; index < list_length; ++index) {
-      switch (RandInRange(8)) {
-        case base::Value::TYPE_BOOLEAN: {
+      switch (static_cast<base::Value::Type>(RandInRange(8))) {
+        case base::Value::Type::BOOLEAN: {
           bool tmp;
           p->GetBoolean(index, &tmp);
           fuzzer->FuzzBool(&tmp);
           p->Set(index, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_INTEGER: {
+        case base::Value::Type::INTEGER: {
           int tmp;
           p->GetInteger(index, &tmp);
           fuzzer->FuzzInt(&tmp);
           p->Set(index, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_DOUBLE: {
+        case base::Value::Type::DOUBLE: {
           double tmp;
           p->GetDouble(index, &tmp);
           fuzzer->FuzzDouble(&tmp);
           p->Set(index, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_STRING: {
+        case base::Value::Type::STRING: {
           std::string tmp;
           p->GetString(index, &tmp);
           fuzzer->FuzzString(&tmp);
           p->Set(index, new base::StringValue(tmp));
           break;
         }
-        case base::Value::TYPE_BINARY: {
+        case base::Value::Type::BINARY: {
           char tmp[200];
           size_t bin_length = RandInRange(sizeof(tmp));
           fuzzer->FuzzData(tmp, bin_length);
@@ -534,21 +541,21 @@ struct FuzzTraits<base::ListValue> {
                  base::BinaryValue::CreateWithCopiedBuffer(tmp, bin_length));
           break;
         }
-        case base::Value::TYPE_DICTIONARY: {
+        case base::Value::Type::DICTIONARY: {
           base::DictionaryValue* tmp = new base::DictionaryValue();
           p->GetDictionary(index, &tmp);
           FuzzParam(tmp, fuzzer);
           p->Set(index, tmp);
           break;
         }
-        case base::Value::TYPE_LIST: {
+        case base::Value::Type::LIST: {
           base::ListValue* tmp = new base::ListValue();
           p->GetList(index, &tmp);
           FuzzParam(tmp, fuzzer);
           p->Set(index, tmp);
           break;
         }
-        case base::Value::TYPE_NULL:
+        case base::Value::Type::NONE:
         default:
           break;
       }
@@ -570,32 +577,32 @@ struct FuzzTraits<base::DictionaryValue> {
     for (size_t index = 0; index < dict_length; ++index) {
       std::string property;
       fuzzer->FuzzString(&property);
-      switch (RandInRange(8)) {
-        case base::Value::TYPE_BOOLEAN: {
+      switch (static_cast<base::Value::Type>(RandInRange(8))) {
+        case base::Value::Type::BOOLEAN: {
           bool tmp;
           fuzzer->FuzzBool(&tmp);
           p->SetWithoutPathExpansion(property, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_INTEGER: {
+        case base::Value::Type::INTEGER: {
           int tmp;
           fuzzer->FuzzInt(&tmp);
           p->SetWithoutPathExpansion(property, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_DOUBLE: {
+        case base::Value::Type::DOUBLE: {
           double tmp;
           fuzzer->FuzzDouble(&tmp);
           p->SetWithoutPathExpansion(property, new base::FundamentalValue(tmp));
           break;
         }
-        case base::Value::TYPE_STRING: {
+        case base::Value::Type::STRING: {
           std::string tmp;
           fuzzer->FuzzString(&tmp);
           p->SetWithoutPathExpansion(property, new base::StringValue(tmp));
           break;
         }
-        case base::Value::TYPE_BINARY: {
+        case base::Value::Type::BINARY: {
           char tmp[200];
           size_t bin_length = RandInRange(sizeof(tmp));
           fuzzer->FuzzData(tmp, bin_length);
@@ -604,62 +611,24 @@ struct FuzzTraits<base::DictionaryValue> {
               base::BinaryValue::CreateWithCopiedBuffer(tmp, bin_length));
           break;
         }
-        case base::Value::TYPE_DICTIONARY: {
+        case base::Value::Type::DICTIONARY: {
           base::DictionaryValue* tmp = new base::DictionaryValue();
           FuzzParam(tmp, fuzzer);
           p->SetWithoutPathExpansion(property, tmp);
           break;
         }
-        case base::Value::TYPE_LIST: {
+        case base::Value::Type::LIST: {
           base::ListValue* tmp = new base::ListValue();
           FuzzParam(tmp, fuzzer);
           p->SetWithoutPathExpansion(property, tmp);
           break;
         }
-        case base::Value::TYPE_NULL:
+        case base::Value::Type::NONE:
         default:
           break;
       }
     }
     --g_depth;
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<blink::WebGamepad> {
-  static bool Fuzz(blink::WebGamepad* p, Fuzzer* fuzzer) {
-    if (!FuzzParam(&p->connected, fuzzer))
-      return false;
-    if (!FuzzParam(&p->timestamp, fuzzer))
-      return false;
-    unsigned idLength = static_cast<unsigned>(
-        RandInRange(blink::WebGamepad::idLengthCap + 1));
-    if (!FuzzParamArray(&p->id[0], idLength, fuzzer))
-      return false;
-    p->axesLength = static_cast<unsigned>(
-        RandInRange(blink::WebGamepad::axesLengthCap + 1));
-    if (!FuzzParamArray(&p->axes[0], p->axesLength, fuzzer))
-      return false;
-    p->buttonsLength = static_cast<unsigned>(
-        RandInRange(blink::WebGamepad::buttonsLengthCap + 1));
-    if (!FuzzParamArray(&p->buttons[0], p->buttonsLength, fuzzer))
-      return false;
-    unsigned mappingsLength = static_cast<unsigned>(
-      RandInRange(blink::WebGamepad::mappingLengthCap + 1));
-    if (!FuzzParamArray(&p->mapping[0], mappingsLength, fuzzer))
-      return false;
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<blink::WebGamepadButton> {
-  static bool Fuzz(blink::WebGamepadButton* p, Fuzzer* fuzzer) {
-    if (!FuzzParam(&p->pressed, fuzzer))
-      return false;
-    if (!FuzzParam(&p->value, fuzzer))
-      return false;
     return true;
   }
 };
@@ -674,16 +643,11 @@ struct FuzzTraits<cc::CompositorFrame> {
     if (!FuzzParam(&p->metadata, fuzzer))
       return false;
 
-    switch (RandInRange(3)) {
+    switch (RandInRange(2)) {
       case 0: {
-        p->delegated_frame_data.reset(new cc::DelegatedFrameData());
-        if (!FuzzParam(p->delegated_frame_data.get(), fuzzer))
+        if (!FuzzParam(&p->resource_list, fuzzer))
           return false;
-        return true;
-      }
-      case 1: {
-        p->gl_frame_data.reset(new cc::GLFrameData());
-        if (!FuzzParam(p->gl_frame_data.get(), fuzzer))
+        if (!FuzzParam(&p->render_pass_list, fuzzer))
           return false;
         return true;
       }
@@ -691,33 +655,6 @@ struct FuzzTraits<cc::CompositorFrame> {
         // Fuzz nothing to handle the no frame case.
         return true;
     }
-  }
-};
-
-template <>
-struct FuzzTraits<cc::CompositorFrameAck> {
-  static bool Fuzz(cc::CompositorFrameAck* p, Fuzzer* fuzzer) {
-    if (!FuzzParam(&p->resources, fuzzer))
-      return false;
-
-    if (!p->gl_frame_data)
-      p->gl_frame_data.reset(new cc::GLFrameData);
-    if (!FuzzParam(p->gl_frame_data.get(), fuzzer))
-      return false;
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<cc::DelegatedFrameData> {
-  static bool Fuzz(cc::DelegatedFrameData* p, Fuzzer* fuzzer) {
-    if (!FuzzParam(&p->device_scale_factor, fuzzer))
-      return false;
-    if (!FuzzParam(&p->resource_list, fuzzer))
-      return false;
-    if (!FuzzParam(&p->render_pass_list, fuzzer))
-      return false;
-    return true;
   }
 };
 
@@ -772,142 +709,11 @@ struct FuzzTraits<cc::RenderPassList> {
 
     size_t count = RandElementCount();
     for (size_t i = 0; i < count; ++i) {
-      scoped_ptr<cc::RenderPass> render_pass = cc::RenderPass::Create();
+      std::unique_ptr<cc::RenderPass> render_pass = cc::RenderPass::Create();
       if (!FuzzParam(render_pass.get(), fuzzer))
         return false;
       p->push_back(std::move(render_pass));
     }
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<content::IndexedDBKey> {
-  static bool Fuzz(content::IndexedDBKey* p, Fuzzer* fuzzer) {
-    // TODO(mbarbella): Support mutation.
-    if (!fuzzer->ShouldGenerate())
-      return true;
-
-    ++g_depth;
-    blink::WebIDBKeyType web_type =
-        static_cast<blink::WebIDBKeyType>(RandInRange(7));
-    switch (web_type) {
-      case blink::WebIDBKeyTypeArray: {
-        size_t length = g_depth > 3 ? 0 : RandInRange(4);
-        std::vector<content::IndexedDBKey> array;
-        array.resize(length);
-        for (size_t i = 0; i < length; ++i) {
-            if (!FuzzParam(&array[i], fuzzer)) {
-              --g_depth;
-              return false;
-            }
-        }
-        *p = content::IndexedDBKey(array);
-        return true;
-      }
-      case blink::WebIDBKeyTypeBinary: {
-        std::string binary;
-        if (!FuzzParam(&binary, fuzzer)) {
-            --g_depth;
-            return false;
-        }
-        *p = content::IndexedDBKey(binary);
-        return true;
-      }
-      case blink::WebIDBKeyTypeString: {
-        base::string16 string;
-        if (!FuzzParam(&string, fuzzer))
-          return false;
-        *p = content::IndexedDBKey(string);
-        return true;
-      }
-      case blink::WebIDBKeyTypeDate:
-      case blink::WebIDBKeyTypeNumber: {
-        double number;
-        if (!FuzzParam(&number, fuzzer)) {
-            --g_depth;
-            return false;
-        }
-        *p = content::IndexedDBKey(number, web_type);
-        return true;
-      }
-      case blink::WebIDBKeyTypeInvalid:
-      case blink::WebIDBKeyTypeNull: {
-        *p = content::IndexedDBKey(web_type);
-        return true;
-      }
-      default: {
-          NOTREACHED();
-          --g_depth;
-          return false;
-      }
-    }
-  }
-};
-
-template <>
-struct FuzzTraits<content::IndexedDBKeyRange> {
-  static bool Fuzz(content::IndexedDBKeyRange* p, Fuzzer* fuzzer) {
-    content::IndexedDBKey lower = p->lower();
-    content::IndexedDBKey upper = p->upper();
-    bool lower_open = p->lower_open();
-    bool upper_open = p->upper_open();
-    if (!FuzzParam(&lower, fuzzer))
-      return false;
-    if (!FuzzParam(&upper, fuzzer))
-      return false;
-    if (!FuzzParam(&lower_open, fuzzer))
-      return false;
-    if (!FuzzParam(&upper_open, fuzzer))
-      return false;
-    *p = content::IndexedDBKeyRange(lower, upper, lower_open, upper_open);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<content::IndexedDBKeyPath> {
-  static bool Fuzz(content::IndexedDBKeyPath* p, Fuzzer* fuzzer) {
-    // TODO(mbarbella): Support mutation.
-    if (!fuzzer->ShouldGenerate())
-      return true;
-
-    switch (RandInRange(3)) {
-      case 0: {
-        std::vector<base::string16> array;
-        if (!FuzzParam(&array, fuzzer))
-          return false;
-        *p = content::IndexedDBKeyPath(array);
-        break;
-      }
-      case 1: {
-        base::string16 string;
-        if (!FuzzParam(&string, fuzzer))
-          return false;
-        *p = content::IndexedDBKeyPath(string);
-        break;
-      }
-      case 2: {
-        *p = content::IndexedDBKeyPath();
-        break;
-      }
-    }
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<content::NPIdentifier_Param> {
-  static bool Fuzz(content::NPIdentifier_Param* p, Fuzzer* fuzzer) {
-    // TODO(mbarbella): This should actually do something.
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<content::NPVariant_Param> {
-  static bool Fuzz(content::NPVariant_Param* p, Fuzzer* fuzzer) {
-    // TODO(mbarbella): This should actually do something.
     return true;
   }
 };
@@ -931,7 +737,7 @@ struct FuzzTraits<content::SyntheticGesturePacket> {
     if (!fuzzer->ShouldGenerate())
       return true;
 
-    scoped_ptr<content::SyntheticGestureParams> gesture_params;
+    std::unique_ptr<content::SyntheticGestureParams> gesture_params;
     switch (RandInRange(
         content::SyntheticGestureParams::SYNTHETIC_GESTURE_TYPE_MAX + 1)) {
       case content::SyntheticGestureParams::GestureType::
@@ -981,6 +787,17 @@ struct FuzzTraits<content::SyntheticGesturePacket> {
           return false;
         if (!FuzzParam(&params->duration_ms, fuzzer))
           return false;
+        gesture_params.reset(params);
+        break;
+      }
+      case content::SyntheticGestureParams::GestureType::POINTER_ACTION_LIST: {
+        std::vector<content::SyntheticPointerActionListParams::ParamList>
+            param_list;
+        if (!FuzzParam(&param_list, fuzzer))
+          return false;
+        content::SyntheticPointerActionListParams* params =
+            new content::SyntheticPointerActionListParams();
+        params->params = param_list;
         gesture_params.reset(params);
         break;
       }
@@ -1193,6 +1010,18 @@ struct FuzzTraits<gfx::Vector2dF> {
   }
 };
 
+template <typename TypeMarker, typename WrappedType, WrappedType kInvalidValue>
+struct FuzzTraits<gpu::IdType<TypeMarker, WrappedType, kInvalidValue>> {
+  using param_type = gpu::IdType<TypeMarker, WrappedType, kInvalidValue>;
+  static bool Fuzz(param_type* id, Fuzzer* fuzzer) {
+    WrappedType raw_value = id->GetUnsafeValue();
+    if (!FuzzParam(&raw_value, fuzzer))
+      return false;
+    *id = param_type::FromUnsafeValue(raw_value);
+    return true;
+  }
+};
+
 template <>
 struct FuzzTraits<gpu::Mailbox> {
   static bool Fuzz(gpu::Mailbox* p, Fuzzer* fuzzer) {
@@ -1208,7 +1037,7 @@ struct FuzzTraits<gpu::SyncToken> {
     gpu::CommandBufferNamespace namespace_id =
         gpu::CommandBufferNamespace::INVALID;
     int32_t extra_data_field = 0;
-    uint64_t command_buffer_id = 0;
+    gpu::CommandBufferId command_buffer_id;
     uint64_t release_count = 0;
 
     if (!FuzzParam(&verified_flush, fuzzer))
@@ -1238,17 +1067,6 @@ struct FuzzTraits<gpu::MailboxHolder> {
     if (!FuzzParam(&p->sync_token, fuzzer))
       return false;
     if (!FuzzParam(&p->texture_target, fuzzer))
-      return false;
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<gpu::ValueState> {
-  static bool Fuzz(gpu::ValueState* p, Fuzzer* fuzzer) {
-    if (!FuzzParamArray(&p->float_value[0], 4, fuzzer))
-      return false;
-    if (!FuzzParamArray(&p->int_value[0], 4, fuzzer))
       return false;
     return true;
   }
@@ -1327,6 +1145,9 @@ struct FuzzTraits<IPC::Message> {
   }
 };
 
+#if !defined(OS_WIN)
+// PlatformfileForTransit is just SharedMemoryHandle on Windows, which already
+// has a trait, see ipc/ipc_platform_file.h
 template <>
 struct FuzzTraits<IPC::PlatformFileForTransit> {
   static bool Fuzz(IPC::PlatformFileForTransit* p, Fuzzer* fuzzer) {
@@ -1335,6 +1156,7 @@ struct FuzzTraits<IPC::PlatformFileForTransit> {
     return true;
   }
 };
+#endif
 
 template <>
 struct FuzzTraits<IPC::ChannelHandle> {
@@ -1343,16 +1165,7 @@ struct FuzzTraits<IPC::ChannelHandle> {
     if (!fuzzer->ShouldGenerate())
       return true;
 
-    // TODO(inferno): Add way to generate real channel handles.
-#if defined(OS_WIN)
-    HANDLE fake_handle = (HANDLE)(RandU64());
-    p->pipe = IPC::ChannelHandle::PipeHandle(fake_handle);
-    return true;
-#elif defined(OS_POSIX)
-    return
-      FuzzParam(&p->name, fuzzer) &&
-      FuzzParam(&p->socket, fuzzer);
-#endif
+    return FuzzParam(&p->mojo_handle, fuzzer);
   }
 };
 
@@ -1400,6 +1213,20 @@ struct FuzzTraits<media::AudioParameters> {
     params.set_channels_for_discrete(channels);
     params.set_effects(effects);
     *p = params;
+    return true;
+  }
+};
+
+template <>
+struct FuzzTraits<media::cast::RtpTimeTicks> {
+  static bool Fuzz(media::cast::RtpTimeTicks* p, Fuzzer* fuzzer) {
+    base::TimeDelta delta;
+    int base;
+    if (!FuzzParam(&delta, fuzzer))
+      return false;
+    if (!FuzzParam(&base, fuzzer))
+      return false;
+    *p = media::cast::RtpTimeTicks::FromTimeDelta(delta, base);
     return true;
   }
 };
@@ -1454,15 +1281,27 @@ struct FuzzTraits<net::HostPortPair> {
 };
 
 template <>
+struct FuzzTraits<net::IPAddress> {
+  static bool Fuzz(net::IPAddress* p, Fuzzer* fuzzer) {
+    std::vector<uint8_t> bytes = p->bytes();
+    if (!FuzzParam(&bytes, fuzzer))
+      return false;
+    net::IPAddress ip_address(bytes);
+    *p = ip_address;
+    return true;
+  }
+};
+
+template <>
 struct FuzzTraits<net::IPEndPoint> {
   static bool Fuzz(net::IPEndPoint* p, Fuzzer* fuzzer) {
-    net::IPAddressNumber address = p->address();
+    net::IPAddress ip_address = p->address();
     int port = p->port();
-    if (!FuzzParam(&address, fuzzer))
+    if (!FuzzParam(&ip_address, fuzzer))
       return false;
     if (!FuzzParam(&port, fuzzer))
       return false;
-    net::IPEndPoint ip_endpoint(address, port);
+    net::IPEndPoint ip_endpoint(ip_address, port);
     *p = ip_endpoint;
     return true;
   }
@@ -1668,9 +1507,9 @@ struct FuzzTraits<ppapi::SocketOptionData> {
 template <>
 struct FuzzTraits<printing::PdfRenderSettings> {
   static bool Fuzz(printing::PdfRenderSettings* p, Fuzzer* fuzzer) {
-    gfx::Rect area = p->area();
-    int dpi = p->dpi();
-    bool autorotate = p->autorotate();
+    gfx::Rect area = p->area;
+    int dpi = p->dpi;
+    bool autorotate = p->autorotate;
     if (!FuzzParam(&area, fuzzer))
       return false;
     if (!FuzzParam(&dpi, fuzzer))
@@ -1678,20 +1517,6 @@ struct FuzzTraits<printing::PdfRenderSettings> {
     if (!FuzzParam(&autorotate, fuzzer))
       return false;
     *p = printing::PdfRenderSettings(area, dpi, autorotate);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<remoting::ScreenResolution> {
-  static bool Fuzz(remoting::ScreenResolution* p, Fuzzer* fuzzer) {
-    webrtc::DesktopSize dimensions = p->dimensions();
-    webrtc::DesktopVector dpi = p->dpi();
-    if (!FuzzParam(&dimensions, fuzzer))
-      return false;
-    if (!FuzzParam(&dpi, fuzzer))
-      return false;
-    *p = remoting::ScreenResolution(dimensions, dpi);
     return true;
   }
 };
@@ -1784,15 +1609,9 @@ struct FuzzTraits<ui::LatencyInfo> {
     bool terminated = p->terminated();
     uint32_t input_coordinates_size = static_cast<uint32_t>(
         RandInRange(ui::LatencyInfo::kMaxInputCoordinates + 1));
-    ui::LatencyInfo::InputCoordinate
-        input_coordinates[ui::LatencyInfo::kMaxInputCoordinates];
-    uint32_t event_timestamps_size = static_cast<uint32_t>(
-        RandInRange(ui::LatencyInfo::kMaxCoalescedEventTimestamps + 1));
-    double event_timestamps[ui::LatencyInfo::kMaxCoalescedEventTimestamps];
+    gfx::PointF input_coordinates[ui::LatencyInfo::kMaxInputCoordinates];
     if (!FuzzParamArray(
         input_coordinates, input_coordinates_size, fuzzer))
-      return false;
-    if (!FuzzParamArray(event_timestamps, event_timestamps_size, fuzzer))
       return false;
     if (!FuzzParam(&trace_id, fuzzer))
       return false;
@@ -1803,23 +1622,8 @@ struct FuzzTraits<ui::LatencyInfo> {
     for (size_t i = 0; i < input_coordinates_size; i++) {
       latency.AddInputCoordinate(input_coordinates[i]);
     }
-    for (size_t i = 0; i < event_timestamps_size; i++) {
-      latency.AddCoalescedEventTimestamp(event_timestamps[i]);
-    }
     *p = latency;
 
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<ui::LatencyInfo::InputCoordinate> {
-  static bool Fuzz(
-      ui::LatencyInfo::InputCoordinate* p, Fuzzer* fuzzer) {
-    if (!FuzzParam(&p->x, fuzzer))
-      return false;
-    if (!FuzzParam(&p->y, fuzzer))
-      return false;
     return true;
   }
 };
@@ -1865,73 +1669,6 @@ struct FuzzTraits<URLPattern> {
     p->SetHost(host);
     p->SetPort(port);
     p->SetPath(path);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<webrtc::DesktopSize> {
-  static bool Fuzz(webrtc::DesktopSize* p, Fuzzer* fuzzer) {
-    int32_t width = p->width();
-    int32_t height = p->height();
-    if (!FuzzParam(&width, fuzzer))
-      return false;
-    if (!FuzzParam(&height, fuzzer))
-      return false;
-    *p = webrtc::DesktopSize(width, height);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<webrtc::DesktopVector> {
-  static bool Fuzz(webrtc::DesktopVector* p, Fuzzer* fuzzer) {
-    int32_t x = p->x();
-    int32_t y = p->y();
-    if (!FuzzParam(&x, fuzzer))
-      return false;
-    if (!FuzzParam(&y, fuzzer))
-      return false;
-    p->set(x, y);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<webrtc::DesktopRect> {
-  static bool Fuzz(webrtc::DesktopRect* p, Fuzzer* fuzzer) {
-    int32_t left = p->left();
-    int32_t top = p->top();
-    int32_t right = p->right();
-    int32_t bottom = p->bottom();
-    if (!FuzzParam(&left, fuzzer))
-      return false;
-    if (!FuzzParam(&top, fuzzer))
-      return false;
-    if (!FuzzParam(&right, fuzzer))
-      return false;
-    if (!FuzzParam(&bottom, fuzzer))
-      return false;
-    *p = webrtc::DesktopRect::MakeLTRB(left, top, right, bottom);
-    return true;
-  }
-};
-
-template <>
-struct FuzzTraits<webrtc::MouseCursor> {
-  static bool Fuzz(webrtc::MouseCursor* p, Fuzzer* fuzzer) {
-    webrtc::DesktopVector hotspot = p->hotspot();
-    if (!FuzzParam(&hotspot, fuzzer))
-      return false;
-    p->set_hotspot(hotspot);
-
-    // TODO(mbarbella): Find a way to handle the size mutation properly.
-    if (!fuzzer->ShouldGenerate())
-      return false;
-
-    // Using a small size here to avoid OOM or overflow on image allocation.
-    webrtc::DesktopSize size(RandInRange(100), RandInRange(100));
-    p->set_image(new webrtc::BasicDesktopFrame(size));
     return true;
   }
 };
@@ -2001,135 +1738,109 @@ struct FuzzTraits<webrtc::MouseCursor> {
 #include "tools/ipc_fuzzer/message_lib/all_messages.h"
 #include "tools/ipc_fuzzer/message_lib/all_message_null_macros.h"
 
-// Redefine macros to generate generating funtions
-#undef IPC_MESSAGE_DECL
-#define IPC_MESSAGE_DECL(kind, type, name, in, out, ilist, olist)       \
-  IPC_##kind##_##type##_FUZZ(name, in, out, ilist, olist)
-
-#define IPC_EMPTY_CONTROL_FUZZ(name, in, out, ilist, olist)             \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    if (msg) {                                                          \
-      return NULL;                                                      \
-    }                                                                   \
-    return new name();                                                  \
-  }
-
-#define IPC_EMPTY_ROUTED_FUZZ(name, in, out, ilist, olist)              \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    if (msg) {                                                          \
-      return NULL;                                                      \
-    }                                                                   \
-    return new name(RandInRange(MAX_FAKE_ROUTING_ID));                  \
-  }
-
-#define IPC_ASYNC_CONTROL_FUZZ(name, in, out, ilist, olist)             \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    IPC_TUPLE_IN_##in ilist p;                                          \
-    if (msg) {                                                          \
-      name::Read(static_cast<name*>(msg), &p);                          \
-    }                                                                   \
-    if (FuzzParam(&p, fuzzer)) {                                        \
-      return new name(IPC_MEMBERS_IN_##in(p));                          \
-    }                                                                   \
-    std::cerr << "Don't know how to handle " << #name << "\n";          \
-    return 0;                                                           \
-  }
-
-#define IPC_ASYNC_ROUTED_FUZZ(name, in, out, ilist, olist)              \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    IPC_TUPLE_IN_##in ilist p;                                          \
-    if (msg) {                                                          \
-      name::Read(static_cast<name*>(msg), &p);                          \
-    }                                                                   \
-    if (FuzzParam(&p, fuzzer)) {                                        \
-      return new name(RandInRange(MAX_FAKE_ROUTING_ID)                  \
-                      IPC_COMMA_##in                                    \
-                      IPC_MEMBERS_IN_##in(p));                          \
-    }                                                                   \
-    std::cerr << "Don't know how to handle " << #name << "\n";          \
-    return 0;                                                           \
-  }
-
-#define IPC_SYNC_CONTROL_FUZZ(name, in, out, ilist, olist)              \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    IPC_TUPLE_IN_##in ilist p;                                          \
-    name* real_msg = static_cast<name*>(msg);                           \
-    name* new_msg = NULL;                                               \
-    if (real_msg) {                                                     \
-      name::ReadSendParam(real_msg, &p);                                \
-    }                                                                   \
-    if (FuzzParam(&p, fuzzer)) {                                        \
-      new_msg = new name(IPC_MEMBERS_IN_##in(p)                         \
-                         IPC_COMMA_AND_##out(IPC_COMMA_##in)            \
-                         IPC_MEMBERS_OUT_##out());                      \
-    }                                                                   \
-    if (real_msg && new_msg) {                                          \
-      MessageCracker::CopyMessageID(new_msg, real_msg);                 \
-    }                                                                   \
-    else if (!new_msg) {                                                     \
-      std::cerr << "Don't know how to handle " << #name << "\n";        \
-    }                                                                   \
-    return new_msg;                                                     \
-  }
-
-#define IPC_SYNC_ROUTED_FUZZ(name, in, out, ilist, olist)               \
-  IPC::Message* fuzzer_for_##name(IPC::Message* msg, Fuzzer* fuzzer) {  \
-    IPC_TUPLE_IN_##in ilist p;                                          \
-    name* real_msg = static_cast<name*>(msg);                           \
-    name* new_msg = NULL;                                               \
-    if (real_msg) {                                                     \
-      name::ReadSendParam(real_msg, &p);                                \
-    }                                                                   \
-    if (FuzzParam(&p, fuzzer)) {                                        \
-      new_msg = new name(RandInRange(MAX_FAKE_ROUTING_ID)               \
-                         IPC_COMMA_OR_##out(IPC_COMMA_##in)             \
-                         IPC_MEMBERS_IN_##in(p)                         \
-                         IPC_COMMA_AND_##out(IPC_COMMA_##in)            \
-                         IPC_MEMBERS_OUT_##out());                      \
-    }                                                                   \
-    if (real_msg && new_msg) {                                          \
-      MessageCracker::CopyMessageID(new_msg, real_msg);                 \
-    }                                                                   \
-    else if (!new_msg) {                                                     \
-      std::cerr << "Don't know how to handle " << #name << "\n";        \
-    }                                                                   \
-    return new_msg;                                                     \
-  }
-
 #define MAX_FAKE_ROUTING_ID 15
 
-#define IPC_MEMBERS_IN_0(p)
-#define IPC_MEMBERS_IN_1(p) base::get<0>(p)
-#define IPC_MEMBERS_IN_2(p) base::get<0>(p), base::get<1>(p)
-#define IPC_MEMBERS_IN_3(p) base::get<0>(p), base::get<1>(p), base::get<2>(p)
-#define IPC_MEMBERS_IN_4(p) base::get<0>(p), base::get<1>(p), base::get<2>(p), \
-                            base::get<3>(p)
-#define IPC_MEMBERS_IN_5(p) base::get<0>(p), base::get<1>(p), base::get<2>(p), \
-                            base::get<3>(p), base::get<4>(p)
+// MessageFactory abstracts away constructing control/routed messages by
+// providing an additional random routing ID argument when necessary.
+template <typename Message, IPC::MessageKind>
+class MessageFactory;
 
-#define IPC_MEMBERS_OUT_0()
-#define IPC_MEMBERS_OUT_1() NULL
-#define IPC_MEMBERS_OUT_2() NULL, NULL
-#define IPC_MEMBERS_OUT_3() NULL, NULL, NULL
-#define IPC_MEMBERS_OUT_4() NULL, NULL, NULL, NULL
-#define IPC_MEMBERS_OUT_5() NULL, NULL, NULL, NULL, NULL
+template <typename Message>
+class MessageFactory<Message, IPC::MessageKind::CONTROL> {
+ public:
+  template <typename... Args>
+  static Message* New(const Args&... args) {
+    return new Message(args...);
+  }
+};
 
-#include "tools/ipc_fuzzer/message_lib/all_messages.h"
+template <typename Message>
+class MessageFactory<Message, IPC::MessageKind::ROUTED> {
+ public:
+  template <typename... Args>
+  static Message* New(const Args&... args) {
+    return new Message(RandInRange(MAX_FAKE_ROUTING_ID), args...);
+  }
+};
+
+template <typename Message>
+class FuzzerHelper;
+
+template <typename Meta, typename... Ins>
+class FuzzerHelper<IPC::MessageT<Meta, std::tuple<Ins...>, void>> {
+ public:
+  using Message = IPC::MessageT<Meta, std::tuple<Ins...>, void>;
+
+  static IPC::Message* Fuzz(IPC::Message* msg, Fuzzer* fuzzer) {
+    return FuzzImpl(msg, fuzzer, base::MakeIndexSequence<sizeof...(Ins)>());
+  }
+
+ private:
+  template <size_t... Ns>
+  static IPC::Message* FuzzImpl(IPC::Message* msg,
+                                Fuzzer* fuzzer,
+                                base::IndexSequence<Ns...>) {
+    typename Message::Param p;
+    if (msg) {
+      Message::Read(static_cast<Message*>(msg), &p);
+    }
+    if (FuzzParam(&p, fuzzer)) {
+      return MessageFactory<Message, Meta::kKind>::New(std::get<Ns>(p)...);
+    }
+    std::cerr << "Don't know how to handle " << Meta::kName << "\n";
+    return nullptr;
+  }
+};
+
+template <typename Meta, typename... Ins, typename... Outs>
+class FuzzerHelper<
+    IPC::MessageT<Meta, std::tuple<Ins...>, std::tuple<Outs...>>> {
+ public:
+  using Message = IPC::MessageT<Meta, std::tuple<Ins...>, std::tuple<Outs...>>;
+
+  static IPC::Message* Fuzz(IPC::Message* msg, Fuzzer* fuzzer) {
+    return FuzzImpl(msg, fuzzer, base::MakeIndexSequence<sizeof...(Ins)>());
+  }
+
+ private:
+  template <size_t... Ns>
+  static IPC::Message* FuzzImpl(IPC::Message* msg,
+                                Fuzzer* fuzzer,
+                                base::IndexSequence<Ns...>) {
+    typename Message::SendParam p;
+    Message* real_msg = static_cast<Message*>(msg);
+    Message* new_msg = nullptr;
+    if (real_msg) {
+      Message::ReadSendParam(real_msg, &p);
+    }
+    if (FuzzParam(&p, fuzzer)) {
+      new_msg = MessageFactory<Message, Meta::kKind>::New(
+          std::get<Ns>(p)..., static_cast<Outs*>(nullptr)...);
+    }
+    if (real_msg && new_msg) {
+      MessageCracker::CopyMessageID(new_msg, real_msg);
+    } else if (!new_msg) {
+      std::cerr << "Don't know how to handle " << Meta::kName << "\n";
+    }
+    return new_msg;
+  }
+};
+
 #include "tools/ipc_fuzzer/message_lib/all_message_null_macros.h"
 
 void PopulateFuzzerFunctionVector(
     FuzzerFunctionVector* function_vector) {
 #undef IPC_MESSAGE_DECL
-#define IPC_MESSAGE_DECL(kind, type, name, in, out, ilist, olist) \
-  function_vector->push_back(fuzzer_for_##name);
+#define IPC_MESSAGE_DECL(name, ...) \
+  function_vector->push_back(FuzzerHelper<name>::Fuzz);
 #include "tools/ipc_fuzzer/message_lib/all_messages.h"
 }
 
 // Redefine macros to register fuzzing functions into map.
 #include "tools/ipc_fuzzer/message_lib/all_message_null_macros.h"
 #undef IPC_MESSAGE_DECL
-#define IPC_MESSAGE_DECL(kind, type, name, in, out, ilist, olist) \
-  (*map)[static_cast<uint32_t>(name::ID)] = fuzzer_for_##name;
+#define IPC_MESSAGE_DECL(name, ...) \
+  (*map)[static_cast<uint32_t>(name::ID)] = FuzzerHelper<name>::Fuzz;
 
 void PopulateFuzzerFunctionMap(FuzzerFunctionMap* map) {
 #include "tools/ipc_fuzzer/message_lib/all_messages.h"

@@ -8,18 +8,10 @@
 
 namespace content {
 
-const char kMediaStreamSource[] = "chromeMediaSource";
-const char kMediaStreamSourceId[] = "chromeMediaSourceId";
-const char kMediaStreamSourceInfoId[] = "sourceId";
 const char kMediaStreamSourceTab[] = "tab";
 const char kMediaStreamSourceScreen[] = "screen";
 const char kMediaStreamSourceDesktop[] = "desktop";
 const char kMediaStreamSourceSystem[] = "system";
-const char kMediaStreamRenderToAssociatedSink[] =
-    "chromeRenderToAssociatedSink";
-// The prefix of this constant is 'goog' to match with other getUserMedia
-// constraints for audio.
-const char kMediaStreamAudioHotword[] = "googHotword";
 
 TrackControls::TrackControls()
     : requested(false) {}
@@ -27,13 +19,21 @@ TrackControls::TrackControls()
 TrackControls::TrackControls(bool request)
     : requested(request) {}
 
+TrackControls::TrackControls(const TrackControls& other) = default;
+
 TrackControls::~TrackControls() {}
 
 StreamControls::StreamControls()
-    : audio(false), video(false), hotword_enabled(false) {}
+    : audio(false),
+      video(false),
+      hotword_enabled(false),
+      disable_local_echo(false) {}
 
 StreamControls::StreamControls(bool request_audio, bool request_video)
-    : audio(request_audio), video(request_video), hotword_enabled(false) {}
+    : audio(request_audio),
+      video(request_video),
+      hotword_enabled(false),
+      disable_local_echo(false) {}
 
 StreamControls::~StreamControls() {}
 
@@ -46,9 +46,7 @@ StreamDeviceInfo::StreamDeviceInfo()
 StreamDeviceInfo::StreamDeviceInfo(MediaStreamType service_param,
                                    const std::string& name_param,
                                    const std::string& device_param)
-    : device(service_param, device_param, name_param),
-      session_id(kNoId) {
-}
+    : device(service_param, device_param, name_param), session_id(kNoId) {}
 
 StreamDeviceInfo::StreamDeviceInfo(MediaStreamType service_param,
                                    const std::string& name_param,
@@ -56,10 +54,13 @@ StreamDeviceInfo::StreamDeviceInfo(MediaStreamType service_param,
                                    int sample_rate,
                                    int channel_layout,
                                    int frames_per_buffer)
-    : device(service_param, device_param, name_param, sample_rate,
-             channel_layout, frames_per_buffer),
-      session_id(kNoId) {
-}
+    : device(service_param,
+             device_param,
+             name_param,
+             sample_rate,
+             channel_layout,
+             frames_per_buffer),
+      session_id(kNoId) {}
 
 // static
 bool StreamDeviceInfo::IsEqual(const StreamDeviceInfo& first,

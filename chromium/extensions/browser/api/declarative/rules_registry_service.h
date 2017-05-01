@@ -25,7 +25,6 @@ class BrowserContext;
 namespace extensions {
 class ContentRulesRegistry;
 class ExtensionRegistry;
-class RulesRegistryStorageDelegate;
 }
 
 namespace extensions {
@@ -133,7 +132,7 @@ class RulesRegistryService : public BrowserContextKeyedAPI,
   RulesRegistryMap rule_registries_;
 
   // We own the parts of the registries which need to run on the UI thread.
-  std::vector<scoped_ptr<RulesCacheDelegate>> cache_delegates_;
+  std::vector<std::unique_ptr<RulesCacheDelegate>> cache_delegates_;
 
   // Weak pointer into rule_registries_ to make it easier to handle content rule
   // conditions.

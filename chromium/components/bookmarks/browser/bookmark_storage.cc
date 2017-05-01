@@ -12,13 +12,14 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/bookmarks/browser/bookmark_codec.h"
-#include "components/bookmarks/browser/bookmark_index.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/browser/titled_url_index.h"
 #include "components/bookmarks/common/bookmark_constants.h"
 
 using base::TimeTicks;
@@ -52,13 +53,16 @@ void AddBookmarksToIndex(BookmarkLoadDetails* details,
 
 void LoadCallback(const base::FilePath& path,
                   const base::WeakPtr<BookmarkStorage>& storage,
-                  scoped_ptr<BookmarkLoadDetails> details,
+                  std::unique_ptr<BookmarkLoadDetails> details,
                   base::SequencedTaskRunner* task_runner) {
   bool load_index = false;
   bool bookmark_file_exists = base::PathExists(path);
   if (bookmark_file_exists) {
-    JSONFileValueDeserializer deserializer(path);
-    scoped_ptr<base::Value> root = deserializer.Deserialize(NULL, NULL);
+    // Titles may end up containing invalid utf and we shouldn't throw away
+    // all bookmarks if some titles have invalid utf.
+    JSONFileValueDeserializer deserializer(
+        path, base::JSON_REPLACE_INVALID_CHARACTERS);
+    std::unique_ptr<base::Value> root = deserializer.Deserialize(NULL, NULL);
 
     if (root.get()) {
       // Building the index can take a while, so we do it on the background
@@ -92,7 +96,7 @@ void LoadCallback(const base::FilePath& path,
   for (size_t i = 0; i < extra_nodes.size(); ++i) {
     if (!extra_nodes[i]->empty()) {
       load_index = true;
-      break;  
+      break;
     }
   }
 
@@ -104,7 +108,7 @@ void LoadCallback(const base::FilePath& path,
     if (details->trash_folder_node())
       AddBookmarksToIndex(details.get(), details->trash_folder_node());
     for (size_t i = 0; i < extra_nodes.size(); ++i)
-      AddBookmarksToIndex(details.get(), extra_nodes[i]);
+      AddBookmarksToIndex(details.get(), extra_nodes[i].get());
     UMA_HISTOGRAM_TIMES("Bookmarks.CreateBookmarkIndexTime",
                         TimeTicks::Now() - start_time);
   }
@@ -124,7 +128,7 @@ BookmarkLoadDetails::BookmarkLoadDetails(
     BookmarkPermanentNode* mobile_folder_node,
     BookmarkPermanentNode* trash_folder_node,
     const LoadExtraCallback& load_extra_callback,
-    BookmarkIndex* index,
+    TitledUrlIndex* index,
     int64_t max_id)
     : bb_node_(bb_node),
       other_folder_node_(other_folder_node),
@@ -165,14 +169,12 @@ BookmarkStorage::~BookmarkStorage() {
 }
 
 void BookmarkStorage::LoadBookmarks(
-    scoped_ptr<BookmarkLoadDetails> details,
+    std::unique_ptr<BookmarkLoadDetails> details,
     const scoped_refptr<base::SequencedTaskRunner>& task_runner) {
-  sequenced_task_runner_->PostTask(FROM_HERE,
-                                   base::Bind(&LoadCallback,
-                                              writer_.path(),
-                                              weak_factory_.GetWeakPtr(),
-                                              base::Passed(&details),
-                                              task_runner));
+  sequenced_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&LoadCallback, writer_.path(), weak_factory_.GetWeakPtr(),
+                 base::Passed(&details), base::RetainedRef(task_runner)));
 }
 
 void BookmarkStorage::ScheduleSave() {
@@ -209,13 +211,14 @@ void BookmarkStorage::BookmarkModelDeleted() {
 
 bool BookmarkStorage::SerializeData(std::string* output) {
   BookmarkCodec codec;
-  scoped_ptr<base::Value> value(codec.Encode(model_));
+  std::unique_ptr<base::Value> value(codec.Encode(model_));
   JSONStringValueSerializer serializer(output);
   serializer.set_pretty_print(true);
   return serializer.Serialize(*(value.get()));
 }
 
-void BookmarkStorage::OnLoadFinished(scoped_ptr<BookmarkLoadDetails> details) {
+void BookmarkStorage::OnLoadFinished(
+    std::unique_ptr<BookmarkLoadDetails> details) {
   if (!model_)
     return;
 
@@ -230,7 +233,7 @@ bool BookmarkStorage::SaveNow() {
     return false;
   }
 
-  scoped_ptr<std::string> data(new std::string);
+  std::unique_ptr<std::string> data(new std::string);
   if (!SerializeData(data.get()))
     return false;
   writer_.WriteNow(std::move(data));

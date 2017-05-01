@@ -14,7 +14,7 @@
 
 namespace net {
 class AddressList;
-class BoundNetLog;
+class NetLogWithSource;
 
 // A HostResolver implementation that converts requests to mojo types and
 // forwards them to a mojo Impl interface.
@@ -23,8 +23,9 @@ class HostResolverMojo : public HostResolver {
   class Impl {
    public:
     virtual ~Impl() = default;
-    virtual void ResolveDns(interfaces::HostResolverRequestInfoPtr,
-                            interfaces::HostResolverRequestClientPtr) = 0;
+    virtual void ResolveDns(
+        std::unique_ptr<HostResolver::RequestInfo> request_info,
+        interfaces::HostResolverRequestClientPtr) = 0;
   };
 
   // |impl| must outlive |this|.
@@ -32,20 +33,21 @@ class HostResolverMojo : public HostResolver {
   ~HostResolverMojo() override;
 
   // HostResolver overrides.
+  // Note: |Resolve()| currently ignores |priority|.
   int Resolve(const RequestInfo& info,
               RequestPriority priority,
               AddressList* addresses,
               const CompletionCallback& callback,
-              RequestHandle* request_handle,
-              const BoundNetLog& source_net_log) override;
+              std::unique_ptr<Request>* request,
+              const NetLogWithSource& source_net_log) override;
   int ResolveFromCache(const RequestInfo& info,
                        AddressList* addresses,
-                       const BoundNetLog& source_net_log) override;
-  void CancelRequest(RequestHandle req) override;
+                       const NetLogWithSource& source_net_log) override;
   HostCache* GetHostCache() override;
 
  private:
   class Job;
+  class RequestImpl;
 
   int ResolveFromCacheInternal(const RequestInfo& info,
                                const HostCache::Key& key,
@@ -53,7 +55,7 @@ class HostResolverMojo : public HostResolver {
 
   Impl* const impl_;
 
-  scoped_ptr<HostCache> host_cache_;
+  std::unique_ptr<HostCache> host_cache_;
   base::WeakPtrFactory<HostCache> host_cache_weak_factory_;
 
   base::ThreadChecker thread_checker_;

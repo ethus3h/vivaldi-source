@@ -12,16 +12,15 @@
 
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "mojo/message_pump/message_pump_mojo.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "mojo/public/c/system/macros.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "mojo/public/cpp/bindings/connector.h"
+#include "mojo/public/cpp/bindings/filter_chain.h"
 #include "mojo/public/cpp/bindings/interface_ptr.h"
-#include "mojo/public/cpp/bindings/lib/connector.h"
-#include "mojo/public/cpp/bindings/lib/filter_chain.h"
-#include "mojo/public/cpp/bindings/lib/message_header_validator.h"
-#include "mojo/public/cpp/bindings/lib/router.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
 #include "mojo/public/cpp/bindings/message.h"
+#include "mojo/public/cpp/bindings/message_header_validator.h"
 #include "mojo/public/cpp/bindings/tests/validation_test_input_parser.h"
 #include "mojo/public/cpp/system/core.h"
 #include "mojo/public/cpp/test_support/test_support.h"
@@ -154,7 +153,7 @@ bool ReadTestCase(const std::string& test,
   message->Initialize(static_cast<uint32_t>(data.size()),
                       false /* zero_initialized */);
   if (!data.empty())
-    memcpy(message->buffer()->Allocate(data.size()), &data[0], data.size());
+    memcpy(message->mutable_data(), &data[0], data.size());
   message->mutable_handles()->resize(num_handles);
 
   return true;
@@ -165,6 +164,7 @@ void RunValidationTests(const std::string& prefix,
   std::vector<std::string> names =
       EnumerateSourceRootRelativeDirectory(GetPath("", ""));
   std::vector<std::string> tests = GetMatchingTests(names, prefix);
+  ASSERT_FALSE(tests.empty());
 
   for (size_t i = 0; i < tests.size(); ++i) {
     Message message;
@@ -175,7 +175,7 @@ void RunValidationTests(const std::string& prefix,
     base::RunLoop run_loop;
     mojo::internal::ValidationErrorObserverForTesting observer(
         run_loop.QuitClosure());
-    mojo_ignore_result(test_message_receiver->Accept(&message));
+    ignore_result(test_message_receiver->Accept(&message));
     if (expected != "PASS")  // Observer only gets called on errors.
       run_loop.Run();
     if (observer.last_error() == mojo::internal::VALIDATION_ERROR_NONE)
@@ -194,13 +194,17 @@ class DummyMessageReceiver : public MessageReceiver {
   }
 };
 
-using ValidationTest = testing::Test;
+class ValidationTest : public testing::Test {
+ public:
+  ValidationTest() {}
+
+ protected:
+  base::MessageLoop loop_;
+};
 
 class ValidationIntegrationTest : public ValidationTest {
  public:
-  ValidationIntegrationTest()
-      : loop_(common::MessagePumpMojo::Create()),
-        test_message_receiver_(nullptr) {}
+  ValidationIntegrationTest() : test_message_receiver_(nullptr) {}
 
   ~ValidationIntegrationTest() override {}
 
@@ -234,7 +238,8 @@ class ValidationIntegrationTest : public ValidationTest {
                         ScopedMessagePipeHandle handle)
         : owner_(owner),
           connector_(std::move(handle),
-                     mojo::internal::Connector::SINGLE_THREADED_SEND) {
+                     mojo::Connector::SINGLE_THREADED_SEND,
+                     base::ThreadTaskRunnerHandle::Get()) {
       connector_.set_enforce_errors_from_incoming_receiver(false);
     }
     ~TestMessageReceiver() override {}
@@ -245,12 +250,11 @@ class ValidationIntegrationTest : public ValidationTest {
 
    public:
     ValidationIntegrationTest* owner_;
-    mojo::internal::Connector connector_;
+    mojo::Connector connector_;
   };
 
-  void PumpMessages() { loop_.RunUntilIdle(); }
+  void PumpMessages() { base::RunLoop().RunUntilIdle(); }
 
-  base::MessageLoop loop_;
   TestMessageReceiver* test_message_receiver_;
   ScopedMessagePipeHandle testee_endpoint_;
 };
@@ -261,7 +265,7 @@ class IntegrationTestInterfaceImpl : public IntegrationTestInterface {
 
   void Method0(BasicStructPtr param0,
                const Method0Callback& callback) override {
-    callback.Run(Array<uint8_t>::New(0u));
+    callback.Run(std::vector<uint8_t>());
   }
 };
 
@@ -371,20 +375,20 @@ TEST_F(ValidationTest, InputParser) {
 
 TEST_F(ValidationTest, Conformance) {
   DummyMessageReceiver dummy_receiver;
-  mojo::internal::FilterChain validators(&dummy_receiver);
-  validators.Append<mojo::internal::MessageHeaderValidator>();
+  mojo::FilterChain validators(&dummy_receiver);
+  validators.Append<mojo::MessageHeaderValidator>();
   validators.Append<ConformanceTestInterface::RequestValidator_>();
 
-  RunValidationTests("conformance_", validators.GetHead());
+  RunValidationTests("conformance_", &validators);
 }
 
 TEST_F(ValidationTest, AssociatedConformace) {
   DummyMessageReceiver dummy_receiver;
-  mojo::internal::FilterChain validators(&dummy_receiver);
-  validators.Append<mojo::internal::MessageHeaderValidator>();
+  mojo::FilterChain validators(&dummy_receiver);
+  validators.Append<mojo::MessageHeaderValidator>();
   validators.Append<AssociatedConformanceTestInterface::RequestValidator_>();
 
-  RunValidationTests("associated_conformance_", validators.GetHead());
+  RunValidationTests("associated_conformance_", &validators);
 }
 
 // This test is similar to Conformance test but its goal is specifically
@@ -392,31 +396,31 @@ TEST_F(ValidationTest, AssociatedConformace) {
 // detection of off-by-one errors in method ordinals.
 TEST_F(ValidationTest, BoundsCheck) {
   DummyMessageReceiver dummy_receiver;
-  mojo::internal::FilterChain validators(&dummy_receiver);
-  validators.Append<mojo::internal::MessageHeaderValidator>();
+  mojo::FilterChain validators(&dummy_receiver);
+  validators.Append<mojo::MessageHeaderValidator>();
   validators.Append<BoundsCheckTestInterface::RequestValidator_>();
 
-  RunValidationTests("boundscheck_", validators.GetHead());
+  RunValidationTests("boundscheck_", &validators);
 }
 
 // This test is similar to the Conformance test but for responses.
 TEST_F(ValidationTest, ResponseConformance) {
   DummyMessageReceiver dummy_receiver;
-  mojo::internal::FilterChain validators(&dummy_receiver);
-  validators.Append<mojo::internal::MessageHeaderValidator>();
+  mojo::FilterChain validators(&dummy_receiver);
+  validators.Append<mojo::MessageHeaderValidator>();
   validators.Append<ConformanceTestInterface::ResponseValidator_>();
 
-  RunValidationTests("resp_conformance_", validators.GetHead());
+  RunValidationTests("resp_conformance_", &validators);
 }
 
 // This test is similar to the BoundsCheck test but for responses.
 TEST_F(ValidationTest, ResponseBoundsCheck) {
   DummyMessageReceiver dummy_receiver;
-  mojo::internal::FilterChain validators(&dummy_receiver);
-  validators.Append<mojo::internal::MessageHeaderValidator>();
+  mojo::FilterChain validators(&dummy_receiver);
+  validators.Append<mojo::MessageHeaderValidator>();
   validators.Append<BoundsCheckTestInterface::ResponseValidator_>();
 
-  RunValidationTests("resp_boundscheck_", validators.GetHead());
+  RunValidationTests("resp_boundscheck_", &validators);
 }
 
 // Test that InterfacePtr<X> applies the correct validators and they don't
@@ -462,37 +466,31 @@ TEST_F(ValidationTest, ValidateEncodedPointer) {
   EXPECT_FALSE(mojo::internal::ValidateEncodedPointer(&offset));
 }
 
-// Tests the IsValidValue() function generated for BasicEnum.
+// Tests the IsKnownEnumValue() function generated for BasicEnum.
 TEST(EnumValueValidationTest, BasicEnum) {
   // BasicEnum can have -3,0,1,10 as possible integral values.
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(-4)));
-  EXPECT_TRUE(BasicEnum_IsValidValue(static_cast<BasicEnum>(-3)));
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(-2)));
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(-1)));
-  EXPECT_TRUE(BasicEnum_IsValidValue(static_cast<BasicEnum>(0)));
-  EXPECT_TRUE(BasicEnum_IsValidValue(static_cast<BasicEnum>(1)));
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(2)));
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(9)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(-4)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<BasicEnum>(-3)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(-2)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(-1)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<BasicEnum>(0)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<BasicEnum>(1)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(2)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(9)));
   // In the mojom, we represent this value as hex (0xa).
-  EXPECT_TRUE(BasicEnum_IsValidValue(static_cast<BasicEnum>(10)));
-  EXPECT_FALSE(BasicEnum_IsValidValue(static_cast<BasicEnum>(11)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<BasicEnum>(10)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<BasicEnum>(11)));
 }
 
-// Tests the IsValidValue() method generated for StructWithEnum.
+// Tests the IsKnownEnumValue() method generated for StructWithEnum.
 TEST(EnumValueValidationTest, EnumWithin) {
   // StructWithEnum::EnumWithin can have [0,4] as possible integral values.
-  EXPECT_FALSE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(-1)));
-  EXPECT_TRUE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(0)));
-  EXPECT_TRUE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(1)));
-  EXPECT_TRUE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(2)));
-  EXPECT_TRUE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(3)));
-  EXPECT_FALSE(StructWithEnum::EnumWithin_IsValidValue(
-      static_cast<StructWithEnum::EnumWithin>(4)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(-1)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(0)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(1)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(2)));
+  EXPECT_TRUE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(3)));
+  EXPECT_FALSE(IsKnownEnumValue(static_cast<StructWithEnum::EnumWithin>(4)));
 }
 
 }  // namespace

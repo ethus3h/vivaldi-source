@@ -20,7 +20,7 @@ var RestoreOnStartupEnum = {
  * Test Polymer On Startup Settings elements.
  * @constructor
  * @extends {SettingsPageBrowserTest}
-*/
+ */
 function OnStartupSettingsBrowserTest() {}
 
 OnStartupSettingsBrowserTest.prototype = {
@@ -35,6 +35,12 @@ OnStartupSettingsBrowserTest.prototype = {
     var result = module.$$(selector);
     assertTrue(!!result);
     return result;
+  },
+
+  /** @override */
+  preLoad: function() {
+    SettingsPageBrowserTest.prototype.preLoad.call(this);
+    settingsHidePagesByDefaultForTest = true;
   },
 };
 
@@ -52,20 +58,13 @@ TEST_F('OnStartupSettingsBrowserTest', 'uiTests', function() {
   };
 
   suite('OnStartupHandler', function() {
-    var fakePrefs = [{
-      key: 'session.restore_on_startup',
-      type: chrome.settingsPrivate.PrefType.NUMBER,
-      value: 1234,
-    }];
-
     suiteSetup(function() {
-      settingsPrefs = document.querySelector('cr-settings').$$(
+      self.getPage('basic').set('pageVisibility.onStartup', true);
+      Polymer.dom.flush();
+
+      settingsPrefs = document.querySelector('settings-ui').$$(
           'settings-prefs');
       assertTrue(!!settingsPrefs);
-      CrSettingsPrefs.resetForTesting();
-      settingsPrefs.resetForTesting();
-      var fakeApi = new settings.FakeSettingsPrivate(fakePrefs);
-      settingsPrefs.initializeForTesting(fakeApi);
       return CrSettingsPrefs.initialized;
     });
 

@@ -7,11 +7,13 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/android/jni_android.h"
 #include "base/macros.h"
 #include "base/threading/thread_checker.h"
 #include "media/audio/audio_io.h"
-#include "media/audio/audio_parameters.h"
+#include "media/base/audio_parameters.h"
 
 namespace media {
 
@@ -23,9 +25,6 @@ class AudioManagerAndroid;
 // AudioRecordInput.java. This class is created and lives on the Audio Manager
 // thread but recorded audio buffers are delivered on a thread managed by
 // the Java class.
-//
-// The Java class makes use of AudioEffect features which are first available
-// in Jelly Bean. It should not be instantiated running against earlier SDKs.
 class MEDIA_EXPORT AudioRecordInputStream : public AudioInputStream {
  public:
   AudioRecordInputStream(AudioManagerAndroid* manager,
@@ -75,7 +74,7 @@ class MEDIA_EXPORT AudioRecordInputStream : public AudioInputStream {
   // Owned by j_audio_record_.
   uint8_t* direct_buffer_address_;
 
-  scoped_ptr<media::AudioBus> audio_bus_;
+  std::unique_ptr<media::AudioBus> audio_bus_;
   int bytes_per_sample_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioRecordInputStream);

@@ -7,14 +7,16 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "base/version.h"
 #include "build/build_config.h"
+#include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/util_constants.h"
 #include "components/metrics/client_info.h"
 
@@ -26,9 +28,11 @@ class ChannelInfo;
 class InstallationState;
 }
 
-// This class provides accessors to the Google Update 'ClientState' information
-// that recorded when the user downloads the chrome installer. It is
-// google_update.exe responsibility to write the initial values.
+// This class provides accessors to the Google Update group policies and
+// 'ClientState' information. The group policies are set using specific
+// administrative templates. The 'ClientState' information is recorded when the
+// user downloads the Chrome installer. It is google_update.exe responsibility
+// to write the initial values.
 class GoogleUpdateSettings {
  public:
   // Update policy constants defined by Google Update; do not change these.
@@ -44,6 +48,7 @@ class GoogleUpdateSettings {
   static const wchar_t kUpdatePolicyValue[];
   static const wchar_t kUpdateOverrideValuePrefix[];
   static const wchar_t kCheckPeriodOverrideMinutes[];
+  static const wchar_t kDownloadPreferencePolicyValue[];
   static const int kCheckPeriodOverrideMinutesDefault;
   static const int kCheckPeriodOverrideMinutesMax;
   static const GoogleUpdateSettings::UpdatePolicy kDefaultUpdatePolicy;
@@ -85,17 +90,30 @@ class GoogleUpdateSettings {
   // used to download the chrome installer.
   static bool GetCollectStatsConsentAtLevel(bool system_install);
 
+  // Returns the consent value for an app or TRISTATE_NONE if none is found.
+  static google_update::Tristate GetCollectStatsConsentForApp(
+      bool system_install,
+      const AppRegistrationData& reg_data);
+
   // Sets the user consent to send UMA and crash dumps to Google. Returns
   // false if the setting could not be recorded.
   static bool SetCollectStatsConsentAtLevel(bool system_install,
                                             bool consented);
+
+  // Returns the default (original) state of the "send usage stats" checkbox
+  // shown to the user when they downloaded Chrome. The value is returned via
+  // the out parameter |stats_consent_default|. This function returns true if
+  // the default state is known and false otherwise. If false the out param
+  // will not be set.
+  static bool GetCollectStatsConsentDefault(bool* stats_consent_default)
+      WARN_UNUSED_RESULT;
 #endif
 
   // Returns the metrics client info backed up in the registry. NULL
   // if-and-only-if the client_id couldn't be retrieved (failure to retrieve
   // other fields only makes them keep their default value). A non-null return
   // will NEVER contain an empty client_id field.
-  static scoped_ptr<metrics::ClientInfo> LoadMetricsClientInfo();
+  static std::unique_ptr<metrics::ClientInfo> LoadMetricsClientInfo();
 
   // Stores a backup of the metrics client info in the registry. Storing a
   // |client_info| with an empty client id will effectively void the backup.
@@ -163,29 +181,12 @@ class GoogleUpdateSettings {
   // true if this operation succeeded.
   static bool ClearReferral();
 
-  // Set did_run "dr" in the client state value for app specified by
-  // |app_reg_data|. This is used to measure active users. Returns false if
-  // registry write fails.
-  static bool UpdateDidRunStateForApp(const AppRegistrationData& app_reg_data,
-                                      bool did_run);
+  // Updates Chrome's "did run" state, returning true if the update succeeds.
+  static bool UpdateDidRunState(bool did_run);
 
-  // Convenience routine: UpdateDidRunStateForApp() specialized for the current
-  // BrowserDistribution, and also updates Chrome Binary's did_run if the
-  // current distribution is multi-install.
-  static bool UpdateDidRunState(bool did_run, bool system_level);
-
-  // Returns only the channel name: "" (stable), "dev", "beta", "canary", or
-  // "unknown" if unknown. This value will not be modified by "-m" for a
-  // multi-install. See kChromeChannel* in util_constants.h
+  // Returns the channel name: "" (stable), "dev", "beta", "canary", or
+  // "unknown" if unknown. See kChromeChannel* in util_constants.h
   static base::string16 GetChromeChannel(bool system_install);
-
-  // Return a human readable modifier for the version string, e.g.
-  // the channel (dev, beta, stable). Returns true if this operation succeeded,
-  // on success, channel contains one of "", "unknown", "dev" or "beta" (unless
-  // it is a multi-install product, in which case it will return "m",
-  // "unknown-m", "dev-m", or "beta-m").
-  static bool GetChromeChannelAndModifiers(bool system_install,
-                                           base::string16* channel);
 
   // This method changes the Google Update "ap" value to move the installation
   // on to or off of one of the recovery channels.
@@ -197,10 +198,19 @@ class GoogleUpdateSettings {
   // There is no fall-back for full installer :)
   // - Unconditionally remove "-multifail" since we haven't crashed.
   // |state_key| should be obtained via InstallerState::state_key().
+  // - Unconditionally clear a legacy "-stage:" modifier.
   static void UpdateInstallStatus(bool system_install,
                                   installer::ArchiveType archive_type,
                                   int install_return_code,
                                   const base::string16& product_guid);
+
+  // Sets the InstallerProgress value in the registry so that Google Update can
+  // provide informative user feedback. |path| is the full path to the app's
+  // ClientState key. |progress| should be a number between 0 and 100,
+  // inclusive.
+  static void SetProgress(bool system_install,
+                          const base::string16& path,
+                          int progress);
 
   // This method updates the value for Google Update "ap" key for Chrome
   // based on whether we are doing incremental install (or not) and whether
@@ -210,6 +220,8 @@ class GoogleUpdateSettings {
   //   not present already).
   // - If full installer failed, still remove this magic
   //   string (if it is present already).
+  // Additionally, any legacy "-multifail" or "-stage:*" values are
+  // unconditionally removed.
   //
   // archive_type: tells whether this is incremental install or not.
   // install_return_code: if 0, means installation was successful.
@@ -266,6 +278,14 @@ class GoogleUpdateSettings {
   // is assumed not to autoupdate.
   static bool ReenableAutoupdates();
 
+  // Returns a string if the corresponding Google Update group policy is set.
+  // Returns an empty string if no policy or an invalid policy is set.
+  // A valid policy for DownloadPreference is a string that matches the
+  // following regex:  `[a-zA-z]{0-32}`. The actual values for this policy
+  // are specific to Google Update and documented as part of the Google Update
+  // protocol.
+  static base::string16 GetDownloadPreference();
+
   // Records UMA stats about Chrome's update policy.
   static void RecordChromeUpdatePolicyHistograms();
 
@@ -274,7 +294,7 @@ class GoogleUpdateSettings {
   static base::string16 GetUninstallCommandLine(bool system_install);
 
   // Returns the version of Google Update that is installed.
-  static Version GetGoogleUpdateVersion(bool system_install);
+  static base::Version GetGoogleUpdateVersion(bool system_install);
 
   // Returns the time at which Google Update last started an automatic update
   // check, or the null time if this information isn't available.

@@ -26,12 +26,17 @@ void AttemptUserExit();
 // manager re-launch the browser with restore last session flag.
 void AttemptRestart();
 
+// Starts a user initiated relaunch process. On platforms other than
+// chromeos, this is equivalent to AttemptRestart. On ChromeOS, this relaunches
+// the entire OS, instead of just relaunching the browser.
+void AttemptRelaunch();
+
 // Attempt to exit by closing all browsers.  This is equivalent to
 // CloseAllBrowsers() on platforms where the application exits
 // when no more windows are remaining. On other platforms (the Mac),
 // this will additionally exit the application if all browsers are
 // successfully closed.
-//  Note that he exit process may be interrupted by download or
+//  Note that the exit process may be interrupted by download or
 // unload handler, and the browser may or may not exit.
 void AttemptExit();
 
@@ -46,6 +51,7 @@ void AttemptExit();
 void ExitCleanly();
 #endif
 
+#if !defined(OS_ANDROID)
 // Closes all browsers and if successful, quits.
 void CloseAllBrowsersAndQuit();
 
@@ -55,23 +61,14 @@ void CloseAllBrowsersAndQuit();
 // browser windows keeping it alive or the application is quitting.
 void CloseAllBrowsers();
 
+// If there are no browsers open and we aren't already shutting down,
+// initiate a shutdown.
+void ShutdownIfNeeded();
+
 // Begins shutdown of the application when the desktop session is ending.
 void SessionEnding();
 
-// Tells the BrowserList to keep the application alive after the last Browser
-// closes. This is implemented as a count, so callers should pair their calls
-// to IncrementKeepAliveCount() with matching calls to DecrementKeepAliveCount()
-// when they no
-// longer need to keep the application running.
-void IncrementKeepAliveCount();
-
-// Stops keeping the application alive after the last Browser is closed.
-// Should match a previous call to IncrementKeepAliveCount().
-void DecrementKeepAliveCount();
-
-// Returns true if application will continue running after the last Browser
-// closes.
-bool WillKeepAlive();
+#endif  // !defined(OS_ANDROID)
 
 // Emits APP_TERMINATING notification. It is guaranteed that the
 // notification is sent only once.
@@ -79,17 +76,22 @@ void NotifyAppTerminating();
 
 // Send out notifications.
 // For ChromeOS, also request session manager to end the session.
+// |lifetime| is used to signal whether or not a reboot should be forced. By
+// default, the functions only reboot the system if an update is available. When
+// a component flash update is present, but not a system update, the
+// kForceReboot flag is passed.
+enum class RebootPolicy { kForceReboot, kOptionalReboot };
 void NotifyAndTerminate(bool fast_path);
+void NotifyAndTerminate(bool fast_path, RebootPolicy reboot_policy);
 
+#if !defined(OS_ANDROID)
 // Called once the application is exiting.
 void OnAppExiting();
 
 // Called once the application is exiting to do any platform specific
 // processing required.
 void HandleAppExitingForPlatform();
-
-// Disable browser shutdown for unit tests.
-void DisableShutdownForTesting(bool disable_shutdown_for_testing);
+#endif  // !defined(OS_ANDROID)
 
 }  // namespace chrome
 

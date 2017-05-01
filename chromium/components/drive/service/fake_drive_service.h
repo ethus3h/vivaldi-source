@@ -11,6 +11,7 @@
 
 #include "base/files/file_path.h"
 #include "base/macros.h"
+#include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
 #include "components/drive/service/drive_service_interface.h"
 
@@ -122,9 +123,6 @@ class FakeDriveService : public DriveServiceInterface {
   const base::FilePath& last_cancelled_file() const {
     return last_cancelled_file_;
   }
-
-  // Returns the (fake) URL for the link.
-  static GURL GetFakeLinkUrl(const std::string& resource_id);
 
   // Sets the printf format for constructing the response of AuthorizeApp().
   // The format string must include two %s that are to be filled with
@@ -274,7 +272,8 @@ class FakeDriveService : public DriveServiceInterface {
       const std::string& email,
       google_apis::drive::PermissionRole role,
       const google_apis::EntryActionCallback& callback) override;
-  scoped_ptr<BatchRequestConfiguratorInterface> StartBatchRequest() override;
+  std::unique_ptr<BatchRequestConfiguratorInterface> StartBatchRequest()
+      override;
 
   // Adds a new file with the given parameters. On success, returns
   // HTTP_CREATED with the parsed entry.
@@ -381,10 +380,9 @@ class FakeDriveService : public DriveServiceInterface {
   // The class is expected to run on UI thread.
   base::ThreadChecker thread_checker_;
 
-  typedef std::map<std::string, EntryInfo*> EntryInfoMap;
-  EntryInfoMap entries_;
-  scoped_ptr<google_apis::AboutResource> about_resource_;
-  scoped_ptr<base::DictionaryValue> app_info_value_;
+  std::map<std::string, std::unique_ptr<EntryInfo>> entries_;
+  std::unique_ptr<google_apis::AboutResource> about_resource_;
+  std::unique_ptr<base::DictionaryValue> app_info_value_;
   std::map<GURL, UploadSession> upload_sessions_;
   int64_t published_date_seq_;
   int64_t next_upload_sequence_number_;

@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/bind.h"
-#include "base/message_loop/message_loop.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chromeos/login/user_flow.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "components/signin/core/account_id/account_id.h"
@@ -28,7 +30,15 @@ bool DefaultUserFlow::CanLockScreen() {
   return true;
 }
 
+bool DefaultUserFlow::CanStartArc() {
+  return true;
+}
+
 bool DefaultUserFlow::ShouldShowSettings() {
+  return true;
+}
+
+bool DefaultUserFlow::ShouldShowNotificationTray() {
   return true;
 }
 
@@ -74,12 +84,16 @@ bool ExtendedUserFlow::ShouldShowSettings() {
   return true;
 }
 
+bool ExtendedUserFlow::ShouldShowNotificationTray() {
+  return true;
+}
+
 void ExtendedUserFlow::HandleOAuthTokenStatusChange(
     user_manager::User::OAuthTokenStatus status) {
 }
 
 void ExtendedUserFlow::UnregisterFlowSoon() {
-  base::MessageLoop::current()->PostTask(
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
       base::Bind(&ChromeUserManager::ResetUserFlow,
                  base::Unretained(ChromeUserManager::Get()), account_id()));

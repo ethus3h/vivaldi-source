@@ -18,7 +18,6 @@ using webrtc::CreateSessionDescriptionObserver;
 using webrtc::DtmfSenderInterface;
 using webrtc::DtmfSenderObserverInterface;
 using webrtc::IceCandidateInterface;
-using webrtc::MediaConstraintsInterface;
 using webrtc::MediaStreamInterface;
 using webrtc::PeerConnectionInterface;
 using webrtc::SessionDescriptionInterface;
@@ -210,6 +209,17 @@ bool MockPeerConnectionImpl::GetStats(
   return true;
 }
 
+void MockPeerConnectionImpl::GetStats(
+    webrtc::RTCStatsCollectorCallback* callback) {
+  DCHECK(callback);
+  DCHECK(stats_report_);
+  callback->OnStatsDelivered(stats_report_);
+}
+
+void MockPeerConnectionImpl::SetGetStatsReport(webrtc::RTCStatsReport* report) {
+  stats_report_ = report;
+}
+
 const webrtc::SessionDescriptionInterface*
 MockPeerConnectionImpl::local_description() const {
   return local_desc_.get();
@@ -226,7 +236,7 @@ void MockPeerConnectionImpl::AddRemoteStream(MediaStreamInterface* stream) {
 
 void MockPeerConnectionImpl::CreateOffer(
     CreateSessionDescriptionObserver* observer,
-    const MediaConstraintsInterface* constraints) {
+    const RTCOfferAnswerOptions& options) {
   DCHECK(observer);
   created_sessiondescription_.reset(
       dependency_factory_->CreateSessionDescription("unknown", kDummyOffer,
@@ -235,7 +245,7 @@ void MockPeerConnectionImpl::CreateOffer(
 
 void MockPeerConnectionImpl::CreateAnswer(
     CreateSessionDescriptionObserver* observer,
-    const MediaConstraintsInterface* constraints) {
+    const RTCOfferAnswerOptions& options) {
   DCHECK(observer);
   created_sessiondescription_.reset(
       dependency_factory_->CreateSessionDescription("unknown", kDummyAnswer,
@@ -256,9 +266,8 @@ void MockPeerConnectionImpl::SetRemoteDescriptionWorker(
   remote_desc_.reset(desc);
 }
 
-bool MockPeerConnectionImpl::UpdateIce(
-    const IceServers& configuration,
-    const MediaConstraintsInterface* constraints) {
+bool MockPeerConnectionImpl::SetConfiguration(
+    const RTCConfiguration& configuration) {
   return true;
 }
 

@@ -8,10 +8,10 @@
 #include <stddef.h>
 
 #include <map>
+#include <memory>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -34,7 +34,6 @@
 #include "net/url_request/url_request_status.h"
 
 namespace base {
-class ThreadChecker;
 class Value;
 }  // namespace base
 
@@ -65,7 +64,7 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
       const std::string& upload_reporter_string,
       const scoped_refptr<base::SingleThreadTaskRunner>& pref_thread,
       const scoped_refptr<base::SingleThreadTaskRunner>& network_thread,
-      scoped_ptr<MockableTime> time);
+      std::unique_ptr<MockableTime> time);
 
   // Must be called from the pref thread if |MoveToNetworkThread| was not
   // called, or from the network thread if it was called.
@@ -89,6 +88,10 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
       const scoped_refptr<net::URLRequestContextGetter>&
           url_request_context_getter);
 
+  // Shuts down the monitor prior to destruction. Currently, ensures that there
+  // are no pending uploads, to avoid hairy lifetime issues at destruction.
+  void Shutdown();
+
   // Populates the monitor with contexts that were configured at compile time.
   void AddBakedInConfigs();
 
@@ -111,25 +114,33 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
   void OnNetworkChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
 
-  // Called to remove browsing data. With CLEAR_BEACONS, leaves contexts in
-  // place but clears beacons (which betray browsing history); with
-  // CLEAR_CONTEXTS, removes all contexts (which can behave as cookies).
-  void ClearBrowsingData(DomainReliabilityClearMode mode);
+  // Called to remove browsing data for origins matched by |origin_filter|.
+  // With CLEAR_BEACONS, leaves contexts in place but clears beacons (which
+  // betray browsing history); with CLEAR_CONTEXTS, removes entire contexts
+  // (which can behave as cookies). A null |origin_filter| is interpreted
+  // as an always-true filter, indicating complete deletion.
+  void ClearBrowsingData(
+      DomainReliabilityClearMode mode,
+      const base::Callback<bool(const GURL&)>& origin_filter);
 
   // Gets a Value containing data that can be formatted into a web page for
   // debugging purposes.
-  scoped_ptr<base::Value> GetWebUIData() const;
+  std::unique_ptr<base::Value> GetWebUIData() const;
 
   DomainReliabilityContext* AddContextForTesting(
-      scoped_ptr<const DomainReliabilityConfig> config);
+      std::unique_ptr<const DomainReliabilityConfig> config);
 
   size_t contexts_size_for_testing() const {
     return context_manager_.contexts_size_for_testing();
   }
 
+  // Forces all pending uploads to run now, even if their minimum delay has not
+  // yet passed.
+  void ForceUploadsForTesting();
+
   // DomainReliabilityContext::Factory implementation:
-  scoped_ptr<DomainReliabilityContext> CreateContextForConfig(
-      scoped_ptr<const DomainReliabilityConfig> config) override;
+  std::unique_ptr<DomainReliabilityContext> CreateContextForConfig(
+      std::unique_ptr<const DomainReliabilityConfig> config) override;
 
  private:
   friend class DomainReliabilityMonitorTest;
@@ -141,6 +152,7 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
   struct DOMAIN_RELIABILITY_EXPORT RequestInfo {
     RequestInfo();
     explicit RequestInfo(const net::URLRequest& request);
+    RequestInfo(const RequestInfo& other);
     ~RequestInfo();
 
     static bool ShouldReportRequest(const RequestInfo& request);
@@ -158,6 +170,8 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
 
   void OnRequestLegComplete(const RequestInfo& info);
 
+  void MaybeHandleHeader(const RequestInfo& info);
+
   bool OnPrefThread() const {
     return pref_task_runner_->BelongsToCurrentThread();
   }
@@ -167,12 +181,12 @@ class DOMAIN_RELIABILITY_EXPORT DomainReliabilityMonitor
 
   base::WeakPtr<DomainReliabilityMonitor> MakeWeakPtr();
 
-  scoped_ptr<MockableTime> time_;
+  std::unique_ptr<MockableTime> time_;
   base::TimeTicks last_network_change_time_;
   const std::string upload_reporter_string_;
   DomainReliabilityScheduler::Params scheduler_params_;
   DomainReliabilityDispatcher dispatcher_;
-  scoped_ptr<DomainReliabilityUploader> uploader_;
+  std::unique_ptr<DomainReliabilityUploader> uploader_;
   DomainReliabilityContextManager context_manager_;
 
   scoped_refptr<base::SingleThreadTaskRunner> pref_task_runner_;

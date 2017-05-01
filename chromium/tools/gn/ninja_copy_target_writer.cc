@@ -23,6 +23,8 @@ NinjaCopyTargetWriter::~NinjaCopyTargetWriter() {
 }
 
 void NinjaCopyTargetWriter::Run() {
+  if (target_->is_disabled())
+    return;
   const Tool* copy_tool = target_->toolchain()->GetTool(Toolchain::TYPE_COPY);
   if (!copy_tool) {
     g_scheduler->FailWithError(Err(
@@ -103,7 +105,7 @@ void NinjaCopyTargetWriter::WriteCopyRules(
   for (const auto& input_file : target_->sources()) {
     OutputFile output_file =
         SubstitutionWriter::ApplyPatternToSourceAsOutputFile(
-            target_->settings(), output_subst, input_file);
+            target_, target_->settings(), output_subst, input_file);
     output_files->push_back(output_file);
 
     out_ << "build ";

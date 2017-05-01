@@ -21,6 +21,7 @@ examples/api/var_array_buffer/*
 examples/api/var_dictionary/*
 examples/api/video_decode/*
 examples/api/video_encode/*
+examples/api/vpn_provider/*
 examples/api/websocket/*
 examples/button_close.png
 examples/button_close_hover.png
@@ -445,7 +446,6 @@ toolchain/${PLATFORM}_x86_glibc/x86_64-nacl/lib32/libppapi.so
 toolchain/${PLATFORM}_x86_glibc/x86_64-nacl/lib32/libppapi_stub.a
 tools/cl_wrapper.py
 tools/common.mk
-tools/compiler-wrapper.py
 tools/create_html.py
 tools/create_nmf.py
 tools/decode_dump.py

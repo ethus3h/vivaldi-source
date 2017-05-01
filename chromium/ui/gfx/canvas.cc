@@ -10,8 +10,12 @@
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/geometry/insets_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -23,45 +27,45 @@
 
 namespace gfx {
 
+namespace {
+
+sk_sp<SkSurface> CreateSurface(const Size& size, bool is_opaque) {
+  // SkSurface cannot be zero-sized, but clients of Canvas sometimes request
+  // that (and then later resize).
+  int width = std::max(size.width(), 1);
+  int height = std::max(size.height(), 1);
+  SkAlphaType alpha = is_opaque ? kOpaque_SkAlphaType : kPremul_SkAlphaType;
+  SkImageInfo info = SkImageInfo::MakeN32(width, height, alpha);
+  return SkSurface::MakeRaster(info);
+}
+
+}  // namespace
+
 Canvas::Canvas(const Size& size, float image_scale, bool is_opaque)
-    : image_scale_(image_scale),
-      canvas_(NULL) {
+    : image_scale_(image_scale) {
   Size pixel_size = ScaleToCeiledSize(size, image_scale);
-  owned_canvas_ = skia::AdoptRef(skia::CreatePlatformCanvas(pixel_size.width(),
-                                                            pixel_size.height(),
-                                                            is_opaque));
-  canvas_ = owned_canvas_.get();
+  surface_ = CreateSurface(pixel_size, is_opaque);
+  canvas_ = surface_->getCanvas();
+
 #if !defined(USE_CAIRO)
   // skia::PlatformCanvas instances are initialized to 0 by Cairo, but
   // uninitialized on other platforms.
   if (!is_opaque)
-    owned_canvas_->clear(SkColorSetARGB(0, 0, 0, 0));
+    canvas_->clear(SkColorSetARGB(0, 0, 0, 0));
 #endif
 
   SkScalar scale_scalar = SkFloatToScalar(image_scale);
   canvas_->scale(scale_scalar, scale_scalar);
 }
 
-Canvas::Canvas(const ImageSkiaRep& image_rep, bool is_opaque)
-    : image_scale_(image_rep.scale()),
-      owned_canvas_(skia::AdoptRef(
-          skia::CreatePlatformCanvas(image_rep.pixel_width(),
-                                     image_rep.pixel_height(),
-                                     is_opaque))),
-      canvas_(owned_canvas_.get()) {
-  SkScalar scale_scalar = SkFloatToScalar(image_scale_);
-  canvas_->scale(scale_scalar, scale_scalar);
-  DrawImageInt(ImageSkia(image_rep), 0, 0);
-}
-
 Canvas::Canvas()
     : image_scale_(1.f),
-      owned_canvas_(skia::AdoptRef(skia::CreatePlatformCanvas(0, 0, false))),
-      canvas_(owned_canvas_.get()) {}
+      surface_(CreateSurface({0, 0}, false)),
+      canvas_(surface_->getCanvas()) {}
 
 Canvas::Canvas(SkCanvas* canvas, float image_scale)
-    : image_scale_(image_scale), owned_canvas_(), canvas_(canvas) {
-  DCHECK(canvas);
+    : image_scale_(image_scale), canvas_(canvas) {
+  DCHECK(canvas_);
 }
 
 Canvas::~Canvas() {
@@ -72,10 +76,9 @@ void Canvas::RecreateBackingCanvas(const Size& size,
                                    bool is_opaque) {
   image_scale_ = image_scale;
   Size pixel_size = ScaleToFlooredSize(size, image_scale);
-  owned_canvas_ = skia::AdoptRef(skia::CreatePlatformCanvas(pixel_size.width(),
-                                                            pixel_size.height(),
-                                                            is_opaque));
-  canvas_ = owned_canvas_.get();
+  surface_ = CreateSurface(pixel_size, is_opaque);
+  canvas_ = surface_->getCanvas();
+
   SkScalar scale_scalar = SkFloatToScalar(image_scale);
   canvas_->scale(scale_scalar, scale_scalar);
 }
@@ -129,6 +132,10 @@ ImageSkiaRep Canvas::ExtractImageRep() const {
 }
 
 void Canvas::DrawDashedRect(const Rect& rect, SkColor color) {
+  DrawDashedRect(RectF(rect), color);
+}
+
+void Canvas::DrawDashedRect(const RectF& rect, SkColor color) {
   if (rect.IsEmpty())
     return;
   // Create a 2D bitmap containing alternating on/off pixels - we do this
@@ -157,22 +164,16 @@ void Canvas::DrawDashedRect(const Rect& rect, SkColor color) {
     }
   }
 
-  // Make a shader for the bitmap with an origin of the box we'll draw. This
-  // shader is refcounted and will have an initial refcount of 1.
-  skia::RefPtr<SkShader> shader = skia::AdoptRef(
-      SkShader::CreateBitmapShader(
-          *dots, SkShader::kRepeat_TileMode, SkShader::kRepeat_TileMode));
-  // Assign the shader to the paint & release our reference. The paint will
-  // now own the shader and the shader will be destroyed when the paint goes
-  // out of scope.
+  // Make a shader for the bitmap with an origin of the box we'll draw.
   SkPaint paint;
-  paint.setShader(shader.get());
+  paint.setShader(SkShader::MakeBitmapShader(*dots, SkShader::kRepeat_TileMode,
+                                             SkShader::kRepeat_TileMode));
 
-  DrawRect(Rect(rect.x(), rect.y(), rect.width(), 1), paint);
-  DrawRect(Rect(rect.x(), rect.y() + rect.height() - 1, rect.width(), 1),
+  DrawRect(RectF(rect.x(), rect.y(), rect.width(), 1), paint);
+  DrawRect(RectF(rect.x(), rect.y() + rect.height() - 1, rect.width(), 1),
            paint);
-  DrawRect(Rect(rect.x(), rect.y(), 1, rect.height()), paint);
-  DrawRect(Rect(rect.x() + rect.width() - 1, rect.y(), 1, rect.height()),
+  DrawRect(RectF(rect.x(), rect.y(), 1, rect.height()), paint);
+  DrawRect(RectF(rect.x() + rect.width() - 1, rect.y(), 1, rect.height()),
            paint);
 }
 
@@ -199,12 +200,16 @@ void Canvas::Restore() {
   canvas_->restore();
 }
 
-void Canvas::ClipRect(const Rect& rect) {
-  canvas_->clipRect(RectToSkRect(rect));
+void Canvas::ClipRect(const Rect& rect, SkClipOp op) {
+  canvas_->clipRect(RectToSkRect(rect), op);
+}
+
+void Canvas::ClipRect(const RectF& rect, SkClipOp op) {
+  canvas_->clipRect(RectFToSkRect(rect), op);
 }
 
 void Canvas::ClipPath(const SkPath& path, bool do_anti_alias) {
-  canvas_->clipPath(path, SkRegion::kIntersect_Op, do_anti_alias);
+  canvas_->clipPath(path, SkClipOp::kIntersect, do_anti_alias);
 }
 
 bool Canvas::IsClipEmpty() const {
@@ -230,34 +235,38 @@ void Canvas::Scale(int x_scale, int y_scale) {
 }
 
 void Canvas::DrawColor(SkColor color) {
-  DrawColor(color, SkXfermode::kSrcOver_Mode);
+  DrawColor(color, SkBlendMode::kSrcOver);
 }
 
-void Canvas::DrawColor(SkColor color, SkXfermode::Mode mode) {
+void Canvas::DrawColor(SkColor color, SkBlendMode mode) {
   canvas_->drawColor(color, mode);
 }
 
 void Canvas::FillRect(const Rect& rect, SkColor color) {
-  FillRect(rect, color, SkXfermode::kSrcOver_Mode);
+  FillRect(rect, color, SkBlendMode::kSrcOver);
 }
 
-void Canvas::FillRect(const Rect& rect,
-                      SkColor color,
-                      SkXfermode::Mode mode) {
+void Canvas::FillRect(const Rect& rect, SkColor color, SkBlendMode mode) {
   SkPaint paint;
   paint.setColor(color);
   paint.setStyle(SkPaint::kFill_Style);
-  paint.setXfermodeMode(mode);
+  paint.setBlendMode(mode);
   DrawRect(rect, paint);
 }
 
 void Canvas::DrawRect(const Rect& rect, SkColor color) {
-  DrawRect(rect, color, SkXfermode::kSrcOver_Mode);
+  DrawRect(RectF(rect), color);
 }
 
-void Canvas::DrawRect(const Rect& rect,
-                      SkColor color,
-                      SkXfermode::Mode mode) {
+void Canvas::DrawRect(const RectF& rect, SkColor color) {
+  DrawRect(rect, color, SkBlendMode::kSrcOver);
+}
+
+void Canvas::DrawRect(const Rect& rect, SkColor color, SkBlendMode mode) {
+  DrawRect(RectF(rect), color, mode);
+}
+
+void Canvas::DrawRect(const RectF& rect, SkColor color, SkBlendMode mode) {
   SkPaint paint;
   paint.setColor(color);
   paint.setStyle(SkPaint::kStroke_Style);
@@ -265,20 +274,32 @@ void Canvas::DrawRect(const Rect& rect,
   // we set a stroke width of 1, for example, this will internally create a
   // path and fill it, which causes problems near the edge of the canvas.
   paint.setStrokeWidth(SkIntToScalar(0));
-  paint.setXfermodeMode(mode);
+  paint.setBlendMode(mode);
 
   DrawRect(rect, paint);
 }
 
 void Canvas::DrawRect(const Rect& rect, const SkPaint& paint) {
-  canvas_->drawIRect(RectToSkIRect(rect), paint);
+  DrawRect(RectF(rect), paint);
+}
+
+void Canvas::DrawRect(const RectF& rect, const SkPaint& paint) {
+  canvas_->drawRect(RectFToSkRect(rect), paint);
 }
 
 void Canvas::DrawPoint(const Point& p1, const SkPaint& paint) {
-  canvas_->drawPoint(SkIntToScalar(p1.x()), SkIntToScalar(p1.y()), paint);
+  DrawPoint(PointF(p1), paint);
+}
+
+void Canvas::DrawPoint(const PointF& p1, const SkPaint& paint) {
+  canvas_->drawPoint(SkFloatToScalar(p1.x()), SkFloatToScalar(p1.y()), paint);
 }
 
 void Canvas::DrawLine(const Point& p1, const Point& p2, SkColor color) {
+  DrawLine(PointF(p1), PointF(p2), color);
+}
+
+void Canvas::DrawLine(const PointF& p1, const PointF& p2, SkColor color) {
   SkPaint paint;
   paint.setColor(color);
   paint.setStrokeWidth(SkIntToScalar(1));
@@ -286,22 +307,34 @@ void Canvas::DrawLine(const Point& p1, const Point& p2, SkColor color) {
 }
 
 void Canvas::DrawLine(const Point& p1, const Point& p2, const SkPaint& paint) {
-  canvas_->drawLine(SkIntToScalar(p1.x()), SkIntToScalar(p1.y()),
-                    SkIntToScalar(p2.x()), SkIntToScalar(p2.y()), paint);
+  DrawLine(PointF(p1), PointF(p2), paint);
+}
+
+void Canvas::DrawLine(const PointF& p1,
+                      const PointF& p2,
+                      const SkPaint& paint) {
+  canvas_->drawLine(SkFloatToScalar(p1.x()), SkFloatToScalar(p1.y()),
+                    SkFloatToScalar(p2.x()), SkFloatToScalar(p2.y()), paint);
 }
 
 void Canvas::DrawCircle(const Point& center_point,
                         int radius,
                         const SkPaint& paint) {
-  canvas_->drawCircle(SkIntToScalar(center_point.x()),
-      SkIntToScalar(center_point.y()), SkIntToScalar(radius), paint);
+  DrawCircle(PointF(center_point), radius, paint);
+}
+
+void Canvas::DrawCircle(const PointF& center_point,
+                        float radius,
+                        const SkPaint& paint) {
+  canvas_->drawCircle(SkFloatToScalar(center_point.x()),
+                      SkFloatToScalar(center_point.y()),
+                      SkFloatToScalar(radius), paint);
 }
 
 void Canvas::DrawRoundRect(const Rect& rect,
                            int radius,
                            const SkPaint& paint) {
-  canvas_->drawRoundRect(RectToSkRect(rect), SkIntToScalar(radius),
-                         SkIntToScalar(radius), paint);
+  DrawRoundRect(RectF(rect), radius, paint);
 }
 
 void Canvas::DrawRoundRect(const RectF& rect,
@@ -316,23 +349,23 @@ void Canvas::DrawPath(const SkPath& path, const SkPaint& paint) {
 }
 
 void Canvas::DrawFocusRect(const Rect& rect) {
+  DrawFocusRect(RectF(rect));
+}
+
+void Canvas::DrawFocusRect(const RectF& rect) {
   DrawDashedRect(rect, SK_ColorGRAY);
 }
 
-void Canvas::DrawSolidFocusRect(const Rect& rect, SkColor color) {
+void Canvas::DrawSolidFocusRect(const RectF& rect,
+                                SkColor color,
+                                float thickness) {
   SkPaint paint;
   paint.setColor(color);
-  paint.setStrokeWidth(SkIntToScalar(1));
-  // Note: We cannot use DrawRect since it would create a path and fill it which
-  // would cause problems near the edge of the canvas.
-  int x1 = std::min(rect.x(), rect.right());
-  int x2 = std::max(rect.x(), rect.right());
-  int y1 = std::min(rect.y(), rect.bottom());
-  int y2 = std::max(rect.y(), rect.bottom());
-  DrawLine(Point(x1, y1), Point(x2, y1), paint);
-  DrawLine(Point(x1, y2), Point(x2, y2), paint);
-  DrawLine(Point(x1, y1), Point(x1, y2), paint);
-  DrawLine(Point(x2, y1), Point(x2, y2 + 1), paint);
+  paint.setStrokeWidth(SkFloatToScalar(thickness));
+  paint.setStyle(SkPaint::kStroke_Style);
+  gfx::RectF draw_rect = rect;
+  draw_rect.Inset(gfx::InsetsF(thickness / 2));
+  DrawRect(draw_rect, paint);
 }
 
 void Canvas::DrawImageInt(const ImageSkia& image, int x, int y) {
@@ -428,13 +461,10 @@ void Canvas::DrawImageInPath(const ImageSkia& image,
 
   SkMatrix matrix;
   matrix.setTranslate(SkIntToScalar(x), SkIntToScalar(y));
-  skia::RefPtr<SkShader> shader = CreateImageRepShader(
-      image_rep,
-      SkShader::kRepeat_TileMode,
-      matrix);
-
   SkPaint p(paint);
-  p.setShader(shader.get());
+  p.setShader(CreateImageRepShader(image_rep,
+                                   SkShader::kRepeat_TileMode,
+                                   matrix));
   canvas_->drawPath(path, p);
 }
 
@@ -444,15 +474,6 @@ void Canvas::DrawStringRect(const base::string16& text,
                             const Rect& display_rect) {
   DrawStringRectWithFlags(text, font_list, color, display_rect,
                           DefaultCanvasTextAlignment());
-}
-
-void Canvas::DrawStringRectWithFlags(const base::string16& text,
-                                     const FontList& font_list,
-                                     SkColor color,
-                                     const Rect& display_rect,
-                                     int flags) {
-  DrawStringRectWithShadows(text, font_list, color, display_rect, 0, flags,
-                            ShadowValues());
 }
 
 void Canvas::TileImageInt(const ImageSkia& image,
@@ -482,12 +503,30 @@ void Canvas::TileImageInt(const ImageSkia& image,
                           int dest_y,
                           int w,
                           int h) {
-  if (!IntersectsClipRectInt(dest_x, dest_y, w, h))
+  SkRect dest_rect = { SkIntToScalar(dest_x),
+                       SkIntToScalar(dest_y),
+                       SkIntToScalar(dest_x + w),
+                       SkIntToScalar(dest_y + h) };
+  if (!IntersectsClipRect(dest_rect))
     return;
 
+  SkPaint paint;
+  if (InitSkPaintForTiling(image, src_x, src_y, tile_scale_x, tile_scale_y,
+                           dest_x, dest_y, &paint))
+    canvas_->drawRect(dest_rect, paint);
+}
+
+bool Canvas::InitSkPaintForTiling(const ImageSkia& image,
+                                  int src_x,
+                                  int src_y,
+                                  float tile_scale_x,
+                                  float tile_scale_y,
+                                  int dest_x,
+                                  int dest_y,
+                                  SkPaint* paint) {
   const ImageSkiaRep& image_rep = image.GetRepresentation(image_scale_);
   if (image_rep.is_null())
-    return;
+    return false;
 
   SkMatrix shader_scale;
   shader_scale.setScale(SkFloatToScalar(tile_scale_x),
@@ -495,36 +534,19 @@ void Canvas::TileImageInt(const ImageSkia& image,
   shader_scale.preTranslate(SkIntToScalar(-src_x), SkIntToScalar(-src_y));
   shader_scale.postTranslate(SkIntToScalar(dest_x), SkIntToScalar(dest_y));
 
-  skia::RefPtr<SkShader> shader = CreateImageRepShader(
-      image_rep,
-      SkShader::kRepeat_TileMode,
-      shader_scale);
-
-  SkPaint paint;
-  paint.setShader(shader.get());
-  paint.setXfermodeMode(SkXfermode::kSrcOver_Mode);
-
-  SkRect dest_rect = { SkIntToScalar(dest_x),
-                       SkIntToScalar(dest_y),
-                       SkIntToScalar(dest_x + w),
-                       SkIntToScalar(dest_y + h) };
-  canvas_->drawRect(dest_rect, paint);
+  paint->setShader(CreateImageRepShader(image_rep, SkShader::kRepeat_TileMode,
+                                        shader_scale));
+  paint->setBlendMode(SkBlendMode::kSrcOver);
+  return true;
 }
 
 void Canvas::Transform(const gfx::Transform& transform) {
   canvas_->concat(transform.matrix());
 }
 
-bool Canvas::IntersectsClipRectInt(int x, int y, int w, int h) {
+bool Canvas::IntersectsClipRect(const SkRect& rect) {
   SkRect clip;
-  return canvas_->getClipBounds(&clip) &&
-      clip.intersect(SkIntToScalar(x), SkIntToScalar(y), SkIntToScalar(x + w),
-                     SkIntToScalar(y + h));
-}
-
-bool Canvas::IntersectsClipRect(const Rect& rect) {
-  return IntersectsClipRectInt(rect.x(), rect.y(),
-                               rect.width(), rect.height());
+  return canvas_->getClipBounds(&clip) && clip.intersects(rect);
 }
 
 void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
@@ -546,16 +568,15 @@ void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
     return;
   }
 
-  if (!IntersectsClipRectInt(dest_x, dest_y, dest_w, dest_h))
-    return;
-
-  float user_scale_x = static_cast<float>(dest_w) / src_w;
-  float user_scale_y = static_cast<float>(dest_h) / src_h;
-
   SkRect dest_rect = { SkIntToScalar(dest_x),
                        SkIntToScalar(dest_y),
                        SkIntToScalar(dest_x + dest_w),
                        SkIntToScalar(dest_y + dest_h) };
+  if (!IntersectsClipRect(dest_rect))
+    return;
+
+  float user_scale_x = static_cast<float>(dest_w) / src_w;
+  float user_scale_y = static_cast<float>(dest_h) / src_h;
 
   // Make a bitmap shader that contains the bitmap we want to draw. This is
   // basically what SkCanvas.drawBitmap does internally, but it gives us
@@ -567,15 +588,11 @@ void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
   shader_scale.preTranslate(SkIntToScalar(-src_x), SkIntToScalar(-src_y));
   shader_scale.postTranslate(SkIntToScalar(dest_x), SkIntToScalar(dest_y));
 
-  skia::RefPtr<SkShader> shader = CreateImageRepShaderForScale(
-      image_rep, SkShader::kRepeat_TileMode, shader_scale,
-      remove_image_scale ? image_rep.scale() : 1.f);
-
-  // Set up our paint to use the shader & release our reference (now just owned
-  // by the paint).
   SkPaint p(paint);
   p.setFilterQuality(filter ? kLow_SkFilterQuality : kNone_SkFilterQuality);
-  p.setShader(shader.get());
+  p.setShader(CreateImageRepShaderForScale(
+      image_rep, SkShader::kRepeat_TileMode, shader_scale,
+      remove_image_scale ? image_rep.scale() : 1.f));
 
   // The rect will be filled by the bitmap.
   canvas_->drawRect(dest_rect, p);

@@ -4,16 +4,16 @@
 
 #include "app/vivaldi_apptools.h"
 #include "app/vivaldi_constants.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/search/search_urls.h"
+#include "chrome/grit/platform_locale_settings.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_url_handler.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/web_preferences.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/common/search_urls.h"
 #include "extensions/helper/vivaldi_app_helper.h"
-#include "grit/platform_locale_settings.h"
 #include "prefs/vivaldi_pref_names.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -29,22 +29,6 @@ bool HandleVivaldiURLRewrite(GURL* url,
   replacements.SetSchemeStr(content::kChromeUIScheme);
   *url = url->ReplaceComponents(replacements);
 
-  return false;
-}
-
-bool HandleVivaldiURLRewriteReverse(GURL* url,
-                                    content::BrowserContext* browser_context) {
-  // Do nothing in incognito.
-  Profile* profile = Profile::FromBrowserContext(browser_context);
-  if (profile && profile->IsOffTheRecord())
-    return false;
-
-  GURL new_tab_url(vivaldi::kVivaldiNewTabURL);
-  if (new_tab_url.is_valid() &&
-      search::MatchesOriginAndPath(new_tab_url, *url)) {
-    *url = GURL(vivaldi::kVivaldiUINewTabURL);
-    return true;
-  }
   return false;
 }
 }  // namespace vivaldi

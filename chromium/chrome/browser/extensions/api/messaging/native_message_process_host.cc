@@ -22,7 +22,6 @@
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
-#include "net/base/net_util.h"
 #include "url/gurl.h"
 
 namespace {
@@ -45,7 +44,7 @@ namespace extensions {
 NativeMessageProcessHost::NativeMessageProcessHost(
     const std::string& source_extension_id,
     const std::string& native_host_name,
-    scoped_ptr<NativeProcessLauncher> launcher)
+    std::unique_ptr<NativeProcessLauncher> launcher)
     : client_(NULL),
       source_extension_id_(source_extension_id),
       native_host_name_(native_host_name),
@@ -59,7 +58,7 @@ NativeMessageProcessHost::NativeMessageProcessHost(
       weak_factory_(this) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  task_runner_ = content::BrowserThread::GetMessageLoopProxyForThread(
+  task_runner_ = content::BrowserThread::GetTaskRunnerForThread(
       content::BrowserThread::IO);
 }
 
@@ -81,7 +80,7 @@ NativeMessageProcessHost::~NativeMessageProcessHost() {
 }
 
 // static
-scoped_ptr<NativeMessageHost> NativeMessageHost::Create(
+std::unique_ptr<NativeMessageHost> NativeMessageHost::Create(
     gfx::NativeView native_view,
     const std::string& source_extension_id,
     const std::string& native_host_name,
@@ -94,13 +93,13 @@ scoped_ptr<NativeMessageHost> NativeMessageHost::Create(
 }
 
 // static
-scoped_ptr<NativeMessageHost> NativeMessageProcessHost::CreateWithLauncher(
+std::unique_ptr<NativeMessageHost> NativeMessageProcessHost::CreateWithLauncher(
     const std::string& source_extension_id,
     const std::string& native_host_name,
-    scoped_ptr<NativeProcessLauncher> launcher) {
+    std::unique_ptr<NativeProcessLauncher> launcher) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  scoped_ptr<NativeMessageHost> process(new NativeMessageProcessHost(
+  std::unique_ptr<NativeMessageHost> process(new NativeMessageProcessHost(
       source_extension_id, native_host_name, std::move(launcher)));
 
   return process;
@@ -200,17 +199,6 @@ NativeMessageProcessHost::task_runner() const {
   return task_runner_;
 }
 
-#if defined(OS_POSIX)
-void NativeMessageProcessHost::OnFileCanReadWithoutBlocking(int fd) {
-  DCHECK_EQ(fd, read_file_);
-  DoRead();
-}
-
-void NativeMessageProcessHost::OnFileCanWriteWithoutBlocking(int fd) {
-  NOTREACHED();
-}
-#endif  // !defined(OS_POSIX)
-
 void NativeMessageProcessHost::ReadNowForTesting() {
   DoRead();
 }
@@ -226,9 +214,9 @@ void NativeMessageProcessHost::WaitRead() {
   // would always be consuming one thread in the thread pool. On Windows
   // FileStream uses overlapped IO, so that optimization isn't necessary there.
 #if defined(OS_POSIX)
-  base::MessageLoopForIO::current()->WatchFileDescriptor(
-    read_file_, false /* persistent */,
-    base::MessageLoopForIO::WATCH_READ, &read_watcher_, this);
+  read_controller_ = base::FileDescriptorWatcher::WatchReadable(
+      read_file_,
+      base::Bind(&NativeMessageProcessHost::DoRead, base::Unretained(this)));
 #else  // defined(OS_POSIX)
   DoRead();
 #endif  // defined(!OS_POSIX)
@@ -236,6 +224,10 @@ void NativeMessageProcessHost::WaitRead() {
 
 void NativeMessageProcessHost::DoRead() {
   DCHECK(task_runner_->BelongsToCurrentThread());
+
+#if defined(OS_POSIX)
+  read_controller_.reset();
+#endif
 
   while (!closed_ && !read_pending_) {
     read_buffer_ = new net::IOBuffer(kReadBufferSize);

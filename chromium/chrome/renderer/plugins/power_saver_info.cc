@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/renderer/plugins/power_saver_info.h"
 #include "content/public/common/content_constants.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/webplugininfo.h"
 #include "content/public/renderer/render_frame.h"
@@ -73,6 +74,8 @@ std::string GetPluginInstancePosterAttribute(
 PowerSaverInfo::PowerSaverInfo()
     : power_saver_enabled(false), blocked_for_background_tab(false) {}
 
+PowerSaverInfo::PowerSaverInfo(const PowerSaverInfo& other) = default;
+
 PowerSaverInfo PowerSaverInfo::Get(content::RenderFrame* render_frame,
                                    bool power_saver_setting_on,
                                    const blink::WebPluginParams& params,
@@ -86,13 +89,11 @@ PowerSaverInfo PowerSaverInfo::Get(content::RenderFrame* render_frame,
   // It is also enabled for the Power Saver test plugin for browser tests.
   bool is_flash =
       plugin_info.name == base::ASCIIToUTF16(content::kFlashPluginName);
-  bool can_throttle_plugin_type =
-      is_flash || override_for_testing == "ignore-list";
 
   PowerSaverInfo info;
-  info.power_saver_enabled =
-      override_for_testing == "always" ||
-      (power_saver_setting_on && can_throttle_plugin_type);
+  bool is_eligible = power_saver_setting_on && is_flash;
+  info.power_saver_enabled = override_for_testing == "always" ||
+                             (power_saver_setting_on && is_eligible);
 
   if (info.power_saver_enabled) {
     // Even if we disable PPS in the next block because content is same-origin,
@@ -100,18 +101,21 @@ PowerSaverInfo PowerSaverInfo::Get(content::RenderFrame* render_frame,
     info.blocked_for_background_tab = render_frame->IsHidden();
 
     auto status = render_frame->GetPeripheralContentStatus(
-        render_frame->GetWebFrame()->top()->securityOrigin(),
-        url::Origin(params.url), gfx::Size());
+        render_frame->GetWebFrame()->top()->getSecurityOrigin(),
+        url::Origin(params.url), gfx::Size(),
+        content::RenderFrame::RECORD_DECISION);
 
     // Early-exit from the whole Power Saver system if the content is
     // same-origin or whitelisted-origin. We ignore the other possibilities,
     // because we don't know the unobscured size of the plugin content yet.
+    // If we are filtering same-origin tiny content, we cannot early exit here.
     //
     // Once the plugin is loaded, the peripheral content status is re-tested
     // with the actual unobscured plugin size.
-    if (status == content::RenderFrame::CONTENT_STATUS_ESSENTIAL_SAME_ORIGIN ||
-        status == content::RenderFrame::
-                      CONTENT_STATUS_ESSENTIAL_CROSS_ORIGIN_WHITELISTED) {
+    if (!base::FeatureList::IsEnabled(features::kFilterSameOriginTinyPlugin) &&
+        (status == content::RenderFrame::CONTENT_STATUS_ESSENTIAL_SAME_ORIGIN ||
+         status == content::RenderFrame::
+                       CONTENT_STATUS_ESSENTIAL_CROSS_ORIGIN_WHITELISTED)) {
       info.power_saver_enabled = false;
     } else {
       info.poster_attribute = GetPluginInstancePosterAttribute(params);

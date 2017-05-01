@@ -16,7 +16,6 @@
 #include "third_party/WebKit/public/web/WebFormControlElement.h"
 #include "third_party/WebKit/public/web/WebHitTestResult.h"
 #include "third_party/WebKit/public/web/WebInputElement.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebUserGestureIndicator.h"
 #include "third_party/WebKit/public/web/WebView.h"
@@ -25,8 +24,6 @@ using blink::WebElement;
 using blink::WebFormControlElement;
 using blink::WebGestureEvent;
 using blink::WebInputElement;
-using blink::WebInputEvent;
-using blink::WebMouseEvent;
 using blink::WebNode;
 using blink::WebPoint;
 using blink::WebSize;
@@ -88,7 +85,8 @@ void PageClickTracker::FocusChangeComplete() {
 }
 
 void PageClickTracker::DoFocusChangeComplete() {
-  WebElement focused_element = render_frame()->GetFocusedElement();
+  WebElement focused_element =
+      render_frame()->GetWebFrame()->document().focusedElement();
   if (focused_node_was_last_clicked_ && !focused_element.isNull()) {
     const WebFormControlElement control =
         GetTextFormControlElement(focused_element);
@@ -100,6 +98,10 @@ void PageClickTracker::DoFocusChangeComplete() {
 
   was_focused_before_now_ = true;
   focused_node_was_last_clicked_ = false;
+}
+
+void PageClickTracker::OnDestruct() {
+  delete this;
 }
 
 // PageClickTracker::Legacy ----------------------------------------------------

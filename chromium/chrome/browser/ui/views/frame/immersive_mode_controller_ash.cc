@@ -4,11 +4,15 @@
 
 #include "chrome/browser/ui/views/frame/immersive_mode_controller_ash.h"
 
+#include "ash/common/material_design/material_design_controller.h"
+#include "ash/common/wm/window_state.h"
+#include "ash/shared/immersive_revealed_lock.h"
 #include "ash/shell.h"
-#include "ash/wm/immersive_revealed_lock.h"
-#include "ash/wm/window_state.h"
+#include "ash/wm/window_state_aura.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/ui/ash/ash_util.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -16,17 +20,19 @@
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
+#include "services/ui/public/cpp/property_type_converters.h"
+#include "services/ui/public/interfaces/window_manager.mojom.h"
+#include "ui/aura/mus/mus_util.h"
+#include "ui/aura/mus/property_converter.h"
 #include "ui/aura/window.h"
+#include "ui/compositor/paint_context.h"
+#include "ui/compositor/paint_recorder.h"
+#include "ui/views/mus/mus_client.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
 
 namespace {
-
-// Revealing the TopContainerView looks better if the animation starts and ends
-// just a few pixels before the view goes offscreen, which reduces the visual
-// "pop" as the 3-pixel tall "light bar" style tab strip becomes visible.
-const int kAnimationOffsetY = 3;
 
 // Converts from ImmersiveModeController::AnimateReveal to
 // ash::ImmersiveFullscreenController::AnimateReveal.
@@ -49,21 +55,40 @@ class ImmersiveRevealedLockAsh : public ImmersiveRevealedLock {
       : lock_(lock) {}
 
  private:
-  scoped_ptr<ash::ImmersiveRevealedLock> lock_;
+  std::unique_ptr<ash::ImmersiveRevealedLock> lock_;
 
   DISALLOW_COPY_AND_ASSIGN(ImmersiveRevealedLockAsh);
+};
+
+// TODO(sky): remove this, should instead create a layer that is clone of
+// existing layers. http://crbug.com/640378.
+class DelegatingPaintView : public views::View {
+ public:
+  explicit DelegatingPaintView(views::View* view) : view_(view) {}
+
+  ~DelegatingPaintView() override {}
+
+  // views::View:
+  void PaintChildren(const ui::PaintContext& context) override {
+    view_->Paint(ui::PaintContext(
+        context, ui::PaintContext::CLONE_WITHOUT_INVALIDATION));
+  }
+
+ private:
+  views::View* view_;
+
+  DISALLOW_COPY_AND_ASSIGN(DelegatingPaintView);
 };
 
 }  // namespace
 
 ImmersiveModeControllerAsh::ImmersiveModeControllerAsh()
-    : controller_(new ash::ImmersiveFullscreenController),
+    : ImmersiveModeController(Type::ASH),
+      controller_(new ash::ImmersiveFullscreenController),
       browser_view_(nullptr),
       native_window_(nullptr),
       observers_enabled_(false),
-      use_tab_indicators_(false),
-      visible_fraction_(1) {
-}
+      visible_fraction_(1) {}
 
 ImmersiveModeControllerAsh::~ImmersiveModeControllerAsh() {
   EnableWindowObservers(false);
@@ -92,10 +117,6 @@ bool ImmersiveModeControllerAsh::IsEnabled() const {
   return controller_->IsEnabled();
 }
 
-bool ImmersiveModeControllerAsh::ShouldHideTabIndicators() const {
-  return !use_tab_indicators_;
-}
-
 bool ImmersiveModeControllerAsh::ShouldHideTopViews() const {
   return controller_->IsEnabled() && !controller_->IsRevealed();
 }
@@ -109,15 +130,8 @@ int ImmersiveModeControllerAsh::GetTopContainerVerticalOffset(
   if (!IsEnabled())
     return 0;
 
-  // The TopContainerView is flush with the top of |browser_view_| when the
-  // top-of-window views are fully closed so that when the tab indicators are
-  // used, the "light bar" style tab strip is flush with the top of
-  // |browser_view_|.
-  if (!IsRevealed())
-    return 0;
-
-  int height = top_container_size.height() - kAnimationOffsetY;
-  return static_cast<int>(height * (visible_fraction_ - 1));
+  return static_cast<int>(top_container_size.height() *
+                          (visible_fraction_ - 1));
 }
 
 ImmersiveRevealedLock* ImmersiveModeControllerAsh::GetRevealedLock(
@@ -131,10 +145,6 @@ void ImmersiveModeControllerAsh::OnFindBarVisibleBoundsChanged(
   find_bar_visible_bounds_in_screen_ = new_visible_bounds_in_screen;
 }
 
-void ImmersiveModeControllerAsh::SetupForTest() {
-  controller_->SetupForTest();
-}
-
 void ImmersiveModeControllerAsh::EnableWindowObservers(bool enable) {
   if (observers_enabled_ == enable)
     return;
@@ -144,10 +154,20 @@ void ImmersiveModeControllerAsh::EnableWindowObservers(bool enable) {
                                                    ->exclusive_access_manager()
                                                    ->fullscreen_controller());
   if (enable) {
-    ash::wm::GetWindowState(native_window_)->AddObserver(this);
+    if (chrome::IsRunningInMash()) {
+      // TODO: http://crbug.com/640381.
+      NOTIMPLEMENTED();
+    } else {
+      ash::wm::GetWindowState(native_window_)->AddObserver(this);
+    }
     registrar_.Add(this, chrome::NOTIFICATION_FULLSCREEN_CHANGED, source);
   } else {
-    ash::wm::GetWindowState(native_window_)->RemoveObserver(this);
+    if (chrome::IsRunningInMash()) {
+      // TODO: http://crbug.com/640381.
+      NOTIMPLEMENTED();
+    } else {
+      ash::wm::GetWindowState(native_window_)->RemoveObserver(this);
+    }
     registrar_.Remove(this, chrome::NOTIFICATION_FULLSCREEN_CHANGED, source);
   }
 }
@@ -161,45 +181,60 @@ void ImmersiveModeControllerAsh::LayoutBrowserRootView() {
   widget->GetRootView()->Layout();
 }
 
-bool ImmersiveModeControllerAsh::UpdateTabIndicators() {
-  bool has_tabstrip = browser_view_->IsBrowserTypeNormal();
-  if (!IsEnabled() || !has_tabstrip) {
-    use_tab_indicators_ = false;
-  } else {
-    bool in_tab_fullscreen = browser_view_->browser()
-                                 ->exclusive_access_manager()
-                                 ->fullscreen_controller()
-                                 ->IsWindowFullscreenForTabOrPending();
-    use_tab_indicators_ = !in_tab_fullscreen;
-  }
+void ImmersiveModeControllerAsh::CreateMashRevealWidget() {
+  if (!chrome::IsRunningInMash())
+    return;
 
-  bool show_tab_indicators = use_tab_indicators_ && !IsRevealed();
-  if (show_tab_indicators != browser_view_->tabstrip()->IsImmersiveStyle()) {
-    browser_view_->tabstrip()->SetImmersiveStyle(show_tab_indicators);
-    return true;
-  }
-  return false;
+  DCHECK(!mash_reveal_widget_);
+  mash_reveal_widget_ = base::MakeUnique<views::Widget>();
+  views::Widget::InitParams init_params(views::Widget::InitParams::TYPE_POPUP);
+  init_params.mus_properties
+      [ui::mojom::WindowManager::kRenderParentTitleArea_Property] =
+      mojo::ConvertTo<std::vector<uint8_t>>(
+          static_cast<aura::PropertyConverter::PrimitiveType>(true));
+  init_params.name = "ChromeImmersiveRevealWindow";
+  init_params.accept_events = false;
+  init_params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  init_params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+  init_params.parent = native_window_;
+  const gfx::Rect& top_container_bounds =
+      browser_view_->top_container()->bounds();
+  init_params.bounds =
+      gfx::Rect(0, -top_container_bounds.height(), top_container_bounds.width(),
+                top_container_bounds.height());
+  mash_reveal_widget_->Init(init_params);
+  mash_reveal_widget_->SetContentsView(
+      new DelegatingPaintView(browser_view_->top_container()));
+  mash_reveal_widget_->StackAtTop();
+  mash_reveal_widget_->Show();
+}
+
+void ImmersiveModeControllerAsh::DestroyMashRevealWidget() {
+  mash_reveal_widget_.reset();
 }
 
 void ImmersiveModeControllerAsh::OnImmersiveRevealStarted() {
+  DestroyMashRevealWidget();
+
   visible_fraction_ = 0;
   browser_view_->top_container()->SetPaintToLayer(true);
-  browser_view_->top_container()->SetFillsBoundsOpaquely(false);
-  UpdateTabIndicators();
+  browser_view_->top_container()->layer()->SetFillsBoundsOpaquely(false);
   LayoutBrowserRootView();
-  FOR_EACH_OBSERVER(Observer, observers_, OnImmersiveRevealStarted());
+  CreateMashRevealWidget();
+  for (Observer& observer : observers_)
+    observer.OnImmersiveRevealStarted();
 }
 
 void ImmersiveModeControllerAsh::OnImmersiveRevealEnded() {
+  DestroyMashRevealWidget();
   visible_fraction_ = 0;
   browser_view_->top_container()->SetPaintToLayer(false);
-  UpdateTabIndicators();
   LayoutBrowserRootView();
 }
 
 void ImmersiveModeControllerAsh::OnImmersiveFullscreenExited() {
+  DestroyMashRevealWidget();
   browser_view_->top_container()->SetPaintToLayer(false);
-  UpdateTabIndicators();
   LayoutBrowserRootView();
 }
 
@@ -207,6 +242,12 @@ void ImmersiveModeControllerAsh::SetVisibleFraction(double visible_fraction) {
   if (visible_fraction_ != visible_fraction) {
     visible_fraction_ = visible_fraction;
     browser_view_->Layout();
+
+    if (mash_reveal_widget_) {
+      gfx::Rect bounds = mash_reveal_widget_->GetNativeWindow()->bounds();
+      bounds.set_y(visible_fraction * bounds.height() - bounds.height());
+      mash_reveal_widget_->SetBounds(bounds);
+    }
   }
 }
 
@@ -250,18 +291,16 @@ void ImmersiveModeControllerAsh::Observe(
   if (!controller_->IsEnabled())
     return;
 
-  bool tab_indicator_visibility_changed = UpdateTabIndicators();
+  if (chrome::IsRunningInMash()) {
+    // TODO: http://crbug.com/640384.
+    NOTIMPLEMENTED();
+    return;
+  }
 
-  // Auto hide the shelf in immersive browser fullscreen. When auto hidden, the
-  // shelf displays a 3px 'light bar' when it is closed. When in immersive
-  // browser fullscreen and tab fullscreen, hide the shelf completely and
-  // prevent it from being revealed.
+  // Auto hide the shelf in immersive browser fullscreen.
   bool in_tab_fullscreen = content::Source<FullscreenController>(source)->
       IsWindowFullscreenForTabOrPending();
-  ash::wm::GetWindowState(native_window_)->set_hide_shelf_when_fullscreen(
-      in_tab_fullscreen);
+  ash::wm::GetWindowState(native_window_)
+      ->set_hide_shelf_when_fullscreen(in_tab_fullscreen);
   ash::Shell::GetInstance()->UpdateShelfVisibility();
-
-  if (tab_indicator_visibility_changed)
-    LayoutBrowserRootView();
 }

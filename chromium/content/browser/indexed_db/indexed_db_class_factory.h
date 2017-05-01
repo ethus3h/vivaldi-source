@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 
 #include "base/lazy_instance.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "content/browser/indexed_db/indexed_db_backing_store.h"
 #include "content/browser/indexed_db/indexed_db_database.h"
 #include "content/common/content_export.h"
@@ -23,7 +24,7 @@ class Iterator;
 namespace content {
 
 class IndexedDBBackingStore;
-class IndexedDBDatabaseCallbacks;
+class IndexedDBConnection;
 class IndexedDBFactory;
 class IndexedDBTransaction;
 class LevelDBDatabase;
@@ -40,23 +41,24 @@ class CONTENT_EXPORT IndexedDBClassFactory {
 
   static void SetIndexedDBClassFactoryGetter(GetterCallback* cb);
 
-  virtual IndexedDBDatabase* CreateIndexedDBDatabase(
+  virtual scoped_refptr<IndexedDBDatabase> CreateIndexedDBDatabase(
       const base::string16& name,
-      IndexedDBBackingStore* backing_store,
-      IndexedDBFactory* factory,
+      scoped_refptr<IndexedDBBackingStore> backing_store,
+      scoped_refptr<IndexedDBFactory> factory,
       const IndexedDBDatabase::Identifier& unique_identifier);
 
-  virtual IndexedDBTransaction* CreateIndexedDBTransaction(
+  virtual std::unique_ptr<IndexedDBTransaction> CreateIndexedDBTransaction(
       int64_t id,
-      scoped_refptr<IndexedDBDatabaseCallbacks> callbacks,
+      IndexedDBConnection* connection,
       const std::set<int64_t>& scope,
       blink::WebIDBTransactionMode mode,
-      IndexedDBDatabase* db,
       IndexedDBBackingStore::Transaction* backing_store_transaction);
 
-  virtual LevelDBIteratorImpl* CreateIteratorImpl(
-      scoped_ptr<leveldb::Iterator> iterator);
-  virtual LevelDBTransaction* CreateLevelDBTransaction(LevelDBDatabase* db);
+  virtual std::unique_ptr<LevelDBIteratorImpl> CreateIteratorImpl(
+      std::unique_ptr<leveldb::Iterator> iterator);
+
+  virtual scoped_refptr<LevelDBTransaction> CreateLevelDBTransaction(
+      LevelDBDatabase* db);
 
  protected:
   IndexedDBClassFactory() {}

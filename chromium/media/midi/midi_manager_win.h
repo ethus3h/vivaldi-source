@@ -7,27 +7,27 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "media/midi/midi_manager.h"
+#include "media/midi/midi_service.mojom.h"
 
-namespace media {
 namespace midi {
 
 class MidiServiceWinDelegate {
  public:
   virtual ~MidiServiceWinDelegate() {}
-  virtual void OnCompleteInitialization(Result result) = 0;
+  virtual void OnCompleteInitialization(mojom::Result result) = 0;
   virtual void OnAddInputPort(MidiPortInfo info) = 0;
   virtual void OnAddOutputPort(MidiPortInfo info) = 0;
   virtual void OnSetInputPortState(uint32_t port_index,
-                                   MidiPortState state) = 0;
+                                   mojom::PortState state) = 0;
   virtual void OnSetOutputPortState(uint32_t port_index,
-                                    MidiPortState state) = 0;
+                                    mojom::PortState state) = 0;
   virtual void OnReceiveMidiData(uint32_t port_index,
                                  const std::vector<uint8_t>& data,
                                  base::TimeTicks time) = 0;
@@ -58,21 +58,20 @@ class MidiManagerWin final : public MidiManager, public MidiServiceWinDelegate {
                             double timestamp) final;
 
   // MidiServiceWinDelegate overrides:
-  void OnCompleteInitialization(Result result) final;
+  void OnCompleteInitialization(mojom::Result result) final;
   void OnAddInputPort(MidiPortInfo info) final;
   void OnAddOutputPort(MidiPortInfo info) final;
-  void OnSetInputPortState(uint32_t port_index, MidiPortState state) final;
-  void OnSetOutputPortState(uint32_t port_index, MidiPortState state) final;
+  void OnSetInputPortState(uint32_t port_index, mojom::PortState state) final;
+  void OnSetOutputPortState(uint32_t port_index, mojom::PortState state) final;
   void OnReceiveMidiData(uint32_t port_index,
                          const std::vector<uint8_t>& data,
                          base::TimeTicks time) final;
 
  private:
-  scoped_ptr<MidiServiceWin> midi_service_;
+  std::unique_ptr<MidiServiceWin> midi_service_;
   DISALLOW_COPY_AND_ASSIGN(MidiManagerWin);
 };
 
 }  // namespace midi
-}  // namespace media
 
 #endif  // MEDIA_MIDI_MIDI_MANAGER_WIN_H_

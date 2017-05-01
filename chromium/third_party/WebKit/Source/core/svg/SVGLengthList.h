@@ -39,46 +39,53 @@ namespace blink {
 
 class SVGLengthListTearOff;
 
-class SVGLengthList final : public SVGListPropertyHelper<SVGLengthList, SVGLength> {
-public:
-    typedef SVGLengthListTearOff TearOffType;
+class SVGLengthList final
+    : public SVGListPropertyHelper<SVGLengthList, SVGLength> {
+ public:
+  typedef SVGLengthListTearOff TearOffType;
 
-    static PassRefPtrWillBeRawPtr<SVGLengthList> create(SVGLengthMode mode = SVGLengthMode::Other)
-    {
-        return adoptRefWillBeNoop(new SVGLengthList(mode));
-    }
+  static SVGLengthList* create(SVGLengthMode mode = SVGLengthMode::Other) {
+    return new SVGLengthList(mode);
+  }
 
-    ~SVGLengthList() override;
+  ~SVGLengthList() override;
 
-    SVGParsingError setValueAsString(const String&);
+  SVGParsingError setValueAsString(const String&);
 
-    // SVGPropertyBase:
-    PassRefPtrWillBeRawPtr<SVGPropertyBase> cloneForAnimation(const String&) const override;
-    PassRefPtrWillBeRawPtr<SVGLengthList> clone() override;
-    String valueAsString() const override;
-    SVGLengthMode unitMode() const { return m_mode; }
+  // SVGPropertyBase:
+  SVGPropertyBase* cloneForAnimation(const String&) const override;
+  SVGLengthList* clone() override;
+  String valueAsString() const override;
+  SVGLengthMode unitMode() const { return m_mode; }
 
-    void add(PassRefPtrWillBeRawPtr<SVGPropertyBase>, SVGElement*) override;
-    void calculateAnimatedValue(SVGAnimationElement*, float percentage, unsigned repeatCount, PassRefPtrWillBeRawPtr<SVGPropertyBase> fromValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toAtEndOfDurationValue, SVGElement*) override;
-    float calculateDistance(PassRefPtrWillBeRawPtr<SVGPropertyBase> to, SVGElement*) override;
+  void add(SVGPropertyBase*, SVGElement*) override;
+  void calculateAnimatedValue(SVGAnimationElement*,
+                              float percentage,
+                              unsigned repeatCount,
+                              SVGPropertyBase* fromValue,
+                              SVGPropertyBase* toValue,
+                              SVGPropertyBase* toAtEndOfDurationValue,
+                              SVGElement*) override;
+  float calculateDistance(SVGPropertyBase* to, SVGElement*) override;
 
-    static AnimatedPropertyType classType() { return AnimatedLengthList; }
+  static AnimatedPropertyType classType() { return AnimatedLengthList; }
+  AnimatedPropertyType type() const override { return classType(); }
 
-private:
-    explicit SVGLengthList(SVGLengthMode);
+ private:
+  explicit SVGLengthList(SVGLengthMode);
 
-    // Create SVGLength items used to adjust the list length
-    // when animation from/to lists are longer than this list.
-    PassRefPtrWillBeRawPtr<SVGLength> createPaddingItem() const override;
+  // Create SVGLength items used to adjust the list length
+  // when animation from/to lists are longer than this list.
+  SVGLength* createPaddingItem() const override;
 
-    template <typename CharType>
-    SVGParsingError parseInternal(const CharType*& ptr, const CharType* end);
+  template <typename CharType>
+  SVGParsingError parseInternal(const CharType*& ptr, const CharType* end);
 
-    SVGLengthMode m_mode;
+  SVGLengthMode m_mode;
 };
 
 DEFINE_SVG_PROPERTY_TYPE_CASTS(SVGLengthList);
 
-} // namespace blink
+}  // namespace blink
 
-#endif // SVGLengthList_h
+#endif  // SVGLengthList_h

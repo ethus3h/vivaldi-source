@@ -4,18 +4,6 @@
       Polymer({
         is: 'paper-dropdown-menu',
 
-        /**
-         * Fired when the dropdown opens.
-         *
-         * @event paper-dropdown-open
-         */
-
-        /**
-         * Fired when the dropdown closes.
-         *
-         * @event paper-dropdown-close
-         */
-
         behaviors: [
           Polymer.IronButtonState,
           Polymer.IronControlState,
@@ -74,6 +62,13 @@
           },
 
           /**
+           * The error message to display when invalid.
+           */
+          errorMessage: {
+              type: String
+          },
+
+          /**
            * True if the dropdown is open. Otherwise, false.
            */
           opened: {
@@ -81,6 +76,17 @@
             notify: true,
             value: false,
             observer: '_openedChanged'
+          },
+
+          /**
+           * By default, the dropdown will constrain scrolling on the page
+           * to itself when opened.
+           * Set to true in order to prevent scroll from being constrained
+           * to the dropdown when it opens.
+           */
+          allowOutsideScroll: {
+            type: Boolean,
+            value: false
           },
 
           /**
@@ -127,7 +133,17 @@
           verticalAlign: {
             type: String,
             value: 'top'
-          }
+          },
+
+          /**
+           * If true, the `horizontalAlign` and `verticalAlign` properties will
+           * be considered preferences instead of strict requirements when
+           * positioning the dropdown and may be changed if doing so reduces
+           * the area of the dropdown falling outside of `fitInto`.
+           */
+          dynamicAlign: {
+            type: Boolean
+          },
         },
 
         listeners: {
@@ -221,7 +237,7 @@
           if (!selectedItem) {
             value = '';
           } else {
-            value = selectedItem.label || selectedItem.textContent.trim();
+            value = selectedItem.label || selectedItem.getAttribute('label') || selectedItem.textContent.trim();
           }
 
           this._setValue(value);

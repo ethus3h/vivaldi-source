@@ -16,9 +16,11 @@
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/skia/include/ports/SkTypeface_mac.h"
+#include "ui/gfx/decorated_text.h"
 
 namespace {
 
@@ -28,7 +30,7 @@ namespace {
 // 10.10.
 base::ScopedCFTypeRef<CTFontRef> CopyFontWithSymbolicTraits(CTFontRef font,
                                                             int sym_traits) {
-  if (base::mac::IsOSElCapitanOrLater()) {
+  if (base::mac::IsAtLeastOS10_11()) {
     return base::ScopedCFTypeRef<CTFontRef>(CTFontCreateCopyWithSymbolicTraits(
         font, 0, nullptr, sym_traits, sym_traits));
   }
@@ -59,18 +61,47 @@ base::ScopedCFTypeRef<CTFontRef> CopyFontWithSymbolicTraits(CTFontRef font,
       CTFontCreateWithFontDescriptor(desc, 0.0, nullptr));
 }
 
+// Returns whether |font_list| has a valid primary native font.
+bool HasValidPrimaryNativeFont(const gfx::FontList& font_list) {
+  return font_list.GetPrimaryFont().GetNativeFont();
+}
+
+// Checks whether |font_list| is valid. If it isn't, returns the default font
+// list (or a font list derived from it). The returned font list will have a
+// valid primary native font.
+gfx::FontList GetValidFontList(const gfx::FontList& font_list) {
+  if (HasValidPrimaryNativeFont(font_list))
+    return font_list;
+
+  const gfx::FontList default_font_list;
+  const int size_delta =
+      font_list.GetFontSize() - default_font_list.GetFontSize();
+  const gfx::FontList derived_font_list = default_font_list.Derive(
+      size_delta, font_list.GetFontStyle(), font_list.GetFontWeight());
+  if (HasValidPrimaryNativeFont(derived_font_list))
+    return derived_font_list;
+
+  DCHECK(HasValidPrimaryNativeFont(default_font_list));
+  return default_font_list;
+}
+
 }  // namespace
 
 namespace gfx {
 
 namespace internal {
 
-skia::RefPtr<SkTypeface> CreateSkiaTypeface(const gfx::Font& font, int style) {
-  gfx::Font font_with_style = font.Derive(0, style);
+// Note: this is only used by RenderTextHarfbuzz.
+sk_sp<SkTypeface> CreateSkiaTypeface(const Font& font,
+                                     bool italic,
+                                     Font::Weight weight) {
+  const Font::FontStyle style = italic ? Font::ITALIC : Font::NORMAL;
+  Font font_with_style = font.Derive(0, style, weight);
   if (!font_with_style.GetNativeFont())
     return nullptr;
-  return skia::AdoptRef(SkCreateTypefaceFromCTFont(
-      static_cast<CTFontRef>(font_with_style.GetNativeFont())));
+
+  return sk_sp<SkTypeface>(SkCreateTypefaceFromCTFont(
+      base::mac::NSToCFCast(font_with_style.GetNativeFont())));
 }
 
 }  // namespace internal
@@ -79,8 +110,13 @@ RenderTextMac::RenderTextMac() : common_baseline_(0), runs_valid_(false) {}
 
 RenderTextMac::~RenderTextMac() {}
 
-scoped_ptr<RenderText> RenderTextMac::CreateInstanceOfSameType() const {
-  return make_scoped_ptr(new RenderTextMac);
+std::unique_ptr<RenderText> RenderTextMac::CreateInstanceOfSameType() const {
+  return base::WrapUnique(new RenderTextMac);
+}
+
+void RenderTextMac::SetFontList(const FontList& font_list) {
+  // Ensure the font list used has a valid native font.
+  RenderText::SetFontList(GetValidFontList(font_list));
 }
 
 bool RenderTextMac::MultilineSupported() const {
@@ -106,6 +142,10 @@ SelectionModel RenderTextMac::FindCursorPosition(const Point& point) {
   return SelectionModel();
 }
 
+bool RenderTextMac::IsSelectionSupported() const {
+  return false;
+}
+
 std::vector<RenderText::FontSpan> RenderTextMac::GetFontSpansForTesting() {
   EnsureLayout();
   if (!runs_valid_)
@@ -115,7 +155,8 @@ std::vector<RenderText::FontSpan> RenderTextMac::GetFontSpansForTesting() {
   for (size_t i = 0; i < runs_.size(); ++i) {
     const CFRange cf_range = CTRunGetStringRange(runs_[i].ct_run);
     const Range range(cf_range.location, cf_range.location + cf_range.length);
-    spans.push_back(RenderText::FontSpan(runs_[i].font, range));
+    spans.push_back(RenderText::FontSpan(
+        Font(base::mac::CFToNSCast(runs_[i].ct_font.get())), range));
   }
 
   return spans;
@@ -203,21 +244,18 @@ void RenderTextMac::DrawVisualText(internal::SkiaTextRenderer* renderer) {
 
   ApplyFadeEffects(renderer);
   ApplyTextShadows(renderer);
+  renderer->SetFontRenderParams(
+      font_list().GetPrimaryFont().GetFontRenderParams(),
+      subpixel_rendering_suppressed());
 
   for (size_t i = 0; i < runs_.size(); ++i) {
     const TextRun& run = runs_[i];
     renderer->SetForegroundColor(run.foreground);
+    renderer->SetTextSize(CTFontGetSize(run.ct_font));
 
-    CTFontRef ct_font = static_cast<CTFontRef>(run.font.GetNativeFont());
-    renderer->SetTextSize(CTFontGetSize(ct_font));
-
-    int font_style = Font::NORMAL;
-    CTFontSymbolicTraits traits = CTFontGetSymbolicTraits(ct_font);
-    if (traits & kCTFontBoldTrait)
-      font_style |= Font::BOLD;
-    if (traits & kCTFontItalicTrait)
-      font_style |= Font::ITALIC;
-    renderer->SetFontWithStyle(run.font, font_style);
+    // The painter adds its own ref. So don't |release()| it from the ref ptr in
+    // TextRun.
+    renderer->SetTypeface(run.typeface);
 
     renderer->DrawPosText(&run.glyph_positions[0], &run.glyphs[0],
                           run.glyphs.size());
@@ -237,6 +275,8 @@ RenderTextMac::TextRun::TextRun()
       strike(false),
       diagonal_strike(false) {}
 
+RenderTextMac::TextRun::TextRun(TextRun&& other) = default;
+
 RenderTextMac::TextRun::~TextRun() {}
 
 float RenderTextMac::GetLayoutTextWidth() {
@@ -247,7 +287,7 @@ float RenderTextMac::GetLayoutTextWidth() {
   return GetCTLineSize(line.get(), &baseline).width();
 }
 
-gfx::SizeF RenderTextMac::GetCTLineSize(CTLineRef line, SkScalar* baseline) {
+SizeF RenderTextMac::GetCTLineSize(CTLineRef line, SkScalar* baseline) {
   CGFloat ascent = 0;
   CGFloat descent = 0;
   CGFloat leading = 0;
@@ -272,6 +312,7 @@ base::ScopedCFTypeRef<CTLineRef> RenderTextMac::EnsureLayoutInternal(
     base::ScopedCFTypeRef<CFMutableArrayRef>* attributes_owner) {
   CTFontRef ct_font =
       base::mac::NSToCFCast(font_list().GetPrimaryFont().GetNativeFont());
+  DCHECK(ct_font);
 
   const void* keys[] = {kCTFontAttributeName};
   const void* values[] = {ct_font};
@@ -308,7 +349,7 @@ base::ScopedCFTypeRef<CFMutableArrayRef> RenderTextMac::ApplyStyles(
       CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks));
 
   // https://developer.apple.com/library/mac/#documentation/Carbon/Reference/CoreText_StringAttributes_Ref/Reference/reference.html
-  internal::StyleIterator style(colors(), baselines(), styles());
+  internal::StyleIterator style(colors(), baselines(), weights(), styles());
   const size_t layout_text_length = CFAttributedStringGetLength(attr_string);
   for (size_t i = 0, end = 0; i < layout_text_length; i = end) {
     end = TextIndexToGivenTextIndex(text, style.GetRange().end());
@@ -328,8 +369,10 @@ base::ScopedCFTypeRef<CFMutableArrayRef> RenderTextMac::ApplyStyles(
       CFArrayAppendValue(attributes, underline_value);
     }
 
-    const int traits = (style.style(BOLD) ? kCTFontBoldTrait : 0) |
-                       (style.style(ITALIC) ? kCTFontItalicTrait : 0);
+    // TODO(mboc): Apply font weights other than bold below.
+    const int traits =
+        (style.style(ITALIC) ? kCTFontItalicTrait : 0) |
+        (style.weight() >= Font::Weight::BOLD ? kCTFontBoldTrait : 0);
     if (traits != 0) {
       base::ScopedCFTypeRef<CTFontRef> styled_font =
           CopyFontWithSymbolicTraits(font, traits);
@@ -378,7 +421,7 @@ void RenderTextMac::ComputeRuns() {
       continue;
     }
 
-    runs_.push_back(TextRun());
+    runs_.emplace_back();
     TextRun* run = &runs_.back();
     run->ct_run = ct_run;
     run->origin = run_origin;
@@ -413,7 +456,8 @@ void RenderTextMac::ComputeRuns() {
     CFDictionaryRef attributes = CTRunGetAttributes(ct_run);
     CTFontRef ct_font = base::mac::GetValueFromDictionary<CTFontRef>(
         attributes, kCTFontAttributeName);
-    run->font = Font(static_cast<NSFont*>(ct_font));
+    run->ct_font.reset(ct_font, base::scoped_policy::RETAIN);
+    run->typeface.reset(SkCreateTypefaceFromCTFont(ct_font));
 
     const CGColorRef foreground = base::mac::GetValueFromDictionary<CGColorRef>(
         attributes, kCTForegroundColorAttributeName);
@@ -437,6 +481,17 @@ void RenderTextMac::InvalidateStyle() {
   attributes_.reset();
   runs_.clear();
   runs_valid_ = false;
+}
+
+bool RenderTextMac::GetDecoratedTextForRange(const Range& range,
+                                             DecoratedText* decorated_text) {
+  // TODO(karandeepb): This is not invoked on any codepath currently. Style the
+  // returned text if need be.
+  if (obscured())
+    return false;
+
+  decorated_text->text = GetTextFromRange(range);
+  return true;
 }
 
 }  // namespace gfx

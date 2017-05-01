@@ -4,8 +4,8 @@
 
 #include "extensions/browser/api/guest_view/guest_view_internal_api.h"
 
-#include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/profiles/profile.h"
+#include <utility>
+
 #include "components/guest_view/browser/guest_view_base.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
@@ -15,6 +15,13 @@
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/common/api/guest_view_internal.h"
 #include "extensions/common/permissions/permissions_data.h"
+
+#include "app/vivaldi_apptools.h"
+#include "chrome/browser/content_settings/tab_specific_content_settings.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/profiles/profile.h"
+#include "extensions/browser/guest_view/web_view/web_view_constants.h"
+#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 
 using guest_view::GuestViewBase;
 using guest_view::GuestViewManager;
@@ -59,29 +66,56 @@ bool GuestViewInternalCreateGuestFunction::RunAsync() {
   // in logical units.
   create_params->SetBoolean(guest_view::kElementSizeIsLogical, true);
 
-  GuestViewBase* guest = nullptr;
+  if (GetExternalWebContents(create_params)) {
+    return true;
+  }
+
+  guest_view_manager->CreateGuest(view_type,
+                                  sender_web_contents,
+                                  *create_params,
+                                  callback);
+  return true;
+}
+
+bool GuestViewInternalCreateGuestFunction::GetExternalWebContents(
+    base::DictionaryValue* create_params) {
+  GuestViewManager::WebContentsCreatedCallback callback = base::Bind(
+      &GuestViewInternalCreateGuestFunction::CreateGuestCallback, this);
+  content::WebContents* contents = nullptr;
+
   std::string tab_id_as_string;
+  std::string guest_id_str;
   if (create_params->GetString("tab_id", &tab_id_as_string)) {
     int tab_id = atoi(tab_id_as_string.c_str());
-    content::WebContents* contents = NULL;
     int tab_index = 0;
     bool include_incognito = true;
     Profile* profile = Profile::FromBrowserContext(context_);
     Browser* browser;
     TabStripModel* tab_strip;
     extensions::ExtensionTabUtil::GetTabById(tab_id, profile, include_incognito,
-      &browser, &tab_strip, &contents, &tab_index);
-    // the guest could have been created prior for new windows.
-    guest = GuestViewBase::FromWebContents(contents);
-    if(guest)
-      callback.Run(contents);
+                                             &browser, &tab_strip, &contents,
+                                             &tab_index);
+  } else if (create_params->GetString("guestcontent_id", &guest_id_str)) {
+    int guest_id = atoi(guest_id_str.c_str());
+    int ownerprocessid = render_frame_host()->GetProcess()->GetID();
+    contents = GuestViewManager::FromBrowserContext(browser_context())
+                   ->GetGuestByInstanceIDSafely(guest_id, ownerprocessid);
+    TabSpecificContentSettings::CreateForWebContents(contents);
   }
-  if(!guest)
-  guest_view_manager->CreateGuest(view_type,
-                                  sender_web_contents,
-                                  *create_params,
-                                  callback);
-  return true;
+
+  GuestViewBase* guest = nullptr;
+  guest = GuestViewBase::FromWebContents(contents);
+
+  if (guest) {
+    // If there is a guest with the WebContents already in the tabstrip then
+    // use this. This is done through the WebContentsImpl::CreateNewWindow
+    // code-path. Ie. clicking a link in a webpage with target set. The guest
+    // has been created with
+    // GuestViewManager::CreateGuestWithWebContentsParams.
+    callback.Run(guest->web_contents());
+    return true;
+  }
+  return false;
 }
 
 void GuestViewInternalCreateGuestFunction::CreateGuestCallback(
@@ -96,10 +130,11 @@ void GuestViewInternalCreateGuestFunction::CreateGuestCallback(
     content_window_id = guest->proxy_routing_id();
     }
   }
-  scoped_ptr<base::DictionaryValue> return_params(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> return_params(
+      new base::DictionaryValue());
   return_params->SetInteger(guest_view::kID, guest_instance_id);
   return_params->SetInteger(guest_view::kContentWindowID, content_window_id);
-  SetResult(return_params.release());
+  SetResult(std::move(return_params));
   SendResponse(true);
 }
 
@@ -112,11 +147,20 @@ GuestViewInternalDestroyGuestFunction::
 }
 
 bool GuestViewInternalDestroyGuestFunction::RunAsync() {
-  scoped_ptr<guest_view_internal::DestroyGuest::Params> params(
+  std::unique_ptr<guest_view_internal::DestroyGuest::Params> params(
       guest_view_internal::DestroyGuest::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
   GuestViewBase* guest = GuestViewBase::From(
       render_frame_host()->GetProcess()->GetID(), params->instance_id);
+
+  if (!guest && vivaldi::IsVivaldiRunning()) {
+    // In Vivaldi guests share the |WebContents| with the tabstrip, and
+    // can be destroyed when the WebContentsDestroyed is called. So this
+    // is not an error.
+    SendResponse(true);
+    return true;
+  }
+
   if (!guest)
     return false;
   guest->Destroy();
@@ -131,7 +175,7 @@ GuestViewInternalSetSizeFunction::~GuestViewInternalSetSizeFunction() {
 }
 
 bool GuestViewInternalSetSizeFunction::RunAsync() {
-  scoped_ptr<guest_view_internal::SetSize::Params> params(
+  std::unique_ptr<guest_view_internal::SetSize::Params> params(
       guest_view_internal::SetSize::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
   GuestViewBase* guest = GuestViewBase::From(

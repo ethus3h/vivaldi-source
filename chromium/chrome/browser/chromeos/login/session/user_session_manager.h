@@ -5,15 +5,19 @@
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_SESSION_USER_SESSION_MANAGER_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_SESSION_USER_SESSION_MANAGER_H_
 
+#include <memory>
 #include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/chromeos/base/locale_util.h"
+#include "chrome/browser/chromeos/eol_notification.h"
+#include "chrome/browser/chromeos/hats/hats_notification_controller.h"
+#include "chrome/browser/chromeos/login/oobe_screen.h"
+#include "chrome/browser/chromeos/login/quick_unlock/quick_unlock_notification_controller.h"
 #include "chrome/browser/chromeos/login/signin/oauth2_login_manager.h"
 #include "chrome/browser/chromeos/login/signin/token_handle_util.h"
 #include "chromeos/dbus/session_manager_client.h"
@@ -27,7 +31,6 @@
 class AccountId;
 class GURL;
 class PrefRegistrySimple;
-class PrefService;
 class Profile;
 class TokenHandleFetcher;
 
@@ -163,8 +166,9 @@ class UserSessionManager
   // Starts loading CRL set.
   void InitializeCRLSetFetcher(const user_manager::User* user);
 
-  // Starts loading EV Certificates whitelist.
-  void InitializeEVCertificatesWhitelistComponent(
+  // Starts loading CT-related components, which are the EV Certificates
+  // whitelist and the STHSet.
+  void InitializeCertificateTransparencyComponents(
       const user_manager::User* user);
 
   // Invoked when the user is logging in for the first time, or is logging in to
@@ -228,6 +232,9 @@ class UserSessionManager
   scoped_refptr<input_method::InputMethodManager::State> GetDefaultIMEState(
       Profile* profile);
 
+  // Check given profile's EndofLife Status and show notification accordingly.
+  void CheckEolStatus(Profile* profile);
+
   // Note this could return NULL if not enabled.
   EasyUnlockKeyManager* GetEasyUnlockKeyManager();
 
@@ -281,7 +288,6 @@ class UserSessionManager
   void StoreUserContextDataBeforeProfileIsCreated();
 
   void StartCrosSession();
-  void NotifyUserLoggedIn();
   void PrepareProfile();
 
   // Callback for asynchronous profile creation.
@@ -311,7 +317,7 @@ class UserSessionManager
   void FinalizePrepareProfile(Profile* profile);
 
   // Starts out-of-box flow with the specified screen.
-  void ActivateWizard(const std::string& screen_name);
+  void ActivateWizard(OobeScreen screen);
 
   // Adds first-time login URLs.
   void InitializeStartUrls() const;
@@ -332,6 +338,14 @@ class UserSessionManager
 
   // Initializes RLZ. If |disabled| is true, RLZ pings are disabled.
   void InitRlzImpl(Profile* profile, bool disabled);
+
+  // If |user| is not a kiosk app, sets session type as seen by extensions
+  // feature system according to |user|'s type.
+  // The value should eventually be set for kiosk users, too - that's done as
+  // part of special, kiosk user session bring-up.
+  // NOTE: This has to be called before profile is initialized - so it is set up
+  // when extension are loaded during profile initialization.
+  void InitNonKioskExtensionFeaturesSessionType(const user_manager::User* user);
 
   // Callback to process RetrieveActiveSessions() request results.
   void OnRestoreActiveSessions(
@@ -376,6 +390,10 @@ class UserSessionManager
 
   void CreateTokenUtilIfMissing();
 
+  // Returns |true| if given profile show see EndofLife Notification when
+  // applicable.
+  bool ShouldShowEolNotification(Profile* profile);
+
   // Test API methods.
 
   // Injects |user_context| that will be used to create StubAuthenticator
@@ -416,7 +434,7 @@ class UserSessionManager
   StartSessionType start_session_type_;
 
   // Injected user context for stub authenticator.
-  scoped_ptr<UserContext> injected_user_context_;
+  std::unique_ptr<UserContext> injected_user_context_;
 
   // True if the authentication context's cookie jar contains authentication
   // cookies from the authentication extension login flow.
@@ -433,7 +451,9 @@ class UserSessionManager
 
   // User sessions that have to be restored after browser crash.
   // [user_id] > [user_id_hash]
-  SessionManagerClient::ActiveSessionsMap pending_user_sessions_;
+  using PendingUserSessions = std::map<AccountId, std::string>;
+
+  PendingUserSessions pending_user_sessions_;
 
   base::ObserverList<chromeos::UserSessionStateObserver>
       session_state_observer_list_;
@@ -459,22 +479,35 @@ class UserSessionManager
   std::map<Profile*, scoped_refptr<input_method::InputMethodManager::State>,
       ProfileCompare> default_ime_states_;
 
+  // Per-user-session EndofLife Notification
+  std::map<Profile*, std::unique_ptr<EolNotification>, ProfileCompare>
+      eol_notification_handler_;
+
+  // Per-user-session Quick Unlock Feature Notification
+  std::map<Profile*,
+           scoped_refptr<QuickUnlockNotificationController>,
+           ProfileCompare>
+      quick_unlock_notification_handler_;
+
   // Manages Easy unlock cryptohome keys.
-  scoped_ptr<EasyUnlockKeyManager> easy_unlock_key_manager_;
+  std::unique_ptr<EasyUnlockKeyManager> easy_unlock_key_manager_;
   bool running_easy_unlock_key_ops_;
   base::Closure easy_unlock_key_ops_finished_callback_;
 
   // Whether should fetch token handles, tests may override this value.
   bool should_obtain_handles_;
 
-  scoped_ptr<TokenHandleUtil> token_handle_util_;
-  scoped_ptr<TokenHandleFetcher> token_handle_fetcher_;
+  std::unique_ptr<TokenHandleUtil> token_handle_util_;
+  std::unique_ptr<TokenHandleFetcher> token_handle_fetcher_;
 
   // Whether should launch browser, tests may override this value.
   bool should_launch_browser_;
 
   // Child account status is necessary for InitializeStartUrls call.
   bool waiting_for_child_account_status_;
+
+  scoped_refptr<typename HatsNotificationController::HatsNotificationController>
+      hats_notification_controller_;
 
   base::WeakPtrFactory<UserSessionManager> weak_factory_;
 

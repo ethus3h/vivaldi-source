@@ -4,8 +4,7 @@
 
 package org.chromium.chrome.browser.tab;
 
-import android.content.Context;
-import android.graphics.Color;
+import android.os.SystemClock;
 import android.support.annotation.IntDef;
 import android.view.View;
 
@@ -22,10 +21,8 @@ import org.chromium.chrome.browser.metrics.UmaSessionStats;
 import org.chromium.chrome.browser.metrics.UmaUtils;
 import org.chromium.chrome.browser.policy.PolicyAuditor;
 import org.chromium.chrome.browser.policy.PolicyAuditor.AuditEvent;
-import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
-import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeUnit;
 
@@ -64,12 +61,10 @@ public class TabWebContentsObserver extends WebContentsObserver {
     private static final int TAB_RENDERER_EXIT_STATUS_MAX = 6;
 
     private final Tab mTab;
-    private int mThemeColor;
 
     public TabWebContentsObserver(WebContents webContents, Tab tab) {
         super(webContents);
         mTab = tab;
-        mThemeColor = mTab.getDefaultThemeColor();
     }
 
     @Override
@@ -163,6 +158,7 @@ public class TabWebContentsObserver extends WebContentsObserver {
     @Override
     public void didFailLoad(boolean isProvisionalLoad, boolean isMainFrame, int errorCode,
             String description, String failingUrl, boolean wasIgnoredByHandler) {
+        mTab.updateThemeColorIfNeeded(true);
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
         while (observers.hasNext()) {
             observers.next().onDidFailLoad(mTab, isProvisionalLoad, isMainFrame, errorCode,
@@ -182,33 +178,34 @@ public class TabWebContentsObserver extends WebContentsObserver {
     }
 
     @Override
+    public void titleWasSet(String title) {
+        mTab.updateTitle(title);
+    }
+
+    @Override
     public void didStartProvisionalLoadForFrame(long frameId, long parentFrameId,
-            boolean isMainFrame, String validatedUrl, boolean isErrorPage,
-            boolean isIframeSrcdoc) {
+            boolean isMainFrame, String validatedUrl, boolean isErrorPage) {
         if (isMainFrame) mTab.didStartPageLoad(validatedUrl, isErrorPage);
 
-        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-        while (observers.hasNext()) {
-            observers.next().onDidStartProvisionalLoadForFrame(mTab, frameId, parentFrameId,
-                    isMainFrame, validatedUrl, isErrorPage, isIframeSrcdoc);
-        }
+        mTab.handleDidStartProvisionalLoadForFrame(isMainFrame, validatedUrl);
     }
 
     @Override
     public void didCommitProvisionalLoadForFrame(long frameId, boolean isMainFrame, String url,
             int transitionType) {
         if (isMainFrame && UmaUtils.isRunningApplicationStart()) {
-            // Currently it takes about 2000ms to commit a navigation if the measurement
-            // begins very early in the browser start. How many buckets (b) are needed to
-            // explore the _typical_ values with granularity 100ms and a maximum duration
-            // of 1 minute?
-            //   s^{n+1} / s^{n} = 2100 / 2000
-            //   s = 1.05
-            //   s^b = 60000
-            //   b = ln(60000) / ln(1.05) ~= 225
-            RecordHistogram.recordCustomTimesHistogram("Startup.FirstCommitNavigationTime",
-                    System.currentTimeMillis() - UmaUtils.getMainEntryPointTime(),
-                    1, 60000 /* 1 minute */, TimeUnit.MILLISECONDS, 225);
+            // Current median is 550ms, and long tail is very long. ZoomedIn gives good view of the
+            // median and ZoomedOut gives a good overview.
+            RecordHistogram.recordCustomTimesHistogram(
+                    "Startup.FirstCommitNavigationTime2.ZoomedIn",
+                    SystemClock.uptimeMillis() - UmaUtils.getForegroundStartTime(),
+                    200, 1000, TimeUnit.MILLISECONDS, 100);
+            // For ZoomedOut very rarely is it under 50ms and this range matches
+            // CustomTabs.IntentToFirstCommitNavigationTime2.ZoomedOut.
+            RecordHistogram.recordCustomTimesHistogram(
+                    "Startup.FirstCommitNavigationTime2.ZoomedOut",
+                    SystemClock.uptimeMillis() - UmaUtils.getForegroundStartTime(),
+                    50, TimeUnit.MINUTES.toMillis(10), TimeUnit.MILLISECONDS, 50);
             UmaUtils.setRunningApplicationStart(false);
         }
 
@@ -251,6 +248,26 @@ public class TabWebContentsObserver extends WebContentsObserver {
     }
 
     @Override
+    public void didStartNavigation(String url, boolean isInMainFrame, boolean isErrorPage) {
+        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+        while (observers.hasNext()) {
+            observers.next().onDidStartNavigation(mTab, url, isInMainFrame, isErrorPage);
+        }
+    }
+
+    @Override
+    public void didFinishNavigation(String url, boolean isInMainFrame, boolean isErrorPage,
+            boolean hasCommitted, boolean isSamePage, Integer pageTransition, int errorCode) {
+        if (isInMainFrame && hasCommitted) mTab.setIsShowingErrorPage(isErrorPage);
+
+        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+        while (observers.hasNext()) {
+            observers.next().onDidFinishNavigation(mTab, url, isInMainFrame, isErrorPage,
+                    hasCommitted, isSamePage, pageTransition, errorCode);
+        }
+    }
+
+    @Override
     public void didFirstVisuallyNonEmptyPaint() {
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
         while (observers.hasNext()) {
@@ -260,32 +277,14 @@ public class TabWebContentsObserver extends WebContentsObserver {
 
     @Override
     public void didChangeThemeColor(int color) {
-        int securityLevel = mTab.getSecurityLevel();
-        if (securityLevel == ConnectionSecurityLevel.SECURITY_ERROR
-                || securityLevel == ConnectionSecurityLevel.SECURITY_WARNING
-                || securityLevel == ConnectionSecurityLevel.SECURITY_POLICY_WARNING) {
-            color = mTab.getDefaultThemeColor();
-        }
-        if (mTab.isShowingInterstitialPage()) color = mTab.getDefaultThemeColor();
-        if (!isThemeColorEnabled(mTab.getApplicationContext())) {
-            color = mTab.getDefaultThemeColor();
-        }
-        if (color == Color.TRANSPARENT) color = mTab.getDefaultThemeColor();
-        if (mTab.isIncognito()) color = mTab.getDefaultThemeColor();
-        color |= 0xFF000000;
-        if (mTab.getThemeColor() == color) return;
-        mThemeColor = color;
-        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-        while (observers.hasNext()) {
-            observers.next().onDidChangeThemeColor(mTab, mTab.getThemeColor());
-        }
+        mTab.updateThemeColorIfNeeded(true);
     }
 
     @Override
     public void didAttachInterstitialPage() {
         mTab.getInfoBarContainer().setVisibility(View.INVISIBLE);
         mTab.showRenderedPage();
-        didChangeThemeColor(mTab.getDefaultThemeColor());
+        mTab.updateThemeColorIfNeeded(false);
 
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
         while (observers.hasNext()) {
@@ -297,13 +296,15 @@ public class TabWebContentsObserver extends WebContentsObserver {
 
         PolicyAuditor auditor =
                 ((ChromeApplication) mTab.getApplicationContext()).getPolicyAuditor();
-        auditor.notifyCertificateFailure(mTab.getWebContents(), mTab.getApplicationContext());
+        auditor.notifyCertificateFailure(
+                PolicyAuditor.nativeGetCertificateFailure(mTab.getWebContents()),
+                mTab.getApplicationContext());
     }
 
     @Override
     public void didDetachInterstitialPage() {
         mTab.getInfoBarContainer().setVisibility(View.VISIBLE);
-        didChangeThemeColor(mTab.getWebContents().getThemeColor(mTab.getDefaultThemeColor()));
+        mTab.updateThemeColorIfNeeded(false);
 
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
         while (observers.hasNext()) {
@@ -329,18 +330,7 @@ public class TabWebContentsObserver extends WebContentsObserver {
     @Override
     public void destroy() {
         MediaCaptureNotificationService.updateMediaNotificationForTab(
-                mTab.getApplicationContext(), mTab.getId(), false, false, mTab.getUrl());
+                mTab.getApplicationContext(), mTab.getId(), 0, mTab.getUrl());
         super.destroy();
-    }
-
-    /**
-     * @return The theme-color for this web contents.
-     */
-    int getThemeColor() {
-        return mThemeColor;
-    }
-
-    private static boolean isThemeColorEnabled(Context context) {
-        return !DeviceFormFactor.isTablet(context);
     }
 }

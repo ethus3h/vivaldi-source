@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <string>
 #include <vector>
 
 #include "base/i18n/rtl.h"
@@ -17,7 +18,9 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/common/javascript_message_type.h"
 #include "content/public/common/media_stream_request.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "net/http/http_response_headers.h"
+#include "ui/base/window_open_disposition.h"
 
 #if defined(OS_WIN)
 #include "ui/gfx/native_widget_types.h"
@@ -29,43 +32,62 @@ namespace IPC {
 class Message;
 }
 
-namespace content {
+namespace device {
 class GeolocationServiceContext;
+class WakeLockServiceContext;
+}
+
+namespace gfx {
+class Rect;
+}
+
+namespace content {
+class FrameTreeNode;
 class InterstitialPage;
 class PageState;
 class RenderFrameHost;
-class WakeLockServiceContext;
+class RenderFrameHostImpl;
+class ScreenOrientationProvider;
+class SessionStorageNamespace;
 class WebContents;
 struct AXEventNotificationDetails;
+struct AXLocationChangeNotificationDetails;
 struct ContextMenuParams;
-struct TransitionLayerData;
+struct FileChooserParams;
+
+namespace mojom {
+class CreateNewWindowParams;
+}
 
 // An interface implemented by an object interested in knowing about the state
 // of the RenderFrameHost.
 class CONTENT_EXPORT RenderFrameHostDelegate {
  public:
   // This is used to give the delegate a chance to filter IPC messages.
-  virtual bool OnMessageReceived(RenderFrameHost* render_frame_host,
+  virtual bool OnMessageReceived(RenderFrameHostImpl* render_frame_host,
                                  const IPC::Message& message);
+
+  // Allows the delegate to filter incoming associated inteface requests.
+  virtual void OnAssociatedInterfaceRequest(
+      RenderFrameHost* render_frame_host,
+      const std::string& interface_name,
+      mojo::ScopedInterfaceEndpointHandle handle) {}
 
   // Gets the last committed URL. See WebContents::GetLastCommittedURL for a
   // description of the semantics.
   virtual const GURL& GetMainFrameLastCommittedURL() const;
 
   // A message was added to to the console.
-  virtual bool AddMessageToConsole(int32_t level,
-                                   const base::string16& message,
-                                   int32_t line_no,
-                                   const base::string16& source_id);
+  virtual bool DidAddMessageToConsole(int32_t level,
+                                      const base::string16& message,
+                                      int32_t line_no,
+                                      const base::string16& source_id);
 
   // Informs the delegate whenever a RenderFrameHost is created.
   virtual void RenderFrameCreated(RenderFrameHost* render_frame_host) {}
 
   // Informs the delegate whenever a RenderFrameHost is deleted.
   virtual void RenderFrameDeleted(RenderFrameHost* render_frame_host) {}
-
-  // The RenderFrameHost has been swapped out.
-  virtual void SwappedOut(RenderFrameHost* render_frame_host) {}
 
   // A context menu should be shown, to be built using the context information
   // provided in the supplied params.
@@ -81,9 +103,12 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
                                     IPC::Message* reply_msg) {}
 
   virtual void RunBeforeUnloadConfirm(RenderFrameHost* render_frame_host,
-                                      const base::string16& message,
                                       bool is_reload,
                                       IPC::Message* reply_msg) {}
+
+  // Called when a file selection is to be done.
+  virtual void RunFileChooser(RenderFrameHost* render_frame_host,
+                              const FileChooserParams& params) {}
 
   // Another page accessed the top-level initial empty document, which means it
   // is no longer safe to display a pending URL without risking a URL spoof.
@@ -104,7 +129,6 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // The page's title was changed and should be updated. Only called for the
   // top-level frame.
   virtual void UpdateTitle(RenderFrameHost* render_frame_host,
-                           int32_t page_id,
                            const base::string16& title,
                            base::i18n::TextDirection title_direction) {}
 
@@ -137,9 +161,13 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // Get the accessibility mode for the WebContents that owns this frame.
   virtual AccessibilityMode GetAccessibilityMode() const;
 
-  // Invoked when an accessibility event is received from the renderer.
+  // Called when accessibility events or location changes are received
+  // from a render frame, when the accessibility mode has the
+  // ACCESSIBILITY_MODE_FLAG_WEB_CONTENTS flag set.
   virtual void AccessibilityEventReceived(
       const std::vector<AXEventNotificationDetails>& details) {}
+  virtual void AccessibilityLocationChangesReceived(
+      const std::vector<AXLocationChangeNotificationDetails>& details) {}
 
   // Find a guest RenderFrameHost by its parent |render_frame_host| and
   // |browser_plugin_instance_id|.
@@ -148,17 +176,23 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       int browser_plugin_instance_id);
 
   // Gets the GeolocationServiceContext associated with this delegate.
-  virtual GeolocationServiceContext* GetGeolocationServiceContext();
+  virtual device::GeolocationServiceContext* GetGeolocationServiceContext();
 
   // Gets the WakeLockServiceContext associated with this delegate.
-  virtual WakeLockServiceContext* GetWakeLockServiceContext();
+  virtual device::WakeLockServiceContext* GetWakeLockServiceContext();
+
+  // Gets the ScreenOrientationProvider associated with this delegate.
+  virtual ScreenOrientationProvider* GetScreenOrientationProvider();
 
   // Notification that the frame wants to go into fullscreen mode.
   // |origin| represents the origin of the frame that requests fullscreen.
   virtual void EnterFullscreenMode(const GURL& origin) {}
 
   // Notification that the frame wants to go out of fullscreen mode.
-  virtual void ExitFullscreenMode() {}
+  // |will_cause_resize| indicates whether the fullscreen change causes a
+  // view resize. e.g. This will be false when going from tab fullscreen to
+  // browser fullscreen.
+  virtual void ExitFullscreenMode(bool will_cause_resize) {}
 
   // Let the delegate decide whether postMessage should be delivered to
   // |target_rfh| from a source frame in the given SiteInstance.  This defaults
@@ -180,14 +214,60 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // https://crbug.com/330264.
   virtual void EnsureOpenerProxiesExist(RenderFrameHost* source_rfh) {}
 
+  // Set the |node| frame as focused in the current FrameTree as well as
+  // possibly changing focus in distinct but related inner/outer WebContents.
+  virtual void SetFocusedFrame(FrameTreeNode* node, SiteInstance* source) {}
+
   // Creates a WebUI object for a frame navigating to |url|. If no WebUI
   // applies, returns null.
-  virtual scoped_ptr<WebUIImpl> CreateWebUIForRenderFrameHost(const GURL& url);
+  virtual std::unique_ptr<WebUIImpl> CreateWebUIForRenderFrameHost(
+      const GURL& url);
 
-#if defined(OS_WIN)
-  // Returns the frame's parent's NativeViewAccessible.
-  virtual gfx::NativeViewAccessible GetParentNativeViewAccessible();
-#endif
+  // Called by |frame| to notify that it has received an update on focused
+  // element. |bounds_in_root_view| is the rectangle containing the element that
+  // is focused and is with respect to root frame's RenderWidgetHost's
+  // coordinate space.
+  virtual void OnFocusedElementChangedInFrame(
+      RenderFrameHostImpl* frame,
+      const gfx::Rect& bounds_in_root_view) {}
+
+  // The page is trying to open a new page (e.g. a popup window). The window
+  // should be created associated with the given |main_frame_widget_route_id| in
+  // the process of |source_site_instance|, but it should not be shown yet. That
+  // should happen in response to ShowCreatedWindow.
+  // |params.window_container_type| describes the type of RenderViewHost
+  // container that is requested -- in particular, the window.open call may have
+  // specified 'background' and 'persistent' in the feature string.
+  //
+  // The passed |params.frame_name| parameter is the name parameter that was
+  // passed to window.open(), and will be empty if none was passed.
+  //
+  // Note: this is not called "CreateWindow" because that will clash with
+  // the Windows function which is actually a #define.
+  //
+  // The caller is expected to handle cleanup if this operation fails or is
+  // suppressed, by looking for the existence of a RenderFrameHost in
+  // source_site_instance's process with |main_frame_route_id| after this method
+  // returns.
+  virtual void CreateNewWindow(
+      SiteInstance* source_site_instance,
+      int32_t render_view_route_id,
+      int32_t main_frame_route_id,
+      int32_t main_frame_widget_route_id,
+      const mojom::CreateNewWindowParams& params,
+      SessionStorageNamespace* session_storage_namespace) {}
+
+  // Show a previously created page with the specified disposition and bounds.
+  // The window is identified by the |main_frame_widget_route_id| passed to
+  // CreateNewWindow.
+  //
+  // Note: this is not called "ShowWindow" because that will clash with
+  // the Windows function which is actually a #define.
+  virtual void ShowCreatedWindow(int process_id,
+                                 int main_frame_widget_route_id,
+                                 WindowOpenDisposition disposition,
+                                 const gfx::Rect& initial_rect,
+                                 bool user_gesture) {}
 
  protected:
   virtual ~RenderFrameHostDelegate() {}

@@ -42,9 +42,7 @@ CallStackTable::CallStackTable(int call_stack_suspicion_threshold)
 CallStackTable::~CallStackTable() {}
 
 void CallStackTable::Add(const CallStack* call_stack) {
-  Entry* entry = &entry_map_[call_stack];
-
-  ++entry->net_num_allocs;
+  ++entry_map_[call_stack].count;
   ++num_allocs_;
 }
 
@@ -52,28 +50,58 @@ void CallStackTable::Remove(const CallStack* call_stack) {
   auto iter = entry_map_.find(call_stack);
   if (iter == entry_map_.end())
     return;
-  Entry* entry = &iter->second;
-  --entry->net_num_allocs;
+  uint32_t& count_for_call_stack = iter->second.count;
+  --count_for_call_stack;
   ++num_frees_;
 
   // Delete zero-alloc entries to free up space.
-  if (entry->net_num_allocs == 0)
+  if (count_for_call_stack == 0)
     entry_map_.erase(iter);
 }
 
 void CallStackTable::TestForLeaks() {
   // Add all entries to the ranked list.
-  RankedList ranked_list(kMaxCountOfSuspciousStacks);
+  RankedSet ranked_entries(kMaxCountOfSuspciousStacks);
+  GetTopCallStacks(&ranked_entries);
+  leak_analyzer_.AddSample(std::move(ranked_entries));
+}
 
-  for (const auto& entry_pair : entry_map_) {
-    const Entry& entry = entry_pair.second;
-    // Assumes that |entry.net_num_allocs| is always > 0. If that changes
-    // elsewhere in this class, this code should be updated to only pass values
-    // > 0 to |ranked_list|.
-    LeakDetectorValueType call_stack_value(entry_pair.first);
-    ranked_list.Add(call_stack_value, entry.net_num_allocs);
+void CallStackTable::GetTopCallStacks(RankedSet* top_entries) const {
+  for (const auto& call_stack_count_info : entry_map_) {
+    top_entries->AddCallStack(call_stack_count_info.first,
+                              call_stack_count_info.second.count);
   }
-  leak_analyzer_.AddSample(std::move(ranked_list));
+}
+
+void CallStackTable::UpdateLastDropInfo(size_t timestamp) {
+  for (auto& call_stack_and_info : entry_map_) {
+    auto& count_info = call_stack_and_info.second;
+
+    // If the |previous_count| is 0 then we need to initialize info.
+    if (count_info.previous_count == 0 ||
+        count_info.count < count_info.previous_count) {
+      count_info.last_drop_timestamp = timestamp;
+      count_info.last_drop_count = count_info.count;
+    }
+    count_info.previous_count = count_info.count;
+  }
+}
+
+void CallStackTable::GetLastUptrendInfo(
+    const CallStack* call_stack, size_t timestamp, size_t* timestamp_delta,
+    uint32_t* count_delta) const {
+  const auto& call_stack_count_info_iter = entry_map_.find(call_stack);
+
+  if (call_stack_count_info_iter != entry_map_.end()) {
+    const auto& count_info = call_stack_count_info_iter->second;
+    *timestamp_delta = timestamp - count_info.last_drop_timestamp;
+    *count_delta = count_info.count - count_info.last_drop_count;
+  } else {
+    DLOG(WARNING) << "Accessing information about a call stack that has not "
+                  << "been recorded";
+    *timestamp_delta = timestamp;
+    *count_delta = 0;
+  }
 }
 
 }  // namespace leak_detector

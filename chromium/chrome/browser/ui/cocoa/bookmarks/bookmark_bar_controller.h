@@ -7,11 +7,12 @@
 
 #import <Cocoa/Cocoa.h>
 #include <stdint.h>
+
 #include <map>
+#include <memory>
 
 #import "base/mac/cocoa_protocols.h"
 #include "base/mac/scoped_nsobject.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_bridge.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_constants.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_state.h"
@@ -46,17 +47,17 @@ class ManagedBookmarkService;
 // Used as a maximum width for buttons on the bar.
 const CGFloat kDefaultBookmarkWidth = 150.0;
 
-// Horizontal frame inset for buttons in the bookmark bar.
-const CGFloat kBookmarkHorizontalPadding = 1.0;
-
-// Vertical frame inset for buttons in the bookmark bar.
-const CGFloat kBookmarkVerticalPadding = 2.0;
+// Right margin before the last button in the bookmark bar.
+const CGFloat kBookmarkRightMargin = 8.0;
 
 // Left margin before the first button in the bookmark bar.
-const CGFloat kBookmarkLeftMargin = 2.0;
+const CGFloat kBookmarkLeftMargin = 8.0;
 
-// Right margin before the last button in the bookmark bar.
-const CGFloat kBookmarkRightMargin = 2.0;
+// Vertical frame inset for buttons in the bookmark bar.
+const CGFloat kBookmarkVerticalPadding = 4.0;
+
+// Horizontal frame inset for buttons in the bookmark bar.
+const CGFloat kBookmarkHorizontalPadding = 4.0;
 
 // Used as a min/max width for buttons on menus (not on the bar).
 const CGFloat kBookmarkMenuButtonMinimumWidth = 100.0;
@@ -195,8 +196,15 @@ willAnimateFromState:(BookmarkBar::State)oldState
   // The folder image so we can use one copy for all buttons
   base::scoped_nsobject<NSImage> folderImage_;
 
+  // The Material Design Incognito folder image so we can use one copy for all
+  // buttons
+  base::scoped_nsobject<NSImage> folderImageWhite_;
+
   // The default image, so we can use one copy for all buttons.
   base::scoped_nsobject<NSImage> defaultImage_;
+
+  // The Incognito version of the default image.
+  base::scoped_nsobject<NSImage> defaultImageIncognito_;
 
   // If the bar is disabled, we hide it and ignore show/hide commands.
   // Set when using fullscreen mode.
@@ -204,13 +212,10 @@ willAnimateFromState:(BookmarkBar::State)oldState
 
   // Bridge from Chrome-style C++ notifications (e.g. derived from
   // BookmarkModelObserver)
-  scoped_ptr<BookmarkBarBridge> bridge_;
+  std::unique_ptr<BookmarkBarBridge> bridge_;
 
   // Delegate that is informed about state changes in the bookmark bar.
   id<BookmarkBarControllerDelegate> delegate_;  // weak
-
-  // Delegate that can resize us.
-  id<ViewResizer> resizeDelegate_;  // weak
 
   // Logic for dealing with a click on a bookmark folder button.
   base::scoped_nsobject<BookmarkFolderTarget> folderTarget_;
@@ -289,14 +294,14 @@ willAnimateFromState:(BookmarkBar::State)oldState
   base::scoped_nsobject<BookmarkContextMenuCocoaController>
       contextMenuController_;
 
-  // Weak pointer to the pulsed button for the currently pulsing node. We need
-  // to store this as it may not be possible to determine the pulsing button if
-  // the pulsing node is deleted. Nil if there is no pulsing node.
-  BookmarkButton* pulsingButton_;
+  // The pulsed button for the currently pulsing node. We need to store this as
+  // it may not be possible to determine the pulsing button if the pulsing node
+  // is deleted. Nil if there is no pulsing node.
+  base::scoped_nsobject<BookmarkButton> pulsingButton_;
 
   // Specifically watch the currently pulsing node. This lets us stop pulsing
   // when anything happens to the node. Null if there is no pulsing node.
-  scoped_ptr<BookmarkModelObserverForCocoa> pulsingBookmarkObserver_;
+  std::unique_ptr<BookmarkModelObserverForCocoa> pulsingBookmarkObserver_;
 }
 
 @property(readonly, nonatomic) BookmarkBar::State currentState;
@@ -306,15 +311,19 @@ willAnimateFromState:(BookmarkBar::State)oldState
 @property(assign, nonatomic) BOOL stateAnimationsEnabled;
 @property(assign, nonatomic) BOOL innerContentAnimationsEnabled;
 
-// Initializes the bookmark bar controller with the given browser
-// profile and delegates.
+// Initializes the bookmark bar controller with the given browser and delegate.
+// To properly manage vertical resizing of the bookmark bar, the caller must
+// also call -setResizeDelegate on the -controlledView. This should be done once
+// the initializer returns, since it will trigger nib loading.
 - (id)initWithBrowser:(Browser*)browser
          initialWidth:(CGFloat)initialWidth
-             delegate:(id<BookmarkBarControllerDelegate>)delegate
-       resizeDelegate:(id<ViewResizer>)resizeDelegate;
+             delegate:(id<BookmarkBarControllerDelegate>)delegate;
 
 // The Browser corresponding to this BookmarkBarController.
 - (Browser*)browser;
+
+// Strongly-typed version of [self view]. Note this may trigger nib loading.
+- (BookmarkBarToolbarView*)controlledView;
 
 // The controller for all bookmark bar context menus.
 - (BookmarkContextMenuCocoaController*)menuController;
@@ -353,16 +362,16 @@ willAnimateFromState:(BookmarkBar::State)oldState
 // shouldn't be shown.
 - (CGFloat)toolbarDividerOpacity;
 
-// Updates the sizes and positions of the subviews.
-// TODO(viettrungluu): I'm not convinced this should be public, but I currently
-// need it for animations. Try not to propagate its use.
-- (void)layoutSubviews;
+// Set the size of the view and perform layout.
+- (void)layoutToFrame:(NSRect)frame;
 
 // Called by our view when it is moved to a window.
 - (void)viewDidMoveToWindow;
 
-// Provide a favicon for a bookmark node.  May return nil.
-- (NSImage*)faviconForNode:(const bookmarks::BookmarkNode*)node;
+// Provide a favicon for a bookmark node, specifying whether or not it's for
+// use with a dark window theme.  May return nil.
+- (NSImage*)faviconForNode:(const bookmarks::BookmarkNode*)node
+             forADarkTheme:(BOOL)forADarkTheme;
 
 // Used for situations where the bookmark bar folder menus should no longer
 // be actively popping up. Called when the window loses focus, a click has
@@ -388,6 +397,16 @@ willAnimateFromState:(BookmarkBar::State)oldState
 - (IBAction)openOffTheSideFolderFromButton:(id)sender;
 // Import bookmarks from another browser.
 - (IBAction)importBookmarks:(id)sender;
+
+// Returns the app page shortcut button.
+- (NSButton*)appsPageShortcutButton;
+
+// Returns the "off the side" button (aka the chevron button).
+- (NSButton*)offTheSideButton;
+
+// Returns the "off the side" button image.
+- (NSImage*)offTheSideButtonImage:(BOOL)forDarkMode;
+
 @end
 
 // Redirects from BookmarkBarBridge, the C++ object which glues us to
@@ -419,8 +438,6 @@ willAnimateFromState:(BookmarkBar::State)oldState
 - (void)openOrCloseBookmarkFolderForOffTheSideButton;
 - (BookmarkBarView*)buttonView;
 - (NSMutableArray*)buttons;
-- (NSButton*)offTheSideButton;
-- (NSButton*)appsPageShortcutButton;
 - (BOOL)offTheSideButtonIsHidden;
 - (BOOL)appsPageShortcutButtonIsHidden;
 - (BookmarkButton*)otherBookmarksButton;

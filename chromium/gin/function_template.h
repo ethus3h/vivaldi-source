@@ -17,8 +17,6 @@
 
 namespace gin {
 
-class PerIsolateData;
-
 enum CreateFunctionTemplateFlags {
   HolderIsFirstArgument = 1 << 0,
 };
@@ -237,11 +235,12 @@ v8::Local<v8::FunctionTemplate> CreateFunctionTemplate(
   typedef internal::CallbackHolder<Sig> HolderT;
   HolderT* holder = new HolderT(isolate, callback, callback_flags);
 
-  return v8::FunctionTemplate::New(
-      isolate,
-      &internal::Dispatcher<Sig>::DispatchToCallback,
-      ConvertToV8<v8::Local<v8::External> >(isolate,
-                                             holder->GetHandle(isolate)));
+  v8::Local<v8::FunctionTemplate> tmpl = v8::FunctionTemplate::New(
+      isolate, &internal::Dispatcher<Sig>::DispatchToCallback,
+      ConvertToV8<v8::Local<v8::External>>(isolate,
+                                           holder->GetHandle(isolate)));
+  tmpl->RemovePrototype();
+  return tmpl;
 }
 
 // CreateFunctionHandler installs a CallAsFunction handler on the given

@@ -2,17 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
-#include "ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.h"
 
 namespace ui {
 
@@ -44,7 +46,9 @@ class VkTestXkbKeyboardLayoutEngine : public XkbKeyboardLayoutEngine {
   };
   struct KeysymEntry {
     DomCode dom_code;
+    int flags;
     xkb_keysym_t keysym;
+    base::char16 character;
   };
 
   struct RuleNames {
@@ -128,7 +132,7 @@ class VkTestXkbKeyboardLayoutEngine : public XkbKeyboardLayoutEngine {
           return false;
         }
         *xkb_keysym = keysym_entry_->keysym;
-        *character = 0;
+        *character = keysym_entry_->character;
         return true;
     }
     return false;
@@ -149,7 +153,7 @@ class XkbLayoutEngineVkTest : public testing::Test {
 
   void SetUp() override {
     KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
-        make_scoped_ptr(new VkTestXkbKeyboardLayoutEngine(keycode_converter_)));
+        base::MakeUnique<VkTestXkbKeyboardLayoutEngine>(keycode_converter_));
     layout_engine_ = static_cast<VkTestXkbKeyboardLayoutEngine*>(
         KeyboardLayoutEngineManager::GetKeyboardLayoutEngine());
   }
@@ -800,28 +804,34 @@ TEST_F(XkbLayoutEngineVkTest, KeyboardCodeForNonPrintable) {
     VkTestXkbKeyboardLayoutEngine::KeysymEntry test;
     KeyboardCode key_code;
   } kVkeyTestCase[] = {
-    {{DomCode::CONTROL_LEFT, XKB_KEY_Control_L}, VKEY_CONTROL},
-    {{DomCode::CONTROL_RIGHT, XKB_KEY_Control_R}, VKEY_CONTROL},
-    {{DomCode::SHIFT_LEFT, XKB_KEY_Shift_L}, VKEY_SHIFT},
-    {{DomCode::SHIFT_RIGHT, XKB_KEY_Shift_R}, VKEY_SHIFT},
-    {{DomCode::OS_LEFT, XKB_KEY_Super_L}, VKEY_LWIN},
-    {{DomCode::OS_RIGHT, XKB_KEY_Super_R}, VKEY_LWIN},
-    {{DomCode::ALT_LEFT, XKB_KEY_Alt_L}, VKEY_MENU},
-    {{DomCode::ALT_RIGHT, XKB_KEY_Alt_R}, VKEY_MENU},
-    {{DomCode::ALT_RIGHT, XKB_KEY_ISO_Level3_Shift}, VKEY_ALTGR},
-    {{DomCode::DIGIT1, XKB_KEY_1}, VKEY_1},
-    {{DomCode::NUMPAD1, XKB_KEY_KP_1}, VKEY_1},
-    {{DomCode::CAPS_LOCK, XKB_KEY_Caps_Lock}, VKEY_CAPITAL},
-    {{DomCode::ENTER, XKB_KEY_Return}, VKEY_RETURN},
-    {{DomCode::NUMPAD_ENTER, XKB_KEY_KP_Enter}, VKEY_RETURN},
-    {{DomCode::SLEEP, XKB_KEY_XF86Sleep}, VKEY_SLEEP},
+    {{DomCode::CONTROL_LEFT, EF_NONE, XKB_KEY_Control_L}, VKEY_CONTROL},
+    {{DomCode::CONTROL_RIGHT, EF_NONE, XKB_KEY_Control_R}, VKEY_CONTROL},
+    {{DomCode::SHIFT_LEFT, EF_NONE, XKB_KEY_Shift_L}, VKEY_SHIFT},
+    {{DomCode::SHIFT_RIGHT, EF_NONE, XKB_KEY_Shift_R}, VKEY_SHIFT},
+    {{DomCode::META_LEFT, EF_NONE, XKB_KEY_Super_L}, VKEY_LWIN},
+    {{DomCode::META_RIGHT, EF_NONE, XKB_KEY_Super_R}, VKEY_LWIN},
+    {{DomCode::ALT_LEFT, EF_NONE, XKB_KEY_Alt_L}, VKEY_MENU},
+    {{DomCode::ALT_RIGHT, EF_NONE, XKB_KEY_Alt_R}, VKEY_MENU},
+    {{DomCode::ALT_RIGHT, EF_NONE, XKB_KEY_ISO_Level3_Shift}, VKEY_ALTGR},
+    {{DomCode::DIGIT1, EF_NONE, XKB_KEY_1}, VKEY_1},
+    {{DomCode::NUMPAD1, EF_NONE, XKB_KEY_KP_1}, VKEY_1},
+    {{DomCode::CAPS_LOCK, EF_NONE, XKB_KEY_Caps_Lock}, VKEY_CAPITAL},
+    {{DomCode::ENTER, EF_NONE, XKB_KEY_Return}, VKEY_RETURN},
+    {{DomCode::NUMPAD_ENTER, EF_NONE, XKB_KEY_KP_Enter}, VKEY_RETURN},
+    {{DomCode::SLEEP, EF_NONE, XKB_KEY_XF86Sleep}, VKEY_SLEEP},
+    // Verify that number pad digits produce located VKEY codes.
+    {{DomCode::NUMPAD0, EF_NONE, XKB_KEY_KP_0, '0'}, VKEY_NUMPAD0},
+    {{DomCode::NUMPAD9, EF_NONE, XKB_KEY_KP_9, '9'}, VKEY_NUMPAD9},
+    // Verify AltGr+V & AltGr+W on de(neo) layout.
+    {{DomCode::US_W, EF_ALTGR_DOWN, XKB_KEY_BackSpace, 8}, VKEY_BACKSPACE},
+    {{DomCode::US_V, EF_ALTGR_DOWN, XKB_KEY_Return, 13}, VKEY_ENTER},
   };
   for (const auto& e : kVkeyTestCase) {
     SCOPED_TRACE(static_cast<int>(e.test.dom_code));
     layout_engine_->SetEntry(&e.test);
     DomKey dom_key = DomKey::NONE;
     KeyboardCode key_code = VKEY_UNKNOWN;
-    EXPECT_TRUE(layout_engine_->Lookup(e.test.dom_code, EF_NONE, &dom_key,
+    EXPECT_TRUE(layout_engine_->Lookup(e.test.dom_code, e.test.flags, &dom_key,
                                        &key_code));
     EXPECT_EQ(e.key_code, key_code);
   }

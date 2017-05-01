@@ -14,14 +14,28 @@
 #include "base/strings/string_piece.h"
 #include "ui/base/ui_base_export.h"
 
+namespace base {
+class DictionaryValue;
+}
+
 namespace ui {
 
-// Replace ${foo} in the format string with the value for the foo key in
+// Map of strings for template replacement in |ReplaceTemplateExpressions|.
+typedef std::map<const std::string, std::string> TemplateReplacements;
+
+// Convert a dictionary to a replacement map. This helper function is to assist
+// migration to using TemplateReplacements directly (which is preferred).
+// TODO(dschuyler): remove this function by using TemplateReplacements directly.
+UI_BASE_EXPORT void TemplateReplacementsFromDictionaryValue(
+    const base::DictionaryValue& dictionary,
+    TemplateReplacements* replacements);
+
+// Replace $i18n*{foo} in the format string with the value for the foo key in
 // |subst|.  If the key is not found in the |substitutions| that item will
 // be unaltered.
 UI_BASE_EXPORT std::string ReplaceTemplateExpressions(
-    base::StringPiece format_string,
-    const std::map<base::StringPiece, std::string>& substitutions);
+    base::StringPiece source,
+    const TemplateReplacements& replacements);
 
 }  // namespace ui
 

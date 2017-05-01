@@ -13,13 +13,18 @@
 #include "base/callback.h"
 #include "base/containers/hash_tables.h"
 #include "base/lazy_instance.h"
+#include "base/memory/ptr_util.h"
 #include "content/browser/frame_host/frame_tree_node.h"
+#include "content/browser/frame_host/navigation_controller_impl.h"
+#include "content/browser/frame_host/navigation_entry_impl.h"
 #include "content/browser/frame_host/navigator.h"
 #include "content/browser/frame_host/render_frame_host_factory.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/frame_host/render_frame_proxy_host.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/common/content_switches_internal.h"
+#include "content/common/frame_owner_properties.h"
 #include "content/common/input_messages.h"
 #include "content/common/site_isolation_policy.h"
 #include "third_party/WebKit/public/web/WebSandboxFlags.h"
@@ -28,90 +33,60 @@ namespace content {
 
 namespace {
 
-// Used with FrameTree::ForEach() to search for the FrameTreeNode
-// corresponding to |frame_tree_node_id| within a specific FrameTree.
-bool FrameTreeNodeForId(int frame_tree_node_id,
-                        FrameTreeNode** out_node,
-                        FrameTreeNode* node) {
-  if (node->frame_tree_node_id() == frame_tree_node_id) {
-    *out_node = node;
-    // Terminate iteration once the node has been found.
-    return false;
-  }
-  return true;
-}
-
-// Used with FrameTree::ForEach() to search for the FrameTreeNode with the given
-// |name| within a specific FrameTree.
-bool FrameTreeNodeForName(const std::string& name,
-                          FrameTreeNode** out_node,
-                          FrameTreeNode* node) {
-  if (node->frame_name() == name) {
-    *out_node = node;
-    // Terminate iteration once the node has been found.
-    return false;
-  }
-  return true;
-}
-
-bool CreateProxyForSiteInstance(const scoped_refptr<SiteInstance>& instance,
-                                FrameTreeNode* node) {
-  // If a new frame is created in the current SiteInstance, other frames in
-  // that SiteInstance don't need a proxy for the new frame.
-  SiteInstance* current_instance =
-      node->render_manager()->current_frame_host()->GetSiteInstance();
-  if (current_instance != instance.get())
-    node->render_manager()->CreateRenderFrameProxy(instance.get());
-  return true;
-}
-
-// Helper function used with FrameTree::ForEach() for retrieving the total
-// loading progress and number of frames in a frame tree.
-bool CollectLoadProgress(double* progress,
-                         double* loaded_bytes,
-                         int* loaded_elements,
-                         int* total_elements,
-                         int* frame_count,
-                         FrameTreeNode* node) {
-  // Ignore the current frame if it has not started loading.
-  if (!node->has_started_loading())
-    return true;
-
-  // Collect progress.
-  *progress += node->loading_progress();
-  *loaded_bytes += node->loaded_bytes();
-  *total_elements += node->total_elements();
-  *loaded_elements += node->loaded_elements();
-  (*frame_count)++;
-  return true;
-}
-
-// Helper function used with FrameTree::ForEach() to reset the load progress.
-bool ResetNodeLoadProgress(FrameTreeNode* node) {
-  node->reset_loading_progress();
-  return true;
-}
-
-// Helper function used with FrameTree::ForEach() to check if at least one of
-// the nodes is loading.
-bool IsNodeLoading(bool* is_loading, FrameTreeNode* node) {
-  if (node->IsLoading()) {
-    // There is at least one node loading, so abort traversal.
-    *is_loading = true;
-    return false;
-  }
-  return true;
-}
-
-// Helper function used with FrameTree::ForEach to collect SiteInstances
-// involved in rendering a single FrameTree (which is a subset of SiteInstances
-// in main frame's proxy_hosts_ because of openers).
-bool CollectSiteInstances(std::set<SiteInstance*>* set, FrameTreeNode* node) {
-  set->insert(node->current_frame_host()->GetSiteInstance());
-  return true;
+// Helper function to collect SiteInstances involved in rendering a single
+// FrameTree (which is a subset of SiteInstances in main frame's proxy_hosts_
+// because of openers).
+std::set<SiteInstance*> CollectSiteInstances(FrameTree* tree) {
+  std::set<SiteInstance*> instances;
+  for (FrameTreeNode* node : tree->Nodes())
+    instances.insert(node->current_frame_host()->GetSiteInstance());
+  return instances;
 }
 
 }  // namespace
+
+FrameTree::NodeIterator::NodeIterator(const NodeIterator& other) = default;
+
+FrameTree::NodeIterator::~NodeIterator() {}
+
+FrameTree::NodeIterator& FrameTree::NodeIterator::operator++() {
+  for (size_t i = 0; i < current_node_->child_count(); ++i) {
+    FrameTreeNode* child = current_node_->child_at(i);
+    if (child == node_to_skip_)
+      continue;
+    queue_.push(child);
+  }
+
+  if (!queue_.empty()) {
+    current_node_ = queue_.front();
+    queue_.pop();
+  } else {
+    current_node_ = nullptr;
+  }
+
+  return *this;
+}
+
+bool FrameTree::NodeIterator::operator==(const NodeIterator& rhs) const {
+  return current_node_ == rhs.current_node_;
+}
+
+FrameTree::NodeIterator::NodeIterator(FrameTreeNode* starting_node,
+                                      FrameTreeNode* node_to_skip)
+    : current_node_(starting_node != node_to_skip ? starting_node : nullptr),
+      node_to_skip_(node_to_skip) {}
+
+FrameTree::NodeIterator FrameTree::NodeRange::begin() {
+  return NodeIterator(root_, node_to_skip_);
+}
+
+FrameTree::NodeIterator FrameTree::NodeRange::end() {
+  return NodeIterator(nullptr, nullptr);
+}
+
+FrameTree::NodeRange::NodeRange(FrameTreeNode* root,
+                                FrameTreeNode* node_to_skip)
+    : root_(root), node_to_skip_(node_to_skip) {}
 
 FrameTree::FrameTree(Navigator* navigator,
                      RenderFrameHostDelegate* render_frame_delegate,
@@ -125,16 +100,16 @@ FrameTree::FrameTree(Navigator* navigator,
       root_(new FrameTreeNode(this,
                               navigator,
                               render_frame_delegate,
-                              render_view_delegate,
                               render_widget_delegate,
                               manager_delegate,
+                              nullptr,
                               // The top-level frame must always be in a
                               // document scope.
                               blink::WebTreeScopeType::Document,
                               std::string(),
-                              blink::WebSandboxFlags::None,
-                              blink::WebFrameOwnerProperties())),
-      focused_frame_tree_node_id_(-1),
+                              std::string(),
+                              FrameOwnerProperties())),
+      focused_frame_tree_node_id_(FrameTreeNode::kFrameTreeNodeInvalidId),
       load_progress_(0.0) {}
 
 FrameTree::~FrameTree() {
@@ -143,9 +118,11 @@ FrameTree::~FrameTree() {
 }
 
 FrameTreeNode* FrameTree::FindByID(int frame_tree_node_id) {
-  FrameTreeNode* node = nullptr;
-  ForEach(base::Bind(&FrameTreeNodeForId, frame_tree_node_id, &node));
-  return node;
+  for (FrameTreeNode* node : Nodes()) {
+    if (node->frame_tree_node_id() == frame_tree_node_id)
+      return node;
+  }
+  return nullptr;
 }
 
 FrameTreeNode* FrameTree::FindByRoutingID(int process_id, int routing_id) {
@@ -172,44 +149,34 @@ FrameTreeNode* FrameTree::FindByName(const std::string& name) {
   if (name.empty())
     return root_;
 
-  FrameTreeNode* node = nullptr;
-  ForEach(base::Bind(&FrameTreeNodeForName, name, &node));
-  return node;
-}
-
-void FrameTree::ForEach(
-    const base::Callback<bool(FrameTreeNode*)>& on_node) const {
-  ForEach(on_node, nullptr);
-}
-
-void FrameTree::ForEach(
-    const base::Callback<bool(FrameTreeNode*)>& on_node,
-    FrameTreeNode* skip_this_subtree) const {
-  std::queue<FrameTreeNode*> queue;
-  queue.push(root_);
-
-  while (!queue.empty()) {
-    FrameTreeNode* node = queue.front();
-    queue.pop();
-    if (skip_this_subtree == node)
-      continue;
-
-    if (!on_node.Run(node))
-      break;
-
-    for (size_t i = 0; i < node->child_count(); ++i)
-      queue.push(node->child_at(i));
+  for (FrameTreeNode* node : Nodes()) {
+    if (node->frame_name() == name)
+      return node;
   }
+
+  return nullptr;
 }
 
-bool FrameTree::AddFrame(
-    FrameTreeNode* parent,
-    int process_id,
-    int new_routing_id,
-    blink::WebTreeScopeType scope,
-    const std::string& frame_name,
-    blink::WebSandboxFlags sandbox_flags,
-    const blink::WebFrameOwnerProperties& frame_owner_properties) {
+FrameTree::NodeRange FrameTree::Nodes() {
+  return NodesExcept(nullptr);
+}
+
+FrameTree::NodeRange FrameTree::SubtreeNodes(FrameTreeNode* subtree_root) {
+  return NodeRange(subtree_root, nullptr);
+}
+
+FrameTree::NodeRange FrameTree::NodesExcept(FrameTreeNode* node_to_skip) {
+  return NodeRange(root_, node_to_skip);
+}
+
+bool FrameTree::AddFrame(FrameTreeNode* parent,
+                         int process_id,
+                         int new_routing_id,
+                         blink::WebTreeScopeType scope,
+                         const std::string& frame_name,
+                         const std::string& frame_unique_name,
+                         blink::WebSandboxFlags sandbox_flags,
+                         const FrameOwnerProperties& frame_owner_properties) {
   CHECK_NE(new_routing_id, MSG_ROUTING_NONE);
 
   // A child frame always starts with an initial empty document, which means
@@ -221,11 +188,25 @@ bool FrameTree::AddFrame(
 
   // AddChild is what creates the RenderFrameHost.
   FrameTreeNode* added_node = parent->AddChild(
-      make_scoped_ptr(new FrameTreeNode(
+      base::WrapUnique(new FrameTreeNode(
           this, parent->navigator(), render_frame_delegate_,
-          render_view_delegate_, render_widget_delegate_, manager_delegate_,
-          scope, frame_name, sandbox_flags, frame_owner_properties)),
+          render_widget_delegate_, manager_delegate_, parent, scope, frame_name,
+          frame_unique_name, frame_owner_properties)),
       process_id, new_routing_id);
+
+  // The last committed NavigationEntry may have a FrameNavigationEntry with the
+  // same |frame_unique_name|, since we don't remove FrameNavigationEntries if
+  // their frames are deleted.  If there is a stale one, remove it to avoid
+  // conflicts on future updates.
+  NavigationEntryImpl* last_committed_entry = static_cast<NavigationEntryImpl*>(
+      parent->navigator()->GetController()->GetLastCommittedEntry());
+  if (last_committed_entry)
+    last_committed_entry->ClearStaleFrameEntriesForNewFrame(added_node);
+
+  // Set sandbox flags and make them effective immediately, since initial
+  // sandbox flags should apply to the initial empty document in the frame.
+  added_node->SetPendingSandboxFlags(sandbox_flags);
+  added_node->CommitPendingSandboxFlags();
 
   // Now that the new node is part of the FrameTree and has a RenderFrameHost,
   // we can announce the creation of the initial RenderFrame which already
@@ -247,30 +228,28 @@ void FrameTree::RemoveFrame(FrameTreeNode* child) {
 void FrameTree::CreateProxiesForSiteInstance(
     FrameTreeNode* source,
     SiteInstance* site_instance) {
-  // Create the swapped out RVH for the new SiteInstance. This will create
-  // a top-level swapped out RFH as well, which will then be wrapped by a
-  // RenderFrameProxyHost.
+  // Create the RenderFrameProxyHost for the new SiteInstance.
   if (!source || !source->IsMainFrame()) {
     RenderViewHostImpl* render_view_host = GetRenderViewHost(site_instance);
     if (!render_view_host) {
-      if (SiteIsolationPolicy::IsSwappedOutStateForbidden()) {
-        root()->render_manager()->CreateRenderFrameProxy(site_instance);
-      } else {
-        root()->render_manager()->CreateRenderFrame(
-            site_instance, CREATE_RF_SWAPPED_OUT | CREATE_RF_HIDDEN, nullptr);
-      }
+      root()->render_manager()->CreateRenderFrameProxy(site_instance);
     } else {
       root()->render_manager()->EnsureRenderViewInitialized(render_view_host,
                                                             site_instance);
     }
   }
 
-  scoped_refptr<SiteInstance> instance(site_instance);
-
   // Proxies are created in the FrameTree in response to a node navigating to a
   // new SiteInstance. Since |source|'s navigation will replace the currently
   // loaded document, the entire subtree under |source| will be removed.
-  ForEach(base::Bind(&CreateProxyForSiteInstance, instance), source);
+  for (FrameTreeNode* node : NodesExcept(source)) {
+    // If a new frame is created in the current SiteInstance, other frames in
+    // that SiteInstance don't need a proxy for the new frame.
+    SiteInstance* current_instance =
+        node->render_manager()->current_frame_host()->GetSiteInstance();
+    if (current_instance != site_instance)
+      node->render_manager()->CreateRenderFrameProxy(site_instance);
+  }
 }
 
 RenderFrameHostImpl* FrameTree::GetMainFrame() const {
@@ -285,8 +264,9 @@ void FrameTree::SetFocusedFrame(FrameTreeNode* node, SiteInstance* source) {
   if (node == GetFocusedFrame())
     return;
 
-  std::set<SiteInstance*> frame_tree_site_instances;
-  ForEach(base::Bind(&CollectSiteInstances, &frame_tree_site_instances));
+
+  std::set<SiteInstance*> frame_tree_site_instances =
+      CollectSiteInstances(this);
 
   SiteInstance* current_instance =
       node->current_frame_host()->GetSiteInstance();
@@ -301,7 +281,7 @@ void FrameTree::SetFocusedFrame(FrameTreeNode* node, SiteInstance* source) {
   // new focused frame (since it initiated the focus change), and we notify the
   // new focused frame's SiteInstance (if it differs from |source|) separately
   // below.
-  for (const auto& instance : frame_tree_site_instances) {
+  for (auto* instance : frame_tree_site_instances) {
     if (instance != source && instance != current_instance) {
       DCHECK(SiteIsolationPolicy::AreCrossProcessFramesPossible());
       RenderFrameProxyHost* proxy =
@@ -317,6 +297,11 @@ void FrameTree::SetFocusedFrame(FrameTreeNode* node, SiteInstance* source) {
 
   focused_frame_tree_node_id_ = node->frame_tree_node_id();
   node->DidFocus();
+
+  // The accessibility tree data for the root of the frame tree keeps
+  // track of the focused frame too, so update that every time the
+  // focused frame changes.
+  root()->current_frame_host()->UpdateAXTreeData();
 }
 
 void FrameTree::SetFrameRemoveListener(
@@ -332,21 +317,9 @@ RenderViewHostImpl* FrameTree::CreateRenderViewHost(
     bool hidden) {
   RenderViewHostMap::iterator iter =
       render_view_host_map_.find(site_instance->GetId());
-  if (iter != render_view_host_map_.end()) {
-    // If a RenderViewHost is pending deletion for this |site_instance|, it
-    // shouldn't be reused, so put it in the map of RenderViewHosts pending
-    // shutdown.  Otherwise, return the existing RenderViewHost for the
-    // SiteInstance.  Note that if swapped-out is forbidden, the
-    // RenderViewHost's main frame has already been cleared, so we cannot rely
-    // on checking whether the main frame is pending deletion.
-    if (iter->second->is_pending_deletion()) {
-      render_view_host_pending_shutdown_map_.insert(
-          std::make_pair(site_instance->GetId(), iter->second));
-      render_view_host_map_.erase(iter);
-    } else {
-      return iter->second;
-    }
-  }
+  if (iter != render_view_host_map_.end())
+    return iter->second;
+
   RenderViewHostImpl* rvh =
       static_cast<RenderViewHostImpl*>(RenderViewHostFactory::Create(
           site_instance, render_view_delegate_, render_widget_delegate_,
@@ -359,9 +332,10 @@ RenderViewHostImpl* FrameTree::CreateRenderViewHost(
 RenderViewHostImpl* FrameTree::GetRenderViewHost(SiteInstance* site_instance) {
   RenderViewHostMap::iterator iter =
       render_view_host_map_.find(site_instance->GetId());
-  if (iter == render_view_host_map_.end())
-    return nullptr;
-  return iter->second;
+  if (iter != render_view_host_map_.end())
+    return iter->second;
+
+  return nullptr;
 }
 
 void FrameTree::AddRenderViewHostRef(RenderViewHostImpl* render_view_host) {
@@ -379,45 +353,23 @@ void FrameTree::ReleaseRenderViewHostRef(RenderViewHostImpl* render_view_host) {
   int32_t site_instance_id = site_instance->GetId();
   RenderViewHostMap::iterator iter =
       render_view_host_map_.find(site_instance_id);
-  if (iter != render_view_host_map_.end() && iter->second == render_view_host) {
-    // Decrement the refcount and shutdown the RenderViewHost if no one else is
-    // using it.
-    CHECK_GT(iter->second->ref_count(), 0);
-    iter->second->decrement_ref_count();
-    if (iter->second->ref_count() == 0) {
-      iter->second->ShutdownAndDestroy();
-      render_view_host_map_.erase(iter);
-    }
-  } else {
-    // The RenderViewHost should be in the list of RenderViewHosts pending
-    // shutdown.
-    bool render_view_host_found = false;
-    std::pair<RenderViewHostMultiMap::iterator,
-              RenderViewHostMultiMap::iterator> result =
-        render_view_host_pending_shutdown_map_.equal_range(site_instance_id);
-    for (RenderViewHostMultiMap::iterator multi_iter = result.first;
-         multi_iter != result.second;
-         ++multi_iter) {
-      if (multi_iter->second != render_view_host)
-        continue;
-      render_view_host_found = true;
-      // Decrement the refcount and shutdown the RenderViewHost if no one else
-      // is using it.
-      CHECK_GT(render_view_host->ref_count(), 0);
-      render_view_host->decrement_ref_count();
-      if (render_view_host->ref_count() == 0) {
-        render_view_host->ShutdownAndDestroy();
-        render_view_host_pending_shutdown_map_.erase(multi_iter);
-      }
-      break;
-    }
-    CHECK(render_view_host_found);
+
+  CHECK(iter != render_view_host_map_.end());
+  CHECK_EQ(iter->second, render_view_host);
+
+  // Decrement the refcount and shutdown the RenderViewHost if no one else is
+  // using it.
+  CHECK_GT(iter->second->ref_count(), 0);
+  iter->second->decrement_ref_count();
+  if (iter->second->ref_count() == 0) {
+    iter->second->ShutdownAndDestroy();
+    render_view_host_map_.erase(iter);
   }
 }
 
 void FrameTree::FrameRemoved(FrameTreeNode* frame) {
   if (frame->frame_tree_node_id() == focused_frame_tree_node_id_)
-    focused_frame_tree_node_id_ = -1;
+    focused_frame_tree_node_id_ = FrameTreeNode::kFrameTreeNodeInvalidId;
 
   // No notification for the root frame.
   if (!frame->parent()) {
@@ -432,19 +384,59 @@ void FrameTree::FrameRemoved(FrameTreeNode* frame) {
 
 void FrameTree::UpdateLoadProgress() {
   double progress = 0.0;
+  ProgressBarCompletion completion = GetProgressBarCompletionPolicy();
   double loaded_bytes = 0.0;
   int loaded_elements = 0;
   int total_elements = 0;
   int frame_count = 0;
+  switch (completion) {
+    case ProgressBarCompletion::DOM_CONTENT_LOADED:
+    case ProgressBarCompletion::RESOURCES_BEFORE_DCL:
+      if (root_->has_started_loading())
+        progress = root_->loading_progress();
+      break;
+    case ProgressBarCompletion::LOAD_EVENT:
+      for (FrameTreeNode* node : Nodes()) {
+        // Ignore the current frame if it has not started loading.
+        if (!node->has_started_loading())
+          continue;
+        progress += node->loading_progress();
+        frame_count++;
 
-  ForEach(base::Bind(&CollectLoadProgress, &progress, &loaded_bytes,
-                     &loaded_elements, &total_elements, &frame_count));
+        // Vivaldi addition:
+        loaded_bytes += node->loaded_bytes();
+        total_elements += node->total_elements();
+        loaded_elements += node->loaded_elements();
+      }
+      break;
+    case ProgressBarCompletion::RESOURCES_BEFORE_DCL_AND_SAME_ORIGIN_IFRAMES:
+      for (FrameTreeNode* node : Nodes()) {
+        // Ignore the current frame if it has not started loading,
+        // if the frame is cross-origin, or about:blank.
+        if (!node->has_started_loading() || !node->HasSameOrigin(*root_) ||
+            node->current_url() == url::kAboutBlankURL)
+          continue;
+        progress += node->loading_progress();
+        frame_count++;
+
+        // Vivaldi addition:
+        loaded_bytes += node->loaded_bytes();
+        total_elements += node->total_elements();
+        loaded_elements += node->loaded_elements();
+      }
+      break;
+    default:
+      NOTREACHED();
+  }
+
   if (frame_count != 0)
     progress /= frame_count;
 
   if (progress <= load_progress_)
     return;
   load_progress_ = progress;
+
+  // Vivaldi addition:
   loaded_bytes_ = loaded_bytes;
   loaded_elements_ = loaded_elements;
   total_elements_ = total_elements;
@@ -454,29 +446,32 @@ void FrameTree::UpdateLoadProgress() {
 }
 
 void FrameTree::ResetLoadProgress() {
-  ForEach(base::Bind(&ResetNodeLoadProgress));
+  for (FrameTreeNode* node : Nodes())
+    node->reset_loading_progress();
   load_progress_ = 0.0;
   loaded_bytes_ = 0;
   loaded_elements_ = 0;
   total_elements_ = 0;
 }
 
-bool FrameTree::IsLoading() {
-  bool is_loading = false;
-  ForEach(base::Bind(&IsNodeLoading, &is_loading));
-  return is_loading;
+bool FrameTree::IsLoading() const {
+  for (const FrameTreeNode* node : const_cast<FrameTree*>(this)->Nodes()) {
+    if (node->IsLoading())
+      return true;
+  }
+  return false;
 }
 
 void FrameTree::ReplicatePageFocus(bool is_focused) {
-  std::set<SiteInstance*> frame_tree_site_instances;
-  ForEach(base::Bind(&CollectSiteInstances, &frame_tree_site_instances));
+  std::set<SiteInstance*> frame_tree_site_instances =
+      CollectSiteInstances(this);
 
   // Send the focus update to main frame's proxies in all SiteInstances of
   // other frames in this FrameTree. Note that the main frame might also know
   // about proxies in SiteInstances for frames in a different FrameTree (e.g.,
   // for window.open), so we can't just iterate over its proxy_hosts_ in
   // RenderFrameHostManager.
-  for (const auto& instance : frame_tree_site_instances)
+  for (auto* instance : frame_tree_site_instances)
     SetPageFocus(instance, is_focused);
 }
 

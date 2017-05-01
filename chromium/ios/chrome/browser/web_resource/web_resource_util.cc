@@ -9,6 +9,7 @@
 #include "base/location.h"
 #include "base/task_runner.h"
 #include "base/task_runner_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "ios/web/public/web_thread.h"
 
@@ -42,14 +43,14 @@ void ParseJSONOnBackgroundThread(
     return;
   }
 
-  scoped_ptr<base::Value> value(base::JSONReader::Read(data));
+  std::unique_ptr<base::Value> value(base::JSONReader::Read(data));
   if (!value.get()) {
     // Page information not properly read, or corrupted.
     PostErrorTask(task_runner, error_callback, kInvalidDataTypeError);
     return;
   }
 
-  if (!value->IsType(base::Value::TYPE_DICTIONARY)) {
+  if (!value->IsType(base::Value::Type::DICTIONARY)) {
     PostErrorTask(task_runner, error_callback, kUnexpectedJSONFormatError);
     return;
   }
@@ -65,9 +66,10 @@ void StartParseJSONAsync(
     const WebResourceService::SuccessCallback& success_callback,
     const WebResourceService::ErrorCallback& error_callback) {
   web::WebThread::PostBlockingPoolTask(
-      FROM_HERE, base::Bind(&ParseJSONOnBackgroundThread,
-                            base::ThreadTaskRunnerHandle::Get(), data,
-                            success_callback, error_callback));
+      FROM_HERE,
+      base::Bind(&ParseJSONOnBackgroundThread,
+                 base::RetainedRef(base::ThreadTaskRunnerHandle::Get()), data,
+                 success_callback, error_callback));
 }
 
 }  // namespace

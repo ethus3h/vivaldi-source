@@ -6,12 +6,13 @@
 #define CHROMECAST_BROWSER_CAST_CONTENT_BROWSER_CLIENT_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
+#include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/content_browser_client.h"
 
 class PrefService;
@@ -20,22 +21,30 @@ namespace breakpad {
 class CrashHandlerHostLinux;
 }
 
-namespace media {
-class AudioManagerFactory;
-class BrowserCdmFactory;
-}
-
 namespace metrics {
 class MetricsService;
+}
+
+namespace net {
+class URLRequestContextGetter;
+class X509Certificate;
+}
+
+namespace service_manager {
+class InterfaceRegistry;
 }
 
 namespace chromecast {
 class CastService;
 
 namespace media {
+class MediaCapsImpl;
 class MediaPipelineBackend;
+class MediaPipelineBackendManager;
 struct MediaPipelineDeviceParams;
-class CmaMediaPipelineClient;
+class MediaResourceTracker;
+class VideoPlaneController;
+class VideoResolutionPolicy;
 }
 
 namespace shell {
@@ -47,35 +56,47 @@ class CastContentBrowserClient : public content::ContentBrowserClient {
  public:
   // Creates an implementation of CastContentBrowserClient. Platform should
   // link in an implementation as needed.
-  static scoped_ptr<CastContentBrowserClient> Create();
+  static std::unique_ptr<CastContentBrowserClient> Create();
 
   ~CastContentBrowserClient() override;
 
   // Appends extra command line arguments before launching a new process.
   virtual void AppendExtraCommandLineSwitches(base::CommandLine* command_line);
 
+  // Hook for code to run before browser threads created.
+  virtual void PreCreateThreads();
+
   // Creates and returns the CastService instance for the current process.
   // Note: |request_context_getter| might be different than the main request
   // getter accessible via CastBrowserProcess.
-  virtual scoped_ptr<CastService> CreateCastService(
+  virtual std::unique_ptr<CastService> CreateCastService(
       content::BrowserContext* browser_context,
       PrefService* pref_service,
-      net::URLRequestContextGetter* request_context_getter);
+      net::URLRequestContextGetter* request_context_getter,
+      media::VideoPlaneController* video_plane_controller);
 
 #if !defined(OS_ANDROID)
-  virtual scoped_ptr<::media::AudioManagerFactory> CreateAudioManagerFactory();
+  // Gets object for enforcing video resolution policy restrictions.
+  virtual media::VideoResolutionPolicy* GetVideoResolutionPolicy();
 
-  // Creates a CmaMediaPipelineClient which is responsible to create (CMA
-  // backend)
-  // for media playback and watch media pipeline status, called once per media
-  // player
-  // instance.
-  virtual scoped_refptr<media::CmaMediaPipelineClient>
-  CreateCmaMediaPipelineClient();
+  // Returns the task runner that must be used for media IO.
+  scoped_refptr<base::SingleThreadTaskRunner> GetMediaTaskRunner();
+
+  // Creates a MediaPipelineDevice (CMA backend) for media playback, called
+  // once per media player instance.
+  virtual std::unique_ptr<media::MediaPipelineBackend>
+  CreateMediaPipelineBackend(const media::MediaPipelineDeviceParams& params,
+                             const std::string& audio_device_id);
+
+  media::MediaResourceTracker* media_resource_tracker();
+
+  media::MediaPipelineBackendManager* media_pipeline_backend_manager();
+
+  ::media::ScopedAudioManagerPtr CreateAudioManager(
+      ::media::AudioLogFactory* audio_log_factory) override;
+  std::unique_ptr<::media::CdmFactory> CreateCdmFactory() override;
 #endif
-
-  // Performs cleanup for process exit (but before AtExitManager cleanup).
-  void ProcessExiting();
+  media::MediaCapsImpl* media_caps();
 
   // Invoked when the metrics client ID changes.
   virtual void SetMetricsClientId(const std::string& client_id);
@@ -92,15 +113,9 @@ class CastContentBrowserClient : public content::ContentBrowserClient {
   content::BrowserMainParts* CreateBrowserMainParts(
       const content::MainFunctionParams& parameters) override;
   void RenderProcessWillLaunch(content::RenderProcessHost* host) override;
-  net::URLRequestContextGetter* CreateRequestContext(
-      content::BrowserContext* browser_context,
-      content::ProtocolHandlerMap* protocol_handlers,
-      content::URLRequestInterceptorScopedVector request_interceptors)
-      override;
   bool IsHandledURL(const GURL& url) override;
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
-  content::AccessTokenStore* CreateAccessTokenStore() override;
   void OverrideWebkitPrefs(content::RenderViewHost* render_view_host,
                            content::WebPreferences* prefs) override;
   void ResourceDispatcherHostCreated() override;
@@ -115,50 +130,40 @@ class CastContentBrowserClient : public content::ContentBrowserClient {
       bool overridable,
       bool strict_enforcement,
       bool expired_previous_decision,
-      const base::Callback<void(bool)>& callback,
-      content::CertificateRequestResultType* result) override;
+      const base::Callback<void(content::CertificateRequestResultType)>&
+          callback) override;
   void SelectClientCertificate(
       content::WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
-      scoped_ptr<content::ClientCertificateDelegate> delegate) override;
-  bool CanCreateWindow(
-      const GURL& opener_url,
-      const GURL& opener_top_level_frame_url,
-      const GURL& source_origin,
-      WindowContainerType container_type,
-      const GURL& target_url,
-      const content::Referrer& referrer,
-      WindowOpenDisposition disposition,
-      const blink::WebWindowFeatures& features,
-      bool user_gesture,
-      bool opener_suppressed,
-      content::ResourceContext* context,
-      int render_process_id,
-      int opener_render_view_id,
-      int opener_render_frame_id,
-      bool* no_javascript_access) override;
-  void RegisterUnsandboxedOutOfProcessMojoApplications(
-      std::map<GURL, base::string16>* apps) override;
-#if defined(OS_ANDROID)
-  void GetAdditionalMappedFilesForChildProcess(
-      const base::CommandLine& command_line,
-      int child_process_id,
-      content::FileDescriptorInfo* mappings,
-      std::map<int, base::MemoryMappedFile::Region>* regions) override;
-#else
-  scoped_ptr<::media::CdmFactory> CreateCdmFactory() override;
+      std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
+  bool CanCreateWindow(int opener_render_process_id,
+                       int opener_render_frame_id,
+                       const GURL& opener_url,
+                       const GURL& opener_top_level_frame_url,
+                       const GURL& source_origin,
+                       WindowContainerType container_type,
+                       const GURL& target_url,
+                       const content::Referrer& referrer,
+                       const std::string& frame_name,
+                       WindowOpenDisposition disposition,
+                       const blink::WebWindowFeatures& features,
+                       bool user_gesture,
+                       bool opener_suppressed,
+                       content::ResourceContext* context,
+                       bool* no_javascript_access) override;
+  void ExposeInterfacesToRenderer(
+      service_manager::InterfaceRegistry* registry,
+      content::RenderProcessHost* render_process_host) override;
+  void RegisterInProcessServices(StaticServiceMap* services) override;
+  std::unique_ptr<base::Value> GetServiceManifestOverlay(
+      base::StringPiece service_name) override;
   void GetAdditionalMappedFilesForChildProcess(
       const base::CommandLine& command_line,
       int child_process_id,
       content::FileDescriptorInfo* mappings) override;
-#endif  // defined(OS_ANDROID)
   void GetAdditionalWebUISchemes(
       std::vector<std::string>* additional_schemes) override;
-#if defined(OS_ANDROID) && defined(VIDEO_HOLE)
-  content::ExternalVideoSurfaceContainer*
-  OverrideCreateExternalVideoSurfaceContainer(
-      content::WebContents* web_contents) override;
-#endif  // defined(OS_ANDROID) && defined(VIDEO_HOLE)
+  content::DevToolsManagerDelegate* GetDevToolsManagerDelegate() override;
 
  protected:
   CastContentBrowserClient();
@@ -185,9 +190,11 @@ class CastContentBrowserClient : public content::ContentBrowserClient {
 
   // A static cache to hold crash_handlers for each process_type
   std::map<std::string, breakpad::CrashHandlerHostLinux*> crash_handlers_;
-#endif
+#endif  // !defined(OS_ANDROID)
 
-  scoped_ptr<URLRequestContextFactory> url_request_context_factory_;
+  // Created by CastContentBrowserClient but owned by BrowserMainLoop.
+  CastBrowserMainParts* cast_browser_main_parts_;
+  std::unique_ptr<URLRequestContextFactory> url_request_context_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(CastContentBrowserClient);
 };

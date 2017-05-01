@@ -17,31 +17,35 @@ class ExceptionState;
 class Navigator;
 class ServiceWorkerContainer;
 
-class MODULES_EXPORT NavigatorServiceWorker final : public GarbageCollectedFinalized<NavigatorServiceWorker>, public HeapSupplement<Navigator>, public DOMWindowProperty {
-    USING_GARBAGE_COLLECTED_MIXIN(NavigatorServiceWorker);
-public:
-    static NavigatorServiceWorker* from(Document&);
-    static NavigatorServiceWorker& from(Navigator&);
-    static NavigatorServiceWorker* toNavigatorServiceWorker(Navigator&);
+class MODULES_EXPORT NavigatorServiceWorker final
+    : public GarbageCollected<NavigatorServiceWorker>,
+      public Supplement<Navigator> {
+  USING_GARBAGE_COLLECTED_MIXIN(NavigatorServiceWorker);
 
-    virtual ~NavigatorServiceWorker();
+ public:
+  static NavigatorServiceWorker* from(Document&);
+  static NavigatorServiceWorker& from(Navigator&);
+  static NavigatorServiceWorker* toNavigatorServiceWorker(Navigator&);
+  static ServiceWorkerContainer* serviceWorker(ExecutionContext*,
+                                               Navigator&,
+                                               ExceptionState&);
+  static ServiceWorkerContainer* serviceWorker(ExecutionContext*,
+                                               Navigator&,
+                                               String& errorMessage);
+  void clearServiceWorker();
 
-    static ServiceWorkerContainer* serviceWorker(ExecutionContext*, Navigator&, ExceptionState&);
+  DECLARE_VIRTUAL_TRACE();
 
-    DECLARE_VIRTUAL_TRACE();
+ private:
+  explicit NavigatorServiceWorker(Navigator&);
+  ServiceWorkerContainer* serviceWorker(LocalFrame*, ExceptionState&);
+  ServiceWorkerContainer* serviceWorker(LocalFrame*, String& errorMessage);
 
-private:
-    explicit NavigatorServiceWorker(Navigator&);
-    ServiceWorkerContainer* serviceWorker(ExceptionState&);
+  static const char* supplementName();
 
-    static const char* supplementName();
-
-    // DOMWindowProperty override.
-    void willDetachGlobalObjectFromFrame() override;
-
-    Member<ServiceWorkerContainer> m_serviceWorker;
+  Member<ServiceWorkerContainer> m_serviceWorker;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // NavigatorServiceWorker_h
+#endif  // NavigatorServiceWorker_h

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_SPDY_HPACK_HUFFMAN_TABLE_H_
-#define NET_SPDY_HPACK_HUFFMAN_TABLE_H_
+#ifndef NET_SPDY_HPACK_HPACK_HUFFMAN_TABLE_H_
+#define NET_SPDY_HPACK_HPACK_HUFFMAN_TABLE_H_
 
 #include <stdint.h>
 
@@ -92,7 +92,6 @@ class NET_EXPORT_PRIVATE HpackHuffmanTable {
   // DEPRECATED: HpackHuffmanDecoder is now used for decoding strings encoded
   // according to the Huffman Table in the HPACK spec.
   bool GenericDecodeString(HpackInputStream* in,
-                           size_t out_capacity,
                            std::string* out) const;
 
  private:
@@ -130,4 +129,4 @@ class NET_EXPORT_PRIVATE HpackHuffmanTable {
 
 }  // namespace net
 
-#endif  // NET_SPDY_HPACK_HUFFMAN_TABLE_H_
+#endif  // NET_SPDY_HPACK_HPACK_HUFFMAN_TABLE_H_

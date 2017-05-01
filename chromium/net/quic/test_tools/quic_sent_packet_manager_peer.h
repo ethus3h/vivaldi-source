@@ -8,8 +8,8 @@
 #include <stddef.h>
 
 #include "base/macros.h"
-#include "net/quic/quic_protocol.h"
-#include "net/quic/quic_sent_packet_manager.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/core/quic_sent_packet_manager.h"
 
 namespace net {
 
@@ -30,13 +30,12 @@ class QuicSentPacketManagerPeer {
 
   static bool GetUseNewRto(QuicSentPacketManager* sent_packet_manager);
 
-  static QuicByteCount GetReceiveWindow(
-      QuicSentPacketManager* sent_packet_manager);
+  static bool GetUndoRetransmits(QuicSentPacketManager* sent_packet_manager);
 
   static void SetPerspective(QuicSentPacketManager* sent_packet_manager,
                              Perspective perspective);
 
-  static const SendAlgorithmInterface* GetSendAlgorithm(
+  static SendAlgorithmInterface* GetSendAlgorithm(
       const QuicSentPacketManager& sent_packet_manager);
 
   static void SetSendAlgorithm(QuicSentPacketManager* sent_packet_manager,
@@ -47,8 +46,6 @@ class QuicSentPacketManagerPeer {
 
   static void SetLossAlgorithm(QuicSentPacketManager* sent_packet_manager,
                                LossDetectionInterface* loss_detector);
-
-  static RttStats* GetRttStats(QuicSentPacketManager* sent_packet_manager);
 
   static bool HasPendingPackets(
       const QuicSentPacketManager* sent_packet_manager);
@@ -79,7 +76,25 @@ class QuicSentPacketManagerPeer {
   static QuicSentPacketManager::NetworkChangeVisitor* GetNetworkChangeVisitor(
       const QuicSentPacketManager* sent_packet_manager);
 
+  static void SetConsecutiveRtoCount(QuicSentPacketManager* sent_packet_manager,
+                                     size_t count);
+
+  static void SetConsecutiveTlpCount(QuicSentPacketManager* sent_packet_manager,
+                                     size_t count);
+
   static QuicSustainedBandwidthRecorder& GetBandwidthRecorder(
+      QuicSentPacketManager* sent_packet_manager);
+
+  static bool UsingPacing(const QuicSentPacketManager* sent_packet_manager);
+
+  static bool IsUnacked(QuicSentPacketManager* sent_packet_manager,
+                        QuicPacketNumber packet_number);
+
+  static bool HasRetransmittableFrames(
+      QuicSentPacketManager* sent_packet_manager,
+      QuicPacketNumber packet_number);
+
+  static QuicUnackedPacketMap* GetUnackedPacketMap(
       QuicSentPacketManager* sent_packet_manager);
 
  private:

@@ -4,10 +4,11 @@
 
 #include "net/cert/ct_log_response_parser.h"
 
+#include <memory>
+
 #include "base/base64.h"
 #include "base/json/json_value_converter.h"
 #include "base/logging.h"
-#include "base/memory/scoped_vector.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -105,7 +106,7 @@ bool IsJsonSTHStructurallyValid(const JsonSignedTreeHead& sth) {
 // Structure for making JSON decoding easier. The string fields
 // are base64-encoded so will require further decoding.
 struct JsonConsistencyProof {
-  ScopedVector<std::string> proof_nodes;
+  std::vector<std::unique_ptr<std::string>> proof_nodes;
 
   static void RegisterJSONConverter(
       base::JSONValueConverter<JsonConsistencyProof>* converter);
@@ -145,9 +146,7 @@ bool FillSignedTreeHead(const base::Value& json_signed_tree_head,
 
   signed_tree_head->version = SignedTreeHead::V1;
   signed_tree_head->tree_size = parsed_sth.tree_size;
-  signed_tree_head->timestamp =
-      base::Time::UnixEpoch() + base::TimeDelta::FromMilliseconds(
-                                    static_cast<int64_t>(parsed_sth.timestamp));
+  signed_tree_head->timestamp = base::Time::FromJsTime(parsed_sth.timestamp);
   signed_tree_head->signature = parsed_sth.signature;
   memcpy(signed_tree_head->sha256_root_hash,
          parsed_sth.sha256_root_hash.c_str(),
@@ -172,7 +171,7 @@ bool FillConsistencyProof(const base::Value& json_consistency_proof,
   }
 
   consistency_proof->reserve(parsed_proof.proof_nodes.size());
-  for (std::string* proof_node : parsed_proof.proof_nodes) {
+  for (const auto& proof_node : parsed_proof.proof_nodes) {
     consistency_proof->push_back(*proof_node);
   }
 

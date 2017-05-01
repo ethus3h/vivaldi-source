@@ -11,6 +11,7 @@
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "chromeos/chromeos_switches.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/core/browser/signin_manager.h"
 #include "components/user_manager/user_manager.h"
 
@@ -36,6 +37,21 @@ class FileManagerBrowserTest :
 };
 
 IN_PROC_BROWSER_TEST_P(FileManagerBrowserTest, Test) {
+  StartTest();
+}
+
+// Test fixture class for tests that rely on deprecated event dispatch that send
+// tests.
+class FileManagerBrowserTestWithLegacyEventDispatch
+    : public FileManagerBrowserTest {
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    FileManagerBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII("disable-blink-features",
+                                    "TrustedEventsDefaultAction");
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(FileManagerBrowserTestWithLegacyEventDispatch, Test) {
   StartTest();
 }
 
@@ -93,10 +109,13 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
         TestParameter(NOT_IN_GUEST_MODE, "audioOpenDownloads"),
         TestParameter(NOT_IN_GUEST_MODE, "audioOpenDrive"),
         TestParameter(NOT_IN_GUEST_MODE, "audioAutoAdvanceDrive"),
-        TestParameter(NOT_IN_GUEST_MODE, "audioRepeatSingleFileDrive"),
-        TestParameter(NOT_IN_GUEST_MODE, "audioNoRepeatSingleFileDrive"),
-        TestParameter(NOT_IN_GUEST_MODE, "audioRepeatMultipleFileDrive"),
-        TestParameter(NOT_IN_GUEST_MODE, "audioNoRepeatMultipleFileDrive")));
+        TestParameter(NOT_IN_GUEST_MODE, "audioRepeatAllModeSingleFileDrive"),
+        TestParameter(NOT_IN_GUEST_MODE, "audioNoRepeatModeSingleFileDrive"),
+        TestParameter(NOT_IN_GUEST_MODE, "audioRepeatOneModeSingleFileDrive"),
+        TestParameter(NOT_IN_GUEST_MODE, "audioRepeatAllModeMultipleFileDrive"),
+        TestParameter(NOT_IN_GUEST_MODE, "audioNoRepeatModeMultipleFileDrive"),
+        TestParameter(NOT_IN_GUEST_MODE,
+                      "audioRepeatOneModeMultipleFileDrive")));
 
 // Fails on official build. http://crbug.com/429294
 #if defined(DISABLE_SLOW_FILESAPP_TESTS) || defined(OFFICIAL_BUILD)
@@ -166,6 +185,11 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
         TestParameter(NOT_IN_GUEST_MODE,
                       "deleteMenuItemIsDisabledWhenNoItemIsSelected"),
         TestParameter(NOT_IN_GUEST_MODE, "deleteOneItemFromToolbar")));
+
+WRAPPED_INSTANTIATE_TEST_CASE_P(
+    DISABLED_QuickView,
+    FileManagerBrowserTest,
+    ::testing::Values(TestParameter(NOT_IN_GUEST_MODE, "openQuickView")));
 
 #if defined(DISABLE_SLOW_FILESAPP_TESTS)
 #define MAYBE_DirectoryTreeContextMenu DISABLED_DirectoryTreeContextMenu
@@ -404,7 +428,7 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #endif
 WRAPPED_INSTANTIATE_TEST_CASE_P(
     MAYBE_TabIndex,
-    FileManagerBrowserTest,
+    FileManagerBrowserTestWithLegacyEventDispatch,
     ::testing::Values(TestParameter(NOT_IN_GUEST_MODE, "searchBoxFocus")));
 
 #if defined(DISABLE_SLOW_FILESAPP_TESTS)
@@ -414,7 +438,7 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #endif
 WRAPPED_INSTANTIATE_TEST_CASE_P(
     MAYBE_TabindexFocus,
-    FileManagerBrowserTest,
+    FileManagerBrowserTestWithLegacyEventDispatch,
     ::testing::Values(TestParameter(NOT_IN_GUEST_MODE, "tabindexFocus")));
 
 #if defined(DISABLE_SLOW_FILESAPP_TESTS)
@@ -424,7 +448,7 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #endif
 WRAPPED_INSTANTIATE_TEST_CASE_P(
     MAYBE_TabindexFocusDownloads,
-    FileManagerBrowserTest,
+    FileManagerBrowserTestWithLegacyEventDispatch,
     ::testing::Values(TestParameter(NOT_IN_GUEST_MODE,
                                     "tabindexFocusDownloads"),
                       TestParameter(IN_GUEST_MODE, "tabindexFocusDownloads")));
@@ -437,7 +461,7 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #endif
 WRAPPED_INSTANTIATE_TEST_CASE_P(
     MAYBE_TabindexFocusDirectorySelected,
-    FileManagerBrowserTest,
+    FileManagerBrowserTestWithLegacyEventDispatch,
     ::testing::Values(TestParameter(NOT_IN_GUEST_MODE,
                                     "tabindexFocusDirectorySelected")));
 
@@ -447,8 +471,9 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #else
 #define MAYBE_TabindexOpenDialog TabindexOpenDialog
 #endif
+// Flaky: crbug.com/615259
 WRAPPED_INSTANTIATE_TEST_CASE_P(
-    MAYBE_TabindexOpenDialog,
+    DISABLED_TabindexOpenDialog,
     FileManagerBrowserTest,
     ::testing::Values(
         TestParameter(NOT_IN_GUEST_MODE, "tabindexOpenDialogDrive"),
@@ -461,8 +486,9 @@ WRAPPED_INSTANTIATE_TEST_CASE_P(
 #else
 #define MAYBE_TabindexSaveFileDialog TabindexSaveFileDialog
 #endif
+// Flaky: crbug.com/615259
 WRAPPED_INSTANTIATE_TEST_CASE_P(
-    MAYBE_TabindexSaveFileDialog,
+    DISABLED_TabindexSaveFileDialog,
     FileManagerBrowserTest,
     ::testing::Values(
         TestParameter(NOT_IN_GUEST_MODE, "tabindexSaveFileDialogDrive"),
@@ -610,13 +636,13 @@ class MultiProfileFileManagerBrowserTest : public FileManagerBrowserTestBase {
 
   // Adds a new user for testing to the current session.
   void AddUser(const TestAccountInfo& info, bool log_in) {
-    user_manager::UserManager* const user_manager =
-        user_manager::UserManager::Get();
     const AccountId account_id(AccountId::FromUserEmail(info.email));
-    if (log_in)
-      user_manager->UserLoggedIn(account_id, info.hash, false);
-    user_manager->SaveUserDisplayName(account_id,
-                                      base::UTF8ToUTF16(info.display_name));
+    if (log_in) {
+      session_manager::SessionManager::Get()->CreateSession(account_id,
+                                                            info.hash);
+    }
+    user_manager::UserManager::Get()->SaveUserDisplayName(
+        account_id, base::UTF8ToUTF16(info.display_name));
     SigninManagerFactory::GetForProfile(
         chromeos::ProfileHelper::GetProfileByUserIdHash(info.hash))
         ->SetAuthenticatedAccountInfo(info.gaia_id, info.email);

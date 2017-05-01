@@ -6,13 +6,14 @@
 #define CONTENT_BROWSER_WEBUI_URL_DATA_MANAGER_BACKEND_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/supports_user_data.h"
+#include "base/values.h"
 #include "content/browser/webui/url_data_manager.h"
 #include "content/public/browser/url_data_source.h"
 #include "net/url_request/url_request_job_factory.h"
@@ -43,7 +44,8 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
 
   // Invoked to create the protocol handler for chrome://. |is_incognito| should
   // be set for incognito profiles. Called on the UI thread.
-  CONTENT_EXPORT static scoped_ptr<net::URLRequestJobFactory::ProtocolHandler>
+  CONTENT_EXPORT static std::unique_ptr<
+      net::URLRequestJobFactory::ProtocolHandler>
   CreateProtocolHandler(content::ResourceContext* resource_context,
                         bool is_incognito,
                         ChromeBlobStorageContext* blob_storage_context);
@@ -51,7 +53,11 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   // Adds a DataSource to the collection of data sources.
   void AddDataSource(URLDataSourceImpl* source);
 
-  // DataSource invokes this. Sends the data to the URLRequest.
+  void UpdateWebUIDataSource(const std::string& source_name,
+                             const base::DictionaryValue& update);
+
+  // DataSource invokes this. Sends the data to the URLRequest. |bytes| may be
+  // null, which signals an error handling the request.
   void DataAvailable(RequestID request_id, base::RefCountedMemory* bytes);
 
   static net::URLRequestJob* Factory(net::URLRequest* request,
@@ -71,11 +77,12 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   // Helper function to call StartDataRequest on |source|'s delegate. This is
   // needed because while we want to call URLDataSourceDelegate's method, we
   // need to add a refcount on the source.
-  static void CallStartRequest(scoped_refptr<URLDataSourceImpl> source,
-                               const std::string& path,
-                               int render_process_id,
-                               int render_frame_id,
-                               int request_id);
+  static void CallStartRequest(
+      scoped_refptr<URLDataSourceImpl> source,
+      const std::string& path,
+      int child_id,
+      const ResourceRequestInfo::WebContentsGetter& wc_getter,
+      int request_id);
 
   // Remove a request from the list of pending requests.
   void RemoveRequest(URLRequestChromeJob* job);

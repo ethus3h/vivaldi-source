@@ -10,10 +10,9 @@
 #include "base/callback_list.h"
 #include "base/macros.h"
 #include "base/synchronization/lock.h"
-#include "components/content_settings/core/browser/content_settings_binary_value_map.h"
+#include "components/content_settings/core/browser/content_settings_global_value_map.h"
 #include "components/content_settings/core/browser/content_settings_observable_provider.h"
 
-class PrefService;
 class SupervisedUserSettingsService;
 
 namespace content_settings {
@@ -27,7 +26,7 @@ class SupervisedProvider : public ObservableProvider {
   ~SupervisedProvider() override;
 
   // ProviderInterface implementations.
-  scoped_ptr<RuleIterator> GetRuleIterator(
+  std::unique_ptr<RuleIterator> GetRuleIterator(
       ContentSettingsType content_type,
       const ResourceIdentifier& resource_identifier,
       bool incognito) const override;
@@ -42,18 +41,19 @@ class SupervisedProvider : public ObservableProvider {
 
   void ShutdownOnUIThread() override;
 
+ private:
   // Callback on receiving settings from the supervised user settings service.
   void OnSupervisedSettingsAvailable(const base::DictionaryValue* settings);
 
- private:
-  BinaryValueMap value_map_;
+  GlobalValueMap value_map_;
 
   // Used around accesses to the |value_map_| object to guarantee
   // thread safety.
   mutable base::Lock lock_;
 
-  scoped_ptr<base::CallbackList<void(
-      const base::DictionaryValue*)>::Subscription> user_settings_subscription_;
+  std::unique_ptr<
+      base::CallbackList<void(const base::DictionaryValue*)>::Subscription>
+      user_settings_subscription_;
 
   DISALLOW_COPY_AND_ASSIGN(SupervisedProvider);
 };

@@ -4,17 +4,17 @@
 
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_chromeos.h"
 
-#include "ash/ash_switches.h"
-#include "ash/multi_profile_uma.h"
+#include "ash/common/media_controller.h"
+#include "ash/common/multi_profile_uma.h"
+#include "ash/common/session/session_state_delegate.h"
+#include "ash/common/wm/maximize_mode/maximize_mode_controller.h"
+#include "ash/common/wm/window_state.h"
+#include "ash/common/wm_shell.h"
+#include "ash/common/wm_window.h"
+#include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
-#include "ash/session/session_state_delegate.h"
-#include "ash/shelf/shelf.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
-#include "ash/shell_window_ids.h"
-#include "ash/system/tray/system_tray_notifier.h"
-#include "ash/wm/maximize_mode/maximize_mode_controller.h"
-#include "ash/wm/window_state.h"
+#include "ash/wm/window_state_aura.h"
 #include "base/auto_reset.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
@@ -144,6 +144,24 @@ void RecordUMAForTransferredWindowType(aura::Window* window) {
   ash::MultiProfileUMA::RecordTeleportWindowType(window_type);
 }
 
+bool HasSystemModalTransientChildWindow(aura::Window* window) {
+  if (window == nullptr)
+    return false;
+
+  aura::Window* system_modal_container = window->GetRootWindow()->GetChildById(
+      ash::kShellWindowId_SystemModalContainer);
+  if (window->parent() == system_modal_container)
+    return true;
+
+  aura::Window::Windows::const_iterator it =
+      wm::GetTransientChildren(window).begin();
+  for (; it != wm::GetTransientChildren(window).end(); ++it) {
+    if (HasSystemModalTransientChildWindow(*it))
+      return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 namespace chrome {
@@ -232,9 +250,10 @@ MultiUserWindowManagerChromeOS::~MultiUserWindowManagerChromeOS() {
     window = window_to_entry_.begin();
   }
 
-  if (ash::Shell::HasInstance())
-    ash::Shell::GetInstance()->session_state_delegate()->
-        RemoveSessionStateObserver(this);
+  if (ash::WmShell::HasInstance()) {
+    ash::WmShell::Get()->GetSessionStateDelegate()->RemoveSessionStateObserver(
+        this);
+  }
 
   // Remove all app observers.
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -263,9 +282,9 @@ void MultiUserWindowManagerChromeOS::Init() {
          account_id_to_app_observer_.end());
 
   // Add a session state observer to be able to monitor session changes.
-  if (ash::Shell::HasInstance()) {
-    ash::Shell::GetInstance()->session_state_delegate()->
-        AddSessionStateObserver(this);
+  if (ash::WmShell::HasInstance()) {
+    ash::WmShell::Get()->GetSessionStateDelegate()->AddSessionStateObserver(
+        this);
   }
 
   // The BrowserListObserver would have been better to use then the old
@@ -308,7 +327,8 @@ void MultiUserWindowManagerChromeOS::SetWindowOwner(
   AddTransientOwnerRecursive(window, window);
 
   // Notify entry adding.
-  FOR_EACH_OBSERVER(Observer, observers_, OnOwnerEntryAdded(window));
+  for (Observer& observer : observers_)
+    observer.OnOwnerEntryAdded(window);
 
   if (!IsWindowOnDesktopOfUser(window, current_account_id_))
     SetWindowVisibility(window, false, 0);
@@ -333,8 +353,7 @@ void MultiUserWindowManagerChromeOS::ShowWindowForUser(
       previous_owner != current_account_id_)
     return;
 
-  ash::Shell::GetInstance()->session_state_delegate()->SwitchActiveUser(
-      account_id);
+  ash::WmShell::Get()->GetSessionStateDelegate()->SwitchActiveUser(account_id);
 }
 
 bool MultiUserWindowManagerChromeOS::AreWindowsSharedAmongUsers() const {
@@ -396,25 +415,11 @@ void MultiUserWindowManagerChromeOS::AddUser(content::BrowserContext* context) {
     account_id_to_app_observer_[account_id]->OnAppWindowAdded(*it);
 
   // Account all existing browser windows of this user accordingly.
-  BrowserList* browser_list = BrowserList::GetInstance(HOST_DESKTOP_TYPE_ASH);
+  BrowserList* browser_list = BrowserList::GetInstance();
   BrowserList::const_iterator browser_it = browser_list->begin();
   for (; browser_it != browser_list->end(); ++browser_it) {
     if ((*browser_it)->profile()->GetOriginalProfile() == profile)
       AddBrowserWindow(*browser_it);
-  }
-  // When adding another user to the session, we auto switch users.
-  if (account_id_to_app_observer_.size() == 1)
-    return;
-
-  // Don't do anything special in case of user session restore after crash.
-  // In that case session restore process will automatically switch to the
-  // last active user session after whole process is complete.
-  if (!chromeos::UserSessionManager::GetInstance()->
-      UserSessionsRestoreInProgress()) {
-    // Immediately hide the windows of the current user.
-    base::AutoReset<AnimationSpeed> animation_speed(&animation_speed_,
-                                                    ANIMATION_SPEED_DISABLED);
-    ActiveUserChanged(account_id);
   }
 }
 
@@ -440,9 +445,7 @@ void MultiUserWindowManagerChromeOS::ActiveUserChanged(
       this, account_id, GetAdjustedAnimationTimeInMS(kUserFadeTimeMS)));
   // Call notifier here instead of observing ActiveUserChanged because
   // this must happen after MultiUserWindowManagerChromeOS is notified.
-  ash::Shell::GetInstance()
-      ->system_tray_notifier()
-      ->NotifyMediaCaptureChanged();
+  ash::WmShell::Get()->media_controller()->RequestCaptureState();
 }
 
 void MultiUserWindowManagerChromeOS::OnWindowDestroyed(aura::Window* window) {
@@ -458,7 +461,8 @@ void MultiUserWindowManagerChromeOS::OnWindowDestroyed(aura::Window* window) {
   window_to_entry_.erase(window);
 
   // Notify entry change.
-  FOR_EACH_OBSERVER(Observer, observers_, OnOwnerEntryRemoved(window));
+  for (Observer& observer : observers_)
+    observer.OnOwnerEntryRemoved(window);
 }
 
 void MultiUserWindowManagerChromeOS::OnWindowVisibilityChanging(
@@ -530,8 +534,8 @@ void MultiUserWindowManagerChromeOS::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  if (type == NOTIFICATION_BROWSER_WINDOW_READY)
-    AddBrowserWindow(content::Source<Browser>(source).ptr());
+  DCHECK_EQ(NOTIFICATION_BROWSER_WINDOW_READY, type);
+  AddBrowserWindow(content::Source<Browser>(source).ptr());
 }
 
 void MultiUserWindowManagerChromeOS::SetAnimationSpeedForTest(
@@ -540,7 +544,7 @@ void MultiUserWindowManagerChromeOS::SetAnimationSpeedForTest(
 }
 
 bool MultiUserWindowManagerChromeOS::IsAnimationRunningForTest() {
-  return animation_.get() != NULL && !animation_->IsAnimationFinished();
+  return animation_ && !animation_->IsAnimationFinished();
 }
 
 const AccountId& MultiUserWindowManagerChromeOS::GetCurrentUserForTest() const {
@@ -585,13 +589,18 @@ bool MultiUserWindowManagerChromeOS::ShowWindowForUserIntern(
   }
 
   // Notify entry change.
-  FOR_EACH_OBSERVER(Observer, observers_, OnOwnerEntryChanged(window));
+  for (Observer& observer : observers_)
+    observer.OnOwnerEntryChanged(window);
   return true;
 }
 
 void MultiUserWindowManagerChromeOS::SetWindowVisibility(
     aura::Window* window, bool visible, int animation_time_in_ms) {
-  if (window->IsVisible() == visible)
+  // For a panel window, it's possible that this panel window is in the middle
+  // of relayout animation because of hiding/reshowing shelf during profile
+  // switch. Thus the window's visibility might not be its real visibility. See
+  // crbug.com/564725 for more info.
+  if (window->TargetVisibility() == visible)
     return;
 
   // Hiding a system modal dialog should not be allowed. Instead we switch to
@@ -599,11 +608,7 @@ void MultiUserWindowManagerChromeOS::SetWindowVisibility(
   // Note that in some cases (e.g. unit test) windows might not have a root
   // window.
   if (!visible && window->GetRootWindow()) {
-    // Get the system modal container for the window's root window.
-    aura::Window* system_modal_container =
-        window->GetRootWindow()->GetChildById(
-            ash::kShellWindowId_SystemModalContainer);
-    if (window->parent() == system_modal_container) {
+    if (HasSystemModalTransientChildWindow(window)) {
       // The window is system modal and we need to find the parent which owns
       // it so that we can switch to the desktop accordingly.
       AccountId account_id = GetUserPresentingWindow(window);
@@ -613,7 +618,7 @@ void MultiUserWindowManagerChromeOS::SetWindowVisibility(
         account_id = GetUserPresentingWindow(owning_window);
         DCHECK(account_id.is_valid());
       }
-      ash::Shell::GetInstance()->session_state_delegate()->SwitchActiveUser(
+      ash::WmShell::Get()->GetSessionStateDelegate()->SwitchActiveUser(
           account_id);
       return;
     }
@@ -627,6 +632,11 @@ void MultiUserWindowManagerChromeOS::SetWindowVisibility(
     ShowWithTransientChildrenRecursive(window, animation_time_in_ms);
   else
     SetWindowVisible(window, false, animation_time_in_ms);
+}
+
+void MultiUserWindowManagerChromeOS::NotifyAfterUserSwitchAnimationFinished() {
+  for (Observer& observer : observers_)
+    observer.OnUserSwitchAnimationFinished();
 }
 
 void MultiUserWindowManagerChromeOS::AddBrowserWindow(Browser* browser) {
@@ -731,8 +741,10 @@ void MultiUserWindowManagerChromeOS::SetWindowVisible(
   // are not user activatable. Since invisible windows are not being tracked,
   // we tell it to maximize / track this window now before it gets shown, to
   // reduce animation jank from multiple resizes.
-  if (visible)
-    ash::Shell::GetInstance()->maximize_mode_controller()->AddWindow(window);
+  if (visible) {
+    ash::WmShell::Get()->maximize_mode_controller()->AddWindow(
+        ash::WmWindow::Get(window));
+  }
 
   AnimationSetter animation_setter(
       window,
@@ -742,10 +754,6 @@ void MultiUserWindowManagerChromeOS::SetWindowVisible(
     window->Show();
   else
     window->Hide();
-
-  // Make sure that animations have no influence on the window state after the
-  // call.
-  DCHECK_EQ(visible, window->IsVisible());
 }
 
 int MultiUserWindowManagerChromeOS::GetAdjustedAnimationTimeInMS(

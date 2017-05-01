@@ -8,76 +8,94 @@
 #include "core/animation/SVGLengthInterpolationType.h"
 #include "core/animation/UnderlyingLengthChecker.h"
 #include "core/svg/SVGLengthList.h"
+#include <memory>
 
 namespace blink {
 
-PassOwnPtr<InterpolationValue> SVGLengthListInterpolationType::maybeConvertNeutral(const UnderlyingValue& underlyingValue, ConversionCheckers& conversionCheckers) const
-{
-    size_t underlyingLength = UnderlyingLengthChecker::getUnderlyingLength(underlyingValue);
-    conversionCheckers.append(UnderlyingLengthChecker::create(*this, underlyingLength));
+InterpolationValue SVGLengthListInterpolationType::maybeConvertNeutral(
+    const InterpolationValue& underlying,
+    ConversionCheckers& conversionCheckers) const {
+  size_t underlyingLength =
+      UnderlyingLengthChecker::getUnderlyingLength(underlying);
+  conversionCheckers.push_back(
+      UnderlyingLengthChecker::create(underlyingLength));
 
-    if (underlyingLength == 0)
-        return nullptr;
-
-    OwnPtr<InterpolableList> result = InterpolableList::create(underlyingLength);
-    for (size_t i = 0; i < underlyingLength; i++)
-        result->set(i, SVGLengthInterpolationType::neutralInterpolableValue());
-    return InterpolationValue::create(*this, result.release());
-}
-
-PassOwnPtr<InterpolationValue> SVGLengthListInterpolationType::maybeConvertSVGValue(const SVGPropertyBase& svgValue) const
-{
-    if (svgValue.type() != AnimatedLengthList)
-        return nullptr;
-
-    const SVGLengthList& lengthList = toSVGLengthList(svgValue);
-    OwnPtr<InterpolableList> result = InterpolableList::create(lengthList.length());
-    for (size_t i = 0; i < lengthList.length(); i++) {
-        InterpolationComponent component = SVGLengthInterpolationType::convertSVGLength(*lengthList.at(i));
-        result->set(i, component.interpolableValue.release());
-    }
-    return InterpolationValue::create(*this, result.release());
-}
-
-PassOwnPtr<PairwisePrimitiveInterpolation> SVGLengthListInterpolationType::mergeSingleConversions(InterpolationValue& startValue, InterpolationValue& endValue) const
-{
-    size_t startLength = toInterpolableList(startValue.interpolableValue()).length();
-    size_t endLength = toInterpolableList(endValue.interpolableValue()).length();
-    if (startLength != endLength)
-        return nullptr;
-    return InterpolationType::mergeSingleConversions(startValue, endValue);
-}
-
-void SVGLengthListInterpolationType::composite(UnderlyingValue& underlyingValue, double underlyingFraction, const InterpolationValue& value) const
-{
-    size_t startLength = toInterpolableList(underlyingValue->interpolableValue()).length();
-    size_t endLength = toInterpolableList(value.interpolableValue()).length();
-
-    if (startLength == endLength)
-        InterpolationType::composite(underlyingValue, underlyingFraction, value);
-    else
-        underlyingValue.set(&value);
-}
-
-PassRefPtrWillBeRawPtr<SVGPropertyBase> SVGLengthListInterpolationType::appliedSVGValue(const InterpolableValue& interpolableValue, const NonInterpolableValue*) const
-{
-    ASSERT_NOT_REACHED();
-    // This function is no longer called, because apply has been overridden.
+  if (underlyingLength == 0)
     return nullptr;
+
+  std::unique_ptr<InterpolableList> result =
+      InterpolableList::create(underlyingLength);
+  for (size_t i = 0; i < underlyingLength; i++)
+    result->set(i, SVGLengthInterpolationType::neutralInterpolableValue());
+  return InterpolationValue(std::move(result));
 }
 
-void SVGLengthListInterpolationType::apply(const InterpolableValue& interpolableValue, const NonInterpolableValue* nonInterpolableValue, InterpolationEnvironment& environment) const
-{
-    SVGElement& element = environment.svgElement();
-    SVGLengthContext lengthContext(&element);
+InterpolationValue SVGLengthListInterpolationType::maybeConvertSVGValue(
+    const SVGPropertyBase& svgValue) const {
+  if (svgValue.type() != AnimatedLengthList)
+    return nullptr;
 
-    RefPtrWillBeRawPtr<SVGLengthList> result = SVGLengthList::create(m_unitMode);
-    const InterpolableList& list = toInterpolableList(interpolableValue);
-    for (size_t i = 0; i < list.length(); i++) {
-        result->append(SVGLengthInterpolationType::resolveInterpolableSVGLength(*list.get(i), lengthContext, m_unitMode, m_negativeValuesForbidden));
-    }
-
-    element.setWebAnimatedAttribute(attribute(), result.release());
+  const SVGLengthList& lengthList = toSVGLengthList(svgValue);
+  std::unique_ptr<InterpolableList> result =
+      InterpolableList::create(lengthList.length());
+  for (size_t i = 0; i < lengthList.length(); i++) {
+    InterpolationValue component =
+        SVGLengthInterpolationType::convertSVGLength(*lengthList.at(i));
+    result->set(i, std::move(component.interpolableValue));
+  }
+  return InterpolationValue(std::move(result));
 }
 
-} // namespace blink
+PairwiseInterpolationValue SVGLengthListInterpolationType::maybeMergeSingles(
+    InterpolationValue&& start,
+    InterpolationValue&& end) const {
+  size_t startLength = toInterpolableList(*start.interpolableValue).length();
+  size_t endLength = toInterpolableList(*end.interpolableValue).length();
+  if (startLength != endLength)
+    return nullptr;
+  return InterpolationType::maybeMergeSingles(std::move(start), std::move(end));
+}
+
+void SVGLengthListInterpolationType::composite(
+    UnderlyingValueOwner& underlyingValueOwner,
+    double underlyingFraction,
+    const InterpolationValue& value,
+    double interpolationFraction) const {
+  size_t startLength =
+      toInterpolableList(*underlyingValueOwner.value().interpolableValue)
+          .length();
+  size_t endLength = toInterpolableList(*value.interpolableValue).length();
+
+  if (startLength == endLength)
+    InterpolationType::composite(underlyingValueOwner, underlyingFraction,
+                                 value, interpolationFraction);
+  else
+    underlyingValueOwner.set(*this, value);
+}
+
+SVGPropertyBase* SVGLengthListInterpolationType::appliedSVGValue(
+    const InterpolableValue& interpolableValue,
+    const NonInterpolableValue*) const {
+  NOTREACHED();
+  // This function is no longer called, because apply has been overridden.
+  return nullptr;
+}
+
+void SVGLengthListInterpolationType::apply(
+    const InterpolableValue& interpolableValue,
+    const NonInterpolableValue* nonInterpolableValue,
+    InterpolationEnvironment& environment) const {
+  SVGElement& element = environment.svgElement();
+  SVGLengthContext lengthContext(&element);
+
+  SVGLengthList* result = SVGLengthList::create(m_unitMode);
+  const InterpolableList& list = toInterpolableList(interpolableValue);
+  for (size_t i = 0; i < list.length(); i++) {
+    result->append(SVGLengthInterpolationType::resolveInterpolableSVGLength(
+        *list.get(i), lengthContext, m_unitMode, m_negativeValuesForbidden));
+  }
+
+  element.setWebAnimatedAttribute(attribute(), result);
+}
+
+}  // namespace blink

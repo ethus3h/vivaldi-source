@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 
 namespace cc {
 
@@ -19,7 +19,7 @@ TestContextSupport::TestContextSupport()
 
 TestContextSupport::~TestContextSupport() {}
 
-void TestContextSupport::SignalSyncPoint(uint32_t sync_point,
+void TestContextSupport::SignalSyncToken(const gpu::SyncToken& sync_token,
                                          const base::Closure& callback) {
   sync_point_callbacks_.push_back(callback);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
@@ -27,12 +27,9 @@ void TestContextSupport::SignalSyncPoint(uint32_t sync_point,
                             weak_ptr_factory_.GetWeakPtr()));
 }
 
-void TestContextSupport::SignalSyncToken(const gpu::SyncToken& sync_token,
-                                         const base::Closure& callback) {
-  sync_point_callbacks_.push_back(callback);
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(&TestContextSupport::CallAllSyncPointCallbacks,
-                            weak_ptr_factory_.GetWeakPtr()));
+bool TestContextSupport::IsSyncTokenSignalled(
+    const gpu::SyncToken& sync_token) {
+  return true;
 }
 
 void TestContextSupport::SignalQuery(uint32_t query,
@@ -44,8 +41,7 @@ void TestContextSupport::SignalQuery(uint32_t query,
 }
 
 void TestContextSupport::SetAggressivelyFreeResources(
-    bool aggressively_free_resources) {
-}
+    bool aggressively_free_resources) {}
 
 void TestContextSupport::CallAllSyncPointCallbacks() {
   size_t size = sync_point_callbacks_.size();
@@ -68,20 +64,11 @@ void TestContextSupport::SetScheduleOverlayPlaneCallback(
   schedule_overlay_plane_callback_ = schedule_overlay_plane_callback;
 }
 
-void TestContextSupport::Swap() {
-}
+void TestContextSupport::Swap() {}
 
-uint32_t TestContextSupport::InsertFutureSyncPointCHROMIUM() {
-  NOTIMPLEMENTED();
-  return 0;
-}
+void TestContextSupport::SwapWithDamage(const gfx::Rect& damage) {}
 
-void TestContextSupport::RetireSyncPointCHROMIUM(uint32_t sync_point) {
-  NOTIMPLEMENTED();
-}
-
-void TestContextSupport::PartialSwapBuffers(const gfx::Rect& sub_buffer) {
-}
+void TestContextSupport::PartialSwapBuffers(const gfx::Rect& sub_buffer) {}
 
 void TestContextSupport::CommitOverlayPlanes() {}
 
@@ -92,10 +79,8 @@ void TestContextSupport::ScheduleOverlayPlane(
     const gfx::Rect& display_bounds,
     const gfx::RectF& uv_rect) {
   if (!schedule_overlay_plane_callback_.is_null()) {
-    schedule_overlay_plane_callback_.Run(plane_z_order,
-                                         plane_transform,
-                                         overlay_texture_id,
-                                         display_bounds,
+    schedule_overlay_plane_callback_.Run(plane_z_order, plane_transform,
+                                         overlay_texture_id, display_bounds,
                                          uv_rect);
   }
 }
@@ -104,5 +89,8 @@ uint64_t TestContextSupport::ShareGroupTracingGUID() const {
   NOTIMPLEMENTED();
   return 0;
 }
+
+void TestContextSupport::SetErrorMessageCallback(
+    const base::Callback<void(const char*, int32_t)>& callback) {}
 
 }  // namespace cc

@@ -56,9 +56,6 @@ process_template() (
     -e "s#@@CHANNEL@@#${CHANNEL}#g" \
     -e "s#@@COMPANY_FULLNAME@@#${COMPANY_FULLNAME}#g" \
     -e "s#@@VERSION@@#${VERSION}#g" \
-    -e "s#@@CHR_MAJOR@@#${CHR_MAJOR}#g" \
-    -e "s#@@CHR_MINOR@@#${CHR_MINOR}#g" \
-    -e "s#@@CHR_BUILD@@#${CHR_BUILD}#g" \
     -e "s#@@PACKAGE_RELEASE@@#${PACKAGE_RELEASE}#g" \
     -e "s#@@VERSIONFULL@@#${VERSIONFULL}#g" \
     -e "s#@@INSTALLDIR@@#${INSTALLDIR}#g" \
@@ -120,9 +117,6 @@ stage_install_common() {
   DEBUGFILE="${STRIPTEMP}/${PROGNAME}.debug"
   STRIPPEDFILE="${STRIPTEMP}/${PROGNAME}.stripped"
   "${BUILDDIR}/installer/common/eu-strip" -o "${STRIPPEDFILE}" -f "${DEBUGFILE}" "${BUILDDIR}/${PROGNAME}"
-  # Change RPATH to RUNPATH for $ORIGIN/lib/. Needed so LD_LIBRARY_PATH can
-  # override the location of libffmpeg.so.
-  chrpath -c "${STRIPPEDFILE}"
   install -m 755 "${STRIPPEDFILE}" "${STAGEDIR}/${INSTALLDIR}/${PROGNAME}-bin"
   rm "${DEBUGFILE}" "${STRIPPEDFILE}"
   rm -rf "${STRIPTEMP}"
@@ -136,8 +130,6 @@ stage_install_common() {
   if [ -r "${BUILDDIR}/vivaldi_100_percent.pak" ]; then
     install -m 644 "${BUILDDIR}/vivaldi_100_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
     install -m 644 "${BUILDDIR}/vivaldi_200_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
-    install -m 644 "${BUILDDIR}/vivaldi_material_100_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
-    install -m 644 "${BUILDDIR}/vivaldi_material_200_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
   else
     install -m 644 "${BUILDDIR}/theme_resources_100_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
     install -m 644 "${BUILDDIR}/ui_resources_100_percent.pak" "${STAGEDIR}/${INSTALLDIR}/"
@@ -147,6 +139,10 @@ stage_install_common() {
   cp -rf "${BUILDDIR}/resources/vivaldi" "${STAGEDIR}/${INSTALLDIR}/resources/"
   find "${STAGEDIR}/${INSTALLDIR}/resources/vivaldi" -type f -exec chmod 644 '{}' \;
   find "${STAGEDIR}/${INSTALLDIR}/resources/vivaldi" -type d -exec chmod 755 '{}' \;
+  # The features file
+  if [ -f "${BUILDDIR}/features.json" ]; then
+    install -m 644 "${BUILDDIR}/features.json" "${STAGEDIR}/${INSTALLDIR}/"
+  fi
 
   # ICU data file; only necessary when icu_use_data_file_flag is set to 1
   # in build/common.gypi.
@@ -182,15 +178,10 @@ stage_install_common() {
       "${STAGEDIR}/${INSTALLDIR}/libwidevinecdm.so"
   fi
 
-  # Pepper Flash.
-  PEPPERFLASH_SRCDIR="${BUILDDIR}/PepperFlash"
-  if [ -f "${PEPPERFLASH_SRCDIR}/libpepflashplayer.so" ]; then
-    PEPPERFLASH_DESTDIR="${STAGEDIR}/${INSTALLDIR}/PepperFlash"
-    install -m 755 -d "${PEPPERFLASH_DESTDIR}"
-    install -m 644 -s "${PEPPERFLASH_SRCDIR}/libpepflashplayer.so" \
-      "${PEPPERFLASH_DESTDIR}/"
-    install -m 644 "${PEPPERFLASH_SRCDIR}/manifest.json" \
-      "${PEPPERFLASH_DESTDIR}/"
+  # ANGLE
+  if [ "${CHANNEL}" != "stable" ]; then
+    install -m 644 "${BUILDDIR}/libGLESv2.so" "${STAGEDIR}/${INSTALLDIR}/"
+    install -m 644 "${BUILDDIR}/libEGL.so" "${STAGEDIR}/${INSTALLDIR}/"
   fi
 
   # libc++

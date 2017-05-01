@@ -16,7 +16,7 @@
 #include "content/common/content_export.h"
 #include "content/public/common/menu_item.h"
 #include "content/public/common/page_state.h"
-#include "content/public/common/ssl_status.h"
+#include "third_party/WebKit/public/platform/WebCString.h"
 #include "third_party/WebKit/public/platform/WebReferrerPolicy.h"
 #include "third_party/WebKit/public/web/WebContextMenuData.h"
 #include "ui/base/ui_base_types.h"
@@ -54,6 +54,7 @@ struct CONTENT_EXPORT CustomContextMenuContext {
 //              could be used for more contextual actions.
 struct CONTENT_EXPORT ContextMenuParams {
   ContextMenuParams();
+  ContextMenuParams(const ContextMenuParams& other);
   ~ContextMenuParams();
 
   // This is the type of Context Node that the context menu was invoked on.
@@ -114,9 +115,9 @@ struct CONTENT_EXPORT ContextMenuParams {
   // This is the suggested filename to be used when saving file through "Save
   // Link As" option of context menu.
   base::string16 suggested_filename;
-  //Controls if Paste and go context menu should be displayed in input field
-  // To turn on the input field should contain the className "url"
-  bool isVivaldiAddressfield;
+
+  // Field that identifies special input types used in Vivaldi.
+  std::string vivaldi_input_type;
 
   // The misspelled word under the cursor, if any. Used to generate the
   // |dictionary_suggestions| list.
@@ -146,9 +147,6 @@ struct CONTENT_EXPORT ContextMenuParams {
   // These flags indicate to the browser whether the renderer believes it is
   // able to perform the corresponding action.
   int edit_flags;
-
-  // The security info for the resource we are showing the menu on.
-  SSLStatus security_info;
 
   // The character encoding of the frame on which the menu is invoked.
   std::string frame_charset;

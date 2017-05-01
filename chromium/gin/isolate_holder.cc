@@ -7,6 +7,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
@@ -25,10 +27,13 @@ namespace {
 v8::ArrayBuffer::Allocator* g_array_buffer_allocator = nullptr;
 }  // namespace
 
-IsolateHolder::IsolateHolder() : IsolateHolder(AccessMode::kSingleThread) {
-}
+IsolateHolder::IsolateHolder(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
+    : IsolateHolder(std::move(task_runner), AccessMode::kSingleThread) {}
 
-IsolateHolder::IsolateHolder(AccessMode access_mode)
+IsolateHolder::IsolateHolder(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    AccessMode access_mode)
     : access_mode_(access_mode) {
   v8::ArrayBuffer::Allocator* allocator = g_array_buffer_allocator;
   CHECK(allocator) << "You need to invoke gin::IsolateHolder::Initialize first";
@@ -39,7 +44,8 @@ IsolateHolder::IsolateHolder(AccessMode access_mode)
                                        base::SysInfo::AmountOfVirtualMemory());
   params.array_buffer_allocator = allocator;
   isolate_ = v8::Isolate::New(params);
-  isolate_data_.reset(new PerIsolateData(isolate_, allocator));
+  isolate_data_.reset(
+      new PerIsolateData(isolate_, allocator, access_mode, task_runner));
   isolate_memory_dump_provider_.reset(new V8IsolateMemoryDumpProvider(this));
 #if defined(OS_WIN)
   {
@@ -96,7 +102,7 @@ void IsolateHolder::RemoveRunMicrotasksObserver() {
 }
 
 void IsolateHolder::EnableIdleTasks(
-    scoped_ptr<V8IdleTaskRunner> idle_task_runner) {
+    std::unique_ptr<V8IdleTaskRunner> idle_task_runner) {
   DCHECK(isolate_data_.get());
   isolate_data_->EnableIdleTasks(std::move(idle_task_runner));
 }

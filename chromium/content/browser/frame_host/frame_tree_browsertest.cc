@@ -10,6 +10,7 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -17,8 +18,8 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/test/content_browser_test_utils_internal.h"
-#include "content/test/test_frame_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/WebKit/public/web/WebSandboxFlags.h"
@@ -31,23 +32,25 @@
 
 namespace content {
 
+namespace {
+
+std::string GetOriginFromRenderer(FrameTreeNode* node) {
+  std::string origin;
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      node, "window.domAutomationController.send(document.origin);", &origin));
+  return origin;
+}
+
+}  // namespace
+
 class FrameTreeBrowserTest : public ContentBrowserTest {
  public:
   FrameTreeBrowserTest() {}
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
-    ASSERT_TRUE(embedded_test_server()->Start());
     SetupCrossSiteRedirector(embedded_test_server());
-  }
-
- protected:
-  std::string GetOriginFromRenderer(FrameTreeNode* node) {
-    std::string origin;
-    EXPECT_TRUE(ExecuteScriptAndExtractString(
-        node->current_frame_host(),
-        "window.domAutomationController.send(document.origin);", &origin));
-    return origin;
+    ASSERT_TRUE(embedded_test_server()->Start());
   }
 
  private:
@@ -319,8 +322,9 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateGrandchildToBlob) {
   FrameTreeNode* target = root->child_at(0)->child_at(0);
 
   std::string blob_url_string;
+  RenderFrameDeletedObserver deleted_observer(target->current_frame_host());
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      root->current_frame_host(),
+      root,
       "function receiveMessage(event) {"
       "  document.body.appendChild(document.createTextNode(event.data));"
       "  domAutomationController.send(event.source.location.href);"
@@ -333,6 +337,9 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateGrandchildToBlob) {
       "var blob_url = URL.createObjectURL(blob);"
       "frames[0][0].location.href = blob_url;",
       &blob_url_string));
+  // Wait for the RenderFrame to go away, if this will be cross-process.
+  if (AreAllSitesIsolatedForTesting())
+    deleted_observer.WaitUntilDeleted();
   EXPECT_EQ(GURL(blob_url_string), target->current_url());
   EXPECT_EQ(url::kBlobScheme, target->current_url().scheme());
   EXPECT_FALSE(target->current_origin().unique());
@@ -341,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateGrandchildToBlob) {
 
   std::string document_body;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target->current_frame_host(),
+      target,
       "domAutomationController.send(document.body.children[0].innerHTML);",
       &document_body));
   EXPECT_EQ("This is blob content.", document_body);
@@ -362,13 +369,12 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateChildToAboutBlank) {
   FrameTreeNode* initiator = target->parent();
 
   // Give the target a name.
-  EXPECT_TRUE(
-      ExecuteScript(target->current_frame_host(), "window.name = 'target';"));
+  EXPECT_TRUE(ExecuteScript(target, "window.name = 'target';"));
 
   // Use window.open(about:blank), then poll the document for access.
   std::string about_blank_origin;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      initiator->current_frame_host(),
+      initiator,
       "var didNavigate = false;"
       "var intervalID = setInterval(function() {"
       "  if (!didNavigate) {"
@@ -392,8 +398,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateChildToAboutBlank) {
 
   std::string document_body;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target->current_frame_host(),
-      "domAutomationController.send(document.body.innerHTML);",
+      target, "domAutomationController.send(document.body.innerHTML);",
       &document_body));
   EXPECT_EQ("Hi from b.com", document_body);
 }
@@ -416,13 +421,12 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest,
   FrameTreeNode* initiator = target->parent()->parent();
 
   // Give the target a name.
-  EXPECT_TRUE(
-      ExecuteScript(target->current_frame_host(), "window.name = 'target';"));
+  EXPECT_TRUE(ExecuteScript(target, "window.name = 'target';"));
 
   // Use window.open(about:blank), then poll the document for access.
   std::string about_blank_origin;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      initiator->current_frame_host(),
+      initiator,
       "var didNavigate = false;"
       "var intervalID = setInterval(function() {"
       "  if (!didNavigate) {"
@@ -444,10 +448,70 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest,
 
   std::string document_body;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target->current_frame_host(),
-      "domAutomationController.send(document.body.innerHTML);",
+      target, "domAutomationController.send(document.body.innerHTML);",
       &document_body));
   EXPECT_EQ("Hi from a.com", document_body);
+}
+
+// Ensures that iframe with srcdoc is always put in the same origin as its
+// parent frame.
+IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, ChildFrameWithSrcdoc) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  WebContentsImpl* contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTreeNode* root = contents->GetFrameTree()->root();
+  EXPECT_EQ(1U, root->child_count());
+
+  FrameTreeNode* child = root->child_at(0);
+  std::string frame_origin;
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      child, "domAutomationController.send(document.origin);", &frame_origin));
+  EXPECT_TRUE(
+      child->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
+          url::Origin(GURL(frame_origin))));
+  EXPECT_FALSE(
+      root->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
+          url::Origin(GURL(frame_origin))));
+
+  // Create a new iframe with srcdoc and add it to the main frame. It should
+  // be created in the same SiteInstance as the parent.
+  {
+    std::string script("var f = document.createElement('iframe');"
+                       "f.srcdoc = 'some content';"
+                       "document.body.appendChild(f)");
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecuteScript(root, script));
+    EXPECT_EQ(2U, root->child_count());
+    observer.Wait();
+
+    EXPECT_EQ(GURL(kAboutSrcDocURL), root->child_at(1)->current_url());
+    EXPECT_TRUE(ExecuteScriptAndExtractString(
+        root->child_at(1), "domAutomationController.send(document.origin);",
+        &frame_origin));
+    EXPECT_EQ(root->current_frame_host()->GetLastCommittedURL().GetOrigin(),
+              GURL(frame_origin));
+    EXPECT_NE(child->current_frame_host()->GetLastCommittedURL().GetOrigin(),
+              GURL(frame_origin));
+  }
+
+  // Set srcdoc on the existing cross-site frame. It should navigate the frame
+  // back to the origin of the parent.
+  {
+    std::string script("var f = document.getElementById('child-0');"
+                       "f.srcdoc = 'some content';");
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecuteScript(root, script));
+    observer.Wait();
+
+    EXPECT_EQ(GURL(kAboutSrcDocURL), child->current_url());
+    EXPECT_TRUE(ExecuteScriptAndExtractString(
+        child, "domAutomationController.send(document.origin);",
+        &frame_origin));
+    EXPECT_EQ(root->current_frame_host()->GetLastCommittedURL().GetOrigin(),
+              GURL(frame_origin));
+  }
 }
 
 // Ensure that sandbox flags are correctly set when child frames are created.
@@ -464,30 +528,29 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, SandboxFlagsSetForChildFrames) {
   // which resets both SandboxFlags::Scripts and
   // SandboxFlags::AutomaticFeatures bits per blink::parseSandboxPolicy(), and
   // third frame has "allow-scripts allow-same-origin".
-  EXPECT_EQ(root->current_replication_state().sandbox_flags,
-            blink::WebSandboxFlags::None);
-  EXPECT_EQ(root->child_at(0)->current_replication_state().sandbox_flags,
-            blink::WebSandboxFlags::All);
-  EXPECT_EQ(root->child_at(1)->current_replication_state().sandbox_flags,
-            blink::WebSandboxFlags::All & ~blink::WebSandboxFlags::Scripts &
-                ~blink::WebSandboxFlags::AutomaticFeatures);
-  EXPECT_EQ(root->child_at(2)->current_replication_state().sandbox_flags,
-            blink::WebSandboxFlags::All & ~blink::WebSandboxFlags::Scripts &
+  EXPECT_EQ(blink::WebSandboxFlags::None, root->effective_sandbox_flags());
+  EXPECT_EQ(blink::WebSandboxFlags::All,
+            root->child_at(0)->effective_sandbox_flags());
+  EXPECT_EQ(blink::WebSandboxFlags::All & ~blink::WebSandboxFlags::Scripts &
+                ~blink::WebSandboxFlags::AutomaticFeatures,
+            root->child_at(1)->effective_sandbox_flags());
+  EXPECT_EQ(blink::WebSandboxFlags::All & ~blink::WebSandboxFlags::Scripts &
                 ~blink::WebSandboxFlags::AutomaticFeatures &
-                ~blink::WebSandboxFlags::Origin);
+                ~blink::WebSandboxFlags::Origin,
+            root->child_at(2)->effective_sandbox_flags());
 
   // Sandboxed frames should set a unique origin unless they have the
   // "allow-same-origin" directive.
-  EXPECT_EQ(root->child_at(0)->current_origin().Serialize(), "null");
-  EXPECT_EQ(root->child_at(1)->current_origin().Serialize(), "null");
-  EXPECT_EQ(root->child_at(2)->current_origin().Serialize() + "/",
-            main_url.GetOrigin().spec());
+  EXPECT_EQ("null", root->child_at(0)->current_origin().Serialize());
+  EXPECT_EQ("null", root->child_at(1)->current_origin().Serialize());
+  EXPECT_EQ(main_url.GetOrigin().spec(),
+            root->child_at(2)->current_origin().Serialize() + "/");
 
   // Navigating to a different URL should not clear sandbox flags.
   GURL frame_url(embedded_test_server()->GetURL("/title1.html"));
   NavigateFrameToURL(root->child_at(0), frame_url);
-  EXPECT_EQ(root->child_at(0)->current_replication_state().sandbox_flags,
-            blink::WebSandboxFlags::All);
+  EXPECT_EQ(blink::WebSandboxFlags::All,
+            root->child_at(0)->effective_sandbox_flags());
 }
 
 // Ensure that a popup opened from a subframe sets its opener to the subframe's
@@ -504,7 +567,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, SubframeOpenerSetForNewWindow) {
   // Open a new window from a subframe.
   ShellAddedObserver new_shell_observer;
   GURL popup_url(embedded_test_server()->GetURL("foo.com", "/title1.html"));
-  EXPECT_TRUE(ExecuteScript(root->child_at(0)->current_frame_host(),
+  EXPECT_TRUE(ExecuteScript(root->child_at(0),
                             "window.open('" + popup_url.spec() + "');"));
   Shell* new_shell = new_shell_observer.GetShell();
   WebContents* new_contents = new_shell->web_contents();
@@ -531,8 +594,8 @@ class CrossProcessFrameTreeBrowserTest : public ContentBrowserTest {
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
-    ASSERT_TRUE(embedded_test_server()->Start());
     SetupCrossSiteRedirector(embedded_test_server());
+    ASSERT_TRUE(embedded_test_server()->Start());
   }
 
  private:
@@ -633,6 +696,69 @@ IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
   // Navigating to a data URL should set a unique origin.  This is represented
   // as "null" per RFC 6454.
   EXPECT_EQ(root->child_at(1)->current_origin().Serialize(), "null");
+}
+
+// FrameTreeBrowserTest variant where we isolate http://*.is, Iceland's top
+// level domain. This is an analogue to --isolate-extensions that we use inside
+// of content_browsertests, where extensions don't exist. Iceland, like an
+// extension process, is a special place with magical powers; we want to protect
+// it from outsiders.
+class IsolateIcelandFrameTreeBrowserTest : public ContentBrowserTest {
+ public:
+  IsolateIcelandFrameTreeBrowserTest() {}
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitchASCII(switches::kIsolateSitesForTesting, "*.is");
+  }
+
+  void SetUpOnMainThread() override {
+    host_resolver()->AddRule("*", "127.0.0.1");
+    SetupCrossSiteRedirector(embedded_test_server());
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(IsolateIcelandFrameTreeBrowserTest);
+};
+
+// Regression test for https://crbug.com/644966
+IN_PROC_BROWSER_TEST_F(IsolateIcelandFrameTreeBrowserTest,
+                       ProcessSwitchForIsolatedBlob) {
+  // blink suppresses navigations to blob URLs of origins different from the
+  // frame initiating the navigation. We disable those checks for this test, to
+  // test what happens in a compromise scenario.
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kDisableWebSecurity);
+
+  // Set up an iframe.
+  WebContents* contents = shell()->web_contents();
+  FrameTreeNode* root =
+      static_cast<WebContentsImpl*>(contents)->GetFrameTree()->root();
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(a)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  // The navigation targets an invalid blob url; that's intentional to trigger
+  // an error response. The response should commit in a process dedicated to
+  // http://b.is.
+  std::string result;
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      root,
+      "var iframe_element = document.getElementsByTagName('iframe')[0];"
+      "iframe_element.onload = () => {"
+      "    domAutomationController.send('done');"
+      "};"
+      "iframe_element.src = 'blob:http://b.is:2932/';",
+      &result));
+  WaitForLoadStop(contents);
+
+  // Make sure we did a process transfer back to "b.is".
+  EXPECT_EQ(
+      " Site A ------------ proxies for B\n"
+      "   +--Site B ------- proxies for A\n"
+      "Where A = http://a.com/\n"
+      "      B = http://b.is/",
+      FrameTreeVisualizer().DepictFrameTree(root));
 }
 
 }  // namespace content

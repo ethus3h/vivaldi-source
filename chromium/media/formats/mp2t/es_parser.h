@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <list>
+#include <memory>
 #include <utility>
 
 #include "base/callback.h"
@@ -19,6 +20,7 @@
 
 namespace media {
 
+class DecryptConfig;
 class OffsetByteQueue;
 class StreamParserBuffer;
 
@@ -26,7 +28,8 @@ namespace mp2t {
 
 class MEDIA_EXPORT EsParser {
  public:
-  typedef base::Callback<void(scoped_refptr<StreamParserBuffer>)> EmitBufferCB;
+  using EmitBufferCB = base::Callback<void(scoped_refptr<StreamParserBuffer>)>;
+  using GetDecryptConfigCB = base::Callback<const DecryptConfig*()>;
 
   EsParser();
   virtual ~EsParser();
@@ -68,7 +71,7 @@ class MEDIA_EXPORT EsParser {
   TimingDesc GetTimingDescriptor(int64_t es_byte_count);
 
   // Bytes of the ES stream that have not been emitted yet.
-  scoped_ptr<media::OffsetByteQueue> es_queue_;
+  std::unique_ptr<media::OffsetByteQueue> es_queue_;
 
  private:
   // Anchor some timing information into the ES queue.
@@ -90,4 +93,4 @@ class MEDIA_EXPORT EsParser {
 }  // namespace mp2t
 }  // namespace media
 
-#endif
+#endif  // MEDIA_FORMATS_MP2T_ES_PARSER_H_

@@ -8,9 +8,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <memory>
+
 #include "base/i18n/char_iterator.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -21,7 +22,8 @@
 #include "ppapi/c/pp_input_event.h"
 #include "ppapi/shared_impl/ppb_input_event_shared.h"
 #include "third_party/WebKit/public/platform/WebGamepads.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebMouseWheelEvent.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 
 using ppapi::InputEventData;
@@ -80,8 +82,8 @@ static_assert(static_cast<int>(PP_INPUTEVENT_MODIFIER_ISRIGHT) ==
                   static_cast<int>(WebInputEvent::IsRight),
               "IsRight should match");
 
-PP_InputEvent_Type ConvertEventTypes(WebInputEvent::Type wetype) {
-  switch (wetype) {
+PP_InputEvent_Type ConvertEventTypes(const WebInputEvent& event) {
+  switch (event.type()) {
     case WebInputEvent::MouseDown:
       return PP_INPUTEVENT_TYPE_MOUSEDOWN;
     case WebInputEvent::MouseUp:
@@ -118,13 +120,30 @@ PP_InputEvent_Type ConvertEventTypes(WebInputEvent::Type wetype) {
   }
 }
 
+// Converts WebInputEvent::Modifiers flags to PP_InputEvent_Modifier.
+int ConvertEventModifiers(int modifiers) {
+  return modifiers & (PP_INPUTEVENT_MODIFIER_SHIFTKEY |
+                      PP_INPUTEVENT_MODIFIER_CONTROLKEY |
+                      PP_INPUTEVENT_MODIFIER_ALTKEY |
+                      PP_INPUTEVENT_MODIFIER_METAKEY |
+                      PP_INPUTEVENT_MODIFIER_ISKEYPAD |
+                      PP_INPUTEVENT_MODIFIER_ISAUTOREPEAT |
+                      PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN |
+                      PP_INPUTEVENT_MODIFIER_MIDDLEBUTTONDOWN |
+                      PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN |
+                      PP_INPUTEVENT_MODIFIER_CAPSLOCKKEY |
+                      PP_INPUTEVENT_MODIFIER_NUMLOCKKEY |
+                      PP_INPUTEVENT_MODIFIER_ISLEFT |
+                      PP_INPUTEVENT_MODIFIER_ISRIGHT);
+}
+
 // Generates a PP_InputEvent with the fields common to all events, as well as
 // the event type from the given web event. Event-specific fields will be zero
 // initialized.
 InputEventData GetEventWithCommonFieldsAndType(const WebInputEvent& web_event) {
   InputEventData result;
-  result.event_type = ConvertEventTypes(web_event.type);
-  result.event_time_stamp = web_event.timeStampSeconds;
+  result.event_type = ConvertEventTypes(web_event);
+  result.event_time_stamp = web_event.timeStampSeconds();
   return result;
 }
 
@@ -133,7 +152,7 @@ void AppendKeyEvent(const WebInputEvent& event,
   const WebKeyboardEvent& key_event =
       static_cast<const WebKeyboardEvent&>(event);
   InputEventData result = GetEventWithCommonFieldsAndType(event);
-  result.event_modifiers = key_event.modifiers;
+  result.event_modifiers = ConvertEventModifiers(key_event.modifiers());
   result.key_code = key_event.windowsKeyCode;
   result.code = ui::KeycodeConverter::DomCodeToCodeString(
       static_cast<ui::DomCode>(key_event.domCode));
@@ -160,7 +179,7 @@ void AppendCharEvent(const WebInputEvent& event,
   base::i18n::UTF16CharIterator iter(key_event.text, utf16_char_count);
   while (!iter.end()) {
     InputEventData result = GetEventWithCommonFieldsAndType(event);
-    result.event_modifiers = key_event.modifiers;
+    result.event_modifiers = ConvertEventModifiers(key_event.modifiers());
     base::WriteUnicodeCharacter(iter.get(), &result.character_text);
 
     result_events->push_back(result);
@@ -170,25 +189,25 @@ void AppendCharEvent(const WebInputEvent& event,
 
 void AppendMouseEvent(const WebInputEvent& event,
                       std::vector<InputEventData>* result_events) {
-  static_assert(static_cast<int>(WebMouseEvent::ButtonNone) ==
+  static_assert(static_cast<int>(WebMouseEvent::Button::NoButton) ==
                     static_cast<int>(PP_INPUTEVENT_MOUSEBUTTON_NONE),
                 "MouseNone should match");
-  static_assert(static_cast<int>(WebMouseEvent::ButtonLeft) ==
+  static_assert(static_cast<int>(WebMouseEvent::Button::Left) ==
                     static_cast<int>(PP_INPUTEVENT_MOUSEBUTTON_LEFT),
                 "MouseLeft should match");
-  static_assert(static_cast<int>(WebMouseEvent::ButtonRight) ==
+  static_assert(static_cast<int>(WebMouseEvent::Button::Right) ==
                     static_cast<int>(PP_INPUTEVENT_MOUSEBUTTON_RIGHT),
                 "MouseRight should match");
-  static_assert(static_cast<int>(WebMouseEvent::ButtonMiddle) ==
+  static_assert(static_cast<int>(WebMouseEvent::Button::Middle) ==
                     static_cast<int>(PP_INPUTEVENT_MOUSEBUTTON_MIDDLE),
                 "MouseMiddle should match");
 
   const WebMouseEvent& mouse_event = static_cast<const WebMouseEvent&>(event);
   InputEventData result = GetEventWithCommonFieldsAndType(event);
-  result.event_modifiers = mouse_event.modifiers;
-  if (mouse_event.type == WebInputEvent::MouseDown ||
-      mouse_event.type == WebInputEvent::MouseMove ||
-      mouse_event.type == WebInputEvent::MouseUp) {
+  result.event_modifiers = ConvertEventModifiers(mouse_event.modifiers());
+  if (mouse_event.type() == WebInputEvent::MouseDown ||
+      mouse_event.type() == WebInputEvent::MouseMove ||
+      mouse_event.type() == WebInputEvent::MouseUp) {
     result.mouse_button =
         static_cast<PP_InputEvent_MouseButton>(mouse_event.button);
   }
@@ -205,7 +224,7 @@ void AppendMouseWheelEvent(const WebInputEvent& event,
   const WebMouseWheelEvent& mouse_wheel_event =
       static_cast<const WebMouseWheelEvent&>(event);
   InputEventData result = GetEventWithCommonFieldsAndType(event);
-  result.event_modifiers = mouse_wheel_event.modifiers;
+  result.event_modifiers = ConvertEventModifiers(mouse_wheel_event.modifiers());
   result.wheel_delta.x = mouse_wheel_event.deltaX;
   result.wheel_delta.y = mouse_wheel_event.deltaY;
   result.wheel_ticks.x = mouse_wheel_event.wheelTicksX;
@@ -253,6 +272,17 @@ void AppendTouchEvent(const WebInputEvent& event,
       reinterpret_cast<const WebTouchEvent&>(event);
 
   InputEventData result = GetEventWithCommonFieldsAndType(event);
+
+  if (touch_event.touchesLength == 1) {
+    if (touch_event.touches[0].pointerType ==
+        blink::WebPointerProperties::PointerType::Pen) {
+      result.event_modifiers |= PP_INPUTEVENT_MODIFIER_ISPEN;
+    } else if (touch_event.touches[0].pointerType ==
+               blink::WebPointerProperties::PointerType::Eraser) {
+      result.event_modifiers |= PP_INPUTEVENT_MODIFIER_ISERASER;
+    }
+  }
+
   SetPPTouchPoints(
       touch_event.touches, touch_event.touchesLength, ACTIVE, &result.touches);
   SetPPTouchPoints(touch_event.touches,
@@ -270,10 +300,11 @@ void AppendTouchEvent(const WebInputEvent& event,
 WebTouchPoint CreateWebTouchPoint(const PP_TouchPoint& pp_pt,
                                   WebTouchPoint::State state) {
   WebTouchPoint pt;
+  pt.pointerType = blink::WebPointerProperties::PointerType::Touch;
   pt.id = pp_pt.id;
   pt.position.x = pp_pt.position.x;
   pt.position.y = pp_pt.position.y;
-  // TODO bug:http://code.google.com/p/chromium/issues/detail?id=93902
+  // TODO(crbug.com/93902): Add screen coordinate calculation.
   pt.screenPosition.x = 0;
   pt.screenPosition.y = 0;
   pt.force = pp_pt.pressure;
@@ -288,7 +319,7 @@ bool HasTouchPointWithId(const WebTouchPoint* web_touches,
                          uint32_t web_touches_length,
                          uint32_t id) {
   // Note: A brute force search to find the (potentially) existing touch point
-  // is cheap given the small bound on |WebTouchEvent::touchesLengthCap|.
+  // is cheap given the small bound on |WebTouchEvent::kTouchesLengthCap|.
   for (uint32_t i = 0; i < web_touches_length; ++i) {
     if (web_touches[i].id == static_cast<int>(id))
       return true;
@@ -303,10 +334,10 @@ void SetWebTouchPointsIfNotYetSet(const std::vector<PP_TouchPoint>& pp_touches,
   const uint32_t initial_web_touches_length = *web_touches_length;
   const uint32_t touches_length =
       std::min(static_cast<uint32_t>(pp_touches.size()),
-               static_cast<uint32_t>(WebTouchEvent::touchesLengthCap));
+               static_cast<uint32_t>(WebTouchEvent::kTouchesLengthCap));
   for (uint32_t i = 0; i < touches_length; ++i) {
     const uint32_t touch_index = *web_touches_length;
-    if (touch_index >= static_cast<uint32_t>(WebTouchEvent::touchesLengthCap))
+    if (touch_index >= static_cast<uint32_t>(WebTouchEvent::kTouchesLengthCap))
       return;
 
     const PP_TouchPoint& pp_pt = pp_touches[i];
@@ -361,32 +392,29 @@ WebTouchEvent* BuildTouchEvent(const InputEventData& event) {
 }
 
 WebKeyboardEvent* BuildKeyEvent(const InputEventData& event) {
-  WebKeyboardEvent* key_event = new WebKeyboardEvent();
+  WebInputEvent::Type type = WebInputEvent::Type::Undefined;
   switch (event.event_type) {
     case PP_INPUTEVENT_TYPE_RAWKEYDOWN:
-      key_event->type = WebInputEvent::RawKeyDown;
+      type = WebInputEvent::RawKeyDown;
       break;
     case PP_INPUTEVENT_TYPE_KEYDOWN:
-      key_event->type = WebInputEvent::KeyDown;
+      type = WebInputEvent::KeyDown;
       break;
     case PP_INPUTEVENT_TYPE_KEYUP:
-      key_event->type = WebInputEvent::KeyUp;
+      type = WebInputEvent::KeyUp;
       break;
     default:
       NOTREACHED();
   }
-  key_event->timeStampSeconds = event.event_time_stamp;
-  key_event->modifiers = event.event_modifiers;
+  WebKeyboardEvent* key_event =
+      new WebKeyboardEvent(type, event.event_modifiers, event.event_time_stamp);
   key_event->windowsKeyCode = event.key_code;
-  key_event->setKeyIdentifierFromWindowsKeyCode();
   return key_event;
 }
 
 WebKeyboardEvent* BuildCharEvent(const InputEventData& event) {
-  WebKeyboardEvent* key_event = new WebKeyboardEvent();
-  key_event->type = WebInputEvent::Char;
-  key_event->timeStampSeconds = event.event_time_stamp;
-  key_event->modifiers = event.event_modifiers;
+  WebKeyboardEvent* key_event = new WebKeyboardEvent(
+      WebInputEvent::Char, event.event_modifiers, event.event_time_stamp);
 
   // Make sure to not read beyond the buffer in case some bad code doesn't
   // NULL-terminate it (this is called from plugins).
@@ -401,39 +429,40 @@ WebKeyboardEvent* BuildCharEvent(const InputEventData& event) {
 }
 
 WebMouseEvent* BuildMouseEvent(const InputEventData& event) {
-  WebMouseEvent* mouse_event = new WebMouseEvent();
+  WebInputEvent::Type type = WebInputEvent::Undefined;
   switch (event.event_type) {
     case PP_INPUTEVENT_TYPE_MOUSEDOWN:
-      mouse_event->type = WebInputEvent::MouseDown;
+      type = WebInputEvent::MouseDown;
       break;
     case PP_INPUTEVENT_TYPE_MOUSEUP:
-      mouse_event->type = WebInputEvent::MouseUp;
+      type = WebInputEvent::MouseUp;
       break;
     case PP_INPUTEVENT_TYPE_MOUSEMOVE:
-      mouse_event->type = WebInputEvent::MouseMove;
+      type = WebInputEvent::MouseMove;
       break;
     case PP_INPUTEVENT_TYPE_MOUSEENTER:
-      mouse_event->type = WebInputEvent::MouseEnter;
+      type = WebInputEvent::MouseEnter;
       break;
     case PP_INPUTEVENT_TYPE_MOUSELEAVE:
-      mouse_event->type = WebInputEvent::MouseLeave;
+      type = WebInputEvent::MouseLeave;
       break;
     case PP_INPUTEVENT_TYPE_CONTEXTMENU:
-      mouse_event->type = WebInputEvent::ContextMenu;
+      type = WebInputEvent::ContextMenu;
       break;
     default:
       NOTREACHED();
   }
-  mouse_event->timeStampSeconds = event.event_time_stamp;
-  mouse_event->modifiers = event.event_modifiers;
+  WebMouseEvent* mouse_event =
+      new WebMouseEvent(type, event.event_modifiers, event.event_time_stamp);
+  mouse_event->pointerType = blink::WebPointerProperties::PointerType::Mouse;
   mouse_event->button = static_cast<WebMouseEvent::Button>(event.mouse_button);
-  if (mouse_event->type == WebInputEvent::MouseMove) {
-    if (mouse_event->modifiers & WebInputEvent::LeftButtonDown)
-      mouse_event->button = WebMouseEvent::ButtonLeft;
-    else if (mouse_event->modifiers & WebInputEvent::MiddleButtonDown)
-      mouse_event->button = WebMouseEvent::ButtonMiddle;
-    else if (mouse_event->modifiers & WebInputEvent::RightButtonDown)
-      mouse_event->button = WebMouseEvent::ButtonRight;
+  if (mouse_event->type() == WebInputEvent::MouseMove) {
+    if (mouse_event->modifiers() & WebInputEvent::LeftButtonDown)
+      mouse_event->button = WebMouseEvent::Button::Left;
+    else if (mouse_event->modifiers() & WebInputEvent::MiddleButtonDown)
+      mouse_event->button = WebMouseEvent::Button::Middle;
+    else if (mouse_event->modifiers() & WebInputEvent::RightButtonDown)
+      mouse_event->button = WebMouseEvent::Button::Right;
   }
   mouse_event->x = event.mouse_position.x;
   mouse_event->y = event.mouse_position.y;
@@ -444,10 +473,8 @@ WebMouseEvent* BuildMouseEvent(const InputEventData& event) {
 }
 
 WebMouseWheelEvent* BuildMouseWheelEvent(const InputEventData& event) {
-  WebMouseWheelEvent* mouse_wheel_event = new WebMouseWheelEvent();
-  mouse_wheel_event->type = WebInputEvent::MouseWheel;
-  mouse_wheel_event->timeStampSeconds = event.event_time_stamp;
-  mouse_wheel_event->modifiers = event.event_modifiers;
+  WebMouseWheelEvent* mouse_wheel_event = new WebMouseWheelEvent(
+      WebInputEvent::MouseWheel, event.event_modifiers, event.event_time_stamp);
   mouse_wheel_event->deltaX = event.wheel_delta.x;
   mouse_wheel_event->deltaY = event.wheel_delta.y;
   mouse_wheel_event->wheelTicksX = event.wheel_ticks.x;
@@ -529,9 +556,8 @@ void GetKeyCode(const std::string& char_text,
       base::string16 char_text16 = base::UTF8ToUTF16(char_text);
       DCHECK_EQ(char_text16.size(), 1U);
       vk_text = vk_code = char_text16[0];
-      *needs_shift_modifier =
-          (vk_code & 0xFF) >= 'A' && (vk_code & 0xFF) <= 'Z';
-      if ((vk_code & 0xFF) >= 'a' && (vk_code & 0xFF) <= 'z')
+      *needs_shift_modifier = base::IsAsciiUpper(vk_code & 0xFF);
+      if (base::IsAsciiLower(vk_code & 0xFF))
         vk_code -= 'a' - 'A';
       *generate_char = true;
     }
@@ -547,7 +573,7 @@ void CreateInputEventData(const WebInputEvent& event,
                           std::vector<InputEventData>* result) {
   result->clear();
 
-  switch (event.type) {
+  switch (event.type()) {
     case WebInputEvent::MouseDown:
     case WebInputEvent::MouseUp:
     case WebInputEvent::MouseMove:
@@ -580,7 +606,7 @@ void CreateInputEventData(const WebInputEvent& event,
 }
 
 WebInputEvent* CreateWebInputEvent(const InputEventData& event) {
-  scoped_ptr<WebInputEvent> web_input_event;
+  std::unique_ptr<WebInputEvent> web_input_event;
   switch (event.event_type) {
     case PP_INPUTEVENT_TYPE_UNDEFINED:
       return NULL;
@@ -624,12 +650,12 @@ WebInputEvent* CreateWebInputEvent(const InputEventData& event) {
 
 // Generate a coherent sequence of input events to simulate a user event.
 // From src/components/test_runner/event_sender.cc.
-std::vector<scoped_ptr<WebInputEvent>> CreateSimulatedWebInputEvents(
+std::vector<std::unique_ptr<WebInputEvent>> CreateSimulatedWebInputEvents(
     const ppapi::InputEventData& event,
     int plugin_x,
     int plugin_y) {
-  std::vector<scoped_ptr<WebInputEvent>> events;
-  scoped_ptr<WebInputEvent> original_event(CreateWebInputEvent(event));
+  std::vector<std::unique_ptr<WebInputEvent>> events;
+  std::unique_ptr<WebInputEvent> original_event(CreateWebInputEvent(event));
 
   switch (event.event_type) {
     case PP_INPUTEVENT_TYPE_MOUSEDOWN:
@@ -660,8 +686,8 @@ std::vector<scoped_ptr<WebInputEvent>> CreateSimulatedWebInputEvents(
 #if defined(OS_WIN)
       WebKeyboardEvent* web_keyboard_event =
           static_cast<WebKeyboardEvent*>(original_event.get());
-      if (web_keyboard_event->type == WebInputEvent::KeyDown)
-        web_keyboard_event->type = WebInputEvent::RawKeyDown;
+      if (web_keyboard_event->type() == WebInputEvent::KeyDown)
+        web_keyboard_event->setType(WebInputEvent::RawKeyDown);
 #endif
       events.push_back(std::move(original_event));
       break;
@@ -680,34 +706,32 @@ std::vector<scoped_ptr<WebInputEvent>> CreateSimulatedWebInputEvents(
                  &generate_char);
 
       // Synthesize key down and key up events in all cases.
-      scoped_ptr<WebKeyboardEvent> key_down_event(new WebKeyboardEvent());
-      scoped_ptr<WebKeyboardEvent> key_up_event(new WebKeyboardEvent());
+      std::unique_ptr<WebKeyboardEvent> key_down_event(new WebKeyboardEvent(
+          WebInputEvent::RawKeyDown,
+          needs_shift_modifier ? WebInputEvent::ShiftKey
+                               : WebInputEvent::NoModifiers,
+          web_char_event->timeStampSeconds()));
+      std::unique_ptr<WebKeyboardEvent> key_up_event(new WebKeyboardEvent());
 
-      key_down_event->type = WebInputEvent::RawKeyDown;
       key_down_event->windowsKeyCode = code;
       key_down_event->nativeKeyCode = code;
-      if (needs_shift_modifier)
-        key_down_event->modifiers |= WebInputEvent::ShiftKey;
 
       // If a char event is needed, set the text fields.
       if (generate_char) {
         key_down_event->text[0] = text;
         key_down_event->unmodifiedText[0] = text;
       }
-      // Convert the key code to a string identifier.
-      key_down_event->setKeyIdentifierFromWindowsKeyCode();
 
       *key_up_event = *web_char_event = *key_down_event;
 
       events.push_back(std::move(key_down_event));
 
       if (generate_char) {
-        web_char_event->type = WebInputEvent::Char;
-        web_char_event->keyIdentifier[0] = '\0';
+        web_char_event->setType(WebInputEvent::Char);
         events.push_back(std::move(original_event));
       }
 
-      key_up_event->type = WebInputEvent::KeyUp;
+      key_up_event->setType(WebInputEvent::KeyUp);
       events.push_back(std::move(key_up_event));
       break;
     }
@@ -718,8 +742,8 @@ std::vector<scoped_ptr<WebInputEvent>> CreateSimulatedWebInputEvents(
   return events;
 }
 
-PP_InputEvent_Class ClassifyInputEvent(WebInputEvent::Type type) {
-  switch (type) {
+PP_InputEvent_Class ClassifyInputEvent(const WebInputEvent& event) {
+  switch (event.type()) {
     case WebInputEvent::MouseDown:
     case WebInputEvent::MouseUp:
     case WebInputEvent::MouseMove:
@@ -739,9 +763,10 @@ PP_InputEvent_Class ClassifyInputEvent(WebInputEvent::Type type) {
     case WebInputEvent::TouchMove:
     case WebInputEvent::TouchStart:
       return PP_INPUTEVENT_CLASS_TOUCH;
-    case WebInputEvent::Undefined:
+    case WebInputEvent::TouchScrollStarted:
+      return PP_InputEvent_Class(0);
     default:
-      CHECK(WebInputEvent::isGestureEventType(type));
+      CHECK(WebInputEvent::isGestureEventType(event.type()));
       return PP_InputEvent_Class(0);
   }
 }

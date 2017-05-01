@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/clock.h"
 #include "base/time/tick_clock.h"
@@ -162,14 +163,23 @@ TimeTicks TestMockTimeTaskRunner::NowTicks() const {
   return now_ticks_;
 }
 
-scoped_ptr<Clock> TestMockTimeTaskRunner::GetMockClock() const {
+std::unique_ptr<Clock> TestMockTimeTaskRunner::GetMockClock() const {
   DCHECK(thread_checker_.CalledOnValidThread());
-  return make_scoped_ptr(new MockClock(this));
+  return MakeUnique<MockClock>(this);
 }
 
-scoped_ptr<TickClock> TestMockTimeTaskRunner::GetMockTickClock() const {
+std::unique_ptr<TickClock> TestMockTimeTaskRunner::GetMockTickClock() const {
   DCHECK(thread_checker_.CalledOnValidThread());
-  return make_scoped_ptr(new MockTickClock(this));
+  return MakeUnique<MockTickClock>(this);
+}
+
+std::deque<TestPendingTask> TestMockTimeTaskRunner::TakePendingTasks() {
+  std::deque<TestPendingTask> tasks;
+  while (!tasks_.empty()) {
+    tasks.push_back(tasks_.top());
+    tasks_.pop();
+  }
+  return tasks;
 }
 
 bool TestMockTimeTaskRunner::HasPendingTask() const {

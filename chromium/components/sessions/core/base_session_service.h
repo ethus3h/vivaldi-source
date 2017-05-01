@@ -5,10 +5,11 @@
 #ifndef COMPONENTS_SESSIONS_CORE_BASE_SESSION_SERVICE_H_
 #define COMPONENTS_SESSIONS_CORE_BASE_SESSION_SERVICE_H_
 
+#include <memory>
+
 #include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/sessions/core/sessions_export.h"
@@ -17,7 +18,6 @@
 
 namespace sessions {
 class BaseSessionServiceDelegate;
-class SerializedNavigationEntry;
 class SessionCommand;
 class SessionBackend;
 
@@ -34,7 +34,7 @@ class SESSIONS_EXPORT BaseSessionService {
     TAB_RESTORE
   };
 
-  typedef base::Callback<void(ScopedVector<SessionCommand>)>
+  typedef base::Callback<void(std::vector<std::unique_ptr<SessionCommand>>)>
       GetCommandsCallback;
 
   // Creates a new BaseSessionService. After creation you need to invoke
@@ -54,7 +54,7 @@ class SESSIONS_EXPORT BaseSessionService {
 
   // Returns the set of commands which were scheduled to be written. Once
   // committed to the backend, the commands are removed from here.
-  const ScopedVector<SessionCommand>& pending_commands() {
+  const std::vector<std::unique_ptr<SessionCommand>>& pending_commands() {
     return pending_commands_;
   }
 
@@ -68,11 +68,11 @@ class SESSIONS_EXPORT BaseSessionService {
   // Schedules a command. This adds |command| to pending_commands_ and
   // invokes StartSaveTimer to start a timer that invokes Save at a later
   // time.
-  void ScheduleCommand(scoped_ptr<SessionCommand> command);
+  void ScheduleCommand(std::unique_ptr<SessionCommand> command);
 
   // Appends a command as part of a general rebuild. This will neither count
   // against a rebuild, nor will it trigger a save of commands.
-  void AppendRebuildCommand(scoped_ptr<SessionCommand> command);
+  void AppendRebuildCommand(std::unique_ptr<SessionCommand> command);
 
   // Erase the |old_command| from the list of commands.
   // The passed command will automatically be deleted.
@@ -82,7 +82,7 @@ class SESSIONS_EXPORT BaseSessionService {
   // the |old_command|. The |old_command| will be automatically deleted in the
   // process.
   void SwapCommand(SessionCommand* old_command,
-                   scoped_ptr<SessionCommand> new_command);
+                   std::unique_ptr<SessionCommand> new_command);
 
   // Clears all commands from the list.
   void ClearPendingCommands();
@@ -111,7 +111,7 @@ class SESSIONS_EXPORT BaseSessionService {
   scoped_refptr<SessionBackend> backend_;
 
   // Commands we need to send over to the backend.
-  ScopedVector<SessionCommand> pending_commands_;
+  std::vector<std::unique_ptr<SessionCommand>> pending_commands_;
 
   // Whether the backend file should be recreated the next time we send
   // over the commands.

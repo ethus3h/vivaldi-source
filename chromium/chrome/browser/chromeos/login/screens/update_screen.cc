@@ -8,9 +8,11 @@
 
 #include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chromeos/login/error_screens_histogram_helper.h"
 #include "chrome/browser/chromeos/login/screen_manager.h"
 #include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
@@ -102,7 +104,7 @@ bool UpdateScreen::HasInstance(UpdateScreen* inst) {
 // static
 UpdateScreen* UpdateScreen::Get(ScreenManager* manager) {
   return static_cast<UpdateScreen*>(
-      manager->GetScreen(WizardController::kUpdateScreenName));
+      manager->GetScreen(OobeScreen::SCREEN_OOBE_UPDATE));
 }
 
 UpdateScreen::UpdateScreen(BaseScreenDelegate* base_screen_delegate,
@@ -256,10 +258,10 @@ void UpdateScreen::UpdateStatusChanged(
 void UpdateScreen::OnPortalDetectionCompleted(
     const NetworkState* network,
     const NetworkPortalDetector::CaptivePortalState& state) {
-  LOG(WARNING) << "UpdateScreen::OnPortalDetectionCompleted(): "
-               << "network=" << (network ? network->path() : "") << ", "
-               << "state.status=" << state.status << ", "
-               << "state.response_code=" << state.response_code;
+  VLOG(1) << "UpdateScreen::OnPortalDetectionCompleted(): "
+          << "network=" << (network ? network->path() : "") << ", "
+          << "state.status=" << state.status << ", "
+          << "state.response_code=" << state.response_code;
 
   // Wait for sane detection results.
   if (network &&
@@ -272,7 +274,7 @@ void UpdateScreen::OnPortalDetectionCompleted(
        state.status == NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_OFFLINE) &&
       is_first_detection_notification_) {
     is_first_detection_notification_ = false;
-    base::MessageLoop::current()->PostTask(
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::Bind(
             base::IgnoreResult(&NetworkPortalDetector::StartDetectionIfIdle),
@@ -319,13 +321,6 @@ void UpdateScreen::StartNetworkCheck() {
   network_portal_detector::GetInstance()->AddAndFireObserver(this);
 }
 
-void UpdateScreen::PrepareToShow() {
-  if (!view_)
-    return;
-
-  view_->PrepareToShow();
-}
-
 void UpdateScreen::Show() {
   is_shown_ = true;
   histogram_helper_->OnScreenShow();
@@ -344,10 +339,6 @@ void UpdateScreen::Hide() {
   if (view_)
     view_->Hide();
   is_shown_ = false;
-}
-
-void UpdateScreen::Initialize(::login::ScreenContext* context) {
-  UpdateModel::Initialize(context);
 }
 
 void UpdateScreen::OnViewDestroyed(UpdateView* view) {

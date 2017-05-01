@@ -9,18 +9,8 @@
   // never stop loading; disabled widevine pepper support(?)
   DISABLE(PepperContentSettingsSpecialCasesPluginsBlockedTest, WidevineCdm)
 
-  // never stop loading; disabled widevine pepper support(?)
-  DISABLE(PepperContentSettingsSpecialCasesJavaScriptBlockedTest, WidevineCdm)
-
 #if defined(OFFICIAL_BUILD)
-  DISABLE(End2EndTest, BasicFakeSoftwareVideo)
-  DISABLE(End2EndTest, EvilNetwork)
-  DISABLE(End2EndTest, OldPacketNetwork)
-  DISABLE(End2EndTest, ReceiverClockFast)
-  DISABLE(End2EndTest, ReceiverClockSlow)
-  DISABLE(End2EndTest, ShoveHighFrameRateDownYerThroat)
-  DISABLE(End2EndTest, SmoothPlayoutWithFivePercentClockRateSkew)
-  DISABLE(End2EndTest, TestSetPlayoutDelay)
+  DISABLE_ALL(End2EndTest)
 
   DISABLE_MULTI(VideoEncoderTest, CanBeDestroyedBeforeVEAIsCreated)
   DISABLE_MULTI(VideoEncoderTest,EncodesVariedFrameSizes)

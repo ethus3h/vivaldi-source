@@ -24,9 +24,8 @@ class BrowserInstantController : public SearchModelObserver,
   explicit BrowserInstantController(Browser* browser);
   ~BrowserInstantController() override;
 
-  // Commits the current Instant, returning true on success. This is intended
-  // for use from OpenCurrentURL.
-  bool OpenInstant(WindowOpenDisposition disposition, const GURL& url);
+  // Commits the current Instant. This is intended for use from OpenCurrentURL.
+  void OpenInstant(WindowOpenDisposition disposition, const GURL& url);
 
   // Returns the Profile associated with the Browser that owns this object.
   Profile* profile() const;
@@ -56,7 +55,7 @@ class BrowserInstantController : public SearchModelObserver,
   // Replaces the contents at tab |index| with |new_contents| and deletes the
   // existing contents.
   void ReplaceWebContentsAt(int index,
-                            scoped_ptr<content::WebContents> new_contents);
+                            std::unique_ptr<content::WebContents> new_contents);
 
   Browser* const browser_;
 

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,8 +16,6 @@
 #include "base/files/file.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "storage/browser/fileapi/file_system_url.h"
 #include "storage/browser/fileapi/open_file_system_mode.h"
@@ -32,10 +31,6 @@ class SequencedTaskRunner;
 class SingleThreadTaskRunner;
 }
 
-namespace chrome {
-class NativeMediaFileUtilTest;
-}
-
 namespace storage {
 class QuotaManagerProxy;
 class SpecialStoragePolicy;
@@ -46,7 +41,6 @@ class URLRequest;
 }
 
 namespace storage {
-class BlobURLRequestJobTest;
 class FileStreamReader;
 }
 
@@ -58,7 +52,6 @@ class ExternalFileSystemBackend;
 class ExternalMountPoints;
 class FileStreamWriter;
 class FileSystemBackend;
-class FileSystemFileUtil;
 class FileSystemOperation;
 class FileSystemOperationRunner;
 class FileSystemOptions;
@@ -68,7 +61,6 @@ class IsolatedFileSystemBackend;
 class MountPoints;
 class QuotaReservation;
 class SandboxFileSystemBackend;
-class WatchManager;
 
 struct DefaultContextDeleter;
 struct FileSystemInfo;
@@ -125,7 +117,7 @@ class STORAGE_EXPORT FileSystemContext
       ExternalMountPoints* external_mount_points,
       storage::SpecialStoragePolicy* special_storage_policy,
       storage::QuotaManagerProxy* quota_manager_proxy,
-      ScopedVector<FileSystemBackend> additional_backends,
+      std::vector<std::unique_ptr<FileSystemBackend>> additional_backends,
       const std::vector<URLRequestAutoMountHandler>& auto_mount_handlers,
       const base::FilePath& partition_path,
       const FileSystemOptions& options);
@@ -256,7 +248,7 @@ class STORAGE_EXPORT FileSystemContext
   // The resolved FileSystemBackend could perform further specialization
   // depending on the filesystem type pointed by the |url|.
   // At most |max_bytes_to_read| can be fetched from the file stream reader.
-  scoped_ptr<storage::FileStreamReader> CreateFileStreamReader(
+  std::unique_ptr<storage::FileStreamReader> CreateFileStreamReader(
       const FileSystemURL& url,
       int64_t offset,
       int64_t max_bytes_to_read,
@@ -264,11 +256,12 @@ class STORAGE_EXPORT FileSystemContext
 
   // Creates new FileStreamWriter instance to write into a file pointed by
   // |url| from |offset|.
-  scoped_ptr<FileStreamWriter> CreateFileStreamWriter(const FileSystemURL& url,
-                                                      int64_t offset);
+  std::unique_ptr<FileStreamWriter> CreateFileStreamWriter(
+      const FileSystemURL& url,
+      int64_t offset);
 
   // Creates a new FileSystemOperationRunner.
-  scoped_ptr<FileSystemOperationRunner> CreateFileSystemOperationRunner();
+  std::unique_ptr<FileSystemOperationRunner> CreateFileSystemOperationRunner();
 
   base::SequencedTaskRunner* default_file_task_runner() {
     return default_file_task_runner_.get();
@@ -288,10 +281,7 @@ class STORAGE_EXPORT FileSystemContext
                                            FileSystemType type,
                                            const base::FilePath& path) const;
 
-#if defined(OS_CHROMEOS)
-  // Used only on ChromeOS for now.
   void EnableTemporaryFileSystemInIncognito();
-#endif
 
   SandboxFileSystemBackendDelegate* sandbox_delegate() {
     return sandbox_delegate_.get();
@@ -379,15 +369,15 @@ class STORAGE_EXPORT FileSystemContext
 
   scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy_;
 
-  scoped_ptr<SandboxFileSystemBackendDelegate> sandbox_delegate_;
+  std::unique_ptr<SandboxFileSystemBackendDelegate> sandbox_delegate_;
 
   // Regular file system backends.
-  scoped_ptr<SandboxFileSystemBackend> sandbox_backend_;
-  scoped_ptr<IsolatedFileSystemBackend> isolated_backend_;
+  std::unique_ptr<SandboxFileSystemBackend> sandbox_backend_;
+  std::unique_ptr<IsolatedFileSystemBackend> isolated_backend_;
 
   // Additional file system backends.
-  scoped_ptr<PluginPrivateFileSystemBackend> plugin_private_backend_;
-  ScopedVector<FileSystemBackend> additional_backends_;
+  std::unique_ptr<PluginPrivateFileSystemBackend> plugin_private_backend_;
+  std::vector<std::unique_ptr<FileSystemBackend>> additional_backends_;
 
   std::vector<URLRequestAutoMountHandler> auto_mount_handlers_;
 
@@ -412,7 +402,7 @@ class STORAGE_EXPORT FileSystemContext
 
   bool is_incognito_;
 
-  scoped_ptr<FileSystemOperationRunner> operation_runner_;
+  std::unique_ptr<FileSystemOperationRunner> operation_runner_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FileSystemContext);
 };

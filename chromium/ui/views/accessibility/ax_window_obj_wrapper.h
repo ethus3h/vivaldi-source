@@ -37,7 +37,9 @@ class AXWindowObjWrapper : public AXAuraObjWrapper,
   int32_t GetID() override;
 
   // WindowObserver overrides.
+  void OnWindowDestroyed(aura::Window* window) override;
   void OnWindowDestroying(aura::Window* window) override;
+  void OnWindowHierarchyChanged(const HierarchyChangeParams& params) override;
 
  private:
   aura::Window* window_;

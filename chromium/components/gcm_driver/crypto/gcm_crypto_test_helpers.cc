@@ -44,8 +44,7 @@ bool CreateEncryptedPayloadForTesting(const base::StringPiece& payload,
   const size_t salt_size = GCMMessageCryptographer::kSaltSize;
   crypto::RandBytes(base::WriteInto(&salt, salt_size + 1), salt_size);
 
-  GCMMessageCryptographer cryptographer(GCMMessageCryptographer::Label::P256,
-                                        peer_public_key, public_key,
+  GCMMessageCryptographer cryptographer(peer_public_key, public_key,
                                         auth_secret.as_string());
 
   size_t record_size;
@@ -74,7 +73,7 @@ bool CreateEncryptedPayloadForTesting(const base::StringPiece& payload,
   std::stringstream crypto_key_header;
   crypto_key_header << "dh=" << encoded_public_key;
 
-  message->data["crypto_key"] = crypto_key_header.str();
+  message->data["crypto-key"] = crypto_key_header.str();
 
   message->raw_data.swap(ciphertext);
   return true;

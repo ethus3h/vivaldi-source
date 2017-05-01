@@ -4,11 +4,22 @@
 
 #include "content/browser/service_worker/foreign_fetch_request_handler.h"
 
+#include <string>
+
+#include "base/command_line.h"
 #include "base/macros.h"
+#include "base/stl_util.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/service_worker/service_worker_response_info.h"
 #include "content/browser/service_worker/service_worker_url_request_job.h"
-#include "content/common/resource_request_body.h"
+#include "content/common/resource_request_body_impl.h"
+#include "content/common/service_worker/service_worker_types.h"
 #include "content/common/service_worker/service_worker_utils.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/resource_request_info.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/origin_trial_policy.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_interceptor.h"
 #include "storage/browser/blob/blob_storage_context.h"
@@ -42,22 +53,68 @@ class ForeignFetchRequestInterceptor : public net::URLRequestInterceptor {
 
 }  // namespace
 
+bool ForeignFetchRequestHandler::IsForeignFetchEnabled() {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableExperimentalWebPlatformFeatures)) {
+    return true;
+  }
+  OriginTrialPolicy* origin_trial_policy =
+      GetContentClient()->GetOriginTrialPolicy();
+  return origin_trial_policy &&
+         !origin_trial_policy->IsFeatureDisabled("ForeignFetch");
+}
+
 void ForeignFetchRequestHandler::InitializeHandler(
     net::URLRequest* request,
     ServiceWorkerContextWrapper* context_wrapper,
     storage::BlobStorageContext* blob_storage_context,
     int process_id,
     int provider_id,
-    bool skip_service_worker,
+    SkipServiceWorker skip_service_worker,
     FetchRequestMode request_mode,
     FetchCredentialsMode credentials_mode,
     FetchRedirectMode redirect_mode,
     ResourceType resource_type,
     RequestContextType request_context_type,
     RequestContextFrameType frame_type,
-    scoped_refptr<ResourceRequestBody> body) {
-  if (!context_wrapper) {
+    scoped_refptr<ResourceRequestBodyImpl> body,
+    bool initiated_in_secure_context) {
+  if (!IsForeignFetchEnabled())
     return;
+
+  if (!context_wrapper || !context_wrapper->context() ||
+      provider_id == kInvalidServiceWorkerProviderId) {
+    return;
+  }
+
+  if (skip_service_worker == SkipServiceWorker::ALL)
+    return;
+
+  if (!initiated_in_secure_context)
+    return;
+
+  // ServiceWorkerUtils::IsMainResource doesn't consider all worker types to
+  // be main resources. This code shouldn't handle any main resource requests
+  // though, so explicitly exclude the extra worker types.
+  if (ServiceWorkerUtils::IsMainResourceType(resource_type) ||
+      resource_type == RESOURCE_TYPE_WORKER ||
+      resource_type == RESOURCE_TYPE_SERVICE_WORKER)
+    return;
+
+  if (request->initiator().has_value() &&
+      request->initiator()->IsSameOriginWith(url::Origin(request->url()))) {
+    return;
+  }
+
+  ServiceWorkerProviderHost* provider_host =
+      context_wrapper->context()->GetProviderHost(process_id, provider_id);
+  if (!provider_host || !provider_host->IsContextAlive())
+    return;
+
+  base::Optional<base::TimeDelta> timeout;
+  if (provider_host->IsHostToRunningServiceWorker()) {
+    timeout = base::make_optional(
+        provider_host->running_hosted_version()->remaining_timeout());
   }
 
   if (!context_wrapper->OriginHasForeignFetchRegistrations(
@@ -67,10 +124,11 @@ void ForeignFetchRequestHandler::InitializeHandler(
 
   // Any more precise checks to see if the request should be intercepted are
   // asynchronous, so just create our handler in all cases.
-  scoped_ptr<ForeignFetchRequestHandler> handler(new ForeignFetchRequestHandler(
-      context_wrapper, blob_storage_context->AsWeakPtr(), request_mode,
-      credentials_mode, redirect_mode, resource_type, request_context_type,
-      frame_type, body));
+  std::unique_ptr<ForeignFetchRequestHandler> handler(
+      new ForeignFetchRequestHandler(
+          context_wrapper, blob_storage_context->AsWeakPtr(), request_mode,
+          credentials_mode, redirect_mode, resource_type, request_context_type,
+          frame_type, body, timeout));
   request->SetUserData(&kUserDataKey, handler.release());
 }
 
@@ -80,10 +138,10 @@ ForeignFetchRequestHandler* ForeignFetchRequestHandler::GetHandler(
       request->GetUserData(&kUserDataKey));
 }
 
-scoped_ptr<net::URLRequestInterceptor>
+std::unique_ptr<net::URLRequestInterceptor>
 ForeignFetchRequestHandler::CreateInterceptor(
     ResourceContext* resource_context) {
-  return scoped_ptr<net::URLRequestInterceptor>(
+  return std::unique_ptr<net::URLRequestInterceptor>(
       new ForeignFetchRequestInterceptor(resource_context));
 }
 
@@ -94,6 +152,7 @@ net::URLRequestJob* ForeignFetchRequestHandler::MaybeCreateJob(
     net::NetworkDelegate* network_delegate,
     ResourceContext* resource_context) {
   ClearJob();
+  ServiceWorkerResponseInfo::ResetDataForRequest(request);
 
   if (!context_) {
     // We can't do anything other than to fall back to network.
@@ -120,9 +179,11 @@ net::URLRequestJob* ForeignFetchRequestHandler::MaybeCreateJob(
 
   ServiceWorkerURLRequestJob* job = new ServiceWorkerURLRequestJob(
       request, network_delegate, std::string(), blob_storage_context_,
-      resource_context, request_mode_, credentials_mode_, redirect_mode_, false,
-      request_context_type_, frame_type_, body_, this);
+      resource_context, request_mode_, credentials_mode_, redirect_mode_,
+      resource_type_, request_context_type_, frame_type_, body_,
+      ServiceWorkerFetchType::FOREIGN_FETCH, timeout_, this);
   job_ = job->GetWeakPtr();
+  resource_context_ = resource_context;
 
   context_->FindReadyRegistrationForDocument(
       request->url(),
@@ -141,7 +202,8 @@ ForeignFetchRequestHandler::ForeignFetchRequestHandler(
     ResourceType resource_type,
     RequestContextType request_context_type,
     RequestContextFrameType frame_type,
-    scoped_refptr<ResourceRequestBody> body)
+    scoped_refptr<ResourceRequestBodyImpl> body,
+    const base::Optional<base::TimeDelta>& timeout)
     : context_(context),
       blob_storage_context_(blob_storage_context),
       resource_type_(resource_type),
@@ -151,12 +213,13 @@ ForeignFetchRequestHandler::ForeignFetchRequestHandler(
       request_context_type_(request_context_type),
       frame_type_(frame_type),
       body_(body),
+      timeout_(timeout),
       weak_factory_(this) {}
 
 void ForeignFetchRequestHandler::DidFindRegistration(
     const base::WeakPtr<ServiceWorkerURLRequestJob>& job,
     ServiceWorkerStatusCode status,
-    const scoped_refptr<ServiceWorkerRegistration>& registration) {
+    scoped_refptr<ServiceWorkerRegistration> registration) {
   if (!job || job.get() != job_.get()) {
     // No more job to handle, or job changed somehow, so just return.
     return;
@@ -179,7 +242,31 @@ void ForeignFetchRequestHandler::DidFindRegistration(
     }
   }
 
-  if (!scope_matches) {
+  const url::Origin& request_origin = job->request()->initiator().value();
+  bool origin_matches = active_version->foreign_fetch_origins().empty();
+  for (const url::Origin& origin : active_version->foreign_fetch_origins()) {
+    if (request_origin.IsSameOriginWith(origin))
+      origin_matches = true;
+  }
+
+  if (!scope_matches || !origin_matches) {
+    job->FallbackToNetwork();
+    return;
+  }
+
+  if (!IsForeignFetchEnabled() && !CheckOriginTrialToken(active_version)) {
+    job->FallbackToNetwork();
+    return;
+  }
+
+  auto request_info = ResourceRequestInfo::ForRequest(job->request());
+  base::Callback<WebContents*(void)> web_contents_getter;
+  if (request_info)
+    web_contents_getter = request_info->GetWebContentsGetterForRequest();
+
+  if (!GetContentClient()->browser()->AllowServiceWorker(
+          registration->pattern(), job->request()->first_party_for_cookies(),
+          resource_context_, web_contents_getter)) {
     job->FallbackToNetwork();
     return;
   }
@@ -188,20 +275,10 @@ void ForeignFetchRequestHandler::DidFindRegistration(
   job->ForwardToServiceWorker();
 }
 
-void ForeignFetchRequestHandler::OnPrepareToRestart(
-    base::TimeTicks service_worker_start_time,
-    base::TimeTicks service_worker_ready_time) {
+void ForeignFetchRequestHandler::OnPrepareToRestart() {
   use_network_ = true;
   ClearJob();
 }
-
-void ForeignFetchRequestHandler::OnStartCompleted(
-    bool was_fetched_via_service_worker,
-    bool was_fallback_required,
-    const GURL& original_url_via_service_worker,
-    blink::WebServiceWorkerResponseType response_type_via_service_worker,
-    base::TimeTicks service_worker_start_time,
-    base::TimeTicks service_worker_ready_time) {}
 
 ServiceWorkerVersion* ForeignFetchRequestHandler::GetServiceWorkerVersion(
     ServiceWorkerMetrics::URLRequestJobResult* result) {
@@ -214,14 +291,22 @@ ServiceWorkerVersion* ForeignFetchRequestHandler::GetServiceWorkerVersion(
   return target_worker_.get();
 }
 
-GURL ForeignFetchRequestHandler::GetRequestingOrigin() {
-  // TODO(mek): Implement this.
-  return GURL();
-}
-
 void ForeignFetchRequestHandler::ClearJob() {
   job_.reset();
   target_worker_ = nullptr;
+  resource_context_ = nullptr;
+}
+
+// static
+bool ForeignFetchRequestHandler::CheckOriginTrialToken(
+    const ServiceWorkerVersion* const active_version) {
+  // The worker entry in the database was written by old version Chrome (< M56)
+  // and the main script was not loaded yet. In this case, we can't check the
+  // origin trial token.
+  if (!active_version->origin_trial_tokens())
+    return true;
+  const auto& token_map = *active_version->origin_trial_tokens();
+  return base::ContainsKey(token_map, "ForeignFetch");
 }
 
 }  // namespace content

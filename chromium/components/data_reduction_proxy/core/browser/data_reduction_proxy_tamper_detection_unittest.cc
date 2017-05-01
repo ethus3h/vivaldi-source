@@ -15,7 +15,6 @@
 #include "base/base64.h"
 #include "base/macros.h"
 #include "base/md5.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
@@ -25,11 +24,6 @@
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_headers_test_utils.h"
 #include "net/http/http_response_headers.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if defined(OS_ANDROID)
-#include "base/android/jni_android.h"
-#include "net/android/network_library.h"
-#endif
 
 namespace {
 
@@ -82,17 +76,6 @@ std::vector<std::string> StringsToVector(const std::string& values) {
     now = next + 1;
   }
   return ret;
-}
-
-void InitEnv() {
-#if defined(OS_ANDROID)
-  JNIEnv* env = base::android::AttachCurrentThread();
-  static bool inited = false;
-  if (!inited) {
-    net::android::RegisterNetworkLibrary(env);
-    inited = true;
-  }
-#endif
 }
 
 }  // namespace
@@ -828,8 +811,6 @@ TEST_F(DataReductionProxyTamperDetectionTest, DetectAndReport) {
       true,
     },
   };
-
-  InitEnv();
 
   for (size_t i = 0; i < arraysize(test); ++i) {
     std::string raw_headers(test[i].raw_header);

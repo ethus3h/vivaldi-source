@@ -2,27 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef COMPONENTS_DATA_REDUCTION_PROXY_CORE_BROWSER_DATA_REDUCTION_PROXY_PARAMS_H_
-#define COMPONENTS_DATA_REDUCTION_PROXY_CORE_BROWSER_DATA_REDUCTION_PROXY_PARAMS_H_
+#ifndef COMPONENTS_DATA_REDUCTION_PROXY_CORE_COMMON_DATA_REDUCTION_PROXY_PARAMS_H_
+#define COMPONENTS_DATA_REDUCTION_PROXY_CORE_COMMON_DATA_REDUCTION_PROXY_PARAMS_H_
 
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
+#include "base/strings/string_piece.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_config_values.h"
 #include "net/proxy/proxy_server.h"
 #include "url/gurl.h"
 
-namespace base {
-class TimeDelta;
-}
-
 namespace net {
-class HostPortPair;
 class ProxyServer;
 }
 
 namespace data_reduction_proxy {
+
+class DataReductionProxyServer;
 
 // The data_reduction_proxy::params namespace is a collection of methods to
 // determine the operating parameters of the Data Reduction Proxy as specified
@@ -40,16 +38,23 @@ bool IsIncludedInPromoFieldTrial();
 // is in effect.
 bool IsIncludedInHoldbackFieldTrial();
 
+// Returns the name of the trusted SPDY/HTTP2 proxy field trial.
+const char* GetTrustedSpdyProxyFieldTrialName();
+
+// Returns true if this client is part of the enabled group of the trusted
+// SPDY/HTTP2 proxy field trial.
+bool IsIncludedInTrustedSpdyProxyFieldTrial();
+
 // Returns true if this client is part of the field trial that should display
 // a promotion for the data reduction proxy on Android One devices.
-bool IsIncludedInAndroidOnePromoFieldTrial(const char* build_fingerprint);
+bool IsIncludedInAndroidOnePromoFieldTrial(base::StringPiece build_fingerprint);
 
 // Returns the name of the Lo-Fi field trial.
-std::string GetLoFiFieldTrialName();
+const char* GetLoFiFieldTrialName();
 
 // Returns the name of the Lo-Fi field trial that configures LoFi flags when it
 // is force enabled through flags.
-std::string GetLoFiFlagFieldTrialName();
+const char* GetLoFiFlagFieldTrialName();
 
 // Returns true if this client is part of the "Enabled" or "Enabled_Preview"
 // group of the Lo-Fi field trial, both of which mean Lo-Fi should be enabled.
@@ -61,7 +66,11 @@ bool IsIncludedInLoFiControlFieldTrial();
 
 // Returns true if this client is part of the "Preview" group of the Lo-Fi field
 // trial.
-bool IsIncludedInLoFiPreviewFieldTrial();
+bool IsIncludedInLitePageFieldTrial();
+
+// Returns true if this client is part of the field trial that should enable
+// server experiments for the data reduction proxy.
+bool IsIncludedInServerExperimentsFieldTrial();
 
 // Returns true if this client is part of the tamper detection experiment.
 bool IsIncludedInTamperDetectionExperiment();
@@ -87,10 +96,14 @@ bool IsLoFiSlowConnectionsOnlyViaFlags();
 // mode.
 bool IsLoFiDisabledViaFlags();
 
-// Returns true if this client has the command line switch to enable Lo-Fi
-// previews. This means a preview should be requested instead of placeholders
-// whenever Lo-Fi mode is on.
-bool AreLoFiPreviewsEnabledViaFlags();
+// Returns true if this client has the command line switch to enable lite pages.
+// This means a preview should be requested instead of placeholders whenever
+// Lo-Fi mode is on.
+bool AreLitePagesEnabledViaFlags();
+
+// Returns true if this client has the command line switch to enable forced
+// pageload metrics pingbacks on every page load.
+bool IsForcePingbackEnabledViaFlags();
 
 // Returns true if this client has the command line switch to show
 // interstitials for data reduction proxy bypasses.
@@ -100,17 +113,20 @@ bool WarnIfNoDataReductionProxy();
 // proxy server as quic://proxy.googlezip.net.
 bool IsIncludedInQuicFieldTrial();
 
-// Returns true if dev rollout is enabled on this client either through command
-// line switch or as a part of field trial.
-bool IsDevRolloutEnabled();
+const char* GetQuicFieldTrialName();
 
-std::string GetQuicFieldTrialName();
+// Returns true if zero RTT for QUIC is enabled.
+bool IsZeroRttQuicEnabled();
 
-// Returns the name of the client config field trial.
-std::string GetClientConfigFieldTrialName();
+// Returns true if Brotli should be added to the accept-encoding header.
+bool IsBrotliAcceptEncodingEnabled();
 
 // Returns true if the Data Reduction Proxy config client should be used.
 bool IsConfigClientEnabled();
+
+// If the Data Reduction Proxy is used for a page load, the URL for the
+// Data Reduction Proxy Pageload Metrics service.
+GURL GetPingbackURL();
 
 // If the Data Reduction Proxy config client is being used, the URL for the
 // Data Reduction Proxy config service.
@@ -119,10 +135,6 @@ GURL GetConfigServiceURL();
 // Returns true if the Data Reduction Proxy is forced to be enabled from the
 // command line.
 bool ShouldForceEnableDataReductionProxy();
-
-// Returns true if the secure Data Reduction Proxy should be used until the
-// secure proxy check fails.
-bool ShouldUseSecureProxyByDefault();
 
 // Retrieves the int stored in |param_name| from the field trial group
 // |group|. If the value is not present, cannot be parsed, or is less than
@@ -136,23 +148,28 @@ int GetFieldTrialParameterAsInteger(const std::string& group,
 // has been overridden on the command line, and if so, returns the override
 // proxy list in |override_proxies_for_http|.
 bool GetOverrideProxiesForHttpFromCommandLine(
-    std::vector<net::ProxyServer>* override_proxies_for_http);
+    std::vector<DataReductionProxyServer>* override_proxies_for_http);
 
 // Returns the name of the server side experiment field trial.
-std::string GetServerExperimentsFieldTrialName();
+const char* GetServerExperimentsFieldTrialName();
+
+// Returns true if fetching of the warmup URL is enabled.
+bool FetchWarmupURLEnabled();
+
+// Returns the warmup URL.
+GURL GetWarmupURL();
 
 }  // namespace params
 
-// Contains information about a given proxy server. |proxies_for_http| and
-// |proxies_for_https| contain the configured data reduction proxy servers.
-// |is_fallback| and |is_ssl| note whether the given proxy is a fallback or a
-// proxy for ssl; these are not mutually exclusive.
+// Contains information about a given proxy server. |proxies_for_http| contains
+// the configured data reduction proxy servers. |proxy_index| notes the index
+// of the data reduction proxy used in the list of all data reduction proxies.
 struct DataReductionProxyTypeInfo {
   DataReductionProxyTypeInfo();
+  DataReductionProxyTypeInfo(const DataReductionProxyTypeInfo& other);
   ~DataReductionProxyTypeInfo();
   std::vector<net::ProxyServer> proxy_servers;
-  bool is_fallback;
-  bool is_ssl;
+  size_t proxy_index;
 };
 
 // Provides initialization parameters. Proxy origins, and the secure proxy
@@ -162,59 +179,31 @@ struct DataReductionProxyTypeInfo {
 // Reduction Proxy.
 class DataReductionProxyParams : public DataReductionProxyConfigValues {
  public:
-  // Flags used during construction that specify if the data reduction proxy
-  // is allowed to be used, if the fallback proxy is allowed to be used, if the
-  // promotion is allowed to be shown, and if this instance is part of a
-  // holdback experiment.
-  static const unsigned int kAllowed = (1 << 0);
-  static const unsigned int kFallbackAllowed = (1 << 1);
-  // DEPRECATED. TODO(jeremyim): Remove once changes merged downstream.
-  static const unsigned int kAlternativeAllowed = (1 << 2);
-  // DEPRECATED. TODO(jeremyim): Remove once changes merged downstream.
-  static const unsigned int kAlternativeFallbackAllowed = (1 << 3);
-  static const unsigned int kAllowAllProxyConfigurations =
-      kAllowed | kFallbackAllowed;
-  static const unsigned int kPromoAllowed = (1 << 4);
-  static const unsigned int kHoldback = (1 << 5);
+  // Flags used during construction that specify if the promotion is allowed to
+  // be shown, and if this instance is part of a holdback experiment.
+  static const unsigned int kPromoAllowed = (1 << 2);
+  static const unsigned int kHoldback = (1 << 3);
 
-  // Constructs configuration parameters. If |kAllowed|, then the standard
-  // data reduction proxy configuration is allowed to be used. If
-  // |kfallbackAllowed| a fallback proxy can be used if the primary proxy is
-  // bypassed or disabled. Finally if |kPromoAllowed|, the client may show a
-  // promotion for the data reduction proxy.
+  // Constructs configuration parameters. If |kPromoAllowed|, the client may
+  // show a promotion for the data reduction proxy.
   //
   // A standard configuration has a primary proxy, and a fallback proxy for
   // HTTP traffic.
   explicit DataReductionProxyParams(int flags);
 
+  // Updates |proxies_for_http_|.
+  void SetProxiesForHttpForTesting(
+      const std::vector<DataReductionProxyServer>& proxies_for_http);
+
   ~DataReductionProxyParams() override;
 
-  // If true, uses QUIC instead of SPDY to connect to proxies that use TLS.
-  void EnableQuic(bool enable);
-
-  // Overrides of |DataReductionProxyConfigValues|
-  bool UsingHTTPTunnel(const net::HostPortPair& proxy_server) const override;
-
-  const std::vector<net::ProxyServer>& proxies_for_http() const override;
-
-  const std::vector<net::ProxyServer>& proxies_for_https() const override;
+  const std::vector<DataReductionProxyServer> proxies_for_http() const override;
 
   const GURL& secure_proxy_check_url() const override;
-
-  bool allowed() const override;
-
-  bool fallback_allowed() const override;
 
   bool promo_allowed() const override;
 
   bool holdback() const override;
-
-  bool quic_enabled() const { return quic_enabled_; }
-
-  // Returns the corresponding string from preprocessor constants if defined,
-  // and an empty string otherwise.
-  virtual std::string GetDefaultDevOrigin() const;
-  virtual std::string GetDefaultDevFallbackOrigin() const;
 
  protected:
   // Test constructor that optionally won't call Init();
@@ -224,7 +213,7 @@ class DataReductionProxyParams : public DataReductionProxyConfigValues {
   // Initialize the values of the proxies, and secure proxy check URL, from
   // command line flags and preprocessor constants, and check that there are
   // corresponding definitions for the allowed configurations.
-  bool Init(bool allowed, bool fallback_allowed);
+  bool Init();
 
   // Initialize the values of the proxies, and secure proxy check URL from
   // command line flags and preprocessor constants.
@@ -234,35 +223,25 @@ class DataReductionProxyParams : public DataReductionProxyConfigValues {
   // and an empty string otherwise.
   virtual std::string GetDefaultOrigin() const;
   virtual std::string GetDefaultFallbackOrigin() const;
-  virtual std::string GetDefaultSSLOrigin() const;
   virtual std::string GetDefaultSecureProxyCheckURL() const;
-  virtual std::string GetDefaultWarmupURL() const;
-
-  std::vector<net::ProxyServer> proxies_for_http_;
-  std::vector<net::ProxyServer> proxies_for_https_;
 
  private:
+  std::vector<DataReductionProxyServer> proxies_for_http_;
+
   net::ProxyServer origin_;
   net::ProxyServer fallback_origin_;
-  net::ProxyServer ssl_origin_;
 
   GURL secure_proxy_check_url_;
-  GURL warmup_url_;
 
-  bool allowed_;
-  bool fallback_allowed_;
   bool promo_allowed_;
   bool holdback_;
-  bool quic_enabled_;
-  std::string override_quic_origin_;
-
-  bool configured_on_command_line_;
 
   bool use_override_proxies_for_http_;
-  std::vector<net::ProxyServer> override_proxies_for_http_;
+  std::vector<DataReductionProxyServer> override_data_reduction_proxy_servers_;
 
   DISALLOW_COPY_AND_ASSIGN(DataReductionProxyParams);
 };
 
 }  // namespace data_reduction_proxy
-#endif  // COMPONENTS_DATA_REDUCTION_PROXY_CORE_BROWSER_DATA_REDUCTION_PROXY_PARAMS_H_
+
+#endif  // COMPONENTS_DATA_REDUCTION_PROXY_CORE_COMMON_DATA_REDUCTION_PROXY_PARAMS_H_

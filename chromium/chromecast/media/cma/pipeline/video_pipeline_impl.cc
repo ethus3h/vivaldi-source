@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "chromecast/media/cdm/browser_cdm_cast.h"
+#include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/media/cma/base/buffering_defs.h"
 #include "chromecast/media/cma/base/cma_logging.h"
 #include "chromecast/media/cma/base/coded_frame_provider.h"
@@ -37,10 +37,9 @@ VideoPipelineImpl::VideoPipelineImpl(
 VideoPipelineImpl::~VideoPipelineImpl() {
 }
 
-void VideoPipelineImpl::Initialize(
+::media::PipelineStatus VideoPipelineImpl::Initialize(
     const std::vector<::media::VideoDecoderConfig>& configs,
-    scoped_ptr<CodedFrameProvider> frame_provider,
-    const ::media::PipelineStatusCB& status_cb) {
+    std::unique_ptr<CodedFrameProvider> frame_provider) {
   DCHECK_GT(configs.size(), 0u);
   for (const auto& config : configs) {
     CMALOG(kLogControl) << __FUNCTION__ << " "
@@ -53,32 +52,42 @@ void VideoPipelineImpl::Initialize(
   }
 
   if (configs.empty()) {
-     status_cb.Run(::media::PIPELINE_ERROR_INITIALIZATION_FAILED);
-     return;
+    return ::media::PIPELINE_ERROR_INITIALIZATION_FAILED;
   }
   DCHECK(configs.size() <= 2);
   DCHECK(configs[0].IsValidConfig());
+  encryption_schemes_.resize(configs.size());
+
   VideoConfig video_config =
       DecoderConfigAdapter::ToCastVideoConfig(kPrimary, configs[0]);
+  encryption_schemes_[0] = video_config.encryption_scheme;
+
   VideoConfig secondary_config;
   if (configs.size() == 2) {
     DCHECK(configs[1].IsValidConfig());
     secondary_config = DecoderConfigAdapter::ToCastVideoConfig(kSecondary,
                                                                configs[1]);
     video_config.additional_config = &secondary_config;
+    encryption_schemes_[1] = secondary_config.encryption_scheme;
   }
 
   if (!video_decoder_->SetConfig(video_config)) {
-    status_cb.Run(::media::PIPELINE_ERROR_INITIALIZATION_FAILED);
-    return;
+    return ::media::PIPELINE_ERROR_INITIALIZATION_FAILED;
   }
-  TransitionToState(kFlushed);
-  status_cb.Run(::media::PIPELINE_OK);
+
+  set_state(kFlushed);
+  return ::media::PIPELINE_OK;
 }
 
 void VideoPipelineImpl::OnVideoResolutionChanged(const Size& size) {
   if (state() != kPlaying)
     return;
+
+  metrics::CastMetricsHelper* metrics_helper =
+      metrics::CastMetricsHelper::GetInstance();
+  int encoded_video_resolution = (size.width << 16) | size.height;
+  metrics_helper->RecordApplicationEventWithValue(
+      "Cast.Platform.VideoResolution", encoded_video_resolution);
 
   if (!natural_size_changed_cb_.is_null()) {
     natural_size_changed_cb_.Run(gfx::Size(size.width, size.height));
@@ -93,18 +102,31 @@ void VideoPipelineImpl::OnUpdateConfig(
     CMALOG(kLogControl) << __FUNCTION__ << " id:" << id << " "
                         << video_config.AsHumanReadableString();
 
-    bool success = video_decoder_->SetConfig(
-        DecoderConfigAdapter::ToCastVideoConfig(id, video_config));
+    DCHECK_LT(id, encryption_schemes_.size());
+    VideoConfig cast_video_config =
+        DecoderConfigAdapter::ToCastVideoConfig(id, video_config);
+    encryption_schemes_[static_cast<int>(id)] =
+        cast_video_config.encryption_scheme;
+
+    bool success = video_decoder_->SetConfig(cast_video_config);
     if (!success && !client().playback_error_cb.is_null())
       client().playback_error_cb.Run(::media::PIPELINE_ERROR_DECODE);
   }
+}
+
+const EncryptionScheme& VideoPipelineImpl::GetEncryptionScheme(
+    StreamId id) const {
+  DCHECK_LT(id, encryption_schemes_.size());
+  return encryption_schemes_[static_cast<int>(id)];
 }
 
 void VideoPipelineImpl::UpdateStatistics() {
   if (client().statistics_cb.is_null())
     return;
 
-  MediaPipelineBackend::VideoDecoder::Statistics video_stats;
+  // TODO(mbjorge): Give Statistics a default constructor when the
+  // next system update happens. b/32802298
+  MediaPipelineBackend::VideoDecoder::Statistics video_stats = {};
   video_decoder_->GetStatistics(&video_stats);
 
   ::media::PipelineStatistics current_stats;
@@ -120,6 +142,7 @@ void VideoPipelineImpl::UpdateStatistics() {
   delta_stats.video_frames_dropped =
       current_stats.video_frames_dropped - previous_stats_.video_frames_dropped;
 
+  bytes_decoded_since_last_update_ = delta_stats.video_bytes_decoded;
   previous_stats_ = current_stats;
 
   client().statistics_cb.Run(delta_stats);

@@ -16,16 +16,16 @@
 namespace cc {
 
 ClipPathDisplayItem::ClipPathDisplayItem(const SkPath& clip_path,
-                                         SkRegion::Op clip_op,
-                                         bool antialias) {
-  SetNew(clip_path, clip_op, antialias);
+                                         bool antialias)
+    : DisplayItem(CLIP_PATH) {
+  SetNew(clip_path, antialias);
 }
 
-ClipPathDisplayItem::ClipPathDisplayItem(const proto::DisplayItem& proto) {
+ClipPathDisplayItem::ClipPathDisplayItem(const proto::DisplayItem& proto)
+    : DisplayItem(CLIP_PATH) {
   DCHECK_EQ(proto::DisplayItem::Type_ClipPath, proto.type());
 
   const proto::ClipPathDisplayItem& details = proto.clip_path_item();
-  SkRegion::Op clip_op = SkRegionOpFromProto(details.clip_op());
   bool antialias = details.antialias();
 
   SkPath clip_path;
@@ -35,17 +35,15 @@ ClipPathDisplayItem::ClipPathDisplayItem(const proto::DisplayItem& proto) {
     DCHECK_EQ(details.clip_path().size(), bytes_read);
   }
 
-  SetNew(clip_path, clip_op, antialias);
+  SetNew(clip_path, antialias);
 }
 
 ClipPathDisplayItem::~ClipPathDisplayItem() {
 }
 
 void ClipPathDisplayItem::SetNew(const SkPath& clip_path,
-                                 SkRegion::Op clip_op,
                                  bool antialias) {
   clip_path_ = clip_path;
-  clip_op_ = clip_op;
   antialias_ = antialias;
 }
 
@@ -53,23 +51,21 @@ void ClipPathDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
   proto->set_type(proto::DisplayItem::Type_ClipPath);
 
   proto::ClipPathDisplayItem* details = proto->mutable_clip_path_item();
-  details->set_clip_op(SkRegionOpToProto(clip_op_));
   details->set_antialias(antialias_);
 
   // Just use skia's serialization method for the SkPath for now.
   size_t path_size = clip_path_.writeToMemory(nullptr);
   if (path_size > 0) {
-    scoped_ptr<uint8_t[]> buffer(new uint8_t[path_size]);
+    std::unique_ptr<uint8_t[]> buffer(new uint8_t[path_size]);
     clip_path_.writeToMemory(buffer.get());
     details->set_clip_path(buffer.get(), path_size);
   }
 }
 
 void ClipPathDisplayItem::Raster(SkCanvas* canvas,
-                                 const gfx::Rect& canvas_target_playback_rect,
                                  SkPicture::AbortCallback* callback) const {
   canvas->save();
-  canvas->clipPath(clip_path_, clip_op_, antialias_);
+  canvas->clipPath(clip_path_, antialias_);
 }
 
 void ClipPathDisplayItem::AsValueInto(
@@ -80,16 +76,10 @@ void ClipPathDisplayItem::AsValueInto(
       clip_path_.countPoints(), visual_rect.ToString().c_str()));
 }
 
-size_t ClipPathDisplayItem::ExternalMemoryUsage() const {
-  // The size of SkPath's external storage is not currently accounted for (and
-  // may well be shared anyway).
-  return 0;
-}
+EndClipPathDisplayItem::EndClipPathDisplayItem() : DisplayItem(END_CLIP_PATH) {}
 
-EndClipPathDisplayItem::EndClipPathDisplayItem() {}
-
-EndClipPathDisplayItem::EndClipPathDisplayItem(
-    const proto::DisplayItem& proto) {
+EndClipPathDisplayItem::EndClipPathDisplayItem(const proto::DisplayItem& proto)
+    : DisplayItem(END_CLIP_PATH) {
   DCHECK_EQ(proto::DisplayItem::Type_EndClipPath, proto.type());
 }
 
@@ -102,7 +92,6 @@ void EndClipPathDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
 
 void EndClipPathDisplayItem::Raster(
     SkCanvas* canvas,
-    const gfx::Rect& canvas_target_playback_rect,
     SkPicture::AbortCallback* callback) const {
   canvas->restore();
 }
@@ -113,10 +102,6 @@ void EndClipPathDisplayItem::AsValueInto(
   array->AppendString(
       base::StringPrintf("EndClipPathDisplayItem visualRect: [%s]",
                          visual_rect.ToString().c_str()));
-}
-
-size_t EndClipPathDisplayItem::ExternalMemoryUsage() const {
-  return 0;
 }
 
 }  // namespace cc

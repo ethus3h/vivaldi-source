@@ -19,8 +19,7 @@ WindowWatcherShelfItemDelegate::WindowWatcherShelfItemDelegate(
   DCHECK(watcher_);
 }
 
-WindowWatcherShelfItemDelegate::~WindowWatcherShelfItemDelegate() {
-}
+WindowWatcherShelfItemDelegate::~WindowWatcherShelfItemDelegate() {}
 
 ShelfItemDelegate::PerformedAction WindowWatcherShelfItemDelegate::ItemSelected(
     const ui::Event& event) {
@@ -32,34 +31,12 @@ ShelfItemDelegate::PerformedAction WindowWatcherShelfItemDelegate::ItemSelected(
   return kExistingWindowActivated;
 }
 
-base::string16 WindowWatcherShelfItemDelegate::GetTitle() {
-  return watcher_->GetWindowByID(id_)->title();
-}
-
-ui::MenuModel* WindowWatcherShelfItemDelegate::CreateContextMenu(
-    aura::Window* root_window) {
-  return NULL;
-}
-
 ShelfMenuModel* WindowWatcherShelfItemDelegate::CreateApplicationMenu(
     int event_flags) {
-  return NULL;
+  return nullptr;
 }
 
-bool WindowWatcherShelfItemDelegate::IsDraggable() {
-  return true;
-}
-
-bool WindowWatcherShelfItemDelegate::CanPin() const {
-  return true;
-}
-
-bool WindowWatcherShelfItemDelegate::ShouldShowTooltip() {
-  return true;
-}
-
-void WindowWatcherShelfItemDelegate::Close() {
-}
+void WindowWatcherShelfItemDelegate::Close() {}
 
 }  // namespace shell
 }  // namespace ash

@@ -4,9 +4,10 @@
 //
 // Datastructures that hold details of a Safe Browsing hit for reporting.
 
-#ifndef CHROME_BROWSER_SAFE_BROWSING_HIT_REPORT_H_
-#define CHROME_BROWSER_SAFE_BROWSING_HIT_REPORT_H_
+#ifndef COMPONENTS_SAFE_BROWSING_DB_HIT_REPORT_H_
+#define COMPONENTS_SAFE_BROWSING_DB_HIT_REPORT_H_
 
+#include "components/safe_browsing_db/safe_browsing_prefs.h"
 #include "components/safe_browsing_db/util.h"
 #include "url/gurl.h"
 
@@ -16,9 +17,9 @@ namespace safe_browsing {
 enum class ThreatSource {
   UNKNOWN,
   DATA_SAVER,             // From the Data Reduction service.
-  LOCAL_PVER3,            // From LocalSafeBrowingDatabaseManager, protocol v3
-  LOCAL_PVER4,            // From LocalSafeBrowingDatabaseManager, protocol v4
-  REMOTE,                 // From RemoteSafeBrowingDatabaseManager
+  LOCAL_PVER3,            // From LocalSafeBrowsingDatabaseManager, protocol v3
+  LOCAL_PVER4,            // From V4LocalDatabaseManager, protocol v4
+  REMOTE,                 // From RemoteSafeBrowsingDatabaseManager
   CLIENT_SIDE_DETECTION,  // From ClientSideDetectionHost
 };
 
@@ -27,6 +28,7 @@ enum class ThreatSource {
 // sent as a POST instead of a GET.
 struct HitReport {
   HitReport();
+  HitReport(const HitReport& other);
   ~HitReport();
 
   GURL malicious_url;
@@ -36,7 +38,11 @@ struct HitReport {
   bool is_subresource;
   SBThreatType threat_type;
   ThreatSource threat_source;
-  bool is_extended_reporting;
+
+  // Opaque string used for tracking Pver4-based experiments
+  std::string population_id;
+
+  ExtendedReportingLevel extended_reporting_level;
   bool is_metrics_reporting_active;
 
   std::string post_data;
@@ -44,4 +50,4 @@ struct HitReport {
 
 }  // namespace safe_browsing
 
-#endif  // CHROME_BROWSER_SAFE_BROWSING_HIT_REPORT_H_
+#endif  // COMPONENTS_SAFE_BROWSING_DB_HIT_REPORT_H_

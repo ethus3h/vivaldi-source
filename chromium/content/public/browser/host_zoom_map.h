@@ -6,6 +6,7 @@
 #define CONTENT_PUBLIC_BROWSER_HOST_ZOOM_MAP_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,7 +19,6 @@ namespace content {
 
 class NavigationEntry;
 class BrowserContext;
-class ResourceContext;
 class SiteInstance;
 class WebContents;
 
@@ -170,7 +170,7 @@ class HostZoomMap {
   typedef base::CallbackList<void(const ZoomLevelChange&)>::Subscription
       Subscription;
   // Add and remove zoom level changed callbacks.
-  virtual scoped_ptr<Subscription> AddZoomLevelChangedCallback(
+  virtual std::unique_ptr<Subscription> AddZoomLevelChangedCallback(
       const ZoomLevelChangedCallback& callback) = 0;
 
  protected:

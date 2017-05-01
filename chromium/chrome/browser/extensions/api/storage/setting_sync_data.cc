@@ -8,10 +8,10 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "sync/api/sync_data.h"
-#include "sync/protocol/app_setting_specifics.pb.h"
-#include "sync/protocol/extension_setting_specifics.pb.h"
-#include "sync/protocol/sync.pb.h"
+#include "components/sync/model/sync_data.h"
+#include "components/sync/protocol/app_setting_specifics.pb.h"
+#include "components/sync/protocol/extension_setting_specifics.pb.h"
+#include "components/sync/protocol/sync.pb.h"
 
 namespace extensions {
 
@@ -28,7 +28,7 @@ SettingSyncData::SettingSyncData(const syncer::SyncData& sync_data)
 SettingSyncData::SettingSyncData(syncer::SyncChange::SyncChangeType change_type,
                                  const std::string& extension_id,
                                  const std::string& key,
-                                 scoped_ptr<base::Value> value)
+                                 std::unique_ptr<base::Value> value)
     : change_type_(change_type),
       extension_id_(extension_id),
       key_(key),
@@ -36,7 +36,7 @@ SettingSyncData::SettingSyncData(syncer::SyncChange::SyncChangeType change_type,
 
 SettingSyncData::~SettingSyncData() {}
 
-scoped_ptr<base::Value> SettingSyncData::PassValue() {
+std::unique_ptr<base::Value> SettingSyncData::PassValue() {
   DCHECK(value_) << "value has already been Pass()ed";
   return std::move(value_);
 }

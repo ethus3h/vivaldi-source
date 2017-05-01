@@ -27,146 +27,97 @@
 #ifndef ElementShadow_h
 #define ElementShadow_h
 
+#include "bindings/core/v8/ScriptWrappable.h"
+#include "bindings/core/v8/TraceWrapperMember.h"
 #include "core/CoreExport.h"
-#include "core/dom/shadow/InsertionPoint.h"
-#include "core/dom/shadow/SelectRuleFeatureSet.h"
 #include "core/dom/shadow/ShadowRoot.h"
-#include "core/dom/shadow/SlotAssignment.h"
 #include "platform/heap/Handle.h"
-#include "wtf/DoublyLinkedList.h"
-#include "wtf/HashMap.h"
 #include "wtf/Noncopyable.h"
-#include "wtf/PassOwnPtr.h"
 
 namespace blink {
 
-class CORE_EXPORT ElementShadow final : public NoBaseWillBeGarbageCollectedFinalized<ElementShadow> {
-    WTF_MAKE_NONCOPYABLE(ElementShadow);
-    USING_FAST_MALLOC_WILL_BE_REMOVED(ElementShadow);
-public:
-    static PassOwnPtrWillBeRawPtr<ElementShadow> create();
-    ~ElementShadow();
+class ElementShadowV0;
 
-    Element* host() const;
-    ShadowRoot& youngestShadowRoot() const { ASSERT(m_shadowRoots.head()); return *m_shadowRoots.head(); }
-    ShadowRoot* oldestShadowRoot() const { return m_shadowRoots.tail(); }
-    ElementShadow* containingShadow() const;
+class CORE_EXPORT ElementShadow final : public GarbageCollected<ElementShadow>,
+                                        public TraceWrapperBase {
+  WTF_MAKE_NONCOPYABLE(ElementShadow);
 
-    ShadowRoot* shadowRootIfV1() const
-    {
-        if (isV1())
-            return &youngestShadowRoot();
-        return nullptr;
-    }
+ public:
+  static ElementShadow* create();
 
-    HTMLSlotElement* assignedSlotFor(const Node& node) const
-    {
-        ASSERT(m_slotAssignment);
-        return m_slotAssignment->assignedSlotFor(node);
-    }
+  Element& host() const {
+    DCHECK(m_shadowRoot);
+    return m_shadowRoot->host();
+  }
 
-    ShadowRoot& addShadowRoot(Element& shadowHost, ShadowRootType);
+  // TODO(hayato): Remove youngestShadowRoot() and oldestShadowRoot() from
+  // ElementShadow
+  ShadowRoot& youngestShadowRoot() const;
+  ShadowRoot& oldestShadowRoot() const {
+    DCHECK(m_shadowRoot);
+    return *m_shadowRoot;
+  }
 
-    bool hasSameStyles(const ElementShadow*) const;
+  ElementShadow* containingShadow() const;
 
-    void attach(const Node::AttachContext&);
-    void detach(const Node::AttachContext&);
+  ShadowRoot& addShadowRoot(Element& shadowHost, ShadowRootType);
 
-    void willAffectSelector();
-    const SelectRuleFeatureSet& ensureSelectFeatureSet();
+  bool hasSameStyles(const ElementShadow&) const;
 
-    void distributeIfNeeded();
-    void setNeedsDistributionRecalc();
+  void attach(const Node::AttachContext&);
+  void detach(const Node::AttachContext&);
 
-    const InsertionPoint* finalDestinationInsertionPointFor(const Node*) const;
-    const DestinationInsertionPoints* destinationInsertionPointsFor(const Node*) const;
+  void distributeIfNeeded();
 
-    void didDistributeNode(const Node*, InsertionPoint*);
+  void setNeedsDistributionRecalc();
+  bool needsDistributionRecalc() const { return m_needsDistributionRecalc; }
 
-    bool isV1() const { return youngestShadowRoot().isV1(); };
-    bool isOpenOrV0() const { return youngestShadowRoot().isOpenOrV0(); };
+  bool isV1() const { return youngestShadowRoot().isV1(); }
+  bool isOpenOrV0() const { return youngestShadowRoot().isOpenOrV0(); }
 
-    DECLARE_TRACE();
+  ElementShadowV0& v0() const {
+    DCHECK(m_elementShadowV0);
+    return *m_elementShadowV0;
+  }
 
-private:
-    ElementShadow();
+  DECLARE_TRACE();
+  DECLARE_TRACE_WRAPPERS();
 
-#if !ENABLE(OILPAN)
-    void removeDetachedShadowRoots();
-#endif
+ private:
+  ElementShadow();
 
-    void distribute();
-    void clearDistribution();
+  void appendShadowRoot(ShadowRoot&);
+  void distribute();
 
-    void distributeV0();
-    void distributeV1();
-
-    void collectSelectFeatureSetFrom(ShadowRoot&);
-    void distributeNodeChildrenTo(InsertionPoint*, ContainerNode*);
-
-    bool needsSelectFeatureSet() const { return m_needsSelectFeatureSet; }
-    void setNeedsSelectFeatureSet() { m_needsSelectFeatureSet = true; }
-
-#if ENABLE(OILPAN)
-    // The cost of |new| in Oilpan is lower than non-Oilpan.  We should reduce
-    // the size of HashMap entry.
-    typedef HeapHashMap<Member<const Node>, Member<DestinationInsertionPoints>> NodeToDestinationInsertionPoints;
-#else
-    typedef HashMap<const Node*, DestinationInsertionPoints> NodeToDestinationInsertionPoints;
-#endif
-    NodeToDestinationInsertionPoints m_nodeToInsertionPoints;
-
-    SelectRuleFeatureSet m_selectFeatures;
-    // FIXME: Oilpan: add a heap-based version of DoublyLinkedList<>.
-    DoublyLinkedList<ShadowRoot> m_shadowRoots;
-    bool m_needsDistributionRecalc;
-    bool m_needsSelectFeatureSet;
-
-    // TODO(hayato): ShadowRoot should be an owner of SlotAssigment
-    OwnPtrWillBeMember<SlotAssignment> m_slotAssignment;
+  TraceWrapperMember<ElementShadowV0> m_elementShadowV0;
+  TraceWrapperMember<ShadowRoot> m_shadowRoot;
+  bool m_needsDistributionRecalc;
 };
 
-inline Element* ElementShadow::host() const
-{
-    ASSERT(!m_shadowRoots.isEmpty());
-    return youngestShadowRoot().host();
-}
-
-inline ShadowRoot* Node::youngestShadowRoot() const
-{
-    if (!isElementNode())
-        return 0;
-    return toElement(this)->youngestShadowRoot();
-}
-
-inline ShadowRoot* Element::youngestShadowRoot() const
-{
-    if (ElementShadow* shadow = this->shadow())
-        return &shadow->youngestShadowRoot();
-    return 0;
-}
-
-inline ShadowRoot* Element::shadowRootIfV1() const
-{
-    if (ElementShadow* shadow = this->shadow())
-        return shadow->shadowRootIfV1();
+inline ShadowRoot* Node::youngestShadowRoot() const {
+  if (!isElementNode())
     return nullptr;
+  return toElement(this)->youngestShadowRoot();
 }
 
-inline ElementShadow* ElementShadow::containingShadow() const
-{
-    if (ShadowRoot* parentRoot = host()->containingShadowRoot())
-        return parentRoot->owner();
-    return 0;
+inline ShadowRoot* Element::youngestShadowRoot() const {
+  if (ElementShadow* shadow = this->shadow())
+    return &shadow->youngestShadowRoot();
+  return nullptr;
 }
 
-inline void ElementShadow::distributeIfNeeded()
-{
-    if (m_needsDistributionRecalc)
-        distribute();
-    m_needsDistributionRecalc = false;
+inline ElementShadow* ElementShadow::containingShadow() const {
+  if (ShadowRoot* parentRoot = host().containingShadowRoot())
+    return parentRoot->owner();
+  return nullptr;
 }
 
-} // namespace
+inline void ElementShadow::distributeIfNeeded() {
+  if (m_needsDistributionRecalc)
+    distribute();
+  m_needsDistributionRecalc = false;
+}
+
+}  // namespace blink
 
 #endif

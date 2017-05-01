@@ -10,9 +10,6 @@
  * Example:
  *
  *    <cr-expand-button expanded="{{sectionIsExpanded}}"></cr-expand-button>
- *
- * @group Chrome Elements
- * @element cr-expand-button
  */
 Polymer({
   is: 'cr-expand-button',
@@ -22,23 +19,26 @@ Polymer({
      * If true, the button is in the expanded state and will show the
      * 'expand-less' icon. If false, the button shows the 'expand-more' icon.
      */
-    expanded: {
-      type: Boolean,
-      value: false,
-      notify: true
-    },
+    expanded: {type: Boolean, value: false, notify: true},
 
     /**
      * If true, the button will be disabled and greyed out.
      */
-    disabled: {
-      type: Boolean,
-      value: false,
-      reflectToAttribute: true
-    },
+    disabled: {type: Boolean, value: false, reflectToAttribute: true},
+
+    /** A11y text descriptor for this control. */
+    alt: String,
   },
 
   iconName_: function(expanded) {
-    return expanded ? 'expand-less' : 'expand-more';
-  }
+    return expanded ? 'cr:expand-less' : 'cr:expand-more';
+  },
+
+  /**
+   * @param {Event} event
+   * @private
+   */
+  stopTap_: function(event) {
+    event.stopPropagation();
+  },
 });

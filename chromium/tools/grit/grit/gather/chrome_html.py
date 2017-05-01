@@ -91,7 +91,8 @@ def GetImageList(
   filename = filename.replace(DIST_SUBSTR, distribution)
   if filename_expansion_function:
     filename = filename_expansion_function(filename)
-  filepath = os.path.join(base_path, filename)
+  filename = util.PathSearcher.LocatePath(filename, base_path)
+  filepath = util.normpath(os.path.join(base_path, filename))
   images = [('1x', filename)]
 
   for scale_factor in scale_factors:
@@ -286,6 +287,7 @@ class ChromeHtml(interface.GathererBase):
     super(ChromeHtml, self).__init__(*args, **kwargs)
     self.allow_external_script_ = False
     self.flatten_html_ = False
+    self.preprocess_only_ = False
     # 1x resources are implicitly already in the source and do not need to be
     # added.
     self.scale_factors_ = []
@@ -294,8 +296,10 @@ class ChromeHtml(interface.GathererBase):
   def SetAttributes(self, attrs):
     self.allow_external_script_ = ('allowexternalscript' in attrs and
                                    attrs['allowexternalscript'] == 'true')
-    self.flatten_html_ = ('flattenhtml' in attrs and
-                          attrs['flattenhtml'] == 'true')
+    self.preprocess_only_ = ('preprocess' in attrs and
+                             attrs['preprocess'] == 'true')
+    self.flatten_html_ = (self.preprocess_only_ or ('flattenhtml' in attrs and
+                           attrs['flattenhtml'] == 'true'))
 
   def SetDefines(self, defines):
     if 'scale_factors' in defines:
@@ -346,6 +350,8 @@ class ChromeHtml(interface.GathererBase):
           filename,
           self.grd_node,
           allow_external_script = self.allow_external_script_,
+          strip_whitespace=True,
+          preprocess_only = self.preprocess_only_,
           rewrite_function=lambda fp, t, d: ProcessImageSets(
               fp, t, self.scale_factors_, d,
               filename_expansion_function=self.filename_expansion_function),

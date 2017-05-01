@@ -4,10 +4,10 @@
 
 #include "chrome/browser/chromeos/app_mode/kiosk_app_launch_error.h"
 
-#include "base/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace chromeos {
@@ -29,6 +29,7 @@ std::string KioskAppLaunchError::GetErrorMessage(Error error) {
     case NOT_KIOSK_ENABLED:
     case UNABLE_TO_RETRIEVE_HASH:
     case POLICY_LOAD_FAILED:
+    case ARC_AUTH_FAILED:
       return l10n_util::GetStringUTF8(IDS_KIOSK_APP_FAILED_TO_LAUNCH);
 
     case CRYPTOHOMED_NOT_RUNNING:

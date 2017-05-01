@@ -11,16 +11,11 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/time/time.h"
-#include "components/certificate_reporting/error_report.h"
 #include "ios/chrome/browser/interstitials/ios_security_interstitial_page.h"
 #include "net/ssl/ssl_info.h"
 
 class IOSChromeControllerClient;
 class GURL;
-
-namespace ios {
-class ChromeBrowserState;
-}
 
 namespace security_interstitials {
 class SSLErrorUI;
@@ -50,6 +45,7 @@ class IOSSSLBlockingPage : public IOSSecurityInterstitialPage {
   void CommandReceived(const std::string& command) override;
   void OnProceed() override;
   void OnDontProceed() override;
+  void OverrideItem(web::NavigationItem* item) override;
 
   // SecurityInterstitialPage implementation:
   bool ShouldCreateNewNavigation() const override;
@@ -71,8 +67,8 @@ class IOSSSLBlockingPage : public IOSSecurityInterstitialPage {
   // expired.
   const bool expired_but_previously_allowed_;
 
-  scoped_ptr<IOSChromeControllerClient> controller_;
-  scoped_ptr<security_interstitials::SSLErrorUI> ssl_error_ui_;
+  std::unique_ptr<IOSChromeControllerClient> controller_;
+  std::unique_ptr<security_interstitials::SSLErrorUI> ssl_error_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(IOSSSLBlockingPage);
 };

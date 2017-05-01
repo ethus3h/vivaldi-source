@@ -80,13 +80,8 @@ class AutocompleteInput {
                     bool want_asynchronous_matches,
                     bool from_omnibox_focus,
                     const AutocompleteSchemeClassifier& scheme_classifier);
+  AutocompleteInput(const AutocompleteInput& other);
   ~AutocompleteInput();
-
-  // If type is |FORCED_QUERY| and |text| starts with '?', it is removed.
-  // Returns number of leading characters removed.
-  static size_t RemoveForcedQueryStringIfNecessary(
-      metrics::OmniboxInputType::Type type,
-      base::string16* text);
 
   // Converts |type| to a string representation.  Used in logging.
   static std::string TypeToString(metrics::OmniboxInputType::Type type);

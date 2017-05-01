@@ -4,9 +4,11 @@
 
 #include "device/bluetooth/dbus/bluetooth_agent_service_provider.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
+#include "base/callback.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -321,7 +323,7 @@ class BluetoothAgentServiceProviderImpl : public BluetoothAgentServiceProvider {
 
     switch (status) {
       case Delegate::SUCCESS: {
-        scoped_ptr<dbus::Response> response(
+        std::unique_ptr<dbus::Response> response(
             dbus::Response::FromMethodCall(method_call));
         dbus::MessageWriter writer(response.get());
         writer.AppendString(pincode);
@@ -352,7 +354,7 @@ class BluetoothAgentServiceProviderImpl : public BluetoothAgentServiceProvider {
 
     switch (status) {
       case Delegate::SUCCESS: {
-        scoped_ptr<dbus::Response> response(
+        std::unique_ptr<dbus::Response> response(
             dbus::Response::FromMethodCall(method_call));
         dbus::MessageWriter writer(response.get());
         writer.AppendUint32(passkey);
@@ -437,11 +439,10 @@ BluetoothAgentServiceProvider* BluetoothAgentServiceProvider::Create(
     dbus::Bus* bus,
     const dbus::ObjectPath& object_path,
     Delegate* delegate) {
-  if (!bluez::BluezDBusManager::Get()->IsUsingStub()) {
+  if (!bluez::BluezDBusManager::Get()->IsUsingFakes()) {
     return new BluetoothAgentServiceProviderImpl(bus, object_path, delegate);
-  } else {
-    return new FakeBluetoothAgentServiceProvider(object_path, delegate);
   }
+  return new FakeBluetoothAgentServiceProvider(object_path, delegate);
 }
 
 }  // namespace bluez

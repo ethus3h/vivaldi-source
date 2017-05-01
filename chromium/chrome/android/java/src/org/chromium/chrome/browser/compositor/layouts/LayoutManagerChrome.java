@@ -37,7 +37,6 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector.CloseAllTabsDelegat
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.util.FeatureUtilities;
 import org.chromium.chrome.browser.widget.OverviewListLayout;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
@@ -90,7 +89,9 @@ public class LayoutManagerChrome
         @Override
         public void willAddTab(Tab tab, TabLaunchType type) {
             // Open the new tab
-            if (type == TabLaunchType.FROM_INSTANT || type == TabLaunchType.FROM_RESTORE) return;
+            if (type == TabLaunchType.FROM_RESTORE) return;
+            if (type == TabLaunchType.FROM_REPARENTING) return;
+            if (type == TabLaunchType.FROM_EXTERNAL_APP) return;
 
             tabCreating(getTabModelSelector().getCurrentTabId(), tab.getUrl(), tab.isIncognito());
         }
@@ -98,16 +99,17 @@ public class LayoutManagerChrome
         @Override
         public void didAddTab(Tab tab, TabLaunchType launchType) {
             int tabId = tab.getId();
-            if (launchType != TabLaunchType.FROM_INSTANT
-                    && launchType != TabLaunchType.FROM_RESTORE) {
+            if (launchType == TabLaunchType.FROM_RESTORE) {
+                getActiveLayout().onTabRestored(time(), tabId);
+            } else {
                 boolean incognito = tab.isIncognito();
                 boolean willBeSelected = launchType != TabLaunchType.FROM_LONGPRESS_BACKGROUND
                         || (!getTabModelSelector().isIncognitoSelected() && incognito);
-                float lastTapX = LocalizationUtils.isLayoutRtl() ? mLastContentWidthDp : 0.f;
+                float lastTapX = LocalizationUtils.isLayoutRtl()
+                        ? mHost.getWidth() * mPxToDp : 0.f;
                 float lastTapY = 0.f;
-                if (launchType != TabLaunchType.FROM_MENU_OR_OVERVIEW) {
-                    float heightDelta =
-                            mLastFullscreenViewportDp.height() - mLastVisibleViewportDp.height();
+                if (launchType != TabLaunchType.FROM_CHROME_UI) {
+                    float heightDelta = mHost.getHeightMinusBrowserControls() * mPxToDp;
                     lastTapX = mPxToDp * mLastTapX;
                     lastTapY = mPxToDp * mLastTapY - heightDelta;
                 }
@@ -118,13 +120,13 @@ public class LayoutManagerChrome
         }
 
         @Override
-        public void didCloseTab(Tab tab) {
-            tabClosed(tab);
+        public void didCloseTab(int tabId, boolean incognito) {
+            tabClosed(tabId, incognito, false);
         }
 
         @Override
         public void tabPendingClosure(Tab tab) {
-            tabClosed(tab);
+            tabClosed(tab.getId(), tab.isIncognito(), false);
         }
 
         @Override
@@ -140,6 +142,11 @@ public class LayoutManagerChrome
         @Override
         public void didMoveTab(Tab tab, int newIndex, int curIndex) {
             tabMoved(tab.getId(), curIndex, newIndex, tab.isIncognito());
+        }
+
+        @Override
+        public void tabRemoved(Tab tab) {
+            tabClosed(tab.getId(), tab.isIncognito(), true);
         }
     }
 
@@ -363,8 +370,8 @@ public class LayoutManagerChrome
 
         // Check if we should notify OverviewModeObservers.
         if (isOverviewLayout(layoutBeingShown)) {
-            boolean showToolbar =
-                    !mEnableAnimations || getTabModelSelector().getCurrentModel().getCount() <= 0;
+            boolean showToolbar = animate && (!mEnableAnimations
+                    || getTabModelSelector().getCurrentModel().getCount() <= 0);
             for (OverviewModeObserver observer : mOverviewModeObservers) {
                 observer.onOverviewModeStartedShowing(showToolbar);
             }
@@ -461,19 +468,21 @@ public class LayoutManagerChrome
 
     /**
      * Should be called when a tab closed event is triggered.
-     * @param id        The id of the closed tab.
-     * @param nextId    The id of the next tab that will be visible, if any.
-     * @param incognito Whether or not the closed tab is incognito.
+     * @param id         The id of the closed tab.
+     * @param nextId     The id of the next tab that will be visible, if any.
+     * @param incognito  Whether or not the closed tab is incognito.
+     * @param tabRemoved Whether the tab was removed from the model (e.g. for reparenting), rather
+     *                   than closed and destroyed.
      */
-    protected void tabClosed(int id, int nextId, boolean incognito) {
+    protected void tabClosed(int id, int nextId, boolean incognito, boolean tabRemoved) {
         if (getActiveLayout() != null) getActiveLayout().onTabClosed(time(), id, nextId, incognito);
     }
 
-    private void tabClosed(Tab tab) {
+    private void tabClosed(int tabId, boolean incognito, boolean tabRemoved) {
         Tab currentTab =
                 getTabModelSelector() != null ? getTabModelSelector().getCurrentTab() : null;
         int nextTabId = currentTab != null ? currentTab.getId() : Tab.INVALID_TAB_ID;
-        tabClosed(tab.getId(), nextTabId, tab.isIncognito());
+        tabClosed(tabId, nextTabId, incognito, tabRemoved);
     }
 
     /**
@@ -534,20 +543,10 @@ public class LayoutManagerChrome
 
     @Override
     public void initLayoutTabFromHost(final int tabId) {
-        super.initLayoutTabFromHost(tabId);
-
-        if (getTabModelSelector() == null || getActiveLayout() == null) return;
-
-        TabModelSelector selector = getTabModelSelector();
-        Tab tab = selector.getTabById(tabId);
-        if (tab == null) return;
-
-        LayoutTab layoutTab = getExistingLayoutTab(tabId);
-        if (layoutTab == null) return;
-
-        if (mTitleCache != null && layoutTab.isTitleNeeded()) {
-            mTitleCache.getUpdatedTitle(tab, "");
+        if (mTitleCache != null) {
+            mTitleCache.remove(tabId);
         }
+        super.initLayoutTabFromHost(tabId);
     }
 
     /**
@@ -680,8 +679,7 @@ public class LayoutManagerChrome
         public boolean isSwipeEnabled(ScrollDirection direction) {
             FullscreenManager manager = mHost.getFullscreenManager();
             if (getActiveLayout() != mStaticLayout
-                    || !DeviceClassManager.enableToolbarSwipe(
-                               FeatureUtilities.isDocumentMode(mHost.getContext()))
+                    || !DeviceClassManager.enableToolbarSwipe()
                     || (manager != null && manager.getPersistentFullscreenMode())) {
                 return false;
             }

@@ -4,10 +4,11 @@
 
 package org.chromium.content.browser;
 
-import android.test.suitebuilder.annotation.LargeTest;
+import android.support.test.filters.LargeTest;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
@@ -63,15 +64,14 @@ public class InterstitialPageTest extends ContentShellTestBase {
         waitForActiveShellToBeDoneLoading();
     }
 
-    private void waitForInterstitial(final boolean shouldBeShown) throws InterruptedException {
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria(
-                shouldBeShown ? "Interstitial never shown." : "Interstitial never hidden.") {
-            @Override
-            public boolean isSatisfied() {
-                return shouldBeShown
-                        == getWebContents().isShowingInterstitialPage();
-            }
-        });
+    private void waitForInterstitial(final boolean shouldBeShown) {
+        CriteriaHelper.pollUiThread(
+                Criteria.equals(shouldBeShown, new Callable<Boolean>() {
+                    @Override
+                    public Boolean call() {
+                        return getWebContents().isShowingInterstitialPage();
+                    }
+                }));
     }
 
     /**
@@ -79,7 +79,8 @@ public class InterstitialPageTest extends ContentShellTestBase {
      */
     @LargeTest
     @Feature({"Navigation"})
-    public void testCloseInterstitial() throws InterruptedException, ExecutionException {
+    @RetryOnFailure
+    public void testCloseInterstitial() throws ExecutionException {
         final String proceedCommand = "PROCEED";
         final String htmlContent = "<html>"
                 + "<head>"

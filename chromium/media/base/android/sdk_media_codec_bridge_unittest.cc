@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/android/sdk_media_codec_bridge.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "media/base/android/media_codec_util.h"
-#include "media/base/android/sdk_media_codec_bridge.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/test_data_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -90,6 +91,7 @@ unsigned char test_mp3[] = {
     0x8a, 0xb3, 0x52, 0xd1, 0x3d, 0x79, 0x81, 0x4d, 0x31, 0x24, 0xf9, 0x38,
     0x96, 0xbc, 0xf4, 0x8c, 0x25, 0xe9, 0xf2, 0x73, 0x94, 0x85, 0xc2, 0x61,
     0x6a, 0x34, 0x68, 0x65, 0x78, 0x87, 0xa6, 0x4f};
+static const size_t kDecodedAudioLengthInBytes = 9216u;
 
 }  // namespace
 
@@ -105,6 +107,7 @@ namespace media {
   } while (0)
 
 static const int kPresentationTimeBase = 100;
+static const int kMaxInputPts = kPresentationTimeBase + 2;
 
 static inline const base::TimeDelta InfiniteTimeOut() {
   return base::TimeDelta::FromMicroseconds(-1);
@@ -148,19 +151,20 @@ void DecodeMediaFrame(VideoCodecBridge* media_codec,
 TEST(SdkMediaCodecBridgeTest, Initialize) {
   SKIP_TEST_IF_MEDIA_CODEC_BRIDGE_IS_NOT_AVAILABLE();
 
-  scoped_ptr<media::MediaCodecBridge> media_codec;
+  std::unique_ptr<media::MediaCodecBridge> media_codec;
   media_codec.reset(VideoCodecBridge::CreateDecoder(
-      kCodecH264, false, gfx::Size(640, 480), nullptr, nullptr));
+      kCodecH264, false, gfx::Size(640, 480), nullptr, nullptr,
+      std::vector<uint8_t>(), std::vector<uint8_t>()));
 }
 
 TEST(SdkMediaCodecBridgeTest, DoNormal) {
   SKIP_TEST_IF_MEDIA_CODEC_BRIDGE_IS_NOT_AVAILABLE();
 
-  scoped_ptr<media::AudioCodecBridge> media_codec;
+  std::unique_ptr<media::AudioCodecBridge> media_codec;
   media_codec.reset(AudioCodecBridge::Create(kCodecMP3));
 
   ASSERT_TRUE(media_codec->ConfigureAndStart(kCodecMP3, 44100, 2, nullptr, 0, 0,
-                                             0, false, nullptr));
+                                             0, nullptr));
 
   int input_buf_index = -1;
   MediaCodecStatus status =
@@ -181,6 +185,7 @@ TEST(SdkMediaCodecBridgeTest, DoNormal) {
 
   input_pts = kPresentationTimeBase;
   bool eos = false;
+  size_t total_size = 0;
   while (!eos) {
     size_t unused_offset = 0;
     size_t size = 0;
@@ -205,30 +210,29 @@ TEST(SdkMediaCodecBridgeTest, DoNormal) {
     }
     ASSERT_GE(output_buf_index, 0);
     EXPECT_LE(1u, size);
-    if (!eos)
-      EXPECT_EQ(++input_pts, timestamp.InMicroseconds());
-    ASSERT_LE(input_pts, kPresentationTimeBase + 2);
+    total_size += size;
   }
-  ASSERT_EQ(input_pts, kPresentationTimeBase + 2);
+  EXPECT_EQ(kDecodedAudioLengthInBytes, total_size);
+  ASSERT_LE(input_pts, kMaxInputPts);
 }
 
 TEST(SdkMediaCodecBridgeTest, InvalidVorbisHeader) {
   SKIP_TEST_IF_MEDIA_CODEC_BRIDGE_IS_NOT_AVAILABLE();
 
-  scoped_ptr<media::AudioCodecBridge> media_codec;
+  std::unique_ptr<media::AudioCodecBridge> media_codec;
   media_codec.reset(AudioCodecBridge::Create(kCodecVorbis));
 
   // The first byte of the header is not 0x02.
   uint8_t invalid_first_byte[] = {0x00, 0xff, 0xff, 0xff, 0xff};
   EXPECT_FALSE(media_codec->ConfigureAndStart(
       kCodecVorbis, 44100, 2, invalid_first_byte, sizeof(invalid_first_byte), 0,
-      0, false, nullptr));
+      0, nullptr));
 
   // Size of the header does not match with the data we passed in.
   uint8_t invalid_size[] = {0x02, 0x01, 0xff, 0x01, 0xff};
-  EXPECT_FALSE(media_codec->ConfigureAndStart(
-      kCodecVorbis, 44100, 2, invalid_size, sizeof(invalid_size), 0, 0, false,
-      nullptr));
+  EXPECT_FALSE(
+      media_codec->ConfigureAndStart(kCodecVorbis, 44100, 2, invalid_size,
+                                     sizeof(invalid_size), 0, 0, nullptr));
 
   // Size of the header is too large.
   size_t large_size = 8 * 1024 * 1024 + 2;
@@ -237,39 +241,42 @@ TEST(SdkMediaCodecBridgeTest, InvalidVorbisHeader) {
   for (size_t i = 1; i < large_size - 1; ++i)
     very_large_header[i] = 0xff;
   very_large_header[large_size - 1] = 0xfe;
-  EXPECT_FALSE(media_codec->ConfigureAndStart(kCodecVorbis, 44100, 2,
-                                              very_large_header, 0x80000000, 0,
-                                              0, false, nullptr));
+  EXPECT_FALSE(media_codec->ConfigureAndStart(
+      kCodecVorbis, 44100, 2, very_large_header, 0x80000000, 0, 0, nullptr));
   delete[] very_large_header;
 }
 
 TEST(SdkMediaCodecBridgeTest, InvalidOpusHeader) {
   SKIP_TEST_IF_MEDIA_CODEC_BRIDGE_IS_NOT_AVAILABLE();
 
-  scoped_ptr<media::AudioCodecBridge> media_codec;
+  std::unique_ptr<media::AudioCodecBridge> media_codec;
   media_codec.reset(AudioCodecBridge::Create(kCodecOpus));
+  if (!media_codec)
+    return;
+
   uint8_t dummy_extra_data[] = {0, 0};
 
   // Extra Data is NULL.
   EXPECT_FALSE(media_codec->ConfigureAndStart(kCodecOpus, 48000, 2, nullptr, 0,
-                                              -1, 0, false, nullptr));
+                                              -1, 0, nullptr));
 
   // Codec Delay is < 0.
-  EXPECT_FALSE(media_codec->ConfigureAndStart(
-      kCodecOpus, 48000, 2, dummy_extra_data, sizeof(dummy_extra_data), -1, 0,
-      false, nullptr));
+  EXPECT_FALSE(
+      media_codec->ConfigureAndStart(kCodecOpus, 48000, 2, dummy_extra_data,
+                                     sizeof(dummy_extra_data), -1, 0, nullptr));
 
   // Seek Preroll is < 0.
-  EXPECT_FALSE(media_codec->ConfigureAndStart(
-      kCodecOpus, 48000, 2, dummy_extra_data, sizeof(dummy_extra_data), 0, -1,
-      false, nullptr));
+  EXPECT_FALSE(
+      media_codec->ConfigureAndStart(kCodecOpus, 48000, 2, dummy_extra_data,
+                                     sizeof(dummy_extra_data), 0, -1, nullptr));
 }
 
 TEST(SdkMediaCodecBridgeTest, PresentationTimestampsDoNotDecrease) {
-  SKIP_TEST_IF_MEDIA_CODEC_BRIDGE_IS_NOT_AVAILABLE();
+  SKIP_TEST_IF_VP8_DECODER_IS_NOT_SUPPORTED();
 
-  scoped_ptr<VideoCodecBridge> media_codec(VideoCodecBridge::CreateDecoder(
-      kCodecVP8, false, gfx::Size(320, 240), nullptr, nullptr));
+  std::unique_ptr<VideoCodecBridge> media_codec(VideoCodecBridge::CreateDecoder(
+      kCodecVP8, false, gfx::Size(320, 240), nullptr, nullptr,
+      std::vector<uint8_t>(), std::vector<uint8_t>()));
   EXPECT_TRUE(media_codec.get());
   scoped_refptr<DecoderBuffer> buffer = ReadTestDataFile("vp8-I-frame-320x240");
   DecodeMediaFrame(media_codec.get(), buffer->data(), buffer->data_size(),
@@ -280,13 +287,13 @@ TEST(SdkMediaCodecBridgeTest, PresentationTimestampsDoNotDecrease) {
                              buffer->data() + buffer->data_size());
   chunk.insert(chunk.end(), buffer->data(),
                buffer->data() + buffer->data_size());
-  media_codec->Reset();
+  media_codec->Flush();
   DecodeMediaFrame(media_codec.get(), &chunk[0], chunk.size(),
                    base::TimeDelta::FromMicroseconds(10000000),
                    base::TimeDelta::FromMicroseconds(9900000));
 
   // Simulate a seek to 5 seconds.
-  media_codec->Reset();
+  media_codec->Flush();
   DecodeMediaFrame(media_codec.get(), &chunk[0], chunk.size(),
                    base::TimeDelta::FromMicroseconds(5000000),
                    base::TimeDelta::FromMicroseconds(4900000));
@@ -294,9 +301,10 @@ TEST(SdkMediaCodecBridgeTest, PresentationTimestampsDoNotDecrease) {
 
 TEST(SdkMediaCodecBridgeTest, CreateUnsupportedCodec) {
   EXPECT_EQ(nullptr, AudioCodecBridge::Create(kUnknownAudioCodec));
-  EXPECT_EQ(nullptr, VideoCodecBridge::CreateDecoder(kUnknownVideoCodec, false,
-                                                     gfx::Size(320, 240),
-                                                     nullptr, nullptr));
+  EXPECT_EQ(nullptr,
+            VideoCodecBridge::CreateDecoder(
+                kUnknownVideoCodec, false, gfx::Size(320, 240), nullptr,
+                nullptr, std::vector<uint8_t>(), std::vector<uint8_t>()));
 }
 
 }  // namespace media

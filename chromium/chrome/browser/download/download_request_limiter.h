@@ -23,7 +23,6 @@
 #include "content/public/browser/web_contents_observer.h"
 
 class HostContentSettingsMap;
-class DownloadRequestInfoBarDelegateAndroid;
 
 namespace content {
 class NavigationController;
@@ -77,7 +76,7 @@ class DownloadRequestLimiter
   // TabDownloadState prompts the user with an infobar as necessary.
   // TabDownloadState deletes itself (by invoking
   // DownloadRequestLimiter::Remove) as necessary.
-  // TODO(gbillock): just make this class implement PermissionBubbleRequest.
+  // TODO(gbillock): just make this class implement PermissionRequest.
   class TabDownloadState : public content::NotificationObserver,
                            public content::WebContentsObserver {
    public:
@@ -109,12 +108,13 @@ class DownloadRequestLimiter
     }
 
     // content::WebContentsObserver overrides.
-    void DidNavigateMainFrame(
-        const content::LoadCommittedDetails& details,
-        const content::FrameNavigateParams& params) override;
-    // Invoked when a user gesture occurs (mouse click, enter or space). This
-    // may result in invoking Remove on DownloadRequestLimiter.
-    void DidGetUserGesture() override;
+    void DidStartNavigation(
+        content::NavigationHandle* navigation_handle) override;
+    void DidFinishNavigation(
+        content::NavigationHandle* navigation_handle) override;
+    // Invoked when a user gesture occurs (mouse click, mouse scroll, tap, or
+    // key down). This may result in invoking Remove on DownloadRequestLimiter.
+    void DidGetUserInteraction(const blink::WebInputEvent::Type type) override;
     void WebContentsDestroyed() override;
 
     // Asks the user if they really want to allow the download.

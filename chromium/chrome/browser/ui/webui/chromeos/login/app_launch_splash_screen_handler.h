@@ -16,8 +16,6 @@
 
 namespace chromeos {
 
-class ErrorScreenActor;
-
 // A class that handles the WebUI hooks for the app launch splash screen.
 class AppLaunchSplashScreenHandler
     : public BaseScreenHandler,
@@ -39,7 +37,6 @@ class AppLaunchSplashScreenHandler
 
   // AppLaunchSplashScreenActor implementation:
   void Show(const std::string& app_id) override;
-  void PrepareToShow() override;
   void Hide() override;
   void ToggleNetworkConfig(bool visible) override;
   void UpdateAppLaunchState(AppLaunchState state) override;

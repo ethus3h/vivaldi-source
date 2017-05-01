@@ -15,7 +15,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "media/base/media_keys.h"
+#include "media/base/content_decryption_module.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleResult.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleSession.h"
 
@@ -28,25 +28,26 @@ class CdmFactory;
 class WebContentDecryptionModuleSessionImpl;
 
 // Owns the CDM instance and makes calls from session objects to the CDM.
-// Forwards the session ID-based callbacks of the MediaKeys interface to the
-// appropriate session object. Callers should hold references to this class
-// as long as they need the CDM instance.
+// Forwards the session ID-based callbacks of the ContentDecryptionModule
+// interface to the appropriate session object. Callers should hold references
+// to this class as long as they need the CDM instance.
 class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
  public:
   CdmSessionAdapter();
 
   // Creates the CDM for |key_system| using |cdm_factory| and returns the result
   // via |result|.
-  void CreateCdm(CdmFactory* cdm_factory,
-                 const std::string& key_system,
-                 const GURL& security_origin,
-                 const CdmConfig& cdm_config,
-                 scoped_ptr<blink::WebContentDecryptionModuleResult> result);
+  void CreateCdm(
+      CdmFactory* cdm_factory,
+      const std::string& key_system,
+      const GURL& security_origin,
+      const CdmConfig& cdm_config,
+      std::unique_ptr<blink::WebContentDecryptionModuleResult> result);
 
   // Provides a server certificate to be used to encrypt messages to the
   // license server.
   void SetServerCertificate(const std::vector<uint8_t>& certificate,
-                            scoped_ptr<SimpleCdmPromise> promise);
+                            std::unique_ptr<SimpleCdmPromise> promise);
 
   // Creates a new session and adds it to the internal map. The caller owns the
   // created session. RemoveSession() must be called when destroying it, if
@@ -67,32 +68,30 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   // |session_type| provided.
   void InitializeNewSession(EmeInitDataType init_data_type,
                             const std::vector<uint8_t>& init_data,
-                            MediaKeys::SessionType session_type,
-                            scoped_ptr<NewSessionCdmPromise> promise);
+                            CdmSessionType session_type,
+                            std::unique_ptr<NewSessionCdmPromise> promise);
 
   // Loads the session specified by |session_id|.
-  void LoadSession(MediaKeys::SessionType session_type,
+  void LoadSession(CdmSessionType session_type,
                    const std::string& session_id,
-                   scoped_ptr<NewSessionCdmPromise> promise);
+                   std::unique_ptr<NewSessionCdmPromise> promise);
 
   // Updates the session specified by |session_id| with |response|.
   void UpdateSession(const std::string& session_id,
                      const std::vector<uint8_t>& response,
-                     scoped_ptr<SimpleCdmPromise> promise);
+                     std::unique_ptr<SimpleCdmPromise> promise);
 
   // Closes the session specified by |session_id|.
   void CloseSession(const std::string& session_id,
-                    scoped_ptr<SimpleCdmPromise> promise);
+                    std::unique_ptr<SimpleCdmPromise> promise);
 
   // Removes stored session data associated with the session specified by
   // |session_id|.
   void RemoveSession(const std::string& session_id,
-                     scoped_ptr<SimpleCdmPromise> promise);
+                     std::unique_ptr<SimpleCdmPromise> promise);
 
-  // Returns the CdmContext associated with |media_keys_|.
-  // TODO(jrummell): Figure out lifetimes, as WMPI may still use the decryptor
-  // after WebContentDecryptionModule is freed. http://crbug.com/330324
-  CdmContext* GetCdmContext();
+  // Returns a reference to the CDM.
+  scoped_refptr<ContentDecryptionModule> GetCdm();
 
   // Returns the key system name.
   const std::string& GetKeySystem() const;
@@ -113,24 +112,19 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   // Callback for CreateCdm().
   void OnCdmCreated(const std::string& key_system,
                     base::TimeTicks start_time,
-                    const scoped_refptr<MediaKeys>& cdm,
+                    const scoped_refptr<ContentDecryptionModule>& cdm,
                     const std::string& error_message);
 
   // Callbacks for firing session events.
   void OnSessionMessage(const std::string& session_id,
-                        MediaKeys::MessageType message_type,
-                        const std::vector<uint8_t>& message,
-                        const GURL& legacy_destination_url);
+                        ContentDecryptionModule::MessageType message_type,
+                        const std::vector<uint8_t>& message);
   void OnSessionKeysChange(const std::string& session_id,
                            bool has_additional_usable_key,
                            CdmKeysInfo keys_info);
   void OnSessionExpirationUpdate(const std::string& session_id,
-                                 const base::Time& new_expiry_time);
+                                 base::Time new_expiry_time);
   void OnSessionClosed(const std::string& session_id);
-  void OnLegacySessionError(const std::string& session_id,
-                            MediaKeys::Exception exception_code,
-                            uint32_t system_code,
-                            const std::string& error_message);
 
   // Helper function of the callbacks.
   WebContentDecryptionModuleSessionImpl* GetSession(
@@ -138,7 +132,7 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
 
   void ReportTimeToCreateCdmUMA(base::TimeDelta cdm_creation_time) const;
 
-  scoped_refptr<MediaKeys> cdm_;
+  scoped_refptr<ContentDecryptionModule> cdm_;
 
   SessionMap sessions_;
 
@@ -149,7 +143,7 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   // OnCdmCreated() call.
   uint32_t trace_id_;
 
-  scoped_ptr<blink::WebContentDecryptionModuleResult> cdm_created_result_;
+  std::unique_ptr<blink::WebContentDecryptionModuleResult> cdm_created_result_;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<CdmSessionAdapter> weak_ptr_factory_;

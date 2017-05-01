@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/command_line.h"
-#include "base/memory/scoped_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_glx_api_implementation.h"
 #include "ui/gl/gl_implementation.h"
 
-namespace gfx {
+namespace gl {
 
 class GLXApiTest : public testing::Test {
  public:
@@ -56,9 +57,11 @@ class GLXApiTest : public testing::Test {
     return static_cast<GLXContext>(nullptr);
   }
 
-  static void* GL_BINDING_CALL FakeGLGetProcAddress(const char *proc) {
+  static GLFunctionPointerType GL_BINDING_CALL
+  FakeGLGetProcAddress(const char* proc) {
     if (!strcmp("glXCreateContextAttribsARB", proc)) {
-      return reinterpret_cast<void *>(&FakeCreateContextAttribsARB);
+      return reinterpret_cast<GLFunctionPointerType>(
+          &FakeCreateContextAttribsARB);
     }
     return NULL;
   }
@@ -71,7 +74,7 @@ class GLXApiTest : public testing::Test {
  protected:
   static const char* fake_extension_string_;
 
-  scoped_ptr<RealGLXApi> api_;
+  std::unique_ptr<RealGLXApi> api_;
 };
 
 const char* GLXApiTest::fake_extension_string_ = "";
@@ -113,4 +116,4 @@ TEST_F(GLXApiTest, DisabledExtensionStringTest) {
   EXPECT_STREQ(kFilteredExtensions, GetExtensions());
 }
 
-}  // namespace gfx
+}  // namespace gl

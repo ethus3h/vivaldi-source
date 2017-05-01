@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/renderer/pepper/plugin_instance_throttler_impl.h"
+
+#include <memory>
+
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/renderer/pepper/plugin_instance_throttler_impl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebMouseEvent.h"
 #include "third_party/WebKit/public/web/WebPluginParams.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/gfx/canvas.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -36,7 +40,8 @@ class PluginInstanceThrottlerImplTest
   }
 
   void SetUp() override {
-    throttler_.reset(new PluginInstanceThrottlerImpl);
+    throttler_.reset(
+        new PluginInstanceThrottlerImpl(RenderFrame::DONT_RECORD_DECISION));
     throttler_->Initialize(nullptr, url::Origin(GURL("http://example.com")),
                            "Shockwave Flash", gfx::Size(100, 100));
     throttler_->AddObserver(this);
@@ -60,9 +65,9 @@ class PluginInstanceThrottlerImplTest
                         bool expect_consumed,
                         bool expect_throttled,
                         int expect_change_callback_count) {
-    blink::WebMouseEvent event;
-    event.type = event_type;
-    event.modifiers = blink::WebInputEvent::Modifiers::LeftButtonDown;
+    blink::WebMouseEvent event(
+        event_type, blink::WebInputEvent::Modifiers::LeftButtonDown,
+        ui::EventTimeStampToSeconds(ui::EventTimeForNow()));
     EXPECT_EQ(expect_consumed, throttler()->ConsumeInputEvent(event));
     EXPECT_EQ(expect_throttled, throttler()->IsThrottled());
     EXPECT_EQ(expect_change_callback_count, change_callback_calls());
@@ -72,7 +77,7 @@ class PluginInstanceThrottlerImplTest
   // PluginInstanceThrottlerImpl::Observer
   void OnThrottleStateChange() override { ++change_callback_calls_; }
 
-  scoped_ptr<PluginInstanceThrottlerImpl> throttler_;
+  std::unique_ptr<PluginInstanceThrottlerImpl> throttler_;
 
   int change_callback_calls_;
 
@@ -102,12 +107,12 @@ TEST_F(PluginInstanceThrottlerImplTest, ThrottleByKeyframe) {
   SkBitmap interesting_bitmap = skia::ReadPixels(canvas.sk_canvas());
 
   // Don't throttle for a boring frame.
-  throttler()->OnImageFlush(&boring_bitmap);
+  throttler()->OnImageFlush(boring_bitmap);
   EXPECT_FALSE(throttler()->IsThrottled());
   EXPECT_EQ(0, change_callback_calls());
 
   // Throttle after an interesting frame.
-  throttler()->OnImageFlush(&interesting_bitmap);
+  throttler()->OnImageFlush(interesting_bitmap);
   EXPECT_TRUE(throttler()->IsThrottled());
   EXPECT_EQ(1, change_callback_calls());
 }
@@ -120,7 +125,7 @@ TEST_F(PluginInstanceThrottlerImplTest, MaximumKeyframesAnalyzed) {
 
   // Throttle after tons of boring bitmaps.
   for (int i = 0; i < kMaximumFramesToExamine; ++i) {
-    throttler()->OnImageFlush(&boring_bitmap);
+    throttler()->OnImageFlush(boring_bitmap);
   }
   EXPECT_TRUE(throttler()->IsThrottled());
   EXPECT_EQ(1, change_callback_calls());
@@ -199,18 +204,18 @@ TEST_F(PluginInstanceThrottlerImplTest, ThrottleOnLeftClickOnly) {
   EXPECT_TRUE(throttler()->IsThrottled());
   EXPECT_EQ(1, change_callback_calls());
 
-  blink::WebMouseEvent event;
-  event.type = blink::WebInputEvent::Type::MouseUp;
-
-  event.modifiers = blink::WebInputEvent::Modifiers::RightButtonDown;
+  blink::WebMouseEvent event(
+      blink::WebInputEvent::Type::MouseUp,
+      blink::WebInputEvent::Modifiers::RightButtonDown,
+      ui::EventTimeStampToSeconds(ui::EventTimeForNow()));
   EXPECT_FALSE(throttler()->ConsumeInputEvent(event));
   EXPECT_TRUE(throttler()->IsThrottled());
 
-  event.modifiers = blink::WebInputEvent::Modifiers::MiddleButtonDown;
+  event.setModifiers(blink::WebInputEvent::Modifiers::MiddleButtonDown);
   EXPECT_TRUE(throttler()->ConsumeInputEvent(event));
   EXPECT_TRUE(throttler()->IsThrottled());
 
-  event.modifiers = blink::WebInputEvent::Modifiers::LeftButtonDown;
+  event.setModifiers(blink::WebInputEvent::Modifiers::LeftButtonDown);
   EXPECT_TRUE(throttler()->ConsumeInputEvent(event));
   EXPECT_FALSE(throttler()->IsThrottled());
 }

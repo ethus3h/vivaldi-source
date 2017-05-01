@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/ash/launcher/launcher_application_menu_item_model.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/metrics/histogram_macros.h"
@@ -46,12 +47,6 @@ bool LauncherApplicationMenuItemModel::IsCommandIdEnabled(
   return launcher_items_[command_id]->IsEnabled();
 }
 
-bool LauncherApplicationMenuItemModel::GetAcceleratorForCommandId(
-    int command_id,
-    ui::Accelerator* accelerator) {
-  return false;
-}
-
 void LauncherApplicationMenuItemModel::ExecuteCommand(int command_id,
                                                       int event_flags) {
   DCHECK(command_id < static_cast<int>(launcher_items_.size()));
@@ -65,7 +60,7 @@ void LauncherApplicationMenuItemModel::Build() {
 
   AddSeparator(ui::SPACING_SEPARATOR);
   for (size_t i = 0; i < launcher_items_.size(); i++) {
-    ChromeLauncherAppMenuItem* item = launcher_items_[i];
+    ChromeLauncherAppMenuItem* item = launcher_items_[i].get();
 
     // Check for a separator requirement in front of this item.
     if (item->HasLeadingSeparator())
@@ -82,7 +77,7 @@ void LauncherApplicationMenuItemModel::Build() {
 
 int LauncherApplicationMenuItemModel::GetNumMenuItemsEnabled() const {
   int num_menu_items_enabled = 0;
-  for (const ChromeLauncherAppMenuItem* menu_item : launcher_items_) {
+  for (const auto& menu_item : launcher_items_) {
     if (menu_item->IsEnabled())
       ++num_menu_items_enabled;
   }

@@ -11,19 +11,22 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <utility>
 
+#include "base/bind_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/ref_counted.h"
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
-#include "base/thread_task_runner_handle.h"
-#include "base/threading/worker_pool.h"
+#include "base/task_scheduler/post_task.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "dbus/file_descriptor.h"
+#include "device/bluetooth/bluez/bluetooth_service_attribute_value_bluez.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "device/bluetooth/dbus/fake_bluetooth_adapter_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_agent_manager_client.h"
@@ -33,6 +36,8 @@
 #include "device/bluetooth/dbus/fake_bluetooth_profile_manager_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_profile_service_provider.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
+
+namespace bluez {
 
 namespace {
 
@@ -93,9 +98,38 @@ void SimpleErrorCallback(const std::string& error_name,
   VLOG(1) << "Bluetooth Error: " << error_name << ": " << error_message;
 }
 
-}  // namespace
+BluetoothDeviceClient::ServiceRecordList CreateFakeServiceRecords() {
+  BluetoothDeviceClient::ServiceRecordList records;
 
-namespace bluez {
+  std::unique_ptr<BluetoothServiceRecordBlueZ> record1 =
+      base::MakeUnique<BluetoothServiceRecordBlueZ>();
+  // ID 0 = handle.
+  record1->AddRecordEntry(0x0, BluetoothServiceAttributeValueBlueZ(
+                                   BluetoothServiceAttributeValueBlueZ::UINT, 4,
+                                   base::MakeUnique<base::FundamentalValue>(
+                                       static_cast<int32_t>(0x1337))));
+  // ID 1 = service class id list.
+  std::unique_ptr<BluetoothServiceAttributeValueBlueZ::Sequence> class_id_list =
+      base::MakeUnique<BluetoothServiceAttributeValueBlueZ::Sequence>();
+  class_id_list->emplace_back(BluetoothServiceAttributeValueBlueZ::UUID, 4,
+                              base::MakeUnique<base::StringValue>("1802"));
+  record1->AddRecordEntry(
+      0x1, BluetoothServiceAttributeValueBlueZ(std::move(class_id_list)));
+  records.emplace_back(*record1);
+
+  std::unique_ptr<BluetoothServiceRecordBlueZ> record2 =
+      base::MakeUnique<BluetoothServiceRecordBlueZ>();
+  // ID 0 = handle.
+  record2->AddRecordEntry(0x0, BluetoothServiceAttributeValueBlueZ(
+                                   BluetoothServiceAttributeValueBlueZ::UINT, 4,
+                                   base::MakeUnique<base::FundamentalValue>(
+                                       static_cast<int32_t>(0xffffffff))));
+  records.emplace_back(*record2);
+
+  return records;
+}
+
+}  // namespace
 
 const char FakeBluetoothDeviceClient::kTestPinCode[] = "123456";
 const int FakeBluetoothDeviceClient::kTestPassKey = 123456;
@@ -113,7 +147,10 @@ const char FakeBluetoothDeviceClient::kPairingActionRequest[] = "Request";
 const char FakeBluetoothDeviceClient::kPairedDevicePath[] = "/fake/hci0/dev0";
 const char FakeBluetoothDeviceClient::kPairedDeviceAddress[] =
     "00:11:22:33:44:55";
-const char FakeBluetoothDeviceClient::kPairedDeviceName[] = "Fake Device";
+const char FakeBluetoothDeviceClient::kPairedDeviceName[] =
+    "Fake Device (name)";
+const char FakeBluetoothDeviceClient::kPairedDeviceAlias[] =
+    "Fake Device (alias)";
 const uint32_t FakeBluetoothDeviceClient::kPairedDeviceClass = 0x000104;
 
 const char FakeBluetoothDeviceClient::kLegacyAutopairPath[] = "/fake/hci0/dev1";
@@ -199,12 +236,19 @@ const char FakeBluetoothDeviceClient::kLowEnergyName[] =
 const uint32_t FakeBluetoothDeviceClient::kLowEnergyClass =
     0x000918;  // Major class "Health", Minor class "Heart/Pulse Rate Monitor."
 
+const char FakeBluetoothDeviceClient::kDualPath[] = "/fake/hci0/devF";
+const char FakeBluetoothDeviceClient::kDualAddress[] = "00:1A:11:00:15:40";
+const char FakeBluetoothDeviceClient::kDualName[] =
+    "Bluetooth 4.0 Battery Monitor";
+
 const char FakeBluetoothDeviceClient::kPairedUnconnectableDevicePath[] =
     "/fake/hci0/devD";
 const char FakeBluetoothDeviceClient::kPairedUnconnectableDeviceAddress[] =
     "20:7D:74:00:00:04";
 const char FakeBluetoothDeviceClient::kPairedUnconnectableDeviceName[] =
-    "Paired Unconnectable Device";
+    "Paired Unconnectable Device (name)";
+const char FakeBluetoothDeviceClient::kPairedUnconnectableDeviceAlias[] =
+    "Paired Unconnectable Device (alias)";
 const uint32_t FakeBluetoothDeviceClient::kPairedUnconnectableDeviceClass =
     0x000104;
 
@@ -270,13 +314,14 @@ FakeBluetoothDeviceClient::FakeBluetoothDeviceClient()
       transmit_power_(kUnkownPower),
       max_transmit_power_(kUnkownPower),
       delay_start_discovery_(false) {
-  scoped_ptr<Properties> properties(new Properties(
+  std::unique_ptr<Properties> properties(new Properties(
       base::Bind(&FakeBluetoothDeviceClient::OnPropertyChanged,
                  base::Unretained(this), dbus::ObjectPath(kPairedDevicePath))));
   properties->address.ReplaceValue(kPairedDeviceAddress);
   properties->bluetooth_class.ReplaceValue(kPairedDeviceClass);
-  properties->name.ReplaceValue("Fake Device (Name)");
-  properties->alias.ReplaceValue(kPairedDeviceName);
+  properties->name.ReplaceValue(kPairedDeviceName);
+  properties->name.set_valid(true);
+  properties->alias.ReplaceValue(kPairedDeviceAlias);
   properties->paired.ReplaceValue(true);
   properties->trusted.ReplaceValue(true);
   properties->adapter.ReplaceValue(
@@ -298,8 +343,9 @@ FakeBluetoothDeviceClient::FakeBluetoothDeviceClient()
       dbus::ObjectPath(kPairedUnconnectableDevicePath))));
   properties->address.ReplaceValue(kPairedUnconnectableDeviceAddress);
   properties->bluetooth_class.ReplaceValue(kPairedUnconnectableDeviceClass);
-  properties->name.ReplaceValue("Fake Device 2 (Unconnectable)");
-  properties->alias.ReplaceValue(kPairedUnconnectableDeviceName);
+  properties->name.ReplaceValue(kPairedUnconnectableDeviceName);
+  properties->name.set_valid(true);
+  properties->alias.ReplaceValue(kPairedUnconnectableDeviceAlias);
   properties->paired.ReplaceValue(true);
   properties->trusted.ReplaceValue(true);
   properties->adapter.ReplaceValue(
@@ -390,9 +436,8 @@ void FakeBluetoothDeviceClient::Connect(const dbus::ObjectPath& object_path,
     FakeBluetoothGattServiceClient* gatt_service_client =
         static_cast<FakeBluetoothGattServiceClient*>(
             bluez::BluezDBusManager::Get()->GetBluetoothGattServiceClient());
-    gatt_service_client->ExposeHeartRateService(
-        dbus::ObjectPath(kLowEnergyPath));
-    properties->gatt_services.ReplaceValue(gatt_service_client->GetServices());
+    gatt_service_client->ExposeHeartRateService(object_path);
+    properties->services_resolved.ReplaceValue(true);
   }
 
   AddInputDeviceIfNeeded(object_path, properties);
@@ -406,7 +451,7 @@ void FakeBluetoothDeviceClient::Disconnect(
   Properties* properties = GetProperties(object_path);
 
   if (!properties->connected.value()) {
-    error_callback.Run("org.bluez.Error.NotConnected", "Not Connected");
+    error_callback.Run(bluetooth_device::kErrorNotConnected, "Not Connected");
     return;
   }
 
@@ -470,10 +515,14 @@ void FakeBluetoothDeviceClient::ConnectProfile(
     return;
   }
 
-  base::WorkerPool::GetTaskRunner(false)
-      ->PostTask(FROM_HERE, base::Bind(&SimulatedProfileSocket, fds[0]));
+  base::PostTaskWithTraits(
+      FROM_HERE, base::TaskTraits()
+                     .WithShutdownBehavior(
+                         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN)
+                     .MayBlock(),
+      base::Bind(&SimulatedProfileSocket, fds[0]));
 
-  scoped_ptr<dbus::FileDescriptor> fd(new dbus::FileDescriptor(fds[1]));
+  base::ScopedFD fd(fds[1]);
 
   // Post the new connection to the service provider.
   BluetoothProfileServiceProvider::Delegate::Options options;
@@ -538,11 +587,23 @@ void FakeBluetoothDeviceClient::GetConnInfo(
     const ErrorCallback& error_callback) {
   Properties* properties = GetProperties(object_path);
   if (!properties->connected.value()) {
-    error_callback.Run("org.bluez.Error.NotConnected", "Not Connected");
+    error_callback.Run(bluetooth_device::kErrorNotConnected, "Not Connected");
     return;
   }
 
   callback.Run(connection_rssi_, transmit_power_, max_transmit_power_);
+}
+
+void FakeBluetoothDeviceClient::GetServiceRecords(
+    const dbus::ObjectPath& object_path,
+    const ServiceRecordsCallback& callback,
+    const ErrorCallback& error_callback) {
+  Properties* properties = GetProperties(object_path);
+  if (!properties->connected.value()) {
+    error_callback.Run(bluetooth_device::kErrorNotConnected, "Not Connected");
+    return;
+  }
+  callback.Run(CreateFakeServiceRecords());
 }
 
 void FakeBluetoothDeviceClient::BeginDiscoverySimulation(
@@ -563,6 +624,7 @@ void FakeBluetoothDeviceClient::EndDiscoverySimulation(
     const dbus::ObjectPath& adapter_path) {
   VLOG(1) << "stopping discovery simulation";
   discovery_simulation_step_ = 0;
+  InvalidateDeviceRSSI(dbus::ObjectPath(kLowEnergyPath));
 }
 
 void FakeBluetoothDeviceClient::BeginIncomingPairingSimulation(
@@ -597,16 +659,18 @@ void FakeBluetoothDeviceClient::CreateDevice(
       device_list_.end())
     return;
 
-  scoped_ptr<Properties> properties(
+  std::unique_ptr<Properties> properties(
       new Properties(base::Bind(&FakeBluetoothDeviceClient::OnPropertyChanged,
                                 base::Unretained(this), device_path)));
   properties->adapter.ReplaceValue(adapter_path);
+  properties->type.ReplaceValue(BluetoothDeviceClient::kTypeBredr);
+  properties->type.set_valid(true);
 
   if (device_path == dbus::ObjectPath(kLegacyAutopairPath)) {
     properties->address.ReplaceValue(kLegacyAutopairAddress);
     properties->bluetooth_class.ReplaceValue(kLegacyAutopairClass);
-    properties->name.ReplaceValue("LegacyAutopair");
-    properties->alias.ReplaceValue(kLegacyAutopairName);
+    properties->name.ReplaceValue(kLegacyAutopairName);
+    properties->name.set_valid(true);
 
     std::vector<std::string> uuids;
     uuids.push_back("00001124-0000-1000-8000-00805f9b34fb");
@@ -615,8 +679,8 @@ void FakeBluetoothDeviceClient::CreateDevice(
   } else if (device_path == dbus::ObjectPath(kDisplayPinCodePath)) {
     properties->address.ReplaceValue(kDisplayPinCodeAddress);
     properties->bluetooth_class.ReplaceValue(kDisplayPinCodeClass);
-    properties->name.ReplaceValue("DisplayPinCode");
-    properties->alias.ReplaceValue(kDisplayPinCodeName);
+    properties->name.ReplaceValue(kDisplayPinCodeName);
+    properties->name.set_valid(true);
 
     std::vector<std::string> uuids;
     uuids.push_back("00001124-0000-1000-8000-00805f9b34fb");
@@ -625,14 +689,14 @@ void FakeBluetoothDeviceClient::CreateDevice(
   } else if (device_path == dbus::ObjectPath(kVanishingDevicePath)) {
     properties->address.ReplaceValue(kVanishingDeviceAddress);
     properties->bluetooth_class.ReplaceValue(kVanishingDeviceClass);
-    properties->name.ReplaceValue("VanishingDevice");
-    properties->alias.ReplaceValue(kVanishingDeviceName);
+    properties->name.ReplaceValue(kVanishingDeviceName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kConnectUnpairablePath)) {
     properties->address.ReplaceValue(kConnectUnpairableAddress);
     properties->bluetooth_class.ReplaceValue(kConnectUnpairableClass);
-    properties->name.ReplaceValue("ConnectUnpairable");
-    properties->alias.ReplaceValue(kConnectUnpairableName);
+    properties->name.ReplaceValue(kConnectUnpairableName);
+    properties->name.set_valid(true);
 
     std::vector<std::string> uuids;
     uuids.push_back("00001124-0000-1000-8000-00805f9b34fb");
@@ -641,8 +705,8 @@ void FakeBluetoothDeviceClient::CreateDevice(
   } else if (device_path == dbus::ObjectPath(kDisplayPasskeyPath)) {
     properties->address.ReplaceValue(kDisplayPasskeyAddress);
     properties->bluetooth_class.ReplaceValue(kDisplayPasskeyClass);
-    properties->name.ReplaceValue("DisplayPasskey");
-    properties->alias.ReplaceValue(kDisplayPasskeyName);
+    properties->name.ReplaceValue(kDisplayPasskeyName);
+    properties->name.set_valid(true);
 
     std::vector<std::string> uuids;
     uuids.push_back("00001124-0000-1000-8000-00805f9b34fb");
@@ -651,48 +715,57 @@ void FakeBluetoothDeviceClient::CreateDevice(
   } else if (device_path == dbus::ObjectPath(kRequestPinCodePath)) {
     properties->address.ReplaceValue(kRequestPinCodeAddress);
     properties->bluetooth_class.ReplaceValue(kRequestPinCodeClass);
-    properties->name.ReplaceValue("RequestPinCode");
-    properties->alias.ReplaceValue(kRequestPinCodeName);
+    properties->name.ReplaceValue(kRequestPinCodeName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kConfirmPasskeyPath)) {
     properties->address.ReplaceValue(kConfirmPasskeyAddress);
     properties->bluetooth_class.ReplaceValue(kConfirmPasskeyClass);
-    properties->name.ReplaceValue("ConfirmPasskey");
-    properties->alias.ReplaceValue(kConfirmPasskeyName);
+    properties->name.ReplaceValue(kConfirmPasskeyName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kRequestPasskeyPath)) {
     properties->address.ReplaceValue(kRequestPasskeyAddress);
     properties->bluetooth_class.ReplaceValue(kRequestPasskeyClass);
-    properties->name.ReplaceValue("RequestPasskey");
-    properties->alias.ReplaceValue(kRequestPasskeyName);
+    properties->name.ReplaceValue(kRequestPasskeyName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kUnconnectableDevicePath)) {
     properties->address.ReplaceValue(kUnconnectableDeviceAddress);
     properties->bluetooth_class.ReplaceValue(kUnconnectableDeviceClass);
-    properties->name.ReplaceValue("UnconnectableDevice");
-    properties->alias.ReplaceValue(kUnconnectableDeviceName);
+    properties->name.ReplaceValue(kUnconnectableDeviceName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kUnpairableDevicePath)) {
     properties->address.ReplaceValue(kUnpairableDeviceAddress);
     properties->bluetooth_class.ReplaceValue(kUnpairableDeviceClass);
-    properties->name.ReplaceValue("Fake Unpairable Device");
-    properties->alias.ReplaceValue(kUnpairableDeviceName);
+    properties->name.ReplaceValue(kUnpairableDeviceName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kJustWorksPath)) {
     properties->address.ReplaceValue(kJustWorksAddress);
     properties->bluetooth_class.ReplaceValue(kJustWorksClass);
-    properties->name.ReplaceValue("JustWorks");
-    properties->alias.ReplaceValue(kJustWorksName);
+    properties->name.ReplaceValue(kJustWorksName);
+    properties->name.set_valid(true);
 
   } else if (device_path == dbus::ObjectPath(kLowEnergyPath)) {
     properties->address.ReplaceValue(kLowEnergyAddress);
     properties->bluetooth_class.ReplaceValue(kLowEnergyClass);
-    properties->name.ReplaceValue("Heart Rate Monitor");
-    properties->alias.ReplaceValue(kLowEnergyName);
-
-    std::vector<std::string> uuids;
-    uuids.push_back(FakeBluetoothGattServiceClient::kHeartRateServiceUUID);
-    properties->uuids.ReplaceValue(uuids);
+    properties->name.ReplaceValue(kLowEnergyName);
+    properties->name.set_valid(true);
+    properties->services_resolved.ReplaceValue(false);
+    properties->type.ReplaceValue(BluetoothDeviceClient::kTypeLe);
+    properties->uuids.ReplaceValue(std::vector<std::string>(
+        {FakeBluetoothGattServiceClient::kHeartRateServiceUUID}));
+  } else if (device_path == dbus::ObjectPath(kDualPath)) {
+    properties->address.ReplaceValue(kDualAddress);
+    properties->name.ReplaceValue(kDualName);
+    properties->name.set_valid(true);
+    properties->services_resolved.ReplaceValue(false);
+    properties->type.ReplaceValue(BluetoothDeviceClient::kTypeDual);
+    properties->uuids.ReplaceValue(std::vector<std::string>(
+        {FakeBluetoothGattServiceClient::kGenericAccessServiceUUID,
+         FakeBluetoothGattServiceClient::kHeartRateServiceUUID}));
   } else if (device_path ==
              dbus::ObjectPath(kConnectedTrustedNotPairedDevicePath)) {
     properties->address.ReplaceValue(kConnectedTrustedNotPairedDeviceAddress);
@@ -701,16 +774,17 @@ void FakeBluetoothDeviceClient::CreateDevice(
     properties->trusted.ReplaceValue(true);
     properties->connected.ReplaceValue(true);
     properties->paired.ReplaceValue(false);
-    properties->name.ReplaceValue("Connected Pairable Device");
-    properties->alias.ReplaceValue(kConnectedTrustedNotPairedDeviceName);
+    properties->name.ReplaceValue(kConnectedTrustedNotPairedDeviceName);
+    properties->name.set_valid(true);
   } else {
     NOTREACHED();
   }
 
   properties_map_.insert(std::make_pair(device_path, std::move(properties)));
   device_list_.push_back(device_path);
-  FOR_EACH_OBSERVER(BluetoothDeviceClient::Observer, observers_,
-                    DeviceAdded(device_path));
+
+  for (auto& observer : observers_)
+    observer.DeviceAdded(device_path);
 }
 
 void FakeBluetoothDeviceClient::CreateDeviceWithProperties(
@@ -721,11 +795,12 @@ void FakeBluetoothDeviceClient::CreateDeviceWithProperties(
       device_list_.end())
     return;
 
-  scoped_ptr<Properties> properties(
+  std::unique_ptr<Properties> properties(
       new Properties(base::Bind(&FakeBluetoothDeviceClient::OnPropertyChanged,
                                 base::Unretained(this), device_path)));
   properties->adapter.ReplaceValue(adapter_path);
   properties->name.ReplaceValue(props.device_name);
+  properties->name.set_valid(true);
   properties->alias.ReplaceValue(props.device_alias);
   properties->address.ReplaceValue(props.device_address);
   properties->bluetooth_class.ReplaceValue(props.device_class);
@@ -734,7 +809,7 @@ void FakeBluetoothDeviceClient::CreateDeviceWithProperties(
   if (props.is_trusted)
     properties->paired.ReplaceValue(true);
 
-  scoped_ptr<SimulatedPairingOptions> options(new SimulatedPairingOptions);
+  std::unique_ptr<SimulatedPairingOptions> options(new SimulatedPairingOptions);
   options->pairing_method = props.pairing_method;
   options->pairing_auth_token = props.pairing_auth_token;
   options->pairing_action = props.pairing_action;
@@ -743,14 +818,15 @@ void FakeBluetoothDeviceClient::CreateDeviceWithProperties(
   properties_map_.insert(std::make_pair(device_path, std::move(properties)));
   device_list_.push_back(device_path);
   pairing_options_map_.insert(std::make_pair(device_path, std::move(options)));
-  FOR_EACH_OBSERVER(BluetoothDeviceClient::Observer, observers_,
-                    DeviceAdded(device_path));
+  for (auto& observer : observers_)
+    observer.DeviceAdded(device_path);
 }
 
-scoped_ptr<base::ListValue>
+std::unique_ptr<base::ListValue>
 FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
-  scoped_ptr<base::ListValue> predefined_devices(new base::ListValue);
-  scoped_ptr<base::DictionaryValue> pairedDevice(new base::DictionaryValue);
+  std::unique_ptr<base::ListValue> predefined_devices(new base::ListValue);
+  std::unique_ptr<base::DictionaryValue> pairedDevice(
+      new base::DictionaryValue);
   pairedDevice->SetString("path", kPairedDevicePath);
   pairedDevice->SetString("address", kPairedDeviceAddress);
   pairedDevice->SetString("name", kPairedDeviceName);
@@ -765,7 +841,8 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   pairedDevice->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(pairedDevice));
 
-  scoped_ptr<base::DictionaryValue> legacyDevice(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> legacyDevice(
+      new base::DictionaryValue);
   legacyDevice->SetString("path", kLegacyAutopairPath);
   legacyDevice->SetString("address", kLegacyAutopairAddress);
   legacyDevice->SetString("name", kLegacyAutopairName);
@@ -780,7 +857,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   legacyDevice->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(legacyDevice));
 
-  scoped_ptr<base::DictionaryValue> pin(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> pin(new base::DictionaryValue);
   pin->SetString("path", kDisplayPinCodePath);
   pin->SetString("address", kDisplayPinCodeAddress);
   pin->SetString("name", kDisplayPinCodeName);
@@ -795,7 +872,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   pin->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(pin));
 
-  scoped_ptr<base::DictionaryValue> vanishing(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> vanishing(new base::DictionaryValue);
   vanishing->SetString("path", kVanishingDevicePath);
   vanishing->SetString("address", kVanishingDeviceAddress);
   vanishing->SetString("name", kVanishingDeviceName);
@@ -810,7 +887,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   vanishing->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(vanishing));
 
-  scoped_ptr<base::DictionaryValue> connect_unpairable(
+  std::unique_ptr<base::DictionaryValue> connect_unpairable(
       new base::DictionaryValue);
   connect_unpairable->SetString("path", kConnectUnpairablePath);
   connect_unpairable->SetString("address", kConnectUnpairableAddress);
@@ -826,7 +903,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   connect_unpairable->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(connect_unpairable));
 
-  scoped_ptr<base::DictionaryValue> passkey(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> passkey(new base::DictionaryValue);
   passkey->SetString("path", kDisplayPasskeyPath);
   passkey->SetString("address", kDisplayPasskeyAddress);
   passkey->SetString("name", kDisplayPasskeyName);
@@ -841,7 +918,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   passkey->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(passkey));
 
-  scoped_ptr<base::DictionaryValue> request_pin(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> request_pin(new base::DictionaryValue);
   request_pin->SetString("path", kRequestPinCodePath);
   request_pin->SetString("address", kRequestPinCodeAddress);
   request_pin->SetString("name", kRequestPinCodeName);
@@ -856,7 +933,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   request_pin->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(request_pin));
 
-  scoped_ptr<base::DictionaryValue> confirm(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> confirm(new base::DictionaryValue);
   confirm->SetString("path", kConfirmPasskeyPath);
   confirm->SetString("address", kConfirmPasskeyAddress);
   confirm->SetString("name", kConfirmPasskeyName);
@@ -871,7 +948,8 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   confirm->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(confirm));
 
-  scoped_ptr<base::DictionaryValue> request_passkey(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> request_passkey(
+      new base::DictionaryValue);
   request_passkey->SetString("path", kRequestPasskeyPath);
   request_passkey->SetString("address", kRequestPasskeyAddress);
   request_passkey->SetString("name", kRequestPasskeyName);
@@ -886,7 +964,8 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   request_passkey->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(request_passkey));
 
-  scoped_ptr<base::DictionaryValue> unconnectable(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> unconnectable(
+      new base::DictionaryValue);
   unconnectable->SetString("path", kUnconnectableDevicePath);
   unconnectable->SetString("address", kUnconnectableDeviceAddress);
   unconnectable->SetString("name", kUnconnectableDeviceName);
@@ -901,7 +980,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   unconnectable->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(unconnectable));
 
-  scoped_ptr<base::DictionaryValue> unpairable(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> unpairable(new base::DictionaryValue);
   unpairable->SetString("path", kUnpairableDevicePath);
   unpairable->SetString("address", kUnpairableDeviceAddress);
   unpairable->SetString("name", kUnpairableDeviceName);
@@ -916,7 +995,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   unpairable->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(unpairable));
 
-  scoped_ptr<base::DictionaryValue> just_works(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> just_works(new base::DictionaryValue);
   just_works->SetString("path", kJustWorksPath);
   just_works->SetString("address", kJustWorksAddress);
   just_works->SetString("name", kJustWorksName);
@@ -931,7 +1010,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   just_works->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(just_works));
 
-  scoped_ptr<base::DictionaryValue> low_energy(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> low_energy(new base::DictionaryValue);
   low_energy->SetString("path", kLowEnergyPath);
   low_energy->SetString("address", kLowEnergyAddress);
   low_energy->SetString("name", kLowEnergyName);
@@ -946,7 +1025,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   low_energy->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(low_energy));
 
-  scoped_ptr<base::DictionaryValue> paired_unconnectable(
+  std::unique_ptr<base::DictionaryValue> paired_unconnectable(
       new base::DictionaryValue);
   paired_unconnectable->SetString("path", kPairedUnconnectableDevicePath);
   paired_unconnectable->SetString("address", kPairedUnconnectableDeviceAddress);
@@ -963,7 +1042,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
   paired_unconnectable->SetBoolean("incoming", false);
   predefined_devices->Append(std::move(paired_unconnectable));
 
-  scoped_ptr<base::DictionaryValue> connected_trusted_not_paired(
+  std::unique_ptr<base::DictionaryValue> connected_trusted_not_paired(
       new base::DictionaryValue);
   connected_trusted_not_paired->SetString("path",
                                           kConnectedTrustedNotPairedDevicePath);
@@ -998,7 +1077,7 @@ void FakeBluetoothDeviceClient::RemoveDevice(
   PropertiesMap::const_iterator iter = properties_map_.find(device_path);
   Properties* properties = iter->second.get();
 
-  VLOG(1) << "removing device: " << properties->alias.value();
+  VLOG(1) << "removing device: " << properties->name.value();
   device_list_.erase(listiter);
 
   // Remove the Input interface if it exists. This should be called before the
@@ -1016,8 +1095,8 @@ void FakeBluetoothDeviceClient::RemoveDevice(
     gatt_service_client->HideHeartRateService();
   }
 
-  FOR_EACH_OBSERVER(BluetoothDeviceClient::Observer, observers_,
-                    DeviceRemoved(device_path));
+  for (auto& observer : observers_)
+    observer.DeviceRemoved(device_path);
 
   properties_map_.erase(iter);
   PairingOptionsMap::const_iterator options_iter =
@@ -1033,8 +1112,8 @@ void FakeBluetoothDeviceClient::OnPropertyChanged(
     const std::string& property_name) {
   VLOG(2) << "Fake Bluetooth device property changed: " << object_path.value()
           << ": " << property_name;
-  FOR_EACH_OBSERVER(BluetoothDeviceClient::Observer, observers_,
-                    DevicePropertyChanged(object_path, property_name));
+  for (auto& observer : observers_)
+    observer.DevicePropertyChanged(object_path, property_name);
 }
 
 void FakeBluetoothDeviceClient::DiscoverySimulationTimer() {
@@ -1441,6 +1520,20 @@ void FakeBluetoothDeviceClient::AddInputDeviceIfNeeded(
     fake_bluetooth_input_client->AddInputDevice(object_path);
 }
 
+void FakeBluetoothDeviceClient::InvalidateDeviceRSSI(
+    const dbus::ObjectPath& object_path) {
+  PropertiesMap::const_iterator iter = properties_map_.find(object_path);
+  if (iter == properties_map_.end()) {
+    VLOG(2) << "Fake device does not exist: " << object_path.value();
+    return;
+  }
+  Properties* properties = iter->second.get();
+  DCHECK(properties);
+  // Invalidate the value and notify that it changed.
+  properties->rssi.set_valid(false);
+  properties->rssi.ReplaceValue(0);
+}
+
 void FakeBluetoothDeviceClient::UpdateDeviceRSSI(
     const dbus::ObjectPath& object_path,
     int16_t rssi) {
@@ -1451,6 +1544,7 @@ void FakeBluetoothDeviceClient::UpdateDeviceRSSI(
   }
   Properties* properties = iter->second.get();
   DCHECK(properties);
+  properties->rssi.set_valid(true);
   properties->rssi.ReplaceValue(rssi);
 }
 
@@ -1666,6 +1760,60 @@ void FakeBluetoothDeviceClient::DisconnectionCallback(
   } else if (status == BluetoothProfileServiceProvider::Delegate::REJECTED) {
     error_callback.Run(bluetooth_device::kErrorFailed, "Rejected");
   }
+}
+
+void FakeBluetoothDeviceClient::RemoveAllDevices() {
+  device_list_.clear();
+}
+
+void FakeBluetoothDeviceClient::CreateTestDevice(
+    const dbus::ObjectPath& adapter_path,
+    const base::Optional<std::string> name,
+    const std::string alias,
+    const std::string device_address,
+    const std::vector<std::string>& service_uuids,
+    device::BluetoothTransport type) {
+  // Create a random device path.
+  dbus::ObjectPath device_path;
+  do {
+    device_path = dbus::ObjectPath(adapter_path.value() + "/dev" +
+                                   base::RandBytesAsString(10));
+  } while (std::find(device_list_.begin(), device_list_.end(), device_path) !=
+           device_list_.end());
+
+  std::unique_ptr<Properties> properties(
+      new Properties(base::Bind(&FakeBluetoothDeviceClient::OnPropertyChanged,
+                                base::Unretained(this), device_path)));
+  properties->adapter.ReplaceValue(adapter_path);
+
+  properties->address.ReplaceValue(device_address);
+  properties->name.ReplaceValue(
+      name.value_or("Invalid Device Name set in "
+                    "FakeBluetoothDeviceClient::CreateTestDevice"));
+  properties->name.set_valid(name.has_value());
+  properties->alias.ReplaceValue(alias);
+
+  properties->uuids.ReplaceValue(service_uuids);
+
+  switch (type) {
+    case device::BLUETOOTH_TRANSPORT_CLASSIC:
+      properties->type.ReplaceValue(BluetoothDeviceClient::kTypeBredr);
+      break;
+    case device::BLUETOOTH_TRANSPORT_LE:
+      properties->type.ReplaceValue(BluetoothDeviceClient::kTypeLe);
+      break;
+    case device::BLUETOOTH_TRANSPORT_DUAL:
+      properties->type.ReplaceValue(BluetoothDeviceClient::kTypeDual);
+      break;
+    default:
+      NOTREACHED();
+  }
+  properties->type.set_valid(true);
+
+  properties_map_.insert(std::make_pair(device_path, std::move(properties)));
+  device_list_.push_back(device_path);
+  for (auto& observer : observers_)
+    observer.DeviceAdded(device_path);
 }
 
 }  // namespace bluez

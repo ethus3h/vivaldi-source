@@ -7,6 +7,7 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
@@ -45,17 +46,21 @@ class VIEWS_EXPORT NativeViewAccessibility
 
   void NotifyAccessibilityEvent(ui::AXEvent event_type);
 
+  // Focuses or unfocuses a View.
+  bool SetFocused(bool focused);
+
   // ui::AXPlatformNodeDelegate
   const ui::AXNodeData& GetData() override;
   int GetChildCount() override;
   gfx::NativeViewAccessible ChildAtIndex(int index) override;
+  gfx::NativeWindow GetTopLevelWidget() override;
   gfx::NativeViewAccessible GetParent() override;
   gfx::Vector2d GetGlobalCoordinateOffset() override;
   gfx::NativeViewAccessible HitTestSync(int x, int y) override;
   gfx::NativeViewAccessible GetFocus() override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
+  bool AccessibilityPerformAction(const ui::AXActionData& data) override;
   void DoDefaultAction() override;
-  bool SetStringValue(const base::string16& new_value) override;
 
   // WidgetObserver
   void OnWidgetDestroying(Widget* widget) override;

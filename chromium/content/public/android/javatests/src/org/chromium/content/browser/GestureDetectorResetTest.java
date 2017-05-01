@@ -6,11 +6,12 @@ package org.chromium.content.browser;
 
 import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
-import android.test.suitebuilder.annotation.LargeTest;
+import android.support.test.filters.LargeTest;
 
 import junit.framework.Assert;
 
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
@@ -72,7 +73,7 @@ public class GestureDetectorResetTest extends ContentShellTestBase {
             ContentViewCore contentViewCore)
                     throws InterruptedException, Exception, Throwable {
         // Initially the text on the page should say "not clicked".
-        CriteriaHelper.pollForCriteria(new NodeContentsIsEqualToCriteria(
+        CriteriaHelper.pollInstrumentationThread(new NodeContentsIsEqualToCriteria(
                 "The page contents is invalid " + disambiguation, contentViewCore,
                 "test", "not clicked"));
 
@@ -80,7 +81,7 @@ public class GestureDetectorResetTest extends ContentShellTestBase {
         DOMUtils.clickNode(this, contentViewCore, "button");
 
         // After the click, the text on the page should say "clicked".
-        CriteriaHelper.pollForCriteria(new NodeContentsIsEqualToCriteria(
+        CriteriaHelper.pollInstrumentationThread(new NodeContentsIsEqualToCriteria(
                 "The page contents didn't change after a click " + disambiguation,
                 contentViewCore, "test", "clicked"));
     }
@@ -91,6 +92,7 @@ public class GestureDetectorResetTest extends ContentShellTestBase {
      */
     @LargeTest
     @Feature({"Browser"})
+    @RetryOnFailure
     public void testSeparateClicksAreRegisteredOnReload()
             throws InterruptedException, Exception, Throwable {
         // Load the test page.

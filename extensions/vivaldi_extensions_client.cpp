@@ -2,13 +2,25 @@
 
 #include "extensions/vivaldi_extensions_client.h"
 
+#include <vector>
+#include "extensions/common/alias.h"
 #include "extensions/common/features/json_feature_provider_source.h"
 #include "extensions/common/permissions/permissions_info.h"
-
 #include "extensions/schema/generated_schemas.h"
 #include "vivaldi/grit/vivaldi_extension_resources.h"
 
+
 namespace extensions {
+
+namespace {
+
+std::vector<Alias> GetVivaldiPermissionAliases() {
+  // In alias constructor, first value is the alias name; second value is the
+  // real name. See also alias.h.
+  return std::vector<Alias>();
+}
+
+}
 
 static base::LazyInstance<VivaldiExtensionsClient> g_client =
     LAZY_INSTANCE_INITIALIZER;
@@ -24,7 +36,8 @@ void VivaldiExtensionsClient::Initialize() {
   ChromeExtensionsClient::Initialize();
 
   // Set up permissions.
-  PermissionsInfo::GetInstance()->AddProvider(vivaldi_api_permissions_);
+  PermissionsInfo::GetInstance()->AddProvider(vivaldi_api_permissions_,
+                                              GetVivaldiPermissionAliases());
 }
 
 bool
@@ -42,24 +55,13 @@ VivaldiExtensionsClient::GetAPISchema(const std::string& name) const {
 }
 
 
-scoped_ptr<JSONFeatureProviderSource>
-VivaldiExtensionsClient::CreateFeatureProviderSource(
-    const std::string& name) const {
-  scoped_ptr<JSONFeatureProviderSource> source(
-      ChromeExtensionsClient::CreateFeatureProviderSource(name));
+std::unique_ptr<JSONFeatureProviderSource>
+VivaldiExtensionsClient::CreateAPIFeatureSource() const {
+  std::unique_ptr<JSONFeatureProviderSource> source(
+      ChromeExtensionsClient::CreateAPIFeatureSource());
   DCHECK(source);
 
-  if (name == "api") {
-    source->LoadJSON(IDR_VIVALDI_EXTENSION_API_FEATURES);
-  } else if (name == "manifest") {
-    source->LoadJSON(IDR_VIVALDI_EXTENSION_MANIFEST_FEATURES);
-  } else if (name == "permission") {
-    source->LoadJSON(IDR_VIVALDI_EXTENSION_PERMISSION_FEATURES);
-  } else if (name == "behavior") {
-  } else {
-    NOTREACHED();
-    source.reset();
-  }
+  source->LoadJSON(IDR_VIVALDI_EXTENSION_API_FEATURES);
   return source;
 }
 

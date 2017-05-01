@@ -7,9 +7,9 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequenced_task_runner.h"
 #include "base/values.h"
@@ -19,7 +19,6 @@
 
 namespace syncer {
 
-class DroppedInvalidationTracker;
 class AckHandler;
 
 // Represents a local invalidation, and is roughly analogous to
@@ -33,9 +32,10 @@ class INVALIDATION_EXPORT Invalidation {
                            const std::string& payload);
   static Invalidation InitUnknownVersion(const invalidation::ObjectId& id);
   static Invalidation InitFromDroppedInvalidation(const Invalidation& dropped);
-  static scoped_ptr<Invalidation> InitFromValue(
+  static std::unique_ptr<Invalidation> InitFromValue(
       const base::DictionaryValue& value);
 
+  Invalidation(const Invalidation& other);
   ~Invalidation();
 
   // Compares two invalidations.  The comparison ignores ack-tracking state.
@@ -91,7 +91,7 @@ class INVALIDATION_EXPORT Invalidation {
   // Acknowledge() on the most recently dropped inavlidation.
   void Drop();
 
-  scoped_ptr<base::DictionaryValue> ToValue() const;
+  std::unique_ptr<base::DictionaryValue> ToValue() const;
   std::string ToString() const;
 
  private:

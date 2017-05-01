@@ -4,91 +4,36 @@
 
 #include "chrome/browser/password_manager/native_backend_libsecret.h"
 
-#include <dlfcn.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include <libsecret/secret.h>
+
+#include <limits>
 #include <list>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
+#include "url/origin.h"
 
 using autofill::PasswordForm;
 using base::UTF8ToUTF16;
 using base::UTF16ToUTF8;
+using password_manager::MatchResult;
+using password_manager::PasswordStore;
 
 namespace {
 const char kEmptyString[] = "";
 const int kMaxPossibleTimeTValue = std::numeric_limits<int>::max();
 }  // namespace
-
-typeof(&::secret_password_store_sync)
-    LibsecretLoader::secret_password_store_sync;
-typeof(&::secret_service_search_sync)
-    LibsecretLoader::secret_service_search_sync;
-typeof(&::secret_password_clear_sync)
-    LibsecretLoader::secret_password_clear_sync;
-typeof(&::secret_item_get_secret) LibsecretLoader::secret_item_get_secret;
-typeof(&::secret_value_get_text) LibsecretLoader::secret_value_get_text;
-typeof(&::secret_item_get_attributes)
-    LibsecretLoader::secret_item_get_attributes;
-typeof(&::secret_item_load_secret_sync)
-    LibsecretLoader::secret_item_load_secret_sync;
-typeof(&::secret_value_unref) LibsecretLoader::secret_value_unref;
-
-bool LibsecretLoader::libsecret_loaded = false;
-
-const LibsecretLoader::FunctionInfo LibsecretLoader::functions[] = {
-    {"secret_password_store_sync",
-     reinterpret_cast<void**>(&secret_password_store_sync)},
-    {"secret_service_search_sync",
-     reinterpret_cast<void**>(&secret_service_search_sync)},
-    {"secret_password_clear_sync",
-     reinterpret_cast<void**>(&secret_password_clear_sync)},
-    {"secret_item_get_secret",
-     reinterpret_cast<void**>(&secret_item_get_secret)},
-    {"secret_value_get_text", reinterpret_cast<void**>(&secret_value_get_text)},
-    {"secret_item_get_attributes",
-     reinterpret_cast<void**>(&secret_item_get_attributes)},
-    {"secret_item_load_secret_sync",
-     reinterpret_cast<void**>(&secret_item_load_secret_sync)},
-    {"secret_value_unref", reinterpret_cast<void**>(&secret_value_unref)},
-    {nullptr, nullptr}};
-
-bool LibsecretLoader::LoadLibsecret() {
-  if (libsecret_loaded)
-    return true;
-
-  void* handle = dlopen("libsecret-1.so.0", RTLD_NOW | RTLD_GLOBAL);
-  if (!handle) {
-    // We wanted to use libsecret, but we couldn't load it. Warn, because
-    // either the user asked for this, or we autodetected it incorrectly. (Or
-    // the system has broken libraries, which is also good to warn about.)
-    LOG(WARNING) << "Could not load libsecret-1.so.0: " << dlerror();
-    return false;
-  }
-
-  for (size_t i = 0; functions[i].name; ++i) {
-    dlerror();
-    *functions[i].pointer = dlsym(handle, functions[i].name);
-    const char* error = dlerror();
-    if (error) {
-      VLOG(1) << "Unable to load symbol " << functions[i].name << ": " << error;
-      dlclose(handle);
-      return false;
-    }
-  }
-
-  libsecret_loaded = true;
-  // We leak the library handle. That's OK: this function is called only once.
-  return true;
-}
 
 namespace {
 
@@ -107,7 +52,6 @@ const SecretSchema kLibsecretSchema = {
      {"password_element", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {"submit_element", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {"signon_realm", SECRET_SCHEMA_ATTRIBUTE_STRING},
-     {"ssl_valid", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
      {"preferred", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
      {"date_created", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {"blacklisted_by_user", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
@@ -118,7 +62,7 @@ const SecretSchema kLibsecretSchema = {
      {"display_name", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {"avatar_url", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {"federation_url", SECRET_SCHEMA_ATTRIBUTE_STRING},
-     {"skip_zero_click", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
+     {"should_skip_zero_click", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
      {"generation_upload_status", SECRET_SCHEMA_ATTRIBUTE_INTEGER},
      {"form_data", SECRET_SCHEMA_ATTRIBUTE_STRING},
      // This field is always "chrome-profile_id" so that we can search for it.
@@ -143,12 +87,12 @@ uint32_t GetUintFromAttributes(GHashTable* attrs, const char* keyname) {
 // Convert the attributes into a new PasswordForm.
 // Note: does *not* get the actual password, as that is not a key attribute!
 // Returns nullptr if the attributes are for the wrong application.
-scoped_ptr<PasswordForm> FormOutOfAttributes(GHashTable* attrs) {
+std::unique_ptr<PasswordForm> FormOutOfAttributes(GHashTable* attrs) {
   base::StringPiece app_value = GetStringFromAttributes(attrs, "application");
   if (!app_value.starts_with(kLibsecretAppString))
-    return scoped_ptr<PasswordForm>();
+    return std::unique_ptr<PasswordForm>();
 
-  scoped_ptr<PasswordForm> form(new PasswordForm());
+  std::unique_ptr<PasswordForm> form(new PasswordForm());
   form->origin = GURL(GetStringFromAttributes(attrs, "origin_url"));
   form->action = GURL(GetStringFromAttributes(attrs, "action_url"));
   form->username_element =
@@ -160,7 +104,6 @@ scoped_ptr<PasswordForm> FormOutOfAttributes(GHashTable* attrs) {
   form->submit_element =
       UTF8ToUTF16(GetStringFromAttributes(attrs, "submit_element"));
   form->signon_realm = GetStringFromAttributes(attrs, "signon_realm");
-  form->ssl_valid = GetUintFromAttributes(attrs, "ssl_valid");
   form->preferred = GetUintFromAttributes(attrs, "preferred");
   int64_t date_created = 0;
   bool date_ok = base::StringToInt64(
@@ -189,8 +132,12 @@ scoped_ptr<PasswordForm> FormOutOfAttributes(GHashTable* attrs) {
   form->display_name =
       UTF8ToUTF16(GetStringFromAttributes(attrs, "display_name"));
   form->icon_url = GURL(GetStringFromAttributes(attrs, "avatar_url"));
-  form->federation_url = GURL(GetStringFromAttributes(attrs, "federation_url"));
-  form->skip_zero_click = GetUintFromAttributes(attrs, "skip_zero_click");
+  form->federation_origin =
+      url::Origin(GURL(GetStringFromAttributes(attrs, "federation_url")));
+  form->skip_zero_click =
+      g_hash_table_lookup(attrs, "should_skip_zero_click")
+          ? GetUintFromAttributes(attrs, "should_skip_zero_click")
+          : true;
   form->generation_upload_status =
       static_cast<PasswordForm::GenerationUploadStatus>(
           GetUintFromAttributes(attrs, "generation_upload_status"));
@@ -207,48 +154,6 @@ scoped_ptr<PasswordForm> FormOutOfAttributes(GHashTable* attrs) {
   return form;
 }
 
-class LibsecretAttributesBuilder {
- public:
-  LibsecretAttributesBuilder();
-  ~LibsecretAttributesBuilder();
-  void Append(const std::string& name, const std::string& value);
-  void Append(const std::string& name, int64_t value);
-  // GHashTable, its keys and values returned from Get() are destroyed in
-  // |LibsecretAttributesBuilder| desctructor.
-  GHashTable* Get() { return attrs_; }
-
- private:
-  // |name_values_| is a storage for strings referenced in |attrs_|.
-  std::list<std::string> name_values_;
-  GHashTable* attrs_;
-};
-
-LibsecretAttributesBuilder::LibsecretAttributesBuilder() {
-  attrs_ = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                 nullptr,   // no deleter for keys
-                                 nullptr);  // no deleter for values
-}
-
-LibsecretAttributesBuilder::~LibsecretAttributesBuilder() {
-  g_hash_table_destroy(attrs_);
-}
-
-void LibsecretAttributesBuilder::Append(const std::string& name,
-                                        const std::string& value) {
-  name_values_.push_back(name);
-  gpointer name_str =
-      static_cast<gpointer>(const_cast<char*>(name_values_.back().c_str()));
-  name_values_.push_back(value);
-  gpointer value_str =
-      static_cast<gpointer>(const_cast<char*>(name_values_.back().c_str()));
-  g_hash_table_insert(attrs_, name_str, value_str);
-}
-
-void LibsecretAttributesBuilder::Append(const std::string& name,
-                                        int64_t value) {
-  Append(name, base::Int64ToString(value));
-}
-
 // Generates a profile-specific app string based on profile_id_.
 std::string GetProfileSpecificAppString(LocalProfileId id) {
   // Originally, the application string was always just "chrome" and used only
@@ -259,39 +164,15 @@ std::string GetProfileSpecificAppString(LocalProfileId id) {
 
 }  // namespace
 
-bool LibsecretLoader::LibsecretIsAvailable() {
-  if (!libsecret_loaded)
-    return false;
-  // A dummy query is made to check for availability, because libsecret doesn't
-  // have a dedicated availability function. For performance reasons, the query
-  // is meant to return an empty result.
-  LibsecretAttributesBuilder attrs;
-  attrs.Append("application", "chrome-string_to_get_empty_result");
-
-  GError* error = nullptr;
-  GList* found = secret_service_search_sync(nullptr,  // default secret service
-                                            &kLibsecretSchema, attrs.Get(),
-                                            SECRET_SEARCH_ALL,
-                                            nullptr,  // no cancellable ojbect
-                                            &error);
-  bool success = (error == nullptr);
-  if (error)
-    g_error_free(error);
-  if (found)
-    g_list_free(found);
-
-  return success;
-}
-
 NativeBackendLibsecret::NativeBackendLibsecret(LocalProfileId id)
-    : app_string_(GetProfileSpecificAppString(id)) {
-}
+    : app_string_(GetProfileSpecificAppString(id)),
+      ensured_keyring_unlocked_(false) {}
 
 NativeBackendLibsecret::~NativeBackendLibsecret() {
 }
 
 bool NativeBackendLibsecret::Init() {
-  return LoadLibsecret() && LibsecretIsAvailable();
+  return LibsecretLoader::EnsureLibsecretLoaded();
 }
 
 password_manager::PasswordStoreChangeList NativeBackendLibsecret::AddLogin(
@@ -300,7 +181,7 @@ password_manager::PasswordStoreChangeList NativeBackendLibsecret::AddLogin(
   // on origin_url, username_element, username_value, password_element and
   // signon_realm first, remove that, and then add the new entry.
   password_manager::PasswordStoreChangeList changes;
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   if (!AddUpdateLoginSearch(form, &forms))
     return changes;
 
@@ -310,7 +191,7 @@ password_manager::PasswordStoreChangeList NativeBackendLibsecret::AddLogin(
       LOG(WARNING) << "Adding login when there are " << forms.size()
                    << " matching logins already!";
     }
-    for (const PasswordForm* old_form : forms) {
+    for (const auto& old_form : forms) {
       if (!RemoveLogin(*old_form, &temp_changes))
         return changes;
     }
@@ -334,7 +215,7 @@ bool NativeBackendLibsecret::UpdateLogin(
   // then add the new entry. We'd add the new one first, and then delete the
   // original, but then the delete might actually delete the newly-added entry!
   DCHECK(changes);
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   if (!AddUpdateLoginSearch(form, &forms))
     return false;
   if (forms.empty())
@@ -343,7 +224,7 @@ bool NativeBackendLibsecret::UpdateLogin(
     return true;
 
   password_manager::PasswordStoreChangeList temp_changes;
-  for (const PasswordForm* keychain_form : forms) {
+  for (const auto& keychain_form : forms) {
     // Remove all the obsolete forms. Note that RemoveLogin can remove any form
     // matching the unique key. Thus, it's important to call it the right number
     // of times.
@@ -361,18 +242,18 @@ bool NativeBackendLibsecret::UpdateLogin(
 }
 
 bool NativeBackendLibsecret::RemoveLogin(
-    const autofill::PasswordForm& form,
+    const PasswordForm& form,
     password_manager::PasswordStoreChangeList* changes) {
   DCHECK(changes);
   GError* error = nullptr;
-  if (secret_password_clear_sync(
-          &kLibsecretSchema, nullptr, &error,
-          "origin_url", form.origin.spec().c_str(),
-          "username_element", UTF16ToUTF8(form.username_element).c_str(),
-          "username_value", UTF16ToUTF8(form.username_value).c_str(),
-          "password_element", UTF16ToUTF8(form.password_element).c_str(),
-          "signon_realm", form.signon_realm.c_str(),
-          "application", app_string_.c_str(), nullptr)) {
+  if (LibsecretLoader::secret_password_clear_sync(
+          &kLibsecretSchema, nullptr, &error, "origin_url",
+          form.origin.spec().c_str(), "username_element",
+          UTF16ToUTF8(form.username_element).c_str(), "username_value",
+          UTF16ToUTF8(form.username_value).c_str(), "password_element",
+          UTF16ToUTF8(form.password_element).c_str(), "signon_realm",
+          form.signon_realm.c_str(), "application", app_string_.c_str(),
+          nullptr)) {
     changes->push_back(password_manager::PasswordStoreChange(
         password_manager::PasswordStoreChange::REMOVE, form));
   }
@@ -400,15 +281,38 @@ bool NativeBackendLibsecret::RemoveLoginsSyncedBetween(
   return RemoveLoginsBetween(delete_begin, delete_end, SYNC_TIMESTAMP, changes);
 }
 
+bool NativeBackendLibsecret::DisableAutoSignInForOrigins(
+    const base::Callback<bool(const GURL&)>& origin_filter,
+    password_manager::PasswordStoreChangeList* changes) {
+  std::vector<std::unique_ptr<PasswordForm>> all_forms;
+  if (!GetLoginsList(nullptr, ALL_LOGINS, &all_forms))
+    return false;
+
+  for (const std::unique_ptr<PasswordForm>& form : all_forms) {
+    if (origin_filter.Run(form->origin) && !form->skip_zero_click) {
+      form->skip_zero_click = true;
+      if (!UpdateLogin(*form, changes))
+        return false;
+    }
+  }
+
+  return true;
+}
+
 bool NativeBackendLibsecret::GetLogins(
-    const PasswordForm& form,
-    ScopedVector<autofill::PasswordForm>* forms) {
+    const PasswordStore::FormDigest& form,
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   return GetLoginsList(&form, ALL_LOGINS, forms);
 }
 
 bool NativeBackendLibsecret::AddUpdateLoginSearch(
-    const autofill::PasswordForm& lookup_form,
-    ScopedVector<autofill::PasswordForm>* forms) {
+    const PasswordForm& lookup_form,
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
+  if (!ensured_keyring_unlocked_) {
+    LibsecretLoader::EnsureKeyringUnlocked();
+    ensured_keyring_unlocked_ = true;
+  }
+
   LibsecretAttributesBuilder attrs;
   attrs.Append("origin_url", lookup_form.origin.spec());
   attrs.Append("username_element", UTF16ToUTF8(lookup_form.username_element));
@@ -418,11 +322,12 @@ bool NativeBackendLibsecret::AddUpdateLoginSearch(
   attrs.Append("application", app_string_);
 
   GError* error = nullptr;
-  GList* found = secret_service_search_sync(nullptr,  // default secret service
-                                            &kLibsecretSchema, attrs.Get(),
-                                            SECRET_SEARCH_ALL,
-                                            nullptr,  // no cancellable ojbect
-                                            &error);
+  GList* found = LibsecretLoader::secret_service_search_sync(
+      nullptr,  // default secret service
+      &kLibsecretSchema, attrs.Get(),
+      static_cast<SecretSearchFlags>(SECRET_SEARCH_ALL | SECRET_SEARCH_UNLOCK),
+      nullptr,  // no cancellable ojbect
+      &error);
   if (error) {
     LOG(ERROR) << "Unable to get logins " << error->message;
     g_error_free(error);
@@ -431,7 +336,8 @@ bool NativeBackendLibsecret::AddUpdateLoginSearch(
     return false;
   }
 
-  *forms = ConvertFormList(found, &lookup_form);
+  PasswordStore::FormDigest form(lookup_form);
+  *forms = ConvertFormList(found, &form);
   return true;
 }
 
@@ -445,7 +351,8 @@ bool NativeBackendLibsecret::RawAddLogin(const PasswordForm& form) {
   std::string form_data;
   SerializeFormDataToBase64String(form.form_data, &form_data);
   GError* error = nullptr;
-  secret_password_store_sync(
+  // clang-format off
+  LibsecretLoader::secret_password_store_sync(
       &kLibsecretSchema,
       nullptr,                     // Default collection.
       form.origin.spec().c_str(),  // Display name.
@@ -459,7 +366,6 @@ bool NativeBackendLibsecret::RawAddLogin(const PasswordForm& form) {
       "password_element", UTF16ToUTF8(form.password_element).c_str(),
       "submit_element", UTF16ToUTF8(form.submit_element).c_str(),
       "signon_realm", form.signon_realm.c_str(),
-      "ssl_valid", form.ssl_valid,
       "preferred", form.preferred,
       "date_created", base::Int64ToString(date_created).c_str(),
       "blacklisted_by_user", form.blacklisted_by_user,
@@ -469,11 +375,17 @@ bool NativeBackendLibsecret::RawAddLogin(const PasswordForm& form) {
       "date_synced", base::Int64ToString(date_synced).c_str(),
       "display_name", UTF16ToUTF8(form.display_name).c_str(),
       "avatar_url", form.icon_url.spec().c_str(),
-      "federation_url", form.federation_url.spec().c_str(),
-      "skip_zero_click", form.skip_zero_click,
+      // We serialize unique origins as "", in order to make other systems that
+      // read from the login database happy. https://crbug.com/591310
+      "federation_url", form.federation_origin.unique()
+          ? ""
+          : form.federation_origin.Serialize().c_str(),
+      "should_skip_zero_click", form.skip_zero_click,
       "generation_upload_status", form.generation_upload_status,
       "form_data", form_data.c_str(),
-      "application", app_string_.c_str(), nullptr);
+      "application", app_string_.c_str(),
+      nullptr);
+  // clang-format on
 
   if (error) {
     LOG(ERROR) << "Libsecret add raw login failed: " << error->message;
@@ -484,19 +396,29 @@ bool NativeBackendLibsecret::RawAddLogin(const PasswordForm& form) {
 }
 
 bool NativeBackendLibsecret::GetAutofillableLogins(
-    ScopedVector<autofill::PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   return GetLoginsList(nullptr, AUTOFILLABLE_LOGINS, forms);
 }
 
 bool NativeBackendLibsecret::GetBlacklistLogins(
-    ScopedVector<autofill::PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   return GetLoginsList(nullptr, BLACKLISTED_LOGINS, forms);
 }
 
+bool NativeBackendLibsecret::GetAllLogins(
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
+  return GetLoginsList(nullptr, ALL_LOGINS, forms);
+}
+
 bool NativeBackendLibsecret::GetLoginsList(
-    const PasswordForm* lookup_form,
+    const PasswordStore::FormDigest* lookup_form,
     GetLoginsListOptions options,
-    ScopedVector<autofill::PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
+  if (!ensured_keyring_unlocked_) {
+    LibsecretLoader::EnsureKeyringUnlocked();
+    ensured_keyring_unlocked_ = true;
+  }
+
   LibsecretAttributesBuilder attrs;
   attrs.Append("application", app_string_);
   if (options != ALL_LOGINS)
@@ -504,15 +426,17 @@ bool NativeBackendLibsecret::GetLoginsList(
   if (lookup_form &&
       !password_manager::ShouldPSLDomainMatchingApply(
           password_manager::GetRegistryControlledDomain(
-              GURL(lookup_form->signon_realm))))
+              GURL(lookup_form->signon_realm))) &&
+      lookup_form->scheme != PasswordForm::SCHEME_HTML)
     attrs.Append("signon_realm", lookup_form->signon_realm);
 
   GError* error = nullptr;
-  GList* found = secret_service_search_sync(nullptr,  // default secret service
-                                            &kLibsecretSchema, attrs.Get(),
-                                            SECRET_SEARCH_ALL,
-                                            nullptr,  // no cancellable ojbect
-                                            &error);
+  GList* found = LibsecretLoader::secret_service_search_sync(
+      nullptr,  // default secret service
+      &kLibsecretSchema, attrs.Get(),
+      static_cast<SecretSearchFlags>(SECRET_SEARCH_ALL | SECRET_SEARCH_UNLOCK),
+      nullptr,  // no cancellable ojbect
+      &error);
   if (error) {
     LOG(ERROR) << "Unable to get logins " << error->message;
     g_error_free(error);
@@ -526,8 +450,8 @@ bool NativeBackendLibsecret::GetLoginsList(
     return true;
 
   // Get rid of the forms with the same sync tags.
-  ScopedVector<autofill::PasswordForm> duplicates;
-  std::vector<std::vector<autofill::PasswordForm*>> tag_groups;
+  std::vector<std::unique_ptr<PasswordForm>> duplicates;
+  std::vector<std::vector<PasswordForm*>> tag_groups;
   password_manager_util::FindDuplicates(forms, &duplicates, &tag_groups);
   if (duplicates.empty())
     return true;
@@ -548,21 +472,19 @@ bool NativeBackendLibsecret::GetLoginsBetween(
     base::Time get_begin,
     base::Time get_end,
     TimestampToCompare date_to_compare,
-    ScopedVector<autofill::PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   forms->clear();
-  ScopedVector<autofill::PasswordForm> all_forms;
+  std::vector<std::unique_ptr<PasswordForm>> all_forms;
   if (!GetLoginsList(nullptr, ALL_LOGINS, &all_forms))
     return false;
 
-  base::Time autofill::PasswordForm::*date_member =
-      date_to_compare == CREATION_TIMESTAMP
-          ? &autofill::PasswordForm::date_created
-          : &autofill::PasswordForm::date_synced;
-  for (auto& saved_form : all_forms) {
-    if (get_begin <= saved_form->*date_member &&
-        (get_end.is_null() || saved_form->*date_member < get_end)) {
-      forms->push_back(saved_form);
-      saved_form = nullptr;
+  base::Time PasswordForm::*date_member = date_to_compare == CREATION_TIMESTAMP
+                                              ? &PasswordForm::date_created
+                                              : &PasswordForm::date_synced;
+  for (std::unique_ptr<PasswordForm>& saved_form : all_forms) {
+    if (get_begin <= saved_form.get()->*date_member &&
+        (get_end.is_null() || saved_form.get()->*date_member < get_end)) {
+      forms->push_back(std::move(saved_form));
     }
   }
 
@@ -576,7 +498,7 @@ bool NativeBackendLibsecret::RemoveLoginsBetween(
     password_manager::PasswordStoreChangeList* changes) {
   DCHECK(changes);
   changes->clear();
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   if (!GetLoginsBetween(get_begin, get_end, date_to_compare, &forms))
     return false;
 
@@ -587,10 +509,11 @@ bool NativeBackendLibsecret::RemoveLoginsBetween(
   return true;
 }
 
-ScopedVector<autofill::PasswordForm> NativeBackendLibsecret::ConvertFormList(
+std::vector<std::unique_ptr<PasswordForm>>
+NativeBackendLibsecret::ConvertFormList(
     GList* found,
-    const PasswordForm* lookup_form) {
-  ScopedVector<autofill::PasswordForm> forms;
+    const PasswordStore::FormDigest* lookup_form) {
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   password_manager::PSLDomainMatchMetric psl_domain_match_metric =
       password_manager::PSL_DOMAIN_MATCH_NONE;
   GError* error = nullptr;
@@ -604,44 +527,55 @@ ScopedVector<autofill::PasswordForm> NativeBackendLibsecret::ConvertFormList(
       error = nullptr;
       continue;
     }
-    GHashTable* attrs = secret_item_get_attributes(secretItem);
-    scoped_ptr<PasswordForm> form(FormOutOfAttributes(attrs));
+    GHashTable* attrs = LibsecretLoader::secret_item_get_attributes(secretItem);
+    std::unique_ptr<PasswordForm> form(FormOutOfAttributes(attrs));
     g_hash_table_unref(attrs);
-    if (form) {
-      if (lookup_form && form->signon_realm != lookup_form->signon_realm) {
-        // This is not an exact match, we try PSL matching.
-        if (lookup_form->scheme != PasswordForm::SCHEME_HTML ||
-            form->scheme != PasswordForm::SCHEME_HTML ||
-            !(password_manager::IsPublicSuffixDomainMatch(
-                lookup_form->signon_realm, form->signon_realm))) {
-          continue;
-        }
-        psl_domain_match_metric = password_manager::PSL_DOMAIN_MATCH_FOUND;
-        form->is_public_suffix_match = true;
-      }
-      SecretValue* secretValue = secret_item_get_secret(secretItem);
-      if (secretValue) {
-        form->password_value = UTF8ToUTF16(secret_value_get_text(secretValue));
-        secret_value_unref(secretValue);
-      } else {
-        LOG(WARNING) << "Unable to access password from list element!";
-      }
-      forms.push_back(std::move(form));
-    } else {
+    if (!form) {
       VLOG(1) << "Could not initialize PasswordForm from attributes!";
+      continue;
     }
+
+    if (lookup_form) {
+      switch (GetMatchResult(*form, *lookup_form)) {
+        case MatchResult::NO_MATCH:
+          continue;
+        case MatchResult::EXACT_MATCH:
+          break;
+        case MatchResult::PSL_MATCH:
+          psl_domain_match_metric = password_manager::PSL_DOMAIN_MATCH_FOUND;
+          form->is_public_suffix_match = true;
+          break;
+        case MatchResult::FEDERATED_MATCH:
+          break;
+        case MatchResult::FEDERATED_PSL_MATCH:
+          psl_domain_match_metric =
+              password_manager::PSL_DOMAIN_MATCH_FOUND_FEDERATED;
+          form->is_public_suffix_match = true;
+          break;
+      }
+    }
+
+    SecretValue* secretValue =
+        LibsecretLoader::secret_item_get_secret(secretItem);
+    if (secretValue) {
+      form->password_value =
+          UTF8ToUTF16(LibsecretLoader::secret_value_get_text(secretValue));
+      LibsecretLoader::secret_value_unref(secretValue);
+    } else {
+      LOG(WARNING) << "Unable to access password from list element!";
+    }
+    forms.push_back(std::move(form));
   }
 
   if (lookup_form) {
-    const GURL signon_realm(lookup_form->signon_realm);
-    std::string registered_domain =
-        password_manager::GetRegistryControlledDomain(signon_realm);
-    UMA_HISTOGRAM_ENUMERATION(
-        "PasswordManager.PslDomainMatchTriggering",
-        password_manager::ShouldPSLDomainMatchingApply(registered_domain)
-            ? psl_domain_match_metric
-            : password_manager::PSL_DOMAIN_MATCH_NOT_USED,
-        password_manager::PSL_DOMAIN_MATCH_COUNT);
+    const bool allow_psl_match = password_manager::ShouldPSLDomainMatchingApply(
+        password_manager::GetRegistryControlledDomain(
+            GURL(lookup_form->signon_realm)));
+    UMA_HISTOGRAM_ENUMERATION("PasswordManager.PslDomainMatchTriggering",
+                              allow_psl_match
+                                  ? psl_domain_match_metric
+                                  : password_manager::PSL_DOMAIN_MATCH_NOT_USED,
+                              password_manager::PSL_DOMAIN_MATCH_COUNT);
   }
   g_list_free(found);
   return forms;

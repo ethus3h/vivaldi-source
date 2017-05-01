@@ -8,6 +8,7 @@
 
 #include "base/guid.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -98,9 +99,16 @@ RegistryOverrideManager::RegistryOverrideManager(
 RegistryOverrideManager::~RegistryOverrideManager() {}
 
 void RegistryOverrideManager::OverrideRegistry(HKEY override) {
+  OverrideRegistry(override, nullptr);
+}
+
+void RegistryOverrideManager::OverrideRegistry(HKEY override,
+                                               base::string16* override_path) {
   base::string16 key_path = GenerateTempKeyPath(test_key_root_, timestamp_);
   overrides_.push_back(
-      make_scoped_ptr(new ScopedRegistryKeyOverride(override, key_path)));
+      base::MakeUnique<ScopedRegistryKeyOverride>(override, key_path));
+  if (override_path)
+    override_path->assign(key_path);
 }
 
 base::string16 GenerateTempKeyPath() {

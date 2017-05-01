@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <map>
+#include <memory>
 #include <queue>
 #include <string>
 #include <vector>
@@ -16,7 +17,6 @@
 #include "base/files/scoped_file.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
@@ -29,15 +29,14 @@
 
 struct NaClDesc;
 struct NaClImcTypedMsgHdr;
-struct PP_Size;
+
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace IPC {
 class Channel;
 struct ChannelHandle;
-}
-
-namespace ppapi {
-class HostResource;
 }
 
 // Adapts a Chrome IPC channel to an IPC channel that we expose to Native
@@ -105,15 +104,15 @@ class NaClIPCAdapter : public base::RefCountedThreadSafe<NaClIPCAdapter>,
   // |open_resource_cb| may immediately call a OpenResourceReplyCallback
   // function to send a pre-opened resource descriptor to the untrusted side.
   // OpenResourceCallback returns true when OpenResourceReplyCallback is called.
-  NaClIPCAdapter(
-      const IPC::ChannelHandle& handle,
-      base::TaskRunner* runner,
-      ResolveFileTokenCallback resolve_file_token_cb,
-      OpenResourceCallback open_resource_cb);
+  NaClIPCAdapter(const IPC::ChannelHandle& handle,
+                 const scoped_refptr<base::SingleThreadTaskRunner>& runner,
+                 ResolveFileTokenCallback resolve_file_token_cb,
+                 OpenResourceCallback open_resource_cb);
 
   // Initializes with a given channel that's already created for testing
   // purposes. This function will take ownership of the given channel.
-  NaClIPCAdapter(scoped_ptr<IPC::Channel> channel, base::TaskRunner* runner);
+  NaClIPCAdapter(std::unique_ptr<IPC::Channel> channel,
+                 base::TaskRunner* runner);
 
   // Connect the channel. This must be called after the constructor that accepts
   // an IPC::ChannelHandle, and causes the Channel to be connected on the IO
@@ -135,10 +134,6 @@ class NaClIPCAdapter : public base::RefCountedThreadSafe<NaClIPCAdapter>,
   // Make a NaClDesc that refers to this NaClIPCAdapter. Note that the returned
   // NaClDesc is reference-counted, and a reference is returned.
   NaClDesc* MakeNaClDesc();
-
-#if defined(OS_POSIX)
-  base::ScopedFD TakeClientFileDescriptor();
-#endif
 
   // Listener implementation.
   bool OnMessageReceived(const IPC::Message& message) override;
@@ -180,7 +175,7 @@ class NaClIPCAdapter : public base::RefCountedThreadSafe<NaClIPCAdapter>,
     IOThreadData();
     ~IOThreadData();
 
-    scoped_ptr<IPC::Channel> channel_;
+    std::unique_ptr<IPC::Channel> channel_;
 
     // When we send a synchronous message (from untrusted to trusted), we store
     // its type here, so that later we can associate the reply with its type
@@ -210,7 +205,7 @@ class NaClIPCAdapter : public base::RefCountedThreadSafe<NaClIPCAdapter>,
 
   void ConnectChannelOnIOThread();
   void CloseChannelOnIOThread();
-  void SendMessageOnIOThread(scoped_ptr<IPC::Message> message);
+  void SendMessageOnIOThread(std::unique_ptr<IPC::Message> message);
 
   // Saves the message to forward to NaCl. This method assumes that the caller
   // holds the lock for locked_data_.

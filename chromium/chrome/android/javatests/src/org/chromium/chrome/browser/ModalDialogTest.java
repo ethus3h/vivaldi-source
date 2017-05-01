@@ -5,8 +5,8 @@
 package org.chromium.chrome.browser;
 
 import android.content.DialogInterface;
+import android.support.test.filters.MediumTest;
 import android.support.v7.app.AlertDialog;
-import android.test.suitebuilder.annotation.MediumTest;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -14,8 +14,8 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.test.ChromeActivityTestCaseBase;
@@ -31,6 +31,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * Test suite for displaying and functioning of modal dialogs.
  */
+@RetryOnFailure
 public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> {
     private static final String TAG = "ModalDialogTest";
     private static final String EMPTY_PAGE = UrlUtils.encodeHtmlDataUri(
@@ -170,9 +171,8 @@ public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> 
      * Verifies beforeunload dialogs are shown and they block/allow navigation
      * as appropriate.
      */
-    //@MediumTest
-    //@Feature({"Browser", "Main"})
-    @DisabledTest //crbug/270593
+    @MediumTest
+    @Feature({"Browser", "Main"})
     public void testBeforeUnloadDialog()
             throws InterruptedException, TimeoutException, ExecutionException {
         loadUrl(BEFORE_UNLOAD_URL);
@@ -270,7 +270,7 @@ public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> 
      */
     @MediumTest
     @Feature({"Browser", "Main"})
-    public void testDialogDismissedAfterClosingTab() throws InterruptedException {
+    public void testDialogDismissedAfterClosingTab() {
         executeJavaScriptAndWaitForDialog("alert('Android')");
 
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
@@ -282,7 +282,7 @@ public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> 
         });
 
         // Closing the tab should have dismissed the dialog.
-        CriteriaHelper.pollForCriteria(new JavascriptAppModalDialogShownCriteria(
+        CriteriaHelper.pollInstrumentationThread(new JavascriptAppModalDialogShownCriteria(
                 "The dialog should have been dismissed when its tab was closed.", false));
     }
 
@@ -290,8 +290,7 @@ public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> 
      * Asynchronously executes the given code for spawning a dialog and waits
      * for the dialog to be visible.
      */
-    private OnEvaluateJavaScriptResultHelper executeJavaScriptAndWaitForDialog(String script)
-            throws InterruptedException {
+    private OnEvaluateJavaScriptResultHelper executeJavaScriptAndWaitForDialog(String script) {
         return executeJavaScriptAndWaitForDialog(new OnEvaluateJavaScriptResultHelper(), script);
     }
 
@@ -300,12 +299,11 @@ public class ModalDialogTest extends ChromeActivityTestCaseBase<ChromeActivity> 
      * code for spawning a dialog and waits for the dialog to be visible.
      */
     private OnEvaluateJavaScriptResultHelper executeJavaScriptAndWaitForDialog(
-            final OnEvaluateJavaScriptResultHelper helper, String script)
-            throws InterruptedException {
+            final OnEvaluateJavaScriptResultHelper helper, String script) {
         helper.evaluateJavaScriptForTests(
                 getActivity().getCurrentContentViewCore().getWebContents(),
                 script);
-        CriteriaHelper.pollForCriteria(new JavascriptAppModalDialogShownCriteria(
+        CriteriaHelper.pollInstrumentationThread(new JavascriptAppModalDialogShownCriteria(
                 "Could not spawn or locate a modal dialog.", true));
         return helper;
     }

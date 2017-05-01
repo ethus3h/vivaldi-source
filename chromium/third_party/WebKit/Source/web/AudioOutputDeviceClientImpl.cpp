@@ -8,28 +8,26 @@
 #include "core/dom/ExecutionContext.h"
 #include "public/web/WebFrameClient.h"
 #include "web/WebLocalFrameImpl.h"
+#include <memory>
 
 namespace blink {
 
-PassOwnPtrWillBeRawPtr<AudioOutputDeviceClientImpl> AudioOutputDeviceClientImpl::create()
-{
-    return adoptPtrWillBeNoop(new AudioOutputDeviceClientImpl());
+AudioOutputDeviceClientImpl::AudioOutputDeviceClientImpl(LocalFrame& frame)
+    : AudioOutputDeviceClient(frame) {}
+
+AudioOutputDeviceClientImpl::~AudioOutputDeviceClientImpl() {}
+
+void AudioOutputDeviceClientImpl::checkIfAudioSinkExistsAndIsAuthorized(
+    ExecutionContext* context,
+    const WebString& sinkId,
+    std::unique_ptr<WebSetSinkIdCallbacks> callbacks) {
+  DCHECK(context);
+  DCHECK(context->isDocument());
+  Document* document = toDocument(context);
+  WebLocalFrameImpl* webFrame = WebLocalFrameImpl::fromFrame(document->frame());
+  webFrame->client()->checkIfAudioSinkExistsAndIsAuthorized(
+      sinkId, WebSecurityOrigin(context->getSecurityOrigin()),
+      callbacks.release());
 }
 
-AudioOutputDeviceClientImpl::AudioOutputDeviceClientImpl()
-{
-}
-
-AudioOutputDeviceClientImpl::~AudioOutputDeviceClientImpl()
-{
-}
-
-void AudioOutputDeviceClientImpl::checkIfAudioSinkExistsAndIsAuthorized(ExecutionContext* context, const WebString& sinkId, PassOwnPtr<WebSetSinkIdCallbacks> callbacks)
-{
-    ASSERT(context && context->isDocument());
-    Document* document = toDocument(context);
-    WebLocalFrameImpl* webFrame = WebLocalFrameImpl::fromFrame(document->frame());
-    webFrame->client()->checkIfAudioSinkExistsAndIsAuthorized(sinkId, WebSecurityOrigin(context->securityOrigin()), callbacks.leakPtr());
-}
-
-} // namespace blink
+}  // namespace blink

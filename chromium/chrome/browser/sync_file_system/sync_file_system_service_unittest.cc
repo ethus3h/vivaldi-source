@@ -13,7 +13,7 @@
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/sync_file_system/local/canned_syncable_file_system.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_context.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_service.h"
@@ -73,12 +73,11 @@ void AssignValueAndQuit(base::RunLoop* run_loop,
   run_loop->Quit();
 }
 
-// This is called on IO thread.
-void VerifyFileError(base::RunLoop* run_loop,
+// This is called on IO thread. Posts |callback| to be called on UI thread.
+void VerifyFileError(base::Closure callback,
                      base::File::Error error) {
-  DCHECK(run_loop);
   EXPECT_EQ(base::File::FILE_OK, error);
-  run_loop->Quit();
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, callback);
 }
 
 }  // namespace
@@ -123,8 +122,7 @@ ACTION_P2(MockSyncFileCallback, status, url) {
 }
 
 ACTION(InvokeCompletionClosure) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(arg0));
+  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, arg0);
 }
 
 class SyncFileSystemServiceTest : public testing::Test {
@@ -136,12 +134,11 @@ class SyncFileSystemServiceTest : public testing::Test {
   void SetUp() override {
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
     file_system_.reset(new CannedSyncableFileSystem(
-        GURL(kOrigin),
-        in_memory_env_.get(),
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+        GURL(kOrigin), in_memory_env_.get(),
+        BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
+        BrowserThread::GetTaskRunnerForThread(BrowserThread::FILE)));
 
-    scoped_ptr<LocalFileSyncService> local_service =
+    std::unique_ptr<LocalFileSyncService> local_service =
         LocalFileSyncService::CreateForTesting(&profile_, in_memory_env_.get());
     remote_service_ = new StrictMock<MockRemoteFileSyncService>;
     sync_service_.reset(new SyncFileSystemService(&profile_));
@@ -158,7 +155,7 @@ class SyncFileSystemServiceTest : public testing::Test {
 
     sync_service_->Initialize(
         std::move(local_service),
-        scoped_ptr<RemoteFileSyncService>(remote_service_));
+        std::unique_ptr<RemoteFileSyncService>(remote_service_));
 
     // Disable auto sync by default.
     EXPECT_CALL(*mock_remote_service(), SetSyncEnabled(false)).Times(1);
@@ -264,15 +261,15 @@ class SyncFileSystemServiceTest : public testing::Test {
   }
 
   content::TestBrowserThreadBundle thread_bundle_;
-  scoped_ptr<leveldb::Env> in_memory_env_;
+  std::unique_ptr<leveldb::Env> in_memory_env_;
   TestingProfile profile_;
-  scoped_ptr<CannedSyncableFileSystem> file_system_;
+  std::unique_ptr<CannedSyncableFileSystem> file_system_;
 
   // Their ownerships are transferred to SyncFileSystemService.
   StrictMock<MockRemoteFileSyncService>* remote_service_;
   StrictMock<MockLocalChangeProcessor> local_change_processor_;
 
-  scoped_ptr<SyncFileSystemService> sync_service_;
+  std::unique_ptr<SyncFileSystemService> sync_service_;
 };
 
 TEST_F(SyncFileSystemServiceTest, InitializeForApp) {
@@ -432,7 +429,7 @@ TEST_F(SyncFileSystemServiceTest, SimpleSyncFlowWithFileBusy) {
       base::Bind(&CannedSyncableFileSystem::DoCreateFile,
                  base::Unretained(file_system_.get()),
                  kFile, base::Bind(&VerifyFileError,
-                                   &verify_file_error_run_loop)));
+                                   verify_file_error_run_loop.QuitClosure())));
 
   run_loop.Run();
 

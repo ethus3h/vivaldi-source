@@ -21,12 +21,6 @@
 #include "extensions/browser/extension_function.h"
 #include "storage/browser/fileapi/file_system_url.h"
 
-class GURL;
-
-namespace base {
-class FilePath;
-}  // namespace base
-
 namespace storage {
 class FileSystemContext;
 class FileSystemURL;
@@ -155,10 +149,6 @@ class FileManagerPrivateGetSizeStatsFunction
   bool RunAsync() override;
 
  private:
-  void OnGetLocalSpace(uint64_t* total_size,
-                       uint64_t* remaining_size,
-                       bool is_download);
-
   void OnGetDriveAvailableSpace(drive::FileError error,
                                 int64_t bytes_total,
                                 int64_t bytes_used);
@@ -260,8 +250,9 @@ class FileManagerPrivateInternalResolveIsolatedEntriesFunction
   bool RunAsync() override;
 
  private:
-  void RunAsyncAfterConvertFileDefinitionListToEntryDefinitionList(scoped_ptr<
-      file_manager::util::EntryDefinitionList> entry_definition_list);
+  void RunAsyncAfterConvertFileDefinitionListToEntryDefinitionList(
+      std::unique_ptr<file_manager::util::EntryDefinitionList>
+          entry_definition_list);
 };
 
 class FileManagerPrivateInternalComputeChecksumFunction
@@ -279,7 +270,7 @@ class FileManagerPrivateInternalComputeChecksumFunction
   bool RunAsync() override;
 
  private:
-  scoped_ptr<drive::util::FileStreamMd5Digester> digester_;
+  std::unique_ptr<drive::util::FileStreamMd5Digester> digester_;
 
   void Respond(const std::string& hash);
 };
@@ -337,6 +328,22 @@ class FileManagerPrivateInternalSetEntryTagFunction
 
   ExtensionFunction::ResponseAction Run() override;
   DISALLOW_COPY_AND_ASSIGN(FileManagerPrivateInternalSetEntryTagFunction);
+};
+
+// Implements the chrome.fileManagerPrivate.getDirectorySize method.
+class FileManagerPrivateInternalGetDirectorySizeFunction
+    : public LoggedAsyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivateInternal.getDirectorySize",
+                             FILEMANAGERPRIVATEINTERNAL_GETDIRECTORYSIZE)
+
+ protected:
+  ~FileManagerPrivateInternalGetDirectorySizeFunction() override {}
+
+  void OnDirectorySizeRetrieved(int64_t size);
+
+  // AsyncExtensionFunction overrides
+  bool RunAsync() override;
 };
 
 }  // namespace extensions

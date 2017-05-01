@@ -14,8 +14,6 @@
 #include "base/memory/scoped_vector.h"
 #include "base/metrics/bucket_ranges.h"
 #include "base/metrics/sample_vector.h"
-#include "base/prefs/pref_service.h"
-#include "base/prefs/testing_pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "components/metrics/metrics_pref_names.h"
@@ -23,6 +21,8 @@
 #include "components/metrics/proto/chrome_user_metrics_extension.pb.h"
 #include "components/metrics/test_metrics_provider.h"
 #include "components/metrics/test_metrics_service_client.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "components/variations/active_field_trials.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -253,8 +253,7 @@ TEST_F(MetricsLogTest, RecordEnvironment) {
   synthetic_trials.push_back(kSyntheticTrials[0]);
   synthetic_trials.push_back(kSyntheticTrials[1]);
 
-  log.RecordEnvironment(std::vector<MetricsProvider*>(),
-                        synthetic_trials,
+  log.RecordEnvironment(std::vector<MetricsProvider*>(), synthetic_trials,
                         kInstallDate, kEnabledDate);
   // Check that the system profile on the log has the correct values set.
   CheckSystemProfile(log.system_profile());
@@ -277,12 +276,15 @@ TEST_F(MetricsLogTest, LoadSavedEnvironmentFromPrefs) {
       prefs::kStabilitySavedSystemProfileHash;
 
   TestMetricsServiceClient client;
+  client.set_version_string("bogus version");
 
   // The pref value is empty, so loading it from prefs should fail.
   {
     TestMetricsLog log(
         kClientId, kSessionId, MetricsLog::ONGOING_LOG, &client, &prefs_);
-    EXPECT_FALSE(log.LoadSavedEnvironmentFromPrefs());
+    std::string app_version;
+    EXPECT_FALSE(log.LoadSavedEnvironmentFromPrefs(&app_version));
+    EXPECT_TRUE(app_version.empty());
   }
 
   // Do a RecordEnvironment() call and check whether the pref is recorded.
@@ -299,13 +301,15 @@ TEST_F(MetricsLogTest, LoadSavedEnvironmentFromPrefs) {
   {
     TestMetricsLog log(
         kClientId, kSessionId, MetricsLog::ONGOING_LOG, &client, &prefs_);
-    EXPECT_TRUE(log.LoadSavedEnvironmentFromPrefs());
+    std::string app_version;
+    EXPECT_TRUE(log.LoadSavedEnvironmentFromPrefs(&app_version));
+    EXPECT_EQ("bogus version", app_version);
     // Check some values in the system profile.
     EXPECT_EQ(kInstallDateExpected, log.system_profile().install_date());
     EXPECT_EQ(kEnabledDateExpected, log.system_profile().uma_enabled_date());
-    // Ensure that the call cleared the prefs.
-    EXPECT_TRUE(prefs_.GetString(kSystemProfilePref).empty());
-    EXPECT_TRUE(prefs_.GetString(kSystemProfileHashPref).empty());
+    // Ensure that the call did not clear the prefs.
+    EXPECT_FALSE(prefs_.GetString(kSystemProfilePref).empty());
+    EXPECT_FALSE(prefs_.GetString(kSystemProfileHashPref).empty());
   }
 
   // Ensure that a non-matching hash results in the pref being invalid.
@@ -323,11 +327,52 @@ TEST_F(MetricsLogTest, LoadSavedEnvironmentFromPrefs) {
     prefs_.SetString(kSystemProfileHashPref, "deadbeef");
     TestMetricsLog log(
         kClientId, kSessionId, MetricsLog::ONGOING_LOG, &client, &prefs_);
-    EXPECT_FALSE(log.LoadSavedEnvironmentFromPrefs());
-    // Ensure that the prefs are cleared, even if the call failed.
-    EXPECT_TRUE(prefs_.GetString(kSystemProfilePref).empty());
-    EXPECT_TRUE(prefs_.GetString(kSystemProfileHashPref).empty());
+    std::string app_version;
+    EXPECT_FALSE(log.LoadSavedEnvironmentFromPrefs(&app_version));
+    EXPECT_TRUE(app_version.empty());
+    // Ensure that the prefs are not cleared, even if the call failed.
+    EXPECT_FALSE(prefs_.GetString(kSystemProfilePref).empty());
+    EXPECT_FALSE(prefs_.GetString(kSystemProfileHashPref).empty());
   }
+}
+
+TEST_F(MetricsLogTest, RecordEnvironmentEnableDefault) {
+  TestMetricsServiceClient client;
+  TestMetricsLog log_unknown(kClientId, kSessionId, MetricsLog::ONGOING_LOG,
+                             &client, &prefs_);
+
+  std::vector<variations::ActiveGroupId> synthetic_trials;
+
+  log_unknown.RecordEnvironment(std::vector<MetricsProvider*>(),
+                                synthetic_trials, kInstallDate, kEnabledDate);
+  EXPECT_FALSE(log_unknown.system_profile().has_uma_default_state());
+
+  client.set_enable_default(EnableMetricsDefault::OPT_IN);
+  TestMetricsLog log_opt_in(kClientId, kSessionId, MetricsLog::ONGOING_LOG,
+                            &client, &prefs_);
+  log_opt_in.RecordEnvironment(std::vector<MetricsProvider*>(),
+                               synthetic_trials, kInstallDate, kEnabledDate);
+  EXPECT_TRUE(log_opt_in.system_profile().has_uma_default_state());
+  EXPECT_EQ(SystemProfileProto_UmaDefaultState_OPT_IN,
+            log_opt_in.system_profile().uma_default_state());
+
+  client.set_enable_default(EnableMetricsDefault::OPT_OUT);
+  TestMetricsLog log_opt_out(kClientId, kSessionId, MetricsLog::ONGOING_LOG,
+                             &client, &prefs_);
+  log_opt_out.RecordEnvironment(std::vector<MetricsProvider*>(),
+                                synthetic_trials, kInstallDate, kEnabledDate);
+  EXPECT_TRUE(log_opt_out.system_profile().has_uma_default_state());
+  EXPECT_EQ(SystemProfileProto_UmaDefaultState_OPT_OUT,
+            log_opt_out.system_profile().uma_default_state());
+
+  client.set_reporting_is_managed(true);
+  TestMetricsLog log_managed(kClientId, kSessionId, MetricsLog::ONGOING_LOG,
+                             &client, &prefs_);
+  log_managed.RecordEnvironment(std::vector<MetricsProvider*>(),
+                                synthetic_trials, kInstallDate, kEnabledDate);
+  EXPECT_TRUE(log_managed.system_profile().has_uma_default_state());
+  EXPECT_EQ(SystemProfileProto_UmaDefaultState_POLICY_FORCED_ENABLED,
+            log_managed.system_profile().uma_default_state());
 }
 
 TEST_F(MetricsLogTest, InitialLogStabilityMetrics) {
@@ -350,12 +395,12 @@ TEST_F(MetricsLogTest, InitialLogStabilityMetrics) {
   // Required metrics:
   EXPECT_TRUE(stability.has_launch_count());
   EXPECT_TRUE(stability.has_crash_count());
-  // Initial log metrics:
-  EXPECT_TRUE(stability.has_incomplete_shutdown_count());
-  EXPECT_TRUE(stability.has_breakpad_registration_success_count());
-  EXPECT_TRUE(stability.has_breakpad_registration_failure_count());
-  EXPECT_TRUE(stability.has_debugger_present_count());
-  EXPECT_TRUE(stability.has_debugger_not_present_count());
+  // Initial log metrics: only expected if non-zero.
+  EXPECT_FALSE(stability.has_incomplete_shutdown_count());
+  EXPECT_FALSE(stability.has_breakpad_registration_success_count());
+  EXPECT_FALSE(stability.has_breakpad_registration_failure_count());
+  EXPECT_FALSE(stability.has_debugger_present_count());
+  EXPECT_FALSE(stability.has_debugger_not_present_count());
 
   // The test provider should have been called upon to provide initial
   // stability and regular stability metrics.
@@ -380,7 +425,7 @@ TEST_F(MetricsLogTest, OngoingLogStabilityMetrics) {
   // Required metrics:
   EXPECT_TRUE(stability.has_launch_count());
   EXPECT_TRUE(stability.has_crash_count());
-  // Initial log metrics:
+  // Initial log metrics: only expected if non-zero.
   EXPECT_FALSE(stability.has_incomplete_shutdown_count());
   EXPECT_FALSE(stability.has_breakpad_registration_success_count());
   EXPECT_FALSE(stability.has_breakpad_registration_failure_count());

@@ -11,7 +11,6 @@
 #include "base/memory/scoped_vector.h"
 #include "base/memory/singleton.h"
 #include "base/stl_util.h"
-#include "ui/gfx/win/dpi.h"
 #include "ui/gfx/win/hwnd_util.h"
 
 namespace {
@@ -111,7 +110,7 @@ HWNDSubclass* HWNDSubclass::GetHwndSubclassForTarget(HWND target) {
 
 void HWNDSubclass::AddFilter(HWNDMessageFilter* filter) {
   DCHECK(filter);
-  if (!ContainsValue(filters_, filter))
+  if (!base::ContainsValue(filters_, filter))
     filters_.push_back(filter);
 }
 

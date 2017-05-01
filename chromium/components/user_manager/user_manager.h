@@ -17,17 +17,8 @@
 class AccountId;
 class PrefService;
 
-namespace base {
-class DictionaryValue;
-}
-
 namespace chromeos {
-class LoginState;
 class ScopedUserManagerEnabler;
-}
-
-namespace cryptohome {
-class AsyncMethodCaller;
 }
 
 namespace user_manager {
@@ -47,6 +38,18 @@ class USER_MANAGER_EXPORT UserManager {
    public:
     // Called when the local state preferences is changed.
     virtual void LocalStateChanged(UserManager* user_manager);
+
+    // Called when the image of the given user is changed.
+    virtual void OnUserImageChanged(const User& user);
+
+    // Called when the profile image download for the given user fails or
+    // user has the default profile image or no porfile image at all.
+    virtual void OnUserProfileImageUpdateFailed(const User& user);
+
+    // Called when the profile image for the given user is downloaded.
+    // |profile_image| contains the downloaded profile image.
+    virtual void OnUserProfileImageUpdated(const User& user,
+                                           const gfx::ImageSkia& profile_image);
 
    protected:
     virtual ~Observer();
@@ -169,14 +172,8 @@ class USER_MANAGER_EXPORT UserManager {
   // restore has completed).
   virtual void SwitchToLastActiveUser() = 0;
 
-  // Called when browser session is started i.e. after
-  // browser_creator.LaunchBrowser(...) was called after user sign in.
-  // When user is at the image screen IsUserLoggedIn() will return true
-  // but IsSessionStarted() will return false. During the kiosk splash screen,
-  // we perform additional initialization after the user is logged in but
-  // before the session has been started.
-  // Fires NOTIFICATION_SESSION_STARTED.
-  virtual void SessionStarted() = 0;
+  // Invoked by session manager to inform session start.
+  virtual void OnSessionStarted() = 0;
 
   // Removes the user from the device. Note, it will verify that the given user
   // isn't the owner, so calling this method for the owner will take no effect.
@@ -200,12 +197,6 @@ class USER_MANAGER_EXPORT UserManager {
   // list or currently logged in as ephemeral. Returns |NULL| otherwise.
   // Same as FindUser but returns non-const pointer to User object.
   virtual User* FindUserAndModify(const AccountId& account_id) = 0;
-
-  // Returns the logged-in user.
-  // TODO(nkostylev): Deprecate this call, move clients to GetActiveUser().
-  // http://crbug.com/230852
-  virtual const User* GetLoggedInUser() const = 0;
-  virtual User* GetLoggedInUser() = 0;
 
   // Returns the logged-in user that is currently active within this session.
   // There could be multiple users logged in at the the same but for now
@@ -269,6 +260,10 @@ class USER_MANAGER_EXPORT UserManager {
   // display email) is ephemeral.
   virtual bool IsCurrentUserNonCryptohomeDataEphemeral() const = 0;
 
+  // Returns true if data stored or cached for the current user inside that
+  // user's cryptohome is ephemeral.
+  virtual bool IsCurrentUserCryptohomeDataEphemeral() const = 0;
+
   // Returns true if the current user's session can be locked (i.e. the user has
   // a password with which to unlock the session).
   virtual bool CanCurrentUserLock() const = 0;
@@ -294,19 +289,20 @@ class USER_MANAGER_EXPORT UserManager {
   // Returns true if we're logged in as a kiosk app.
   virtual bool IsLoggedInAsKioskApp() const = 0;
 
+  // Returns true if we're logged in as a ARC kiosk app.
+  virtual bool IsLoggedInAsArcKioskApp() const = 0;
+
   // Returns true if we're logged in as the stub user used for testing on Linux.
   virtual bool IsLoggedInAsStub() const = 0;
-
-  // Returns true if we're logged in and browser has been started i.e.
-  // browser_creator.LaunchBrowser(...) was called after sign in
-  // or restart after crash.
-  virtual bool IsSessionStarted() const = 0;
 
   // Returns true if data stored or cached for the user with the given
   // |account_id|
   // address outside that user's cryptohome (wallpaper, avatar, OAuth token
   // status, display name, display email) is to be treated as ephemeral.
   virtual bool IsUserNonCryptohomeDataEphemeral(
+      const AccountId& account_id) const = 0;
+
+  virtual bool IsUserCryptohomeDataEphemeral(
       const AccountId& account_id) const = 0;
 
   virtual void AddObserver(Observer* obs) = 0;
@@ -316,6 +312,11 @@ class USER_MANAGER_EXPORT UserManager {
   virtual void RemoveSessionStateObserver(UserSessionStateObserver* obs) = 0;
 
   virtual void NotifyLocalStateChanged() = 0;
+  virtual void NotifyUserImageChanged(const User& user) = 0;
+  virtual void NotifyUserProfileImageUpdateFailed(const User& user) = 0;
+  virtual void NotifyUserProfileImageUpdated(
+      const User& user,
+      const gfx::ImageSkia& profile_image) = 0;
 
   // Changes the child status and notifies observers.
   virtual void ChangeUserChildStatus(User* user, bool is_child) = 0;

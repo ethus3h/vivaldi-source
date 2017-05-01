@@ -24,8 +24,7 @@ class StarView : public BubbleIconView {
   // BubbleIconView:
   void OnExecuting(BubbleIconView::ExecuteSource execute_source) override;
   void ExecuteCommand(ExecuteSource source) override;
-  views::BubbleDelegateView* GetBubble() const override;
-  bool SetRasterIcon() override;
+  views::BubbleDialogDelegateView* GetBubble() const override;
   gfx::VectorIconId GetVectorIcon() const override;
 
  private:

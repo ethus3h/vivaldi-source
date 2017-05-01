@@ -23,6 +23,14 @@ source_set("js_to_cpp_tests") {
     "js_to_cpp_tests.cc",
   ]
 
+  data = [
+    "binding_tests.js",
+    "connection_tests.js",
+    "interface_ptr_tests.js",
+    "js_to_cpp_tests.js",
+    "sample_service_tests.js",
+  ]
+
   configs += [ "//v8:external_startup_data" ]
 }
 
@@ -30,6 +38,4 @@ mojom("js_to_cpp_bindings") {
   sources = [
     "js_to_cpp.mojom",
   ]
-
-  with_environment = false
 }

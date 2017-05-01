@@ -6,18 +6,18 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 
 #include "base/base64.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "jingle/notifier/listener/notification_constants.h"
 #include "jingle/notifier/listener/xml_element_util.h"
-#include "third_party/webrtc/libjingle/xmllite/qname.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
-#include "webrtc/libjingle/xmpp/constants.h"
-#include "webrtc/libjingle/xmpp/jid.h"
-#include "webrtc/libjingle/xmpp/xmppclient.h"
+#include "third_party/libjingle_xmpp/xmllite/qname.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmpp/constants.h"
+#include "third_party/libjingle_xmpp/xmpp/jid.h"
+#include "third_party/libjingle_xmpp/xmpp/xmppclient.h"
 
 namespace notifier {
 
@@ -28,9 +28,8 @@ PushNotificationsSendUpdateTask::PushNotificationsSendUpdateTask(
 PushNotificationsSendUpdateTask::~PushNotificationsSendUpdateTask() {}
 
 int PushNotificationsSendUpdateTask::ProcessStart() {
-  scoped_ptr<buzz::XmlElement> stanza(
-      MakeUpdateMessage(notification_,
-                        GetClient()->jid().BareJid()));
+  std::unique_ptr<buzz::XmlElement> stanza(
+      MakeUpdateMessage(notification_, GetClient()->jid().BareJid()));
   DVLOG(1) << "Sending notification " << notification_.ToString()
            << " as stanza " << XmlElementToString(*stanza);
   if (SendStanza(stanza.get()) != buzz::XMPP_RETURN_OK) {

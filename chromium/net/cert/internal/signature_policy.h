@@ -13,6 +13,7 @@
 
 namespace net {
 
+class CertErrors;
 class SignatureAlgorithm;
 
 // SignaturePolicy is an interface (and base implementation) for applying
@@ -28,34 +29,33 @@ class NET_EXPORT SignaturePolicy {
   //
   // The default implementation accepts all signature algorithms.
   virtual bool IsAcceptableSignatureAlgorithm(
-      const SignatureAlgorithm& algorithm) const;
+      const SignatureAlgorithm& algorithm,
+      CertErrors* errors) const;
 
   // Implementations should return true if |curve_nid| is an allowed
   // elliptical curve. |curve_nid| is an object ID from BoringSSL (for example
   // NID_secp384r1).
   //
   // The default implementation accepts secp256r1, secp384r1, secp521r1 only.
-  virtual bool IsAcceptableCurveForEcdsa(int curve_nid) const;
+  virtual bool IsAcceptableCurveForEcdsa(int curve_nid,
+                                         CertErrors* errors) const;
 
   // Implementations should return true if |modulus_length_bits| is an allowed
   // RSA key size in bits.
   //
   // The default implementation accepts any modulus length >= 2048 bits.
-  virtual bool IsAcceptableModulusLengthForRsa(
-      size_t modulus_length_bits) const;
+  virtual bool IsAcceptableModulusLengthForRsa(size_t modulus_length_bits,
+                                               CertErrors* errors) const;
 };
 
 // SimpleSignaturePolicy modifies the base SignaturePolicy by allowing the
 // minimum RSA key length to be specified (rather than hard coded to 2048).
-//
-// TODO(eroman): This is currently just used by a test. If it ends up being
-// only useful for the unit-test then move it directly to that test file.
 class NET_EXPORT SimpleSignaturePolicy : public SignaturePolicy {
  public:
   explicit SimpleSignaturePolicy(size_t min_rsa_modulus_length_bits);
 
-  bool IsAcceptableModulusLengthForRsa(
-      size_t modulus_length_bits) const override;
+  bool IsAcceptableModulusLengthForRsa(size_t modulus_length_bits,
+                                       CertErrors* errors) const override;
 
  private:
   const size_t min_rsa_modulus_length_bits_;

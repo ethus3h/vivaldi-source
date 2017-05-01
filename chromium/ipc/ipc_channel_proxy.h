@@ -7,18 +7,23 @@
 
 #include <stdint.h>
 
+#include <map>
+#include <memory>
+#include <string>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/non_thread_safe.h"
 #include "build/build_config.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_handle.h"
-#include "ipc/ipc_endpoint.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
+#include "mojo/public/cpp/bindings/associated_group.h"
+#include "mojo/public/cpp/bindings/associated_interface_request.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -29,7 +34,6 @@ namespace IPC {
 class ChannelFactory;
 class MessageFilter;
 class MessageFilterRouter;
-class SendCallbackHelper;
 
 //-----------------------------------------------------------------------------
 // IPC::ChannelProxy
@@ -67,7 +71,7 @@ class SendCallbackHelper;
 // |channel_lifetime_lock_| is used to protect it. The locking overhead is only
 // paid if the underlying channel supports thread-safe |Send|.
 //
-class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
+class IPC_EXPORT ChannelProxy : public Sender, public base::NonThreadSafe {
  public:
 #if defined(ENABLE_IPC_FUZZER)
   // Interface for a filter to be imposed on outgoing messages which can
@@ -86,27 +90,47 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
   // on the background thread.  Any message not handled by the filter will be
   // dispatched to the listener.  The given task runner correspond to a thread
   // on which IPC::Channel is created and used (e.g. IO thread).
-  static scoped_ptr<ChannelProxy> Create(
+  static std::unique_ptr<ChannelProxy> Create(
       const IPC::ChannelHandle& channel_handle,
       Channel::Mode mode,
       Listener* listener,
       const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner);
 
-  static scoped_ptr<ChannelProxy> Create(
-      scoped_ptr<ChannelFactory> factory,
+  static std::unique_ptr<ChannelProxy> Create(
+      std::unique_ptr<ChannelFactory> factory,
+      Listener* listener,
+      const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner);
+
+  // Constructs a ChannelProxy without initializing it.
+  ChannelProxy(
       Listener* listener,
       const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner);
 
   ~ChannelProxy() override;
 
   // Initializes the channel proxy. Only call this once to initialize a channel
-  // proxy that was not initialized in its constructor. If create_pipe_now is
+  // proxy that was not initialized in its constructor. If |create_pipe_now| is
   // true, the pipe is created synchronously. Otherwise it's created on the IO
   // thread.
   void Init(const IPC::ChannelHandle& channel_handle,
             Channel::Mode mode,
             bool create_pipe_now);
-  void Init(scoped_ptr<ChannelFactory> factory, bool create_pipe_now);
+  void Init(std::unique_ptr<ChannelFactory> factory,
+            bool create_pipe_now);
+
+  // Pause the channel. Subsequent calls to Send() will be internally queued
+  // until Unpause() is called. Queued messages will not be sent until the
+  // channel is flushed.
+  void Pause();
+
+  // Unpause the channel. If |flush| is true the channel will be flushed as soon
+  // as it's unpaused (see Flush() below.) Otherwise you must explicitly call
+  // Flush() to flush messages which were queued while the channel was paused.
+  void Unpause(bool flush);
+
+  // Flush the channel. This sends any messages which were queued before calling
+  // Connect. Only useful if Unpause(false) was called previously.
+  void Flush();
 
   // Close the IPC::Channel.  This operation completes asynchronously, once the
   // background thread processes the command to close the channel.  It is ok to
@@ -134,34 +158,82 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
   void AddFilter(MessageFilter* filter);
   void RemoveFilter(MessageFilter* filter);
 
+  using GenericAssociatedInterfaceFactory =
+      base::Callback<void(mojo::ScopedInterfaceEndpointHandle)>;
+
+  // Adds a generic associated interface factory to bind incoming interface
+  // requests directly on the IO thread. MUST be called either before Init() or
+  // before the remote end of the Channel is able to send messages (e.g. before
+  // its process is launched.)
+  void AddGenericAssociatedInterfaceForIOThread(
+      const std::string& name,
+      const GenericAssociatedInterfaceFactory& factory);
+
+  template <typename Interface>
+  using AssociatedInterfaceFactory =
+      base::Callback<void(mojo::AssociatedInterfaceRequest<Interface>)>;
+
+  // Helper to bind an IO-thread associated interface factory, inferring the
+  // interface name from the callback argument's type. MUST be called before
+  // Init().
+  template <typename Interface>
+  void AddAssociatedInterfaceForIOThread(
+      const AssociatedInterfaceFactory<Interface>& factory) {
+    AddGenericAssociatedInterfaceForIOThread(
+        Interface::Name_,
+        base::Bind(&ChannelProxy::BindAssociatedInterfaceRequest<Interface>,
+                   factory));
+  }
+
+  // Gets the AssociatedGroup used to create new associated endpoints on this
+  // ChannelProxy.
+  mojo::AssociatedGroup* GetAssociatedGroup();
+
+  // Requests an associated interface from the remote endpoint.
+  void GetGenericRemoteAssociatedInterface(
+      const std::string& name,
+      mojo::ScopedInterfaceEndpointHandle handle);
+
+  // Template helper to request associated interfaces from the remote endpoint.
+  template <typename Interface>
+  void GetRemoteAssociatedInterface(
+      mojo::AssociatedInterfacePtr<Interface>* proxy) {
+    mojo::AssociatedInterfaceRequest<Interface> request =
+        mojo::MakeRequest(proxy, GetAssociatedGroup());
+    GetGenericRemoteAssociatedInterface(Interface::Name_, request.PassHandle());
+  }
+
 #if defined(ENABLE_IPC_FUZZER)
   void set_outgoing_message_filter(OutgoingMessageFilter* filter) {
     outgoing_message_filter_ = filter;
   }
 #endif
 
+  template <typename Interface>
+  using AssociatedInterfaceRetrievedCallback =
+      base::Callback<void(mojo::AssociatedInterfacePtr<Interface>)>;
+  // Creates an AssociatedInterfacePtr to |Interface| on the IO thread and
+  // passes it to |callback|, also invoked on the IO thread.
+  template <typename Interface>
+  void RetrieveAssociatedInterfaceOnIOThread(
+      const AssociatedInterfaceRetrievedCallback<Interface>& callback) {
+    context_->ipc_task_runner()->PostTask(
+        FROM_HERE, base::Bind(&Context::RetrieveAssociatedInterface<Interface>,
+                              context_, callback));
+  }
+
+  base::SingleThreadTaskRunner* ipc_task_runner() const {
+    return context_->ipc_task_runner();
+  }
+
   // Called to clear the pointer to the IPC task runner when it's going away.
   void ClearIPCTaskRunner();
-
-  // Endpoint overrides.
-  base::ProcessId GetPeerPID() const override;
-  void OnSetAttachmentBrokerEndpoint() override;
-
-#if defined(OS_POSIX) && !defined(OS_NACL_SFI)
-  // Calls through to the underlying channel's methods.
-  int GetClientFileDescriptor();
-  base::ScopedFD TakeClientFileDescriptor();
-#endif
 
  protected:
   class Context;
   // A subclass uses this constructor if it needs to add more information
   // to the internal state.
-  ChannelProxy(Context* context);
-
-  ChannelProxy(
-      Listener* listener,
-      const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner);
+  explicit ChannelProxy(Context* context);
 
   // Used internally to hold state that is referenced on the IPC thread.
   class Context : public base::RefCountedThreadSafe<Context>,
@@ -173,16 +245,16 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     base::SingleThreadTaskRunner* ipc_task_runner() const {
       return ipc_task_runner_.get();
     }
-    const std::string& channel_id() const { return channel_id_; }
-
     // Dispatches a message on the listener thread.
     void OnDispatchMessage(const Message& message);
 
     // Sends |message| from appropriate thread.
     void Send(Message* message);
 
-    // Indicates if the underlying channel's Send is thread-safe.
-    bool IsChannelSendThreadSafe() const;
+    // Requests a remote associated interface on the IPC thread.
+    void GetRemoteAssociatedInterface(
+        const std::string& name,
+        mojo::ScopedInterfaceEndpointHandle handle);
 
    protected:
     friend class base::RefCountedThreadSafe<Context>;
@@ -192,6 +264,9 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     bool OnMessageReceived(const Message& message) override;
     void OnChannelConnected(int32_t peer_pid) override;
     void OnChannelError() override;
+    void OnAssociatedInterfaceRequest(
+        const std::string& interface_name,
+        mojo::ScopedInterfaceEndpointHandle handle) override;
 
     // Like OnMessageReceived but doesn't try the filters.
     bool OnMessageReceivedNoFilter(const Message& message);
@@ -199,6 +274,10 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     // Gives the filters a chance at processing |message|.
     // Returns true if the message was processed, false otherwise.
     bool TryFilters(const Message& message);
+
+    void PauseChannel();
+    void UnpauseChannel(bool flush);
+    void FlushChannel();
 
     // Like Open and Close, but called on the IPC thread.
     virtual void OnChannelOpened();
@@ -214,27 +293,37 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     friend class IpcSecurityTestUtil;
 
     // Create the Channel
-    void CreateChannel(scoped_ptr<ChannelFactory> factory);
-
-    void set_attachment_broker_endpoint(bool is_endpoint) {
-      attachment_broker_endpoint_ = is_endpoint;
-      if (channel_)
-        channel_->SetAttachmentBrokerEndpoint(is_endpoint);
-    }
+    void CreateChannel(std::unique_ptr<ChannelFactory> factory);
 
     // Methods called on the IO thread.
-    void OnSendMessage(scoped_ptr<Message> message_ptr);
+    void OnSendMessage(std::unique_ptr<Message> message_ptr);
     void OnAddFilter();
     void OnRemoveFilter(MessageFilter* filter);
+    template <typename Interface>
+    void RetrieveAssociatedInterface(
+        const AssociatedInterfaceRetrievedCallback<Interface>& callback) {
+      mojo::AssociatedInterfacePtr<Interface> interface_ptr;
+      channel_->GetAssociatedInterfaceSupport()->GetRemoteAssociatedInterface(
+          &interface_ptr);
+      callback.Run(std::move(interface_ptr));
+    }
 
     // Methods called on the listener thread.
     void AddFilter(MessageFilter* filter);
     void OnDispatchConnected();
     void OnDispatchError();
     void OnDispatchBadMessage(const Message& message);
+    void OnDispatchAssociatedInterfaceRequest(
+        const std::string& interface_name,
+        mojo::ScopedInterfaceEndpointHandle handle);
 
-    void SendFromThisThread(Message* message);
     void ClearChannel();
+
+    mojo::AssociatedGroup* associated_group() { return &associated_group_; }
+
+    void AddGenericAssociatedInterfaceForIOThread(
+        const std::string& name,
+        const GenericAssociatedInterfaceFactory& factory);
 
     scoped_refptr<base::SingleThreadTaskRunner> listener_task_runner_;
     Listener* listener_;
@@ -247,20 +336,16 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     // But once it has been set, it must only be read or cleared on the IPC
     // thread.
     // One exception is the thread-safe send. See the class comment.
-    scoped_ptr<Channel> channel_;
-    std::string channel_id_;
+    std::unique_ptr<Channel> channel_;
     bool channel_connected_called_;
 
     // Lock for |channel_| value. This is only relevant in the context of
     // thread-safe send.
     base::Lock channel_lifetime_lock_;
-    // Indicates the thread-safe send availability. This is constant once
-    // |channel_| is set.
-    bool channel_send_thread_safe_;
 
     // Routes a given message to a proper subset of |filters_|, depending
     // on which message classes a filter might support.
-    scoped_ptr<MessageFilterRouter> message_filter_router_;
+    std::unique_ptr<MessageFilterRouter> message_filter_router_;
 
     // Holds filters between the AddFilter call on the listerner thread and the
     // IPC thread when they're added to filters_.
@@ -271,10 +356,16 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
     // Cached copy of the peer process ID. Set on IPC but read on both IPC and
     // listener threads.
     base::ProcessId peer_pid_;
+    base::Lock peer_pid_lock_;
 
-    // Whether this channel is used as an endpoint for sending and receiving
-    // brokerable attachment messages to/from the broker process.
-    bool attachment_broker_endpoint_;
+    mojo::AssociatedGroup associated_group_;
+
+    // Holds associated interface binders added by
+    // AddGenericAssociatedInterfaceForIOThread until the underlying channel has
+    // been initialized.
+    base::Lock pending_io_thread_interfaces_lock_;
+    std::vector<std::pair<std::string, GenericAssociatedInterfaceFactory>>
+        pending_io_thread_interfaces_;
   };
 
   Context* context() { return context_.get(); }
@@ -290,6 +381,15 @@ class IPC_EXPORT ChannelProxy : public Endpoint, public base::NonThreadSafe {
 
  private:
   friend class IpcSecurityTestUtil;
+
+  template <typename Interface>
+  static void BindAssociatedInterfaceRequest(
+      const AssociatedInterfaceFactory<Interface>& factory,
+      mojo::ScopedInterfaceEndpointHandle handle) {
+    mojo::AssociatedInterfaceRequest<Interface> request;
+    request.Bind(std::move(handle));
+    factory.Run(std::move(request));
+  }
 
   // Always called once immediately after Init.
   virtual void OnChannelInit();

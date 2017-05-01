@@ -35,7 +35,6 @@ class ResourceContext;
 namespace net {
 class IOBuffer;
 class URLRequestContextGetter;
-class SSLClientSocket;
 }
 
 namespace extensions {
@@ -117,8 +116,8 @@ class SocketAsyncApiFunction : public AsyncApiFunction {
   bool PrePrepare() override;
   bool Respond() override;
 
-  virtual scoped_ptr<SocketResourceManagerInterface>
-      CreateSocketResourceManager();
+  virtual std::unique_ptr<SocketResourceManagerInterface>
+  CreateSocketResourceManager();
 
   int AddSocket(Socket* socket);
   Socket* GetSocket(int api_resource_id);
@@ -138,11 +137,11 @@ class SocketAsyncApiFunction : public AsyncApiFunction {
                                   int socket_id);
   void OnFirewallHoleOpened(
       int socket_id,
-      scoped_ptr<AppFirewallHole, content::BrowserThread::DeleteOnUIThread>
+      std::unique_ptr<AppFirewallHole, content::BrowserThread::DeleteOnUIThread>
           hole);
 #endif  // OS_CHROMEOS
 
-  scoped_ptr<SocketResourceManagerInterface> manager_;
+  std::unique_ptr<SocketResourceManagerInterface> manager_;
 };
 
 class SocketExtensionWithDnsLookupFunction : public SocketAsyncApiFunction {
@@ -157,6 +156,8 @@ class SocketExtensionWithDnsLookupFunction : public SocketAsyncApiFunction {
   virtual void AfterDnsLookup(int lookup_result) = 0;
 
   net::AddressList addresses_;
+
+  std::unique_ptr<net::HostResolver::Request> request_;
 
  private:
   void OnDnsLookup(int resolve_result);
@@ -182,7 +183,7 @@ class SocketCreateFunction : public SocketAsyncApiFunction {
   FRIEND_TEST_ALL_PREFIXES(SocketUnitTest, Create);
   enum SocketType { kSocketTypeInvalid = -1, kSocketTypeTCP, kSocketTypeUDP };
 
-  scoped_ptr<api::socket::Create::Params> params_;
+  std::unique_ptr<api::socket::Create::Params> params_;
   SocketType socket_type_;
 };
 
@@ -272,7 +273,7 @@ class SocketListenFunction : public SocketAsyncApiFunction {
   void AsyncWorkStart() override;
 
  private:
-  scoped_ptr<api::socket::Listen::Params> params_;
+  std::unique_ptr<api::socket::Listen::Params> params_;
 };
 
 class SocketAcceptFunction : public SocketAsyncApiFunction {
@@ -289,9 +290,9 @@ class SocketAcceptFunction : public SocketAsyncApiFunction {
   void AsyncWorkStart() override;
 
  private:
-  void OnAccept(int result_code, scoped_ptr<net::TCPClientSocket> socket);
+  void OnAccept(int result_code, std::unique_ptr<net::TCPClientSocket> socket);
 
-  scoped_ptr<api::socket::Accept::Params> params_;
+  std::unique_ptr<api::socket::Accept::Params> params_;
 };
 
 class SocketReadFunction : public SocketAsyncApiFunction {
@@ -306,10 +307,12 @@ class SocketReadFunction : public SocketAsyncApiFunction {
   // AsyncApiFunction:
   bool Prepare() override;
   void AsyncWorkStart() override;
-  void OnCompleted(int result, scoped_refptr<net::IOBuffer> io_buffer);
+  void OnCompleted(int result,
+                   scoped_refptr<net::IOBuffer> io_buffer,
+                   bool socket_destroying);
 
  private:
-  scoped_ptr<api::socket::Read::Params> params_;
+  std::unique_ptr<api::socket::Read::Params> params_;
 };
 
 class SocketWriteFunction : public SocketAsyncApiFunction {
@@ -346,11 +349,12 @@ class SocketRecvFromFunction : public SocketAsyncApiFunction {
   void AsyncWorkStart() override;
   void OnCompleted(int result,
                    scoped_refptr<net::IOBuffer> io_buffer,
+                   bool socket_destroying,
                    const std::string& address,
                    uint16_t port);
 
  private:
-  scoped_ptr<api::socket::RecvFrom::Params> params_;
+  std::unique_ptr<api::socket::RecvFrom::Params> params_;
 };
 
 class SocketSendToFunction : public SocketExtensionWithDnsLookupFunction {
@@ -394,7 +398,7 @@ class SocketSetKeepAliveFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::SetKeepAlive::Params> params_;
+  std::unique_ptr<api::socket::SetKeepAlive::Params> params_;
 };
 
 class SocketSetNoDelayFunction : public SocketAsyncApiFunction {
@@ -411,7 +415,7 @@ class SocketSetNoDelayFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::SetNoDelay::Params> params_;
+  std::unique_ptr<api::socket::SetNoDelay::Params> params_;
 };
 
 class SocketGetInfoFunction : public SocketAsyncApiFunction {
@@ -428,7 +432,7 @@ class SocketGetInfoFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::GetInfo::Params> params_;
+  std::unique_ptr<api::socket::GetInfo::Params> params_;
 };
 
 class SocketGetNetworkListFunction : public AsyncExtensionFunction {
@@ -459,7 +463,7 @@ class SocketJoinGroupFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::JoinGroup::Params> params_;
+  std::unique_ptr<api::socket::JoinGroup::Params> params_;
 };
 
 class SocketLeaveGroupFunction : public SocketAsyncApiFunction {
@@ -476,7 +480,7 @@ class SocketLeaveGroupFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::LeaveGroup::Params> params_;
+  std::unique_ptr<api::socket::LeaveGroup::Params> params_;
 };
 
 class SocketSetMulticastTimeToLiveFunction : public SocketAsyncApiFunction {
@@ -494,7 +498,7 @@ class SocketSetMulticastTimeToLiveFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::SetMulticastTimeToLive::Params> params_;
+  std::unique_ptr<api::socket::SetMulticastTimeToLive::Params> params_;
 };
 
 class SocketSetMulticastLoopbackModeFunction : public SocketAsyncApiFunction {
@@ -512,7 +516,7 @@ class SocketSetMulticastLoopbackModeFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::SetMulticastLoopbackMode::Params> params_;
+  std::unique_ptr<api::socket::SetMulticastLoopbackMode::Params> params_;
 };
 
 class SocketGetJoinedGroupsFunction : public SocketAsyncApiFunction {
@@ -530,7 +534,7 @@ class SocketGetJoinedGroupsFunction : public SocketAsyncApiFunction {
   void Work() override;
 
  private:
-  scoped_ptr<api::socket::GetJoinedGroups::Params> params_;
+  std::unique_ptr<api::socket::GetJoinedGroups::Params> params_;
 };
 
 class SocketSecureFunction : public SocketAsyncApiFunction {
@@ -547,9 +551,9 @@ class SocketSecureFunction : public SocketAsyncApiFunction {
 
  private:
   // Callback from TLSSocket::UpgradeSocketToTLS().
-  void TlsConnectDone(scoped_ptr<TLSSocket> socket, int result);
+  void TlsConnectDone(std::unique_ptr<TLSSocket> socket, int result);
 
-  scoped_ptr<api::socket::Secure::Params> params_;
+  std::unique_ptr<api::socket::Secure::Params> params_;
   scoped_refptr<net::URLRequestContextGetter> url_request_getter_;
 
   DISALLOW_COPY_AND_ASSIGN(SocketSecureFunction);

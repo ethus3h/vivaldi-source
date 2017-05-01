@@ -11,9 +11,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,6 +26,7 @@
 #include "chrome/grit/locale_settings.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/favicon_base/select_favicon_frames.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -56,6 +55,7 @@
 
 #if defined(OS_WIN)
 #include "base/win/shortcut.h"
+#include "base/win/windows_version.h"
 #endif  // defined(OS_WIN)
 
 namespace {
@@ -68,10 +68,6 @@ class AppInfoView : public views::View {
   AppInfoView(const base::string16& title,
               const base::string16& description,
               const gfx::ImageFamily& icon);
-
-  // Updates the title/description of the web app.
-  void UpdateText(const base::string16& title,
-                  const base::string16& description);
 
   // Updates the icon of the web app.
   void UpdateIcon(const gfx::ImageFamily& image);
@@ -170,14 +166,6 @@ void AppInfoView::SetupLayout() {
   }
 }
 
-void AppInfoView::UpdateText(const base::string16& title,
-                             const base::string16& description) {
-  title_->SetText(title);
-  PrepareDescriptionLabel(description);
-
-  SetupLayout();
-}
-
 void AppInfoView::UpdateIcon(const gfx::ImageFamily& image) {
   // Get an icon at the desired preview size (scaling from a larger image if
   // none is available at that exact size).
@@ -260,6 +248,7 @@ void CreateApplicationShortcutView::InitControls(DialogLayout dialog_layout) {
   create_shortcuts_label_ = new views::Label(
       l10n_util::GetStringUTF16(IDS_CREATE_SHORTCUTS_LABEL));
   create_shortcuts_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  create_shortcuts_label_->SetMultiLine(true);
 
   desktop_check_box_ = AddCheckbox(
       l10n_util::GetStringUTF16(IDS_CREATE_SHORTCUTS_DESKTOP_CHKBOX),
@@ -303,7 +292,7 @@ void CreateApplicationShortcutView::InitControls(DialogLayout dialog_layout) {
 
   static const int kTableColumnSetId = 1;
   column_set = layout->AddColumnSet(kTableColumnSetId);
-  column_set->AddPaddingColumn(0, views::kPanelHorizIndentation);
+  column_set->AddPaddingColumn(0, views::kCheckboxIndent);
   column_set->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
                         100.0f, views::GridLayout::USE_PREF, 0, 0);
 
@@ -556,7 +545,7 @@ bool CreateChromeApplicationShortcutView::Cancel() {
 }
 
 void CreateChromeApplicationShortcutView::OnAppInfoLoaded(
-    scoped_ptr<web_app::ShortcutInfo> shortcut_info,
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info,
     const extensions::FileHandlersInfo& file_handlers_info) {
   shortcut_info_ = std::move(shortcut_info);
   file_handlers_info_ = file_handlers_info;

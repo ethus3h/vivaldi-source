@@ -14,12 +14,11 @@
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "ui/base/layout.h"
+#include "url/gurl.h"
 #include "url/url_util.h"
 
-class GURL;
-
 namespace base {
-class RefCountedStaticMemory;
+class RefCountedMemory;
 }
 
 namespace IPC {
@@ -34,17 +33,19 @@ namespace gpu {
 struct GPUInfo;
 }
 
-namespace sandbox {
-class TargetPolicy;
+namespace media {
+class MediaClientAndroid;
 }
 
 namespace content {
 
 class ContentBrowserClient;
 class ContentClient;
-class ContentPluginClient;
+class ContentGpuClient;
 class ContentRendererClient;
 class ContentUtilityClient;
+class OriginTrialPolicy;
+struct CdmInfo;
 struct PepperPluginInfo;
 
 // Setter and getter for the client.  The client should be set early, before any
@@ -72,7 +73,7 @@ class CONTENT_EXPORT ContentClient {
   virtual ~ContentClient();
 
   ContentBrowserClient* browser() { return browser_; }
-  ContentPluginClient* plugin() { return plugin_; }
+  ContentGpuClient* gpu() { return gpu_; }
   ContentRendererClient* renderer() { return renderer_; }
   ContentUtilityClient* utility() { return utility_; }
 
@@ -86,11 +87,32 @@ class CONTENT_EXPORT ContentClient {
   virtual void AddPepperPlugins(
       std::vector<content::PepperPluginInfo>* plugins) {}
 
-  // Gives the embedder a chance to register its own standard and saveable
-  // url schemes early on in the startup sequence.
-  virtual void AddAdditionalSchemes(
-      std::vector<url::SchemeWithType>* standard_schemes,
-      std::vector<std::string>* savable_schemes) {}
+  // Gives the embedder a chance to register the content decryption
+  // modules it supports.
+  virtual void AddContentDecryptionModules(
+      std::vector<content::CdmInfo>* cdms) {}
+
+  // Gives the embedder a chance to register its own schemes early in the
+  // startup sequence.
+  struct Schemes {
+    Schemes();
+    ~Schemes();
+    std::vector<std::string> standard_schemes;
+    std::vector<std::string> referrer_schemes;
+    std::vector<std::string> savable_schemes;
+    // Additional schemes that should be allowed to register service workers.
+    // Only secure and trustworthy schemes should be added.
+    std::vector<std::string> service_worker_schemes;
+    // For the following three, see the documentation in WebSecurityPolicy.
+    std::vector<std::string> local_schemes;
+    std::vector<std::string> no_access_schemes;
+    std::vector<std::string> cors_enabled_schemes;
+    // See https://www.w3.org/TR/powerful-features/#is-origin-trustworthy.
+    std::vector<std::string> secure_schemes;
+    std::vector<GURL> secure_origins;
+  };
+
+  virtual void AddAdditionalSchemes(Schemes* schemes) {}
 
   // Returns whether the given message should be sent in a swapped out renderer.
   virtual bool CanSendWhileSwappedOut(const IPC::Message* message);
@@ -112,7 +134,7 @@ class CONTENT_EXPORT ContentClient {
       ui::ScaleFactor scale_factor) const;
 
   // Returns the raw bytes of a scale independent data resource.
-  virtual base::RefCountedStaticMemory* GetDataResourceBytes(
+  virtual base::RefCountedMemory* GetDataResourceBytes(
       int resource_id) const;
 
   // Returns a native image given its id.
@@ -122,7 +144,7 @@ class CONTENT_EXPORT ContentClient {
   // doesn't know about because they're from the embedder.
   virtual std::string GetProcessTypeNameInEnglish(int type);
 
-#if defined(OS_MACOSX) && !defined(OS_IOS)
+#if defined(OS_MACOSX)
   // Allows the embedder to define a new |sandbox_type| by mapping it to the
   // resource ID corresponding to the sandbox profile to use. The legal values
   // for |sandbox_type| are defined by the embedder and should start with
@@ -135,16 +157,9 @@ class CONTENT_EXPORT ContentClient {
       int* sandbox_profile_resource_id) const;
 #endif
 
-  // Gives the embedder a chance to register additional schemes and origins
-  // that need to be considered trustworthy.
-  // See https://www.w3.org/TR/powerful-features/#is-origin-trustworthy.
-  virtual void AddSecureSchemesAndOrigins(std::set<std::string>* schemes,
-                                          std::set<GURL>* origins) {}
-
-  // Gives the embedder a chance to register additional schemes that
-  // should be allowed to register service workers. Only secure and
-  // trustworthy schemes should be added.
-  virtual void AddServiceWorkerSchemes(std::set<std::string>* schemes) {}
+  // Returns whether or not V8 script extensions should be allowed for a
+  // service worker.
+  virtual bool AllowScriptExtensionForServiceWorker(const GURL& script_url);
 
   // Returns true if the embedder wishes to supplement the site isolation policy
   // used by the content layer. Returning true enables the infrastructure for
@@ -153,14 +168,28 @@ class CONTENT_EXPORT ContentClient {
   // model decisions.
   virtual bool IsSupplementarySiteIsolationModeEnabled();
 
+  // Returns the origin trial policy, or nullptr if origin trials are not
+  // supported by the embedder.
+  virtual OriginTrialPolicy* GetOriginTrialPolicy();
+
+#if defined(OS_ANDROID)
+  // Returns true for clients like Android WebView that uses synchronous
+  // compositor. Note setting this to true will permit synchronous IPCs from
+  // the browser UI thread.
+  virtual bool UsingSynchronousCompositing();
+
+  // Returns the MediaClientAndroid to be used by media code on Android.
+  virtual media::MediaClientAndroid* GetMediaClientAndroid();
+#endif  // OS_ANDROID
+
  private:
   friend class ContentClientInitializer;  // To set these pointers.
   friend class InternalTestInitializer;
 
   // The embedder API for participating in browser logic.
   ContentBrowserClient* browser_;
-  // The embedder API for participating in plugin logic.
-  ContentPluginClient* plugin_;
+  // The embedder API for participating in gpu logic.
+  ContentGpuClient* gpu_;
   // The embedder API for participating in renderer logic.
   ContentRendererClient* renderer_;
   // The embedder API for participating in utility logic.

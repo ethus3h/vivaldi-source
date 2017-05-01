@@ -19,10 +19,10 @@
 #include "ui/base/ime/chromeos/input_method_descriptor.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/chromeos/mock_ime_candidate_window_handler.h"
-#include "ui/base/ime/chromeos/mock_ime_input_context_handler.h"
 #include "ui/base/ime/composition_text.h"
 #include "ui/base/ime/ime_bridge.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
+#include "ui/base/ime/mock_ime_input_context_handler.h"
 #include "ui/base/ime/text_input_flags.h"
 #include "ui/chromeos/ime/input_method_menu_item.h"
 #include "ui/chromeos/ime/input_method_menu_manager.h"
@@ -157,9 +157,9 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
   InputMethodManager::Get()->GetActiveIMEState()->ChangeInputMethod(
       kIdentityIMEID, false /* show_message */);
 
-  scoped_ptr<MockIMEInputContextHandler> mock_input_context(
-      new MockIMEInputContextHandler());
-  scoped_ptr<MockIMECandidateWindowHandler> mock_candidate_window(
+  std::unique_ptr<ui::MockIMEInputContextHandler> mock_input_context(
+      new ui::MockIMEInputContextHandler());
+  std::unique_ptr<MockIMECandidateWindowHandler> mock_candidate_window(
       new MockIMECandidateWindowHandler());
 
   ui::IMEBridge::Get()->SetInputContextHandler(mock_input_context.get());
@@ -240,9 +240,9 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
   InputMethodManager::Get()->GetActiveIMEState()->ChangeInputMethod(
       kAPIArgumentIMEID, false /* show_message */);
 
-  scoped_ptr<MockIMEInputContextHandler> mock_input_context(
-      new MockIMEInputContextHandler());
-  scoped_ptr<MockIMECandidateWindowHandler> mock_candidate_window(
+  std::unique_ptr<ui::MockIMEInputContextHandler> mock_input_context(
+      new ui::MockIMEInputContextHandler());
+  std::unique_ptr<MockIMECandidateWindowHandler> mock_candidate_window(
       new MockIMECandidateWindowHandler());
 
   ui::IMEBridge::Get()->SetInputContextHandler(mock_input_context.get());

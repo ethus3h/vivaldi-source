@@ -13,8 +13,6 @@ template <typename T>
 struct DefaultSingletonTraits;
 }
 
-class Profile;
-
 namespace extensions {
 
 class ExtensionGarbageCollector;
@@ -27,7 +25,7 @@ class ExtensionGarbageCollectorFactory
 
   static ExtensionGarbageCollectorFactory* GetInstance();
 
-  static scoped_ptr<KeyedService> BuildInstanceFor(
+  static std::unique_ptr<KeyedService> BuildInstanceFor(
       content::BrowserContext* context);
 
  private:

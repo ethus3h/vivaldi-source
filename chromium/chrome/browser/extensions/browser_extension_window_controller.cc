@@ -15,6 +15,8 @@
 #include "components/sessions/core/session_id.h"
 #include "extensions/common/extension.h"
 
+#include "app/vivaldi_constants.h"
+
 BrowserExtensionWindowController::BrowserExtensionWindowController(
     Browser* browser)
     : extensions::WindowController(browser->window(), browser->profile()),
@@ -42,18 +44,18 @@ std::string BrowserExtensionWindowController::GetWindowTypeText() const {
   return keys::kWindowTypeValueNormal;
 }
 
-base::DictionaryValue*
+std::unique_ptr<base::DictionaryValue>
 BrowserExtensionWindowController::CreateWindowValue() const {
-  base::DictionaryValue* result =
+  std::unique_ptr<base::DictionaryValue> result =
       extensions::WindowController::CreateWindowValue();
-  result->SetString(keys::kWindowExtDataKey, browser_->ext_data());
+  result->SetString(vivaldi::kWindowExtDataKey, browser_->ext_data());
   return result;
 }
 
-base::DictionaryValue*
+std::unique_ptr<base::DictionaryValue>
 BrowserExtensionWindowController::CreateWindowValueWithTabs(
     const extensions::Extension* extension) const {
-  base::DictionaryValue* result = CreateWindowValue();
+  std::unique_ptr<base::DictionaryValue> result = CreateWindowValue();
 
   result->Set(keys::kTabsKey,
               extensions::ExtensionTabUtil::CreateTabList(browser_, extension));
@@ -61,12 +63,13 @@ BrowserExtensionWindowController::CreateWindowValueWithTabs(
   return result;
 }
 
-base::DictionaryValue* BrowserExtensionWindowController::CreateTabValue(
-    const extensions::Extension* extension, int tab_index) const {
+std::unique_ptr<extensions::api::tabs::Tab>
+BrowserExtensionWindowController::CreateTabObject(
+    const extensions::Extension* extension,
+    int tab_index) const {
   TabStripModel* tab_strip = browser_->tab_strip_model();
-  base::DictionaryValue* result = extensions::ExtensionTabUtil::CreateTabValue(
+  return extensions::ExtensionTabUtil::CreateTabObject(
       tab_strip->GetWebContentsAt(tab_index), tab_strip, tab_index);
-  return result;
 }
 
 bool BrowserExtensionWindowController::CanClose(Reason* reason) const {

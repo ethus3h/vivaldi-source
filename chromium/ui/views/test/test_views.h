@@ -5,8 +5,9 @@
 #ifndef UI_VIEWS_TEST_TEST_VIEWS_H_
 #define UI_VIEWS_TEST_TEST_VIEWS_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/view.h"
 
@@ -15,7 +16,7 @@ namespace views {
 // A view that requests a set amount of space.
 class StaticSizedView : public View {
  public:
-  explicit StaticSizedView(const gfx::Size& size);
+  explicit StaticSizedView(const gfx::Size& preferred_size = gfx::Size());
   ~StaticSizedView() override;
 
   void set_minimum_size(const gfx::Size& minimum_size) {
@@ -32,7 +33,7 @@ class StaticSizedView : public View {
   gfx::Size GetMaximumSize() const override;
 
  private:
-  gfx::Size size_;
+  gfx::Size preferred_size_;
   gfx::Size minimum_size_;
   gfx::Size maximum_size_;
 
@@ -45,7 +46,7 @@ class ProportionallySizedView : public View {
   explicit ProportionallySizedView(int factor);
   ~ProportionallySizedView() override;
 
-  void set_preferred_width(int width) { preferred_width_ = width; }
+  void SetPreferredWidth(int width);
 
   int GetHeightForWidth(int w) const override;
   gfx::Size GetPreferredSize() const override;

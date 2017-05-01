@@ -15,7 +15,7 @@
 namespace content {
 
 bool RenderFrameHostDelegate::OnMessageReceived(
-    RenderFrameHost* render_view_host,
+    RenderFrameHostImpl* render_frame_host,
     const IPC::Message& message) {
   return false;
 }
@@ -24,7 +24,7 @@ const GURL& RenderFrameHostDelegate::GetMainFrameLastCommittedURL() const {
   return GURL::EmptyGURL();
 }
 
-bool RenderFrameHostDelegate::AddMessageToConsole(
+bool RenderFrameHostDelegate::DidAddMessageToConsole(
     int32_t level,
     const base::string16& message,
     int32_t line_no,
@@ -45,9 +45,8 @@ void RenderFrameHostDelegate::RequestMediaAccessPermission(
     const MediaResponseCallback& callback) {
   LOG(ERROR) << "RenderFrameHostDelegate::RequestMediaAccessPermission: "
              << "Not supported.";
-  callback.Run(MediaStreamDevices(),
-               MEDIA_DEVICE_NOT_SUPPORTED,
-               scoped_ptr<MediaStreamUI>());
+  callback.Run(MediaStreamDevices(), MEDIA_DEVICE_NOT_SUPPORTED,
+               std::unique_ptr<MediaStreamUI>());
 }
 
 bool RenderFrameHostDelegate::CheckMediaAccessPermission(
@@ -68,12 +67,18 @@ RenderFrameHost* RenderFrameHostDelegate::GetGuestByInstanceID(
   return NULL;
 }
 
-GeolocationServiceContext*
+device::GeolocationServiceContext*
 RenderFrameHostDelegate::GetGeolocationServiceContext() {
-  return NULL;
+  return nullptr;
 }
 
-WakeLockServiceContext* RenderFrameHostDelegate::GetWakeLockServiceContext() {
+device::WakeLockServiceContext*
+RenderFrameHostDelegate::GetWakeLockServiceContext() {
+  return nullptr;
+}
+
+ScreenOrientationProvider*
+RenderFrameHostDelegate::GetScreenOrientationProvider() {
   return nullptr;
 }
 
@@ -83,16 +88,9 @@ bool RenderFrameHostDelegate::ShouldRouteMessageEvent(
   return false;
 }
 
-scoped_ptr<WebUIImpl> RenderFrameHostDelegate::CreateWebUIForRenderFrameHost(
-    const GURL& url) {
+std::unique_ptr<WebUIImpl>
+RenderFrameHostDelegate::CreateWebUIForRenderFrameHost(const GURL& url) {
   return nullptr;
 }
-
-#if defined(OS_WIN)
-gfx::NativeViewAccessible
-    RenderFrameHostDelegate::GetParentNativeViewAccessible() {
-  return NULL;
-}
-#endif  // defined(OS_WIN)
 
 }  // namespace content

@@ -72,9 +72,11 @@ void SetUpFontconfig() {
   // - FcConfigReference() increments a config's refcount.
   // - FcConfigDestroy() decrements a config's refcount, deallocating the
   //   config when the count reaches 0.
-  // - FcConfigSetCurrent() calls FcConfigDestroy() on the old config, but
-  //   interestingly does not call FcConfigReference() on the new config.
-  CHECK(FcConfigSetCurrent(FcConfigCreate()));
+  // - FcConfigSetCurrent() calls FcConfigDestroy() on the old config, and
+  //   calls FcConfigReference() on the new config.
+  FcConfig* config = FcConfigCreate();
+  FcConfigBuildFonts(config);
+  CHECK(FcConfigSetCurrent(config));
 }
 
 void TearDownFontconfig() {
@@ -85,7 +87,7 @@ bool LoadFontIntoFontconfig(const base::FilePath& path) {
   if (!base::PathExists(path)) {
     LOG(ERROR) << "You are missing " << path.value() << ". Try re-running "
                << "build/install-build-deps.sh. Also see "
-               << "http://code.google.com/p/chromium/wiki/LayoutTestsLinux";
+               << "https://chromium.googlesource.com/chromium/src/+/master/docs/layout_tests_linux.md";
     return false;
   }
 

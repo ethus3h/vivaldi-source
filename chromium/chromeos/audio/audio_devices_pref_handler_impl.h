@@ -5,14 +5,15 @@
 #ifndef CHROMEOS_AUDIO_AUDIO_DEVICES_PREF_HANDLER_IMPL_H_
 #define CHROMEOS_AUDIO_AUDIO_DEVICES_PREF_HANDLER_IMPL_H_
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "base/prefs/pref_change_registrar.h"
 #include "base/values.h"
 #include "chromeos/audio/audio_devices_pref_handler.h"
 #include "chromeos/chromeos_export.h"
+#include "components/prefs/pref_change_registrar.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -35,6 +36,13 @@ class CHROMEOS_EXPORT AudioDevicesPrefHandlerImpl
   bool GetMuteValue(const AudioDevice& device) override;
   void SetMuteValue(const AudioDevice& device, bool mute_on) override;
 
+  void SetDeviceActive(const AudioDevice& device,
+                       bool active,
+                       bool activate_by_user) override;
+  bool GetDeviceActive(const AudioDevice& device,
+                       bool* active,
+                       bool* activate_by_user) override;
+
   bool GetAudioOutputAllowedValue() override;
 
   void AddAudioPrefObserver(AudioPrefObserver* observer) override;
@@ -50,29 +58,51 @@ class CHROMEOS_EXPORT AudioDevicesPrefHandlerImpl
   // Initializes the observers for the policy prefs.
   void InitializePrefObservers();
 
-  // Update and save methods for the mute preferences for all devices.
-  void UpdateDevicesMutePref();
+  // Load and save methods for the mute preferences for all devices.
+  void LoadDevicesMutePref();
   void SaveDevicesMutePref();
 
-  // Update and save methods for the volume preferences for all devices.
-  void UpdateDevicesVolumePref();
+  // Load and save methods for the volume preferences for all devices.
+  void LoadDevicesVolumePref();
   void SaveDevicesVolumePref();
+
+  // Load and save methods for the active state for all devices.
+  void LoadDevicesStatePref();
+  void SaveDevicesStatePref();
 
   double GetVolumeGainPrefValue(const AudioDevice& device);
   double GetDeviceDefaultOutputVolume(const AudioDevice& device);
 
-  // Methods to migrate the mute and volume settings for a device from the
-  // previous global pref value to the new per device pref value for the
-  // current active device. If a previous global setting doesn't exist, we'll
-  // use default values of mute = off and volume = 75%.
-  void MigrateDeviceMuteSettings(const std::string& active_device);
-  void MigrateDeviceVolumeSettings(const std::string& active_device);
+  // Migrates devices state pref for an audio device. Device settings are
+  // saved under device stable device ID - this method migrates device state
+  // for a device that is saved under key derived from v1 stable device ID to
+  // |device_key|. Note that |device_key| should be the key derived from
+  // |device|'s v2 stable device ID.
+  bool MigrateDevicesStatePref(const std::string& device_key,
+                               const AudioDevice& device);
+
+  // Methods to migrate the mute and volume settings for an audio device.
+  // Migration is done in the folowing way:
+  //   1. If there is a setting for the device under |device_key|, do nothing.
+  //      (Note that |device_key| is expected to be the key derived from
+  //       |device's| v2 stable device ID).
+  //   2. If there is a setting for the device under the key derived from
+  //      |device|'s v1 stable device ID, move the value to |device_key|.
+  //   3. If a previous global pref value exists, move it to the per device
+  //      setting (under |device_key|).
+  //   4. If a previous global setting is not set, use default values of
+  //      mute = off and volume = 75%.
+  void MigrateDeviceMuteSettings(const std::string& device_key,
+                                 const AudioDevice& device);
+  void MigrateDeviceVolumeGainSettings(const std::string& device_key,
+                                       const AudioDevice& device);
 
   // Notifies the AudioPrefObserver for audio policy pref changes.
   void NotifyAudioPolicyChange();
 
-  scoped_ptr<base::DictionaryValue> device_mute_settings_;
-  scoped_ptr<base::DictionaryValue> device_volume_settings_;
+  std::unique_ptr<base::DictionaryValue> device_mute_settings_;
+  std::unique_ptr<base::DictionaryValue> device_volume_settings_;
+  std::unique_ptr<base::DictionaryValue> device_state_settings_;
 
   PrefService* local_state_;  // not owned
 

@@ -49,10 +49,8 @@ class HostPairingScreen
   void CommitContextChanges();
 
   // Overridden from BaseScreen:
-  void PrepareToShow() override;
   void Show() override;
   void Hide() override;
-  std::string GetName() const override;
 
   // pairing_chromeos::HostPairingController::Observer:
   void PairingStageChanged(Stage new_stage) override;
@@ -86,7 +84,7 @@ class HostPairingScreen
   // Controller performing pairing. Owned by the wizard controller.
   pairing_chromeos::HostPairingController* remora_controller_;
 
-  scoped_ptr<EnterpriseEnrollmentHelper> enrollment_helper_;
+  std::unique_ptr<EnterpriseEnrollmentHelper> enrollment_helper_;
 
   // Current stage of pairing process.
   Stage current_stage_;

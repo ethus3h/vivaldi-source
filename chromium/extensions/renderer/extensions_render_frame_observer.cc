@@ -40,21 +40,22 @@ StackTrace GetStackTraceFromMessage(base::string16* message,
 
   if (message->find(base::UTF8ToUTF16(kStackFrameDelimiter)) !=
           base::string16::npos) {
-    base::SplitStringUsingSubstr(*message,
-                                 base::UTF8ToUTF16(kStackFrameDelimiter),
-                                 &pieces);
+    pieces = base::SplitStringUsingSubstr(
+        *message, base::UTF8ToUTF16(kStackFrameDelimiter),
+        base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     *message = pieces[0];
     index = 1;
   } else if (!stack_trace.empty()) {
-    base::SplitStringUsingSubstr(stack_trace,
-                                 base::UTF8ToUTF16(kStackFrameDelimiter),
-                                 &pieces);
+    pieces = base::SplitStringUsingSubstr(
+        stack_trace, base::UTF8ToUTF16(kStackFrameDelimiter),
+        base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   }
 
   // If we got a stack trace, parse each frame from the text.
   if (index < pieces.size()) {
     for (; index < pieces.size(); ++index) {
-      scoped_ptr<StackFrame> frame = StackFrame::CreateFromText(pieces[index]);
+      std::unique_ptr<StackFrame> frame =
+          StackFrame::CreateFromText(pieces[index]);
       if (frame.get())
         result.push_back(*frame);
     }
@@ -85,7 +86,7 @@ void ExtensionsRenderFrameObserver::DetailedConsoleMessageAdded(
     const base::string16& message,
     const base::string16& source,
     const base::string16& stack_trace_string,
-    int32_t line_number,
+    uint32_t line_number,
     int32_t severity_level) {
   base::string16 trimmed_message = message;
   StackTrace stack_trace = GetStackTraceFromMessage(
@@ -95,6 +96,10 @@ void ExtensionsRenderFrameObserver::DetailedConsoleMessageAdded(
       line_number);
   Send(new ExtensionHostMsg_DetailedConsoleMessageAdded(
       routing_id(), trimmed_message, source, stack_trace, severity_level));
+}
+
+void ExtensionsRenderFrameObserver::OnDestruct() {
+  delete this;
 }
 
 }  // namespace extensions

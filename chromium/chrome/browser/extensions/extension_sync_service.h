@@ -14,9 +14,9 @@
 #include "base/version.h"
 #include "chrome/browser/extensions/sync_bundle.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/sync/model/syncable_service.h"
 #include "extensions/browser/extension_prefs_observer.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "sync/api/syncable_service.h"
 
 class ExtensionService;
 class Profile;
@@ -57,8 +57,8 @@ class ExtensionSyncService : public syncer::SyncableService,
   syncer::SyncMergeResult MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
-      scoped_ptr<syncer::SyncChangeProcessor> sync_processor,
-      scoped_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
+      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
+      std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
   void StopSyncing(syncer::ModelType type) override;
   syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
   syncer::SyncError ProcessSyncChanges(
@@ -111,17 +111,13 @@ class ExtensionSyncService : public syncer::SyncableService,
       const extensions::ExtensionSyncData& extension_sync_data);
 
   // Collects the ExtensionSyncData for all installed apps or extensions.
-  // If |include_everything| is true, includes all installed extensions,
-  // otherwise only those that have the NeedsSync pref set, i.e. which have
-  // local changes that need to be pushed.
   std::vector<extensions::ExtensionSyncData> GetLocalSyncDataList(
-      syncer::ModelType type, bool include_everything) const;
+      syncer::ModelType type) const;
 
   // Helper for GetLocalSyncDataList.
   void FillSyncDataList(
       const extensions::ExtensionSet& extensions,
       syncer::ModelType type,
-      bool include_everything,
       std::vector<extensions::ExtensionSyncData>* sync_data_list) const;
 
   // Returns whether the given extension should be synced by this class.

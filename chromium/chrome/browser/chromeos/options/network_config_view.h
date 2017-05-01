@@ -14,13 +14,8 @@
 #include "ui/views/controls/button/button.h"  // views::ButtonListener
 #include "ui/views/window/dialog_delegate.h"
 
-namespace gfx {
-class ImageSkia;
-}
-
 namespace views {
 class ImageView;
-class LabelButton;
 }
 
 namespace chromeos {
@@ -45,10 +40,16 @@ class NetworkConfigView : public views::DialogDelegateView,
      virtual ~Delegate() {}
   };
 
-  // Shows a network connection dialog if none is currently visible.
-  static void Show(const std::string& service_path, gfx::NativeWindow parent);
+  // Shows a network connection dialog if none is currently visible. The dialog
+  // will be a child of |parent| (e.g. the webui settings window) which ensures
+  // it appears on the display the user is looking at. If |parent| is null and
+  // no fallback parent can be found then the dialog will be placed on the
+  // primary display.
+  static void ShowForNetworkId(const std::string& network_id,
+                               gfx::NativeWindow parent);
+
   // Shows a dialog to configure a new network. |type| must be a valid Shill
-  // 'Type' property value.
+  // 'Type' property value. See above regarding |parent|.
   static void ShowForType(const std::string& type, gfx::NativeWindow parent);
 
   // Returns corresponding native window.
@@ -67,7 +68,7 @@ class NetworkConfigView : public views::DialogDelegateView,
   ui::ModalType GetModalType() const override;
 
   // views::View overrides.
-  void GetAccessibleState(ui::AXViewState* state) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
   // views::ButtonListener overrides.
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
@@ -105,7 +106,7 @@ class NetworkConfigView : public views::DialogDelegateView,
   Delegate* delegate_;
 
   // Button in lower-left corner, may be null or hidden.
-  views::LabelButton* advanced_button_;
+  views::View* advanced_button_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkConfigView);
 };
@@ -161,25 +162,16 @@ class ChildNetworkConfigView : public views::View {
 // control.
 class ControlledSettingIndicatorView : public views::View {
  public:
-  ControlledSettingIndicatorView();
   explicit ControlledSettingIndicatorView(const NetworkPropertyUIData& ui_data);
   ~ControlledSettingIndicatorView() override;
-
-  // Updates the view based on |ui_data|.
-  void Update(const NetworkPropertyUIData& ui_data);
 
  protected:
   // views::View:
   gfx::Size GetPreferredSize() const override;
-  void Layout() override;
 
  private:
-  // Initializes the view.
-  void Init();
-
   bool managed_;
   views::ImageView* image_view_;
-  const gfx::ImageSkia* image_;
 
   DISALLOW_COPY_AND_ASSIGN(ControlledSettingIndicatorView);
 };

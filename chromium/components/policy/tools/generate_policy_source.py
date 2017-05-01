@@ -39,23 +39,23 @@ class PolicyDetails:
   # TODO(joaodasilva): refactor the 'dict' type into a more generic 'json' type
   # that can also be used to represent lists of other JSON objects.
   TYPE_MAP = {
-    'dict':             ('TYPE_DICTIONARY',   'string',       'String',
+    'dict':             ('Type::DICTIONARY',  'string',       'String',
                         'string'),
     'external':         ('TYPE_EXTERNAL',     'string',       'String',
                         'invalid'),
-    'int':              ('TYPE_INTEGER',      'int64',        'Integer',
+    'int':              ('Type::INTEGER',     'int64',        'Integer',
                         'integer'),
-    'int-enum':         ('TYPE_INTEGER',      'int64',        'Integer',
+    'int-enum':         ('Type::INTEGER',     'int64',        'Integer',
                         'choice'),
-    'list':             ('TYPE_LIST',         'StringList',   'StringList',
+    'list':             ('Type::LIST',        'StringList',   'StringList',
                         'string'),
-    'main':             ('TYPE_BOOLEAN',      'bool',         'Boolean',
+    'main':             ('Type::BOOLEAN',     'bool',         'Boolean',
                         'bool'),
-    'string':           ('TYPE_STRING',       'string',       'String',
+    'string':           ('Type::STRING',      'string',       'String',
                         'string'),
-    'string-enum':      ('TYPE_STRING',       'string',       'String',
+    'string-enum':      ('Type::STRING',      'string',       'String',
                         'choice'),
-    'string-enum-list': ('TYPE_LIST',         'StringList',   'StringList',
+    'string-enum-list': ('Type::LIST',        'StringList',   'StringList',
                         'multi-select'),
   }
 
@@ -75,6 +75,7 @@ class PolicyDetails:
     self.can_be_mandatory = features.get('can_be_mandatory', True)
     self.is_deprecated = policy.get('deprecated', False)
     self.is_device_only = policy.get('device_only', False)
+    self.is_future = policy.get('future', False)
     self.schema = policy.get('schema', {})
     self.has_enterprise_default = 'default_for_enterprise_users' in policy
     if self.has_enterprise_default:
@@ -84,6 +85,10 @@ class PolicyDetails:
     self.platforms = []
     for platform, version_range in [ p.split(':')
                                      for p in policy['supported_on'] ]:
+      if self.is_device_only and platform != 'chrome_os':
+        raise RuntimeError('is_device_only is only allowed for Chrome OS: "%s"'
+                           % p)
+
       split_result = version_range.split('-')
       if len(split_result) != 2:
         raise RuntimeError('supported_on must have exactly one dash: "%s"' % p)
@@ -344,11 +349,11 @@ def _WritePolicyConstantHeader(policies, os, f, riskTags):
 
 # A mapping of the simple schema types to base::Value::Types.
 SIMPLE_SCHEMA_NAME_MAP = {
-  'boolean': 'TYPE_BOOLEAN',
-  'integer': 'TYPE_INTEGER',
-  'null'   : 'TYPE_NULL',
-  'number' : 'TYPE_DOUBLE',
-  'string' : 'TYPE_STRING',
+  'boolean': 'Type::BOOLEAN',
+  'integer': 'Type::INTEGER',
+  'null'   : 'Type::NONE',
+  'number' : 'Type::DOUBLE',
+  'string' : 'Type::STRING',
 }
 
 class SchemaNodesGenerator:
@@ -408,7 +413,7 @@ class SchemaNodesGenerator:
   def GetStringList(self):
     if self.stringlist_type == None:
       self.stringlist_type = self.AppendSchema(
-          'TYPE_LIST',
+          'Type::LIST',
           self.GetSimpleType('string'),
           'simple type: stringlist')
     return self.stringlist_type
@@ -427,12 +432,12 @@ class SchemaNodesGenerator:
     possible_values = schema['enum']
     if self.IsConsecutiveInterval(possible_values):
       index = self.AppendRestriction(max(possible_values), min(possible_values))
-      return self.AppendSchema('TYPE_INTEGER', index,
+      return self.AppendSchema('Type::INTEGER', index,
           'integer with enumeration restriction (use range instead): %s' % name)
     offset_begin = len(self.int_enums)
     self.int_enums += possible_values
     offset_end = len(self.int_enums)
-    return self.AppendSchema('TYPE_INTEGER',
+    return self.AppendSchema('Type::INTEGER',
         self.AppendRestriction(offset_begin, offset_end),
         'integer with enumeration restriction: %s' % name)
 
@@ -441,7 +446,7 @@ class SchemaNodesGenerator:
     offset_begin = len(self.string_enums)
     self.string_enums += schema['enum']
     offset_end = len(self.string_enums)
-    return self.AppendSchema('TYPE_STRING',
+    return self.AppendSchema('Type::STRING',
         self.AppendRestriction(offset_begin, offset_end),
         'string with enumeration restriction: %s' % name)
 
@@ -465,7 +470,7 @@ class SchemaNodesGenerator:
     re.compile(pattern)
     index = len(self.string_enums);
     self.string_enums.append(pattern);
-    return self.AppendSchema('TYPE_STRING',
+    return self.AppendSchema('Type::STRING',
         self.AppendRestriction(index, index),
         'string with pattern restriction: %s' % name);
 
@@ -484,7 +489,7 @@ class SchemaNodesGenerator:
     index = self.AppendRestriction(
         str(max_value) if max_value_set else 'INT_MAX',
         str(min_value) if min_value_set else 'INT_MIN')
-    return self.AppendSchema('TYPE_INTEGER',
+    return self.AppendSchema('Type::INTEGER',
         index,
         'integer with ranged restriction: %s' % name)
 
@@ -515,13 +520,13 @@ class SchemaNodesGenerator:
       # The 'type' may be missing if the schema has a '$ref' attribute.
       if schema['items'].get('type', '') == 'string':
         return self.GetStringList()
-      return self.AppendSchema('TYPE_LIST',
+      return self.AppendSchema('Type::LIST',
           self.GenerateAndCollectID(schema['items'], 'items of ' + name))
     elif schema['type'] == 'object':
       # Reserve an index first, so that dictionaries come before their
       # properties. This makes sure that the root node is the first in the
       # SchemaNodes array.
-      index = self.AppendSchema('TYPE_DICTIONARY', -1)
+      index = self.AppendSchema('Type::DICTIONARY', -1)
 
       if 'additionalProperties' in schema:
         additionalProperties = self.GenerateAndCollectID(
@@ -559,7 +564,7 @@ class SchemaNodesGenerator:
           additionalProperties, name))
 
       # Set the right data at |index| now.
-      self.schema_nodes[index] = ('TYPE_DICTIONARY', extra, name)
+      self.schema_nodes[index] = ('Type::DICTIONARY', extra, name)
       return index
     else:
       assert False
@@ -656,16 +661,43 @@ class SchemaNodesGenerator:
     self.properties_nodes = map(partial(self.ResolveID, 3),
         self.properties_nodes)
 
+def _GenerateDefaultValue(value):
+  """Converts a JSON object into a base::Value entry. Returns a tuple, the first
+  entry being a list of declaration statements to define the variable, the
+  second entry being a way to access the variable.
+
+  If no definition is needed, the first return value will be an empty list. If
+  any error occurs, the second return value will be None (ie, no way to fetch
+  the value).
+
+  |value|: The deserialized value to convert to base::Value."""
+  if type(value) == bool or type(value) == int:
+    return [], 'base::MakeUnique<base::FundamentalValue>(%s)' %\
+                    json.dumps(value)
+  elif type(value) == str:
+    return [], 'base::MakeUnique<base::StringValue>("%s")' % value
+  elif type(value) == list:
+    setup = ['auto default_value = base::MakeUnique<base::ListValue>();']
+    for entry in value:
+      decl, fetch = _GenerateDefaultValue(entry)
+      # Nested lists are not supported.
+      if decl:
+        return [], None
+      setup.append('default_value->Append(%s);' % fetch)
+    return setup, 'std::move(default_value)'
+  return [], None
+
 def _WritePolicyConstantSource(policies, os, f, riskTags):
-  f.write('#include "policy/policy_constants.h"\n'
+  f.write('#include "components/policy/policy_constants.h"\n'
           '\n'
           '#include <algorithm>\n'
           '#include <climits>\n'
           '\n'
           '#include "base/logging.h"\n'
-          '#include "policy/risk_tag.h"\n'
+          '#include "base/memory/ptr_util.h"\n'
           '#include "components/policy/core/common/policy_types.h"\n'
           '#include "components/policy/core/common/schema_internal.h"\n'
+          '#include "components/policy/risk_tag.h"\n'
           '\n'
           'namespace policy {\n'
           '\n')
@@ -689,6 +721,7 @@ def _WritePolicyConstantSource(policies, os, f, riskTags):
           '//  is_deprecated  is_device_policy  id    max_external_data_size\n')
   for policy in policies:
     if policy.is_supported:
+      f.write('  // %s\n' % policy.name)
       f.write('  { %-14s %-16s %3s, %24s,\n'
               '    %s },\n' % (
                   'true,' if policy.is_deprecated else 'false,',
@@ -734,27 +767,29 @@ def _WritePolicyConstantSource(policies, os, f, riskTags):
 
   for policy in policies:
     if policy.has_enterprise_default:
-      if policy.policy_type == 'TYPE_BOOLEAN':
-        creation_expression = 'new base::FundamentalValue(%s)' %\
-                              ('true' if policy.enterprise_default else 'false')
-      elif policy.policy_type == 'TYPE_INTEGER':
-        creation_expression = 'new base::FundamentalValue(%s)' %\
-                              policy.enterprise_default
-      elif policy.policy_type == 'TYPE_STRING':
-        creation_expression = 'new base::StringValue("%s")' %\
-                              policy.enterprise_default
-      else:
+      declare_default_stmts, fetch_default =\
+          _GenerateDefaultValue(policy.enterprise_default)
+      if not fetch_default:
         raise RuntimeError('Type %s of policy %s is not supported at '
                            'enterprise defaults' % (policy.policy_type,
                                                     policy.name))
+
+      # Convert declare_default_stmts to a string with the correct identation.
+      if declare_default_stmts:
+        declare_default = '    %s\n' % '\n    '.join(declare_default_stmts)
+      else:
+        declare_default = ''
+
       f.write('  if (!policy_map->Get(key::k%s)) {\n'
+              '%s'
               '    policy_map->Set(key::k%s,\n'
               '                    POLICY_LEVEL_MANDATORY,\n'
               '                    POLICY_SCOPE_USER,\n'
               '                    POLICY_SOURCE_ENTERPRISE_DEFAULT,\n'
               '                    %s,\n'
-              '                    NULL);\n'
-              '  }\n' % (policy.name, policy.name, creation_expression))
+              '                    nullptr);\n'
+              '  }\n' % (policy.name, declare_default, policy.name,
+                         fetch_default))
 
   f.write('}\n'
           '#endif\n\n')
@@ -952,7 +987,7 @@ def _WritePolicyProto(f, policy, fields):
     _OutputComment(f, '\nValid values:')
     for item in policy.items:
       _OutputComment(f, '  %s: %s' % (str(item.value), item.caption))
-  if policy.policy_type == 'TYPE_DICTIONARY':
+  if policy.policy_type == 'Type::DICTIONARY':
     _OutputComment(f, '\nValue schema:\n%s' %
                    json.dumps(policy.schema, sort_keys=True, indent=4,
                               separators=(',', ': ')))
@@ -1001,20 +1036,22 @@ def _WriteCloudPolicyProtobuf(policies, os, f, riskTags):
 
 CPP_HEAD = '''
 #include <limits>
+#include <memory>
+#include <utility>
 #include <string>
 
 #include "base/callback.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
-#include "policy/policy_constants.h"
-#include "policy/proto/cloud_policy.pb.h"
+#include "components/policy/policy_constants.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 
 using google::protobuf::RepeatedPtrField;
 
@@ -1022,7 +1059,8 @@ namespace policy {
 
 namespace em = enterprise_management;
 
-base::Value* DecodeIntegerValue(google::protobuf::int64 value) {
+std::unique_ptr<base::Value> DecodeIntegerValue(
+    google::protobuf::int64 value) {
   if (value < std::numeric_limits<int>::min() ||
       value > std::numeric_limits<int>::max()) {
     LOG(WARNING) << "Integer value " << value
@@ -1030,21 +1068,20 @@ base::Value* DecodeIntegerValue(google::protobuf::int64 value) {
     return nullptr;
   }
 
-  return new base::FundamentalValue(static_cast<int>(value));
+  return base::WrapUnique(
+      new base::FundamentalValue(static_cast<int>(value)));
 }
 
-base::ListValue* DecodeStringList(const em::StringList& string_list) {
-  base::ListValue* list_value = new base::ListValue;
-  RepeatedPtrField<std::string>::const_iterator entry;
-  for (entry = string_list.entries().begin();
-       entry != string_list.entries().end(); ++entry) {
-    list_value->AppendString(*entry);
-  }
+std::unique_ptr<base::ListValue> DecodeStringList(
+    const em::StringList& string_list) {
+  std::unique_ptr<base::ListValue> list_value(new base::ListValue);
+  for (const auto& entry : string_list.entries())
+    list_value->AppendString(entry);
   return list_value;
 }
 
-base::Value* DecodeJson(const std::string& json) {
-  scoped_ptr<base::Value> root =
+std::unique_ptr<base::Value> DecodeJson(const std::string& json) {
+  std::unique_ptr<base::Value> root =
       base::JSONReader::Read(json, base::JSON_ALLOW_TRAILING_COMMAS);
 
   if (!root)
@@ -1052,7 +1089,7 @@ base::Value* DecodeJson(const std::string& json) {
 
   // Accept any Value type that parsed as JSON, and leave it to the handler to
   // convert and check the concrete type.
-  return root.release();
+  return root;
 }
 
 void DecodePolicy(const em::CloudPolicySettings& policy,
@@ -1068,15 +1105,15 @@ CPP_FOOT = '''}
 
 
 def _CreateValue(type, arg):
-  if type == 'TYPE_BOOLEAN':
+  if type == 'Type::BOOLEAN':
     return 'new base::FundamentalValue(%s)' % arg
-  elif type == 'TYPE_INTEGER':
+  elif type == 'Type::INTEGER':
     return 'DecodeIntegerValue(%s)' % arg
-  elif type == 'TYPE_STRING':
+  elif type == 'Type::STRING':
     return 'new base::StringValue(%s)' % arg
-  elif type == 'TYPE_LIST':
+  elif type == 'Type::LIST':
     return 'DecodeStringList(%s)' % arg
-  elif type == 'TYPE_DICTIONARY' or type == 'TYPE_EXTERNAL':
+  elif type == 'Type::DICTIONARY' or type == 'TYPE_EXTERNAL':
     return 'DecodeJson(%s)' % arg
   else:
     raise NotImplementedError('Unknown type %s' % type)
@@ -1085,7 +1122,7 @@ def _CreateValue(type, arg):
 def _CreateExternalDataFetcher(type, name):
   if type == 'TYPE_EXTERNAL':
     return 'new ExternalDataFetcher(external_data_manager, key::k%s)' % name
-  return 'NULL'
+  return 'nullptr'
 
 
 def _WritePolicyCode(f, policy):
@@ -1113,19 +1150,20 @@ def _WritePolicyCode(f, policy):
           '        }\n'
           '      }\n'
           '      if (do_set) {\n')
-  f.write('        base::Value* value = %s;\n' %
+  f.write('        std::unique_ptr<base::Value> value(%s);\n' %
           (_CreateValue(policy.policy_type, 'policy_proto.value()')))
   # TODO(bartfab): |value| == NULL indicates that the policy value could not be
   # parsed successfully. Surface such errors in the UI.
   f.write('        if (value) {\n')
-  f.write('          ExternalDataFetcher* external_data_fetcher = %s;\n' %
+  f.write('          std::unique_ptr<ExternalDataFetcher>\n')
+  f.write('              external_data_fetcher(%s);\n' %
           _CreateExternalDataFetcher(policy.policy_type, policy.name))
   f.write('          map->Set(key::k%s, \n' % policy.name)
   f.write('                   level, \n'
           '                   POLICY_SCOPE_USER, \n'
           '                   POLICY_SOURCE_CLOUD, \n'
-          '                   value, \n'
-          '                   external_data_fetcher);\n'
+          '                   std::move(value), \n'
+          '                   std::move(external_data_fetcher));\n'
           '        }\n'
           '      }\n'
           '    }\n'
@@ -1166,7 +1204,8 @@ def _WriteAppRestrictions(policies, os, f, riskTags):
   f.write('<restrictions xmlns:android="'
           'http://schemas.android.com/apk/res/android">\n\n')
   for policy in policies:
-    if policy.is_supported and policy.restriction_type != 'invalid':
+    if (policy.is_supported and policy.restriction_type != 'invalid' and
+         not policy.is_deprecated and not policy.is_future):
       WriteAppRestriction(policy)
   f.write('</restrictions>')
 

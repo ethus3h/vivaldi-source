@@ -9,8 +9,6 @@
 #include "content/public/renderer/render_view_observer.h"
 #include "third_party/WebKit/public/web/WebDateTimeChooserParams.h"
 
-struct ViewHostMsg_DateTimeDialogValue_Params;
-
 namespace blink {
 class WebDateTimeChooserCompletion;
 }  // namespace blink
@@ -34,6 +32,7 @@ class RendererDateTimePicker : public RenderViewObserver {
 
   // RenderViewObserver
   bool OnMessageReceived(const IPC::Message& message) override;
+  void OnDestruct() override;
 
   blink::WebDateTimeChooserParams chooser_params_;
   blink::WebDateTimeChooserCompletion* chooser_completion_;  // Not owned by us

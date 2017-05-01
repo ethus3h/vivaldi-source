@@ -5,16 +5,60 @@
 #include "components/autofill/core/browser/autofill_experiments.h"
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
-#include "base/prefs/pref_service.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/suggestion.h"
 #include "components/autofill/core/common/autofill_pref_names.h"
 #include "components/autofill/core/common/autofill_switches.h"
-#include "components/sync_driver/sync_service.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync/driver/sync_service.h"
+#include "components/variations/variations_associated_data.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "grit/components_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
+
+const base::Feature kAutofillCreditCardAssist{
+    "AutofillCreditCardAssist", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kAutofillCreditCardSigninPromo{
+    "AutofillCreditCardSigninPromo", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kAutofillScanCardholderName{
+    "AutofillScanCardholderName", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kAutofillCreditCardPopupLayout{
+    "AutofillCreditCardPopupLayout", base::FEATURE_DISABLED_BY_DEFAULT};
+const char kCreditCardSigninPromoImpressionLimitParamKey[] = "impression_limit";
+const char kAutofillCreditCardPopupBackgroundColorKey[] = "background_color";
+const char kAutofillCreditCardPopupDividerColorKey[] = "dropdown_divider_color";
+const char kAutofillCreditCardPopupValueBoldKey[] = "is_value_bold";
+const char kAutofillCreditCardPopupIsValueAndLabelInSingleLineKey[] =
+    "is_value_and_label_in_single_line";
+const char kAutofillPopupDropdownItemHeightKey[] =
+    "dropdown_item_height";
+const char kAutofillCreditCardPopupIsIconAtStartKey[] =
+    "is_credit_card_icon_at_start";
+const char kAutofillPopupMarginKey[] = "margin";
+
+namespace {
+
+// Returns parameter value in |kAutofillCreditCardPopupLayout| feature, or 0 if
+// parameter is not specified.
+unsigned int GetCreditCardPopupParameterUintValue(
+    const std::string& param_name) {
+  unsigned int value;
+  const std::string param_value = variations::GetVariationParamValueByFeature(
+      kAutofillCreditCardPopupLayout, param_name);
+  if (!param_value.empty() && base::StringToUint(param_value, &value))
+    return value;
+  return 0;
+}
+
+}  // namespace
 
 bool IsAutofillEnabled(const PrefService* pref_service) {
   return pref_service->GetBoolean(prefs::kAutofillEnabled);
@@ -24,6 +68,87 @@ bool IsInAutofillSuggestionsDisabledExperiment() {
   std::string group_name =
       base::FieldTrialList::FindFullName("AutofillEnabled");
   return group_name == "Disabled";
+}
+
+bool IsAutofillCreditCardSigninPromoEnabled() {
+  return base::FeatureList::IsEnabled(kAutofillCreditCardSigninPromo);
+}
+
+bool IsAutofillCreditCardAssistEnabled() {
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
+  return false;
+#else
+  return base::FeatureList::IsEnabled(kAutofillCreditCardAssist);
+#endif
+}
+
+int GetCreditCardSigninPromoImpressionLimit() {
+  int impression_limit;
+  std::string param_value = variations::GetVariationParamValueByFeature(
+      kAutofillCreditCardSigninPromo,
+      kCreditCardSigninPromoImpressionLimitParamKey);
+  if (!param_value.empty() && base::StringToInt(param_value, &impression_limit))
+    return impression_limit;
+
+  return 0;
+}
+
+bool IsAutofillCreditCardPopupLayoutExperimentEnabled() {
+  return base::FeatureList::IsEnabled(kAutofillCreditCardPopupLayout);
+}
+
+// |GetCreditCardPopupParameterUintValue| returns 0 if experiment parameter is
+// not specified. 0 == |SK_ColorTRANSPARENT|.
+SkColor GetCreditCardPopupBackgroundColor() {
+  return GetCreditCardPopupParameterUintValue(
+      kAutofillCreditCardPopupBackgroundColorKey);
+}
+
+SkColor GetCreditCardPopupDividerColor() {
+  return GetCreditCardPopupParameterUintValue(
+      kAutofillCreditCardPopupDividerColorKey);
+}
+
+bool IsCreditCardPopupValueBold() {
+  const std::string param_value = variations::GetVariationParamValueByFeature(
+      kAutofillCreditCardPopupLayout, kAutofillCreditCardPopupValueBoldKey);
+  return param_value == "true";
+}
+
+unsigned int GetPopupDropdownItemHeight() {
+  return GetCreditCardPopupParameterUintValue(
+      kAutofillPopupDropdownItemHeightKey);
+}
+
+bool IsIconInCreditCardPopupAtStart() {
+  const std::string param_value = variations::GetVariationParamValueByFeature(
+      kAutofillCreditCardPopupLayout, kAutofillCreditCardPopupIsIconAtStartKey);
+  return param_value == "true";
+}
+
+// Modifies |suggestion| as follows if experiment to display value and label in
+// a single line is enabled.
+// Say, |value| is 'Visa ....1111' and |label| is '01/18' (expiration date).
+// Modifies |value| to 'Visa ....1111, exp 01/18' and clears |label|.
+void ModifyAutofillCreditCardSuggestion(Suggestion* suggestion) {
+  DCHECK(IsAutofillCreditCardPopupLayoutExperimentEnabled());
+  const std::string param_value = variations::GetVariationParamValueByFeature(
+      kAutofillCreditCardPopupLayout,
+      kAutofillCreditCardPopupIsValueAndLabelInSingleLineKey);
+  if (param_value == "true") {
+    const base::string16 format_string = l10n_util::GetStringUTF16(
+        IDS_AUTOFILL_CREDIT_CARD_EXPIRATION_DATE_LABEL_AND_ABBR);
+    if (!format_string.empty()) {
+      suggestion->value.append(l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_CREDIT_CARD_EXPIRATION_DATE_LABEL_AND_ABBR,
+          suggestion->label));
+    }
+    suggestion->label.clear();
+  }
+}
+
+unsigned int GetPopupMargin() {
+  return GetCreditCardPopupParameterUintValue(kAutofillPopupMarginKey);
 }
 
 bool OfferStoreUnmaskedCards() {
@@ -52,7 +177,7 @@ bool OfferStoreUnmaskedCards() {
 }
 
 bool IsCreditCardUploadEnabled(const PrefService* pref_service,
-                               const sync_driver::SyncService* sync_service,
+                               const syncer::SyncService* sync_service,
                                const std::string& user_email) {
   // Query the field trial first to ensure UMA always reports the correct group.
   std::string group_name =
@@ -67,16 +192,16 @@ bool IsCreditCardUploadEnabled(const PrefService* pref_service,
   // Users who have enabled a passphrase have chosen to not make their sync
   // information accessible to Google. Since upload makes credit card data
   // available to other Google systems, disable it for passphrase users.
-  if (sync_service->IsBackendInitialized() &&
+  // We can't determine the passphrase state until the sync engine is
+  // initialized so disable upload if sync is not yet available.
+  if (!sync_service->IsEngineInitialized() ||
       sync_service->IsUsingSecondaryPassphrase()) {
     return false;
   }
 
-  // Check Payments integration setting.
-  if (!pref_service->GetBoolean(prefs::kAutofillWalletSyncExperimentEnabled) ||
-      !pref_service->GetBoolean(prefs::kAutofillWalletImportEnabled)) {
+  // Check Payments integration user setting.
+  if (!pref_service->GetBoolean(prefs::kAutofillWalletImportEnabled))
     return false;
-  }
 
   // Check that the user is logged into a supported domain.
   if (user_email.empty())

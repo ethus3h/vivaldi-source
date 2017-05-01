@@ -4,13 +4,12 @@
 
 #include "chrome/browser/ui/ash/multi_user/multi_user_context_menu.h"
 
-#include "ash/multi_profile_uma.h"
-#include "ash/session/session_state_delegate.h"
-#include "ash/shell.h"
+#include "ash/common/multi_profile_uma.h"
+#include "ash/common/session/session_state_delegate.h"
+#include "ash/common/wm_shell.h"
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
@@ -20,6 +19,7 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/core/account_id/account_id.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -40,10 +40,6 @@ class MultiUserContextMenuChromeos : public ui::SimpleMenuModel,
   // SimpleMenuModel::Delegate:
   bool IsCommandIdChecked(int command_id) const override { return false; }
   bool IsCommandIdEnabled(int command_id) const override { return true; }
-  bool GetAcceleratorForCommandId(int command_id,
-                                  ui::Accelerator* accelerator) override {
-    return false;
-  }
   void ExecuteCommand(int command_id, int event_flags) override;
 
  private:
@@ -65,10 +61,11 @@ void MultiUserContextMenuChromeos::ExecuteCommand(int command_id,
 }  // namespace
 }  // namespace chromeos
 
-scoped_ptr<ui::MenuModel> CreateMultiUserContextMenu(aura::Window* window) {
-  scoped_ptr<ui::MenuModel> model;
+std::unique_ptr<ui::MenuModel> CreateMultiUserContextMenu(
+    aura::Window* window) {
+  std::unique_ptr<ui::MenuModel> model;
   ash::SessionStateDelegate* delegate =
-      ash::Shell::GetInstance()->session_state_delegate();
+      ash::WmShell::Get()->GetSessionStateDelegate();
   if (!delegate)
     return model;
 
@@ -86,12 +83,12 @@ scoped_ptr<ui::MenuModel> CreateMultiUserContextMenu(aura::Window* window) {
     for (int user_index = 1; user_index < logged_in_users; ++user_index) {
       const user_manager::UserInfo* user_info =
           delegate->GetUserInfo(user_index);
-      menu->AddItem(user_index == 1 ? IDC_VISIT_DESKTOP_OF_LRU_USER_2
-                                    : IDC_VISIT_DESKTOP_OF_LRU_USER_3,
-                    l10n_util::GetStringFUTF16(
-                        IDS_VISIT_DESKTOP_OF_LRU_USER,
-                        user_info->GetDisplayName(),
-                        base::ASCIIToUTF16(user_info->GetEmail())));
+      menu->AddItem(
+          user_index == 1 ? IDC_VISIT_DESKTOP_OF_LRU_USER_2
+                          : IDC_VISIT_DESKTOP_OF_LRU_USER_3,
+          l10n_util::GetStringFUTF16(
+              IDS_VISIT_DESKTOP_OF_LRU_USER, user_info->GetDisplayName(),
+              base::ASCIIToUTF16(user_info->GetDisplayEmail())));
     }
   }
   return model;
@@ -117,8 +114,8 @@ void ExecuteVisitDesktopCommand(int command_id, aura::Window* window) {
       // When running the multi user mode on Chrome OS, windows can "visit"
       // another user's desktop.
       const AccountId account_id =
-          ash::Shell::GetInstance()
-              ->session_state_delegate()
+          ash::WmShell::Get()
+              ->GetSessionStateDelegate()
               ->GetUserInfo(IDC_VISIT_DESKTOP_OF_LRU_USER_2 == command_id ? 1
                                                                           : 2)
               ->GetAccountId();

@@ -7,14 +7,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/events/platform/platform_event_observer.h"
@@ -24,14 +26,11 @@ namespace ui {
 
 namespace {
 
-scoped_ptr<PlatformEvent> CreatePlatformEvent() {
-  scoped_ptr<PlatformEvent> event(new PlatformEvent());
+std::unique_ptr<PlatformEvent> CreatePlatformEvent() {
+  std::unique_ptr<PlatformEvent> event = base::MakeUnique<PlatformEvent>();
   memset(event.get(), 0, sizeof(PlatformEvent));
   return event;
 }
-
-template <typename T>
-void DestroyScopedPtr(scoped_ptr<T> object) {}
 
 void RemoveDispatcher(PlatformEventDispatcher* dispatcher) {
   PlatformEventSource::GetInstance()->RemovePlatformEventDispatcher(dispatcher);
@@ -60,7 +59,8 @@ class TestPlatformEventSource : public PlatformEventSource {
 
   // Dispatches the stream of events, and returns the number of events that are
   // dispatched before it is requested to stop.
-  size_t DispatchEventStream(const ScopedVector<PlatformEvent>& events) {
+  size_t DispatchEventStream(
+      const std::vector<std::unique_ptr<PlatformEvent>>& events) {
     stop_stream_ = false;
     for (size_t count = 0; count < events.size(); ++count) {
       DispatchEvent(*events[count]);
@@ -148,7 +148,7 @@ class PlatformEventTest : public testing::Test {
   void SetUp() override { source_.reset(new TestPlatformEventSource()); }
 
  private:
-  scoped_ptr<TestPlatformEventSource> source_;
+  std::unique_ptr<TestPlatformEventSource> source_;
 
   DISALLOW_COPY_AND_ASSIGN(PlatformEventTest);
 };
@@ -156,13 +156,13 @@ class PlatformEventTest : public testing::Test {
 // Tests that a dispatcher receives an event.
 TEST_F(PlatformEventTest, DispatcherBasic) {
   std::vector<int> list_dispatcher;
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   EXPECT_EQ(0u, list_dispatcher.size());
   {
     TestPlatformEventDispatcher dispatcher(1, &list_dispatcher);
 
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(1u, list_dispatcher.size());
     EXPECT_EQ(1, list_dispatcher[0]);
@@ -178,12 +178,12 @@ TEST_F(PlatformEventTest, DispatcherBasic) {
 TEST_F(PlatformEventTest, DispatcherOrder) {
   std::vector<int> list_dispatcher;
   int sequence[] = {21, 3, 6, 45};
-  ScopedVector<TestPlatformEventDispatcher> dispatchers;
-  for (size_t i = 0; i < arraysize(sequence); ++i) {
+  std::vector<std::unique_ptr<TestPlatformEventDispatcher>> dispatchers;
+  for (auto id : sequence) {
     dispatchers.push_back(
-        new TestPlatformEventDispatcher(sequence[i], &list_dispatcher));
+        base::MakeUnique<TestPlatformEventDispatcher>(id, &list_dispatcher));
   }
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   ASSERT_EQ(arraysize(sequence), list_dispatcher.size());
   EXPECT_EQ(std::vector<int>(sequence, sequence + arraysize(sequence)),
@@ -197,7 +197,7 @@ TEST_F(PlatformEventTest, DispatcherConsumesEventToStopDispatch) {
   TestPlatformEventDispatcher first(12, &list_dispatcher);
   TestPlatformEventDispatcher second(23, &list_dispatcher);
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   ASSERT_EQ(2u, list_dispatcher.size());
   EXPECT_EQ(12, list_dispatcher[0]);
@@ -214,13 +214,13 @@ TEST_F(PlatformEventTest, DispatcherConsumesEventToStopDispatch) {
 // Tests that observers receive events.
 TEST_F(PlatformEventTest, ObserverBasic) {
   std::vector<int> list_observer;
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   EXPECT_EQ(0u, list_observer.size());
   {
     TestPlatformEventObserver observer(31, &list_observer);
 
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(1u, list_observer.size());
     EXPECT_EQ(31, list_observer[0]);
@@ -236,12 +236,12 @@ TEST_F(PlatformEventTest, ObserverBasic) {
 TEST_F(PlatformEventTest, ObserverOrder) {
   std::vector<int> list_observer;
   const int sequence[] = {21, 3, 6, 45};
-  ScopedVector<TestPlatformEventObserver> observers;
-  for (size_t i = 0; i < arraysize(sequence); ++i) {
+  std::vector<std::unique_ptr<TestPlatformEventObserver>> observers;
+  for (auto id : sequence) {
     observers.push_back(
-        new TestPlatformEventObserver(sequence[i], &list_observer));
+        base::MakeUnique<TestPlatformEventObserver>(id, &list_observer));
   }
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   ASSERT_EQ(arraysize(sequence), list_observer.size());
   EXPECT_EQ(std::vector<int>(sequence, sequence + arraysize(sequence)),
@@ -255,7 +255,7 @@ TEST_F(PlatformEventTest, DispatcherAndObserverOrder) {
   TestPlatformEventObserver first_o(10, &list);
   TestPlatformEventDispatcher second_d(23, &list);
   TestPlatformEventObserver second_o(20, &list);
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   const int expected[] = {10, 20, 12, 23};
   EXPECT_EQ(std::vector<int>(expected, expected + arraysize(expected)), list);
@@ -267,7 +267,7 @@ TEST_F(PlatformEventTest, OverriddenDispatcherBasic) {
   std::vector<int> list;
   TestPlatformEventDispatcher dispatcher(10, &list);
   TestPlatformEventObserver observer(15, &list);
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   ASSERT_EQ(2u, list.size());
   EXPECT_EQ(15, list[0]);
@@ -276,7 +276,7 @@ TEST_F(PlatformEventTest, OverriddenDispatcherBasic) {
 
   TestPlatformEventDispatcher overriding_dispatcher(20, &list);
   source()->RemovePlatformEventDispatcher(&overriding_dispatcher);
-  scoped_ptr<ScopedEventDispatcher> handle =
+  std::unique_ptr<ScopedEventDispatcher> handle =
       source()->OverrideDispatcher(&overriding_dispatcher);
   source()->Dispatch(*event);
   ASSERT_EQ(2u, list.size());
@@ -292,11 +292,11 @@ TEST_F(PlatformEventTest, OverriddenDispatcherInvokeDefaultDispatcher) {
   TestPlatformEventObserver observer(15, &list);
   TestPlatformEventDispatcher overriding_dispatcher(20, &list);
   source()->RemovePlatformEventDispatcher(&overriding_dispatcher);
-  scoped_ptr<ScopedEventDispatcher> handle =
+  std::unique_ptr<ScopedEventDispatcher> handle =
       source()->OverrideDispatcher(&overriding_dispatcher);
   overriding_dispatcher.set_post_dispatch_action(POST_DISPATCH_PERFORM_DEFAULT);
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // First the observer, then the overriding dispatcher, then the default
   // dispatcher.
@@ -309,7 +309,7 @@ TEST_F(PlatformEventTest, OverriddenDispatcherInvokeDefaultDispatcher) {
   // Install a second overriding dispatcher.
   TestPlatformEventDispatcher second_overriding(50, &list);
   source()->RemovePlatformEventDispatcher(&second_overriding);
-  scoped_ptr<ScopedEventDispatcher> second_override_handle =
+  std::unique_ptr<ScopedEventDispatcher> second_override_handle =
       source()->OverrideDispatcher(&second_overriding);
   source()->Dispatch(*event);
   ASSERT_EQ(2u, list.size());
@@ -364,7 +364,7 @@ TEST_F(PlatformEventTest, DispatcherRemovesNextDispatcherDuringDispatch) {
 
   second.set_callback(base::Bind(&RemoveDispatcher, base::Unretained(&third)));
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // |second| removes |third| from the dispatcher list during dispatch. So the
   // event should only reach |first|, |second|, and |fourth|.
@@ -384,7 +384,7 @@ TEST_F(PlatformEventTest, DispatcherRemovesSelfDuringDispatch) {
 
   second.set_callback(base::Bind(&RemoveDispatcher, base::Unretained(&second)));
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // |second| removes itself from the dispatcher list during dispatch. So the
   // event should reach all three dispatchers in the list.
@@ -404,7 +404,7 @@ TEST_F(PlatformEventTest, DispatcherRemovesSelfDuringDispatchLast) {
 
   second.set_callback(base::Bind(&RemoveDispatcher, base::Unretained(&second)));
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // |second| removes itself during dispatch. So both dispatchers will have
   // received the event.
@@ -423,7 +423,7 @@ TEST_F(PlatformEventTest, DispatcherRemovesPrevDispatcherDuringDispatch) {
 
   second.set_callback(base::Bind(&RemoveDispatcher, base::Unretained(&first)));
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // |second| removes |first| from the dispatcher list during dispatch. The
   // event should reach all three dispatchers.
@@ -446,7 +446,7 @@ TEST_F(PlatformEventTest, DispatcherRemovesPrevDispatchersDuringDispatch) {
                                 base::Unretained(&first),
                                 base::Unretained(&second)));
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   // |third| removes |first| and |second| from the dispatcher list during
   // dispatch. The event should reach all three dispatchers.
@@ -467,7 +467,7 @@ TEST_F(PlatformEventTest, DispatcherAddedDuringDispatchReceivesEvent) {
   TestPlatformEventDispatcher fourth(30, &list);
   RemoveDispatchers(&third, &fourth);
 
-  scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+  std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
   source()->Dispatch(*event);
   ASSERT_EQ(2u, list.size());
   EXPECT_EQ(10, list[0]);
@@ -498,19 +498,13 @@ class PlatformEventTestWithMessageLoop : public PlatformEventTest {
   ~PlatformEventTestWithMessageLoop() override {}
 
   void Run() {
-    message_loop_.PostTask(
-        FROM_HERE,
-        base::Bind(&PlatformEventTestWithMessageLoop::RunTest,
-                   base::Unretained(this)));
-    message_loop_.Run();
+    message_loop_.task_runner()->PostTask(
+        FROM_HERE, base::Bind(&PlatformEventTestWithMessageLoop::RunTestImpl,
+                              base::Unretained(this)));
+    base::RunLoop().RunUntilIdle();
   }
 
  protected:
-  void RunTest() {
-    RunTestImpl();
-    message_loop_.QuitWhenIdle();
-  }
-
   virtual void RunTestImpl() = 0;
 
  private:
@@ -535,16 +529,16 @@ class ScopedDispatcherRestoresAfterDestroy
 
     TestPlatformEventDispatcher first_overriding(20, &list);
     source()->RemovePlatformEventDispatcher(&first_overriding);
-    scoped_ptr<ScopedEventDispatcher> first_override_handle =
+    std::unique_ptr<ScopedEventDispatcher> first_override_handle =
         source()->OverrideDispatcher(&first_overriding);
 
     // Install a second overriding dispatcher.
     TestPlatformEventDispatcher second_overriding(50, &list);
     source()->RemovePlatformEventDispatcher(&second_overriding);
-    scoped_ptr<ScopedEventDispatcher> second_override_handle =
+    std::unique_ptr<ScopedEventDispatcher> second_override_handle =
         source()->OverrideDispatcher(&second_overriding);
 
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(2u, list.size());
     EXPECT_EQ(15, list[0]);
@@ -569,7 +563,7 @@ class DestroyScopedHandleDispatcher : public TestPlatformEventDispatcher {
       : TestPlatformEventDispatcher(id, list) {}
   ~DestroyScopedHandleDispatcher() override {}
 
-  void SetScopedHandle(scoped_ptr<ScopedEventDispatcher> handler) {
+  void SetScopedHandle(std::unique_ptr<ScopedEventDispatcher> handler) {
     handler_ = std::move(handler);
   }
 
@@ -591,7 +585,7 @@ class DestroyScopedHandleDispatcher : public TestPlatformEventDispatcher {
     return action;
   }
 
-  scoped_ptr<ScopedEventDispatcher> handler_;
+  std::unique_ptr<ScopedEventDispatcher> handler_;
   base::Closure callback_;
 
   DISALLOW_COPY_AND_ASSIGN(DestroyScopedHandleDispatcher);
@@ -605,11 +599,9 @@ class DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration
  public:
   void NestedTask(std::vector<int>* list,
                   TestPlatformEventDispatcher* dispatcher) {
-    ScopedVector<PlatformEvent> events;
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
-    events.push_back(std::move(event));
-    event = CreatePlatformEvent();
-    events.push_back(std::move(event));
+    std::vector<std::unique_ptr<PlatformEvent>> events;
+    events.push_back(CreatePlatformEvent());
+    events.push_back(CreatePlatformEvent());
 
     // Attempt to dispatch a couple of events. Dispatching the first event will
     // have terminated the ScopedEventDispatcher object, which will terminate
@@ -631,8 +623,8 @@ class DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration
     EXPECT_EQ(10, (*list)[1]);
     list->clear();
 
-    // Terminate the message-loop.
-    base::MessageLoopForUI::current()->QuitNow();
+    // Terminate the run loop.
+    run_loop_.Quit();
   }
 
   // PlatformEventTestWithMessageLoop:
@@ -643,10 +635,10 @@ class DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration
 
     DestroyScopedHandleDispatcher overriding(20, &list);
     source()->RemovePlatformEventDispatcher(&overriding);
-    scoped_ptr<ScopedEventDispatcher> override_handle =
+    std::unique_ptr<ScopedEventDispatcher> override_handle =
         source()->OverrideDispatcher(&overriding);
 
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(2u, list.size());
     EXPECT_EQ(15, list[0]);
@@ -654,18 +646,16 @@ class DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration
     list.clear();
 
     overriding.SetScopedHandle(std::move(override_handle));
-    base::RunLoop run_loop;
     base::MessageLoopForUI* loop = base::MessageLoopForUI::current();
     base::MessageLoopForUI::ScopedNestableTaskAllower allow_nested(loop);
-    loop->PostTask(
+    loop->task_runner()->PostTask(
         FROM_HERE,
         base::Bind(
             &DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration::
                 NestedTask,
-            base::Unretained(this),
-            base::Unretained(&list),
+            base::Unretained(this), base::Unretained(&list),
             base::Unretained(&overriding)));
-    run_loop.Run();
+    run_loop_.Run();
 
     // Dispatching the event should now reach the default dispatcher.
     source()->Dispatch(*event);
@@ -673,6 +663,9 @@ class DestroyedNestedOverriddenDispatcherQuitsNestedLoopIteration
     EXPECT_EQ(15, list[0]);
     EXPECT_EQ(10, list[1]);
   }
+
+ private:
+  base::RunLoop run_loop_;
 };
 
 RUN_TEST_IN_MESSAGE_LOOP(
@@ -684,9 +677,9 @@ RUN_TEST_IN_MESSAGE_LOOP(
 class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     : public PlatformEventTestWithMessageLoop {
  public:
-  void NestedTask(scoped_ptr<ScopedEventDispatcher> dispatch_handle,
+  void NestedTask(std::unique_ptr<ScopedEventDispatcher> dispatch_handle,
                   std::vector<int>* list) {
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(2u, list->size());
     EXPECT_EQ(15, (*list)[0]);
@@ -705,7 +698,7 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     // Install another override-dispatcher.
     DestroyScopedHandleDispatcher second_overriding(70, list);
     source()->RemovePlatformEventDispatcher(&second_overriding);
-    scoped_ptr<ScopedEventDispatcher> second_override_handle =
+    std::unique_ptr<ScopedEventDispatcher> second_override_handle =
         source()->OverrideDispatcher(&second_overriding);
 
     source()->Dispatch(*event);
@@ -720,11 +713,10 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     second_overriding.set_callback(run_loop.QuitClosure());
     base::MessageLoopForUI* loop = base::MessageLoopForUI::current();
     base::MessageLoopForUI::ScopedNestableTaskAllower allow_nested(loop);
-    loop->PostTask(
+    loop->task_runner()->PostTask(
         FROM_HERE,
         base::Bind(base::IgnoreResult(&TestPlatformEventSource::Dispatch),
-                   base::Unretained(source()),
-                   *event));
+                   base::Unretained(source()), *event));
     run_loop.Run();
     ASSERT_EQ(2u, list->size());
     EXPECT_EQ(15, (*list)[0]);
@@ -732,7 +724,7 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     list->clear();
 
     // Terminate the message-loop.
-    base::MessageLoopForUI::current()->QuitNow();
+    run_loop_.Quit();
   }
 
   // PlatformEventTestWithMessageLoop:
@@ -743,10 +735,10 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
 
     TestPlatformEventDispatcher overriding(20, &list);
     source()->RemovePlatformEventDispatcher(&overriding);
-    scoped_ptr<ScopedEventDispatcher> override_handle =
+    std::unique_ptr<ScopedEventDispatcher> override_handle =
         source()->OverrideDispatcher(&overriding);
 
-    scoped_ptr<PlatformEvent> event(CreatePlatformEvent());
+    std::unique_ptr<PlatformEvent> event = CreatePlatformEvent();
     source()->Dispatch(*event);
     ASSERT_EQ(2u, list.size());
     EXPECT_EQ(15, list[0]);
@@ -756,18 +748,16 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     // Start a nested message-loop, and destroy |override_handle| in the nested
     // loop. That should terminate the nested loop, restore the previous
     // dispatchers, and return control to this function.
-    base::RunLoop run_loop;
     base::MessageLoopForUI* loop = base::MessageLoopForUI::current();
     base::MessageLoopForUI::ScopedNestableTaskAllower allow_nested(loop);
-    loop->PostTask(
+    loop->task_runner()->PostTask(
         FROM_HERE,
         base::Bind(
             &ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration::
                 NestedTask,
-            base::Unretained(this),
-            base::Passed(&override_handle),
+            base::Unretained(this), base::Passed(&override_handle),
             base::Unretained(&list)));
-    run_loop.Run();
+    run_loop_.Run();
 
     // Dispatching the event should now reach the default dispatcher.
     source()->Dispatch(*event);
@@ -775,6 +765,9 @@ class ConsecutiveOverriddenDispatcherInTheSameMessageLoopIteration
     EXPECT_EQ(15, list[0]);
     EXPECT_EQ(10, list[1]);
   }
+
+ private:
+  base::RunLoop run_loop_;
 };
 
 RUN_TEST_IN_MESSAGE_LOOP(

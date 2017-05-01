@@ -5,13 +5,15 @@
 #ifndef CONTENT_RENDERER_INPUT_RENDER_WIDGET_INPUT_HANDLER_H_
 #define CONTENT_RENDERER_INPUT_RENDER_WIDGET_INPUT_HANDLER_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/time/time.h"
-#include "content/common/input/did_overscroll_params.h"
 #include "content/common/input/input_event_ack.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "content/common/input/input_event_dispatch_type.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/events/blink/did_overscroll_params.h"
 
 namespace blink {
 struct WebFloatPoint;
@@ -33,30 +35,19 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
  public:
   RenderWidgetInputHandler(RenderWidgetInputHandlerDelegate* delegate,
                            RenderWidget* widget);
-  ~RenderWidgetInputHandler();
+  virtual ~RenderWidgetInputHandler();
 
   // Handle input events from the input event provider.
-  void HandleInputEvent(const blink::WebInputEvent& input_event,
-                        const ui::LatencyInfo& latency_info);
+  virtual void HandleInputEvent(const blink::WebInputEvent& input_event,
+                                const ui::LatencyInfo& latency_info,
+                                InputEventDispatchType dispatch_type);
 
   // Handle overscroll from Blink.
   void DidOverscrollFromBlink(
-      const blink::WebFloatSize& unusedDelta,
-      const blink::WebFloatSize& accumulatedRootOverScroll,
+      const blink::WebFloatSize& overscrollDelta,
+      const blink::WebFloatSize& accumulatedOverscroll,
       const blink::WebFloatPoint& position,
       const blink::WebFloatSize& velocity);
-
-  // When paused in debugger, we send ack for mouse event early. This ensures
-  // that we continue receiving mouse moves and pass them to debugger. Returns
-  // whether we are paused in mouse move event and have sent the ack.
-  bool SendAckForMouseMoveFromDebugger();
-
-  // When resumed from pause in debugger while handling mouse move,
-  // we should not send an extra ack (see SendAckForMouseMoveFromDebugger).
-  void IgnoreAckForMouseMoveFromDebugger();
-
-  // Issue the pending InputEventAck if one exists.
-  void FlushPendingInputEventAck();
 
   bool handling_input_event() const { return handling_input_event_; }
   void set_handling_input_event(bool handling_input_event) {
@@ -86,7 +77,7 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
   // handled. If the event causes overscroll, the overscroll metadata can be
   // bundled in the event ack, saving an IPC.  Note that we must continue
   // supporting overscroll IPC notifications due to fling animation updates.
-  scoped_ptr<DidOverscrollParams>* handling_event_overscroll_;
+  std::unique_ptr<ui::DidOverscrollParams>* handling_event_overscroll_;
 
   // Type of the input event we are currently handling.
   blink::WebInputEvent::Type handling_event_type_;
@@ -95,14 +86,6 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
 
   // Indicates if the next sequence of Char events should be suppressed or not.
   bool suppress_next_char_events_;
-
-  // The time spent in input handlers this frame. Used to throttle input acks.
-  base::TimeDelta total_input_handling_time_this_frame_;
-
-  // Whether we should not send ack for the current mouse move.
-  bool ignore_ack_for_mouse_move_from_debugger_;
-
-  scoped_ptr<InputEventAck> pending_input_event_ack_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetInputHandler);
 };

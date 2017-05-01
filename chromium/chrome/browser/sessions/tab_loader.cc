@@ -7,9 +7,11 @@
 #include <algorithm>
 #include <string>
 
+#include "base/memory/memory_coordinator_client_registry.h"
+#include "base/memory/memory_coordinator_proxy.h"
 #include "base/memory/memory_pressure_monitor.h"
-#include "base/metrics/histogram.h"
-#include "base/strings/stringprintf.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/sessions/session_restore_stats_collector.h"
 #include "chrome/browser/ui/browser.h"
@@ -23,12 +25,22 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 
 #include "app/vivaldi_apptools.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/memory/tab_manager.h"
+#include "components/prefs/pref_service.h"
+#include "prefs/vivaldi_pref_names.h"
 
 using content::NavigationController;
 using content::RenderWidgetHost;
 using content::WebContents;
+
+// Vivaldi specific timeout used when we start loading restored pinned tabs.
+static const int kVivaldiFirstPinnedTabLoadTimeoutMS = 1500;
 
 void TabLoader::Observe(int type,
                         const content::NotificationSource& source,
@@ -70,6 +82,30 @@ void TabLoader::SetTabLoadingEnabled(bool enable_tab_loading) {
 // static
 void TabLoader::RestoreTabs(const std::vector<RestoredTab>& tabs,
                             const base::TimeTicks& restore_started) {
+  if (vivaldi::IsVivaldiRunning()) {
+    Profile* current_profile = g_browser_process->profile_manager()
+                                   ->GetLastUsedProfileAllowedByPolicy();
+    PrefService* prefs = current_profile->GetPrefs();
+    if (prefs->GetBoolean(vivaldiprefs::kDeferredTabLoadingAfterRestore)) {
+      if (prefs->GetBoolean(vivaldiprefs::kAlwaysLoadPinnedTabAfterRestore)) {
+        std::vector<RestoredTab> pinned_tabs;
+        for (auto& restored_tab : tabs) {
+          if (restored_tab.is_pinned()) {
+            pinned_tabs.push_back(restored_tab);
+          } else {
+            // if we do not load it mark it as discarded
+            g_browser_process->GetTabManager()->SetIsDiscarded(
+                restored_tab.contents());
+          }
+        }
+        if (!shared_tab_loader_)
+          shared_tab_loader_ = new TabLoader(restore_started);
+        shared_tab_loader_->StartLoading(pinned_tabs);
+      }
+      return;
+    }
+  }
+
   if (!shared_tab_loader_)
     shared_tab_loader_ = new TabLoader(restore_started);
 
@@ -88,17 +124,19 @@ TabLoader::TabLoader(base::TimeTicks restore_started)
   if (!vivaldi::IsVivaldiRunning()) {
   stats_collector_ = new SessionRestoreStatsCollector(
       restore_started,
-      make_scoped_ptr(
-          new SessionRestoreStatsCollector::UmaStatsReportingDelegate()));
+      base::MakeUnique<
+          SessionRestoreStatsCollector::UmaStatsReportingDelegate>());
   }
   shared_tab_loader_ = this;
   this_retainer_ = this;
+  base::MemoryCoordinatorClientRegistry::GetInstance()->Register(this);
 }
 
 TabLoader::~TabLoader() {
   DCHECK(tabs_loading_.empty() && tabs_to_load_.empty());
   DCHECK(shared_tab_loader_ == this);
   shared_tab_loader_ = nullptr;
+  base::MemoryCoordinatorClientRegistry::GetInstance()->Unregister(this);
 }
 
 void TabLoader::StartLoading(const std::vector<RestoredTab>& tabs) {
@@ -115,7 +153,9 @@ void TabLoader::StartLoading(const std::vector<RestoredTab>& tabs) {
       favicon::ContentFaviconDriver* favicon_driver =
           favicon::ContentFaviconDriver::FromWebContents(
               restored_tab.contents());
-      favicon_driver->FetchFavicon(favicon_driver->GetActiveURL());
+      // |favicon_driver| might be null when testing.
+      if (favicon_driver)
+        favicon_driver->FetchFavicon(favicon_driver->GetActiveURL());
     } else {
       tabs_loading_.insert(&restored_tab.contents()->GetController());
     }
@@ -136,12 +176,8 @@ void TabLoader::StartLoading(const std::vector<RestoredTab>& tabs) {
     // There is already at least one tab loading (the active tab). As such we
     // only have to start the timeout timer here. But, don't restore background
     // tabs if the system is under memory pressure.
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level =
-        CurrentMemoryPressureLevel();
-
-    if (memory_pressure_level !=
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE) {
-      OnMemoryPressure(memory_pressure_level);
+    if (ShouldStopLoadingTabs()) {
+      StopLoadingTabs();
       return;
     }
 
@@ -164,11 +200,8 @@ void TabLoader::LoadNextTab() {
     // large delay between a memory pressure event and receiving a notification
     // of that event (in that case tab restore can trigger memory pressure but
     // will complete before the notification arrives).
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level =
-        CurrentMemoryPressureLevel();
-    if (memory_pressure_level !=
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE) {
-      OnMemoryPressure(memory_pressure_level);
+    if (ShouldStopLoadingTabs()) {
+      StopLoadingTabs();
       return;
     }
 
@@ -200,9 +233,22 @@ void TabLoader::LoadNextTab() {
 
 void TabLoader::StartFirstTimer() {
   force_load_timer_.Stop();
+  if (vivaldi::IsVivaldiRunning()) {
+    Profile* current_profile = g_browser_process->profile_manager()
+                                   ->GetLastUsedProfileAllowedByPolicy();
+    PrefService* prefs = current_profile->GetPrefs();
+    if (prefs->GetBoolean(vivaldiprefs::kDeferredTabLoadingAfterRestore) &&
+        prefs->GetBoolean(vivaldiprefs::kAlwaysLoadPinnedTabAfterRestore)) {
+      force_load_timer_.Start(FROM_HERE,
+                              base::TimeDelta::FromMilliseconds(
+                                  kVivaldiFirstPinnedTabLoadTimeoutMS),
+                              this, &TabLoader::ForceLoadTimerFired);
+    }
+  } else {
   force_load_timer_.Start(FROM_HERE,
                           delegate_->GetFirstTabLoadingTimeout(),
                           this, &TabLoader::ForceLoadTimerFired);
+  }
 }
 
 void TabLoader::StartTimer() {
@@ -247,16 +293,40 @@ void TabLoader::HandleTabClosedOrLoaded(NavigationController* controller) {
     LoadNextTab();
 }
 
-base::MemoryPressureListener::MemoryPressureLevel
-    TabLoader::CurrentMemoryPressureLevel() {
-  if (base::MemoryPressureMonitor::Get())
-    return base::MemoryPressureMonitor::Get()->GetCurrentPressureLevel();
-
-  return base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
+bool TabLoader::ShouldStopLoadingTabs() const {
+  if (base::FeatureList::IsEnabled(features::kMemoryCoordinator))
+    return base::MemoryCoordinatorProxy::GetInstance()->GetCurrentMemoryState()
+        != base::MemoryState::NORMAL;
+  if (base::MemoryPressureMonitor::Get()) {
+    return base::MemoryPressureMonitor::Get()->GetCurrentPressureLevel() !=
+        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
+  }
+  return false;
 }
 
 void TabLoader::OnMemoryPressure(
     base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
+  if (ShouldStopLoadingTabs())
+    StopLoadingTabs();
+}
+
+void TabLoader::OnMemoryStateChange(base::MemoryState state) {
+  switch (state) {
+    case base::MemoryState::NORMAL:
+      break;
+    case base::MemoryState::THROTTLED:
+      StopLoadingTabs();
+      break;
+    case base::MemoryState::SUSPENDED:
+      // Note that SUSPENDED never occurs in the main browser process so far.
+      // Fall through.
+    case base::MemoryState::UNKNOWN:
+      NOTREACHED();
+      break;
+  }
+}
+
+void TabLoader::StopLoadingTabs() {
   // When receiving a resource pressure level warning, we stop pre-loading more
   // tabs since we are running in danger of loading more tabs by throwing out
   // old ones.

@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <utility>
 
+#import "chrome/browser/ui/cocoa/l10n_util.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "grit/theme_resources.h"
 #include "ui/base/cocoa/appkit_utils.h"
 #include "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
@@ -20,8 +20,6 @@ NSString* const kBrowserActionGrippyDragFinishedNotification =
     @"BrowserActionGrippyDragFinishedNotification";
 NSString* const kBrowserActionsContainerWillAnimate =
     @"BrowserActionsContainerWillAnimate";
-NSString* const kBrowserActionsContainerMouseEntered =
-    @"BrowserActionsContainerMouseEntered";
 NSString* const kBrowserActionsContainerAnimationEnded =
     @"BrowserActionsContainerAnimationEnded";
 NSString* const kTranslationWithDelta =
@@ -34,26 +32,20 @@ NSString* const kBrowserActionsContainerKeyEventKey =
 namespace {
 const CGFloat kAnimationDuration = 0.2;
 const CGFloat kGrippyWidth = 3.0;
-const CGFloat kMinimumContainerWidth = 3.0;
 }  // namespace
 
 @interface BrowserActionsContainerView(Private)
 // Returns the cursor that should be shown when hovering over the grippy based
 // on |canDragLeft_| and |canDragRight_|.
 - (NSCursor*)appropriateCursorForGrippy;
-
-// Returns the maximum allowed size for the container.
-- (CGFloat)maxAllowedWidth;
 @end
 
 @implementation BrowserActionsContainerView
 
-@synthesize canDragLeft = canDragLeft_;
-@synthesize canDragRight = canDragRight_;
+@synthesize minWidth = minWidth_;
+@synthesize maxWidth = maxWidth_;
 @synthesize grippyPinned = grippyPinned_;
-@synthesize maxDesiredWidth = maxDesiredWidth_;
 @synthesize userIsResizing = userIsResizing_;
-@synthesize delegate = delegate_;
 
 #pragma mark -
 #pragma mark Overridden Class Functions
@@ -61,8 +53,9 @@ const CGFloat kMinimumContainerWidth = 3.0;
 - (id)initWithFrame:(NSRect)frameRect {
   if ((self = [super initWithFrame:frameRect])) {
     grippyRect_ = NSMakeRect(0.0, 0.0, kGrippyWidth, NSHeight([self bounds]));
-    canDragLeft_ = YES;
-    canDragRight_ = YES;
+    if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+      grippyRect_.origin.x = NSWidth(frameRect) - NSWidth(grippyRect_);
+
     resizable_ = YES;
 
     resizeAnimation_.reset([[NSViewAnimation alloc] init]);
@@ -73,12 +66,6 @@ const CGFloat kMinimumContainerWidth = 3.0;
     [self setHidden:YES];
   }
   return self;
-}
-
-- (void)dealloc {
-  if (trackingArea_.get())
-    [self removeTrackingArea:trackingArea_.get()];
-  [super dealloc];
 }
 
 - (void)drawRect:(NSRect)rect {
@@ -103,27 +90,6 @@ const CGFloat kMinimumContainerWidth = 3.0;
     // Since this seems to have the right behavior, use it.
     [[self window] makeFirstResponder:self];
   }
-}
-
-- (void)setTrackingEnabled:(BOOL)enabled {
-  if (enabled) {
-    trackingArea_.reset(
-        [[CrTrackingArea alloc] initWithRect:NSZeroRect
-                                     options:NSTrackingMouseEnteredAndExited |
-                                             NSTrackingActiveInActiveApp |
-                                             NSTrackingInVisibleRect
-                                       owner:self
-                                    userInfo:nil]);
-    [self addTrackingArea:trackingArea_.get()];
-  } else if (trackingArea_.get()) {
-    [self removeTrackingArea:trackingArea_.get()];
-    [trackingArea_.get() clearOwner];
-    trackingArea_.reset(nil);
-  }
-}
-
-- (BOOL)trackingEnabled {
-  return trackingArea_.get() != nullptr;
 }
 
 - (void)keyDown:(NSEvent*)theEvent {
@@ -170,7 +136,7 @@ const CGFloat kMinimumContainerWidth = 3.0;
   [super keyDown:theEvent];
 }
 
-- (void)setHighlight:(scoped_ptr<ui::NinePartImageIds>)highlight {
+- (void)setHighlight:(std::unique_ptr<ui::NinePartImageIds>)highlight {
   if (highlight || highlight_) {
     highlight_ = std::move(highlight);
     // We don't allow resizing when the container is highlighting.
@@ -192,25 +158,27 @@ const CGFloat kMinimumContainerWidth = 3.0;
 }
 
 - (void)resetCursorRects {
+  if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+    grippyRect_.origin.x = NSWidth([self frame]) - NSWidth(grippyRect_);
   [self addCursorRect:grippyRect_ cursor:[self appropriateCursorForGrippy]];
 }
 
 - (BOOL)acceptsFirstResponder {
-  return YES;
-}
-
-- (void)mouseEntered:(NSEvent*)theEvent {
-  [[NSNotificationCenter defaultCenter]
-      postNotificationName:kBrowserActionsContainerMouseEntered
-                    object:self];
+  // The overflow container needs to receive key events to handle in-item
+  // navigation. The top-level container should not become first responder,
+  // allowing focus travel to proceed to the first action.
+  return isOverflow_;
 }
 
 - (void)mouseDown:(NSEvent*)theEvent {
-  initialDragPoint_ = [self convertPoint:[theEvent locationInWindow]
-                                fromView:nil];
-  if (!resizable_ ||
-      !NSMouseInRect(initialDragPoint_, grippyRect_, [self isFlipped]))
+  NSPoint location =
+      [self convertPoint:[theEvent locationInWindow] fromView:nil];
+  if (!resizable_ || !NSMouseInRect(location, grippyRect_, [self isFlipped]))
     return;
+
+  dragOffset_ = location.x - (cocoa_l10n_util::ShouldDoExperimentalRTLLayout()
+                                  ? NSWidth(self.frame)
+                                  : 0);
 
   userIsResizing_ = YES;
 
@@ -242,31 +210,14 @@ const CGFloat kMinimumContainerWidth = 3.0;
   if (!userIsResizing_)
     return;
 
-  NSPoint location = [self convertPoint:[theEvent locationInWindow]
-                               fromView:nil];
-  NSRect containerFrame = [self frame];
-  CGFloat dX = [theEvent deltaX];
-  CGFloat withDelta = location.x - dX;
-  canDragRight_ = (withDelta >= initialDragPoint_.x) &&
-      (NSWidth(containerFrame) > kMinimumContainerWidth);
-  CGFloat maxAllowedWidth = [self maxAllowedWidth];
-  containerFrame.size.width =
-      std::max(NSWidth(containerFrame) - dX, kMinimumContainerWidth);
-  canDragLeft_ = withDelta <= initialDragPoint_.x &&
-      NSWidth(containerFrame) < maxDesiredWidth_ &&
-      NSWidth(containerFrame) < maxAllowedWidth;
+  const CGFloat translation =
+      [self convertPoint:[theEvent locationInWindow] fromView:nil].x -
+      dragOffset_;
+  const CGFloat targetWidth = (cocoa_l10n_util::ShouldDoExperimentalRTLLayout()
+                                   ? translation
+                                   : NSWidth(self.frame) - translation);
 
-  if ((dX < 0.0 && !canDragLeft_) || (dX > 0.0 && !canDragRight_))
-    return;
-
-  if (NSWidth(containerFrame) <= kMinimumContainerWidth)
-    return;
-
-  grippyPinned_ = NSWidth(containerFrame) >= maxAllowedWidth;
-  containerFrame.origin.x += dX;
-
-  [self setFrame:containerFrame];
-  [self setNeedsDisplay:YES];
+  [self resizeToWidth:targetWidth animate:NO];
 
   [[NSNotificationCenter defaultCenter]
       postNotificationName:kBrowserActionGrippyDraggingNotification
@@ -303,17 +254,14 @@ const CGFloat kMinimumContainerWidth = 3.0;
 #pragma mark Public Methods
 
 - (void)resizeToWidth:(CGFloat)width animate:(BOOL)animate {
-  width = std::max(width, kMinimumContainerWidth);
-  NSRect frame = [self frame];
+  width = std::min(std::max(width, minWidth_), maxWidth_);
 
-  CGFloat maxAllowedWidth = [self maxAllowedWidth];
-  width = std::min(maxAllowedWidth, width);
+  NSRect newFrame = [self frame];
+  if (!cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+    newFrame.origin.x += NSWidth(newFrame) - width;
+  newFrame.size.width = width;
 
-  CGFloat dX = frame.size.width - width;
-  frame.size.width = width;
-  NSRect newFrame = NSOffsetRect(frame, dX, 0);
-
-  grippyPinned_ = width == maxAllowedWidth;
+  grippyPinned_ = width == maxWidth_;
 
   [self stopAnimation];
 
@@ -360,21 +308,20 @@ const CGFloat kMinimumContainerWidth = 3.0;
 // Returns the cursor to display over the grippy hover region depending on the
 // current drag state.
 - (NSCursor*)appropriateCursorForGrippy {
-  NSCursor* retVal;
-  if (!resizable_ || (!canDragLeft_ && !canDragRight_)) {
-    retVal = [NSCursor arrowCursor];
-  } else if (!canDragLeft_) {
-    retVal = [NSCursor resizeRightCursor];
-  } else if (!canDragRight_) {
-    retVal = [NSCursor resizeLeftCursor];
-  } else {
-    retVal = [NSCursor resizeLeftRightCursor];
-  }
-  return retVal;
-}
+  if (resizable_) {
+    const CGFloat width = NSWidth(self.frame);
+    const BOOL isRTL = cocoa_l10n_util::ShouldDoExperimentalRTLLayout();
+    const BOOL canDragLeft = width != (isRTL ? minWidth_ : maxWidth_);
+    const BOOL canDragRight = width != (isRTL ? maxWidth_ : minWidth_);
 
-- (CGFloat)maxAllowedWidth {
-  return delegate_ ? delegate_->GetMaxAllowedWidth() : CGFLOAT_MAX;
+    if (canDragLeft && canDragRight)
+      return [NSCursor resizeLeftRightCursor];
+    if (canDragLeft)
+      return [NSCursor resizeLeftCursor];
+    if (canDragRight)
+      return [NSCursor resizeRightCursor];
+  }
+  return [NSCursor arrowCursor];
 }
 
 @end

@@ -1,34 +1,33 @@
 // Copyright (c) 2013-2014 Vivaldi Technologies AS. All rights reserved
 
-
 #include <stack>
 #include <string>
+#include <vector>
 
 #include "chrome/browser/importer/importer_list.h"
 
 #include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/path_service.h"
-#include "chrome/common/importer/importer_bridge.h"
 #include "chrome/browser/shell_integration.h"
-#include "grit/generated_resources.h"
+#include "chrome/common/importer/importer_bridge.h"
+#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #include "app/vivaldi_resources.h"
 #include "importer/imported_notes_entry.h"
-#include "importer/viv_importer_utils.h"
 #include "importer/viv_importer.h"
+#include "importer/viv_importer_utils.h"
 #include "importer/viv_opera_reader.h"
 
-
 class OperaNotesReader : public OperaAdrFileReader {
-public:
-  OperaNotesReader(){};
-  ~OperaNotesReader() override{};
+ public:
+  OperaNotesReader() {}
+  ~OperaNotesReader() override {};
 
   void AddNote(std::vector<base::string16> &current_folder,
                const base::DictionaryValue &entries, bool is_folder,
@@ -36,11 +35,11 @@ public:
 
   const std::vector<ImportedNotesEntry> &Notes() const { return notes; }
 
-protected:
+ protected:
   void HandleEntry(const std::string &category,
                    const base::DictionaryValue &entries) override;
 
-private:
+ private:
   std::vector<base::string16> current_folder;
   std::vector<ImportedNotesEntry> notes;
 
@@ -71,7 +70,6 @@ void OperaNotesReader::AddNote(std::vector<base::string16> &current_folder,
   base::string16 content;
 
   double created_time = 0;
-  double visited_time = 0;
 
   if (!is_folder && !entries.GetString("url", &url))
     url = base::string16();
@@ -88,20 +86,20 @@ void OperaNotesReader::AddNote(std::vector<base::string16> &current_folder,
         it = wtemp.erase(it);
       }
       *it = '\n';
-      if (line_end < 0)
-        line_end = it - wtemp.begin();
+      if (line_end < 0) line_end = it - wtemp.begin();
     }
   }
 
   title = wtemp.substr(0, line_end);
 
-  if(!is_folder)
+  if (!is_folder)
     content = wtemp;
 
   if (item_name)
     *item_name = title;
 
-  if (!entries.GetString("created", &temp) || !base::StringToDouble(temp, &created_time))
+  if (!entries.GetString("created", &temp) ||
+      !base::StringToDouble(temp, &created_time))
     created_time = 0;
 
   ImportedNotesEntry entry;
@@ -115,19 +113,22 @@ void OperaNotesReader::AddNote(std::vector<base::string16> &current_folder,
   notes.push_back(entry);
 }
 
-void OperaImporter::ImportNotes()
-{
-  if (notesfilename_.empty())
-    return;
-
+bool OperaImporter::ImportNotes(std::string& error) {
+  if (notesfilename_.empty()) {
+    error = "No notes filename provided.";
+    return false;
+  }
   base::FilePath file(notesfilename_);
   OperaNotesReader reader;
 
-  reader.LoadFile(file);
-
+  if (!reader.LoadFile(file)) {
+    error = "Notes file does not exist.";
+    return false;
+  }
   if (!reader.Notes().empty() && !cancelled()) {
-    const base::string16& first_folder_name =
-      bridge_->GetLocalizedString(IDS_NOTES_GROUP_FROM_OPERA);
+    const base::string16 &first_folder_name =
+        bridge_->GetLocalizedString(IDS_NOTES_GROUP_FROM_OPERA);
     bridge_->AddNotes(reader.Notes(), first_folder_name);
   }
+  return true;
 }

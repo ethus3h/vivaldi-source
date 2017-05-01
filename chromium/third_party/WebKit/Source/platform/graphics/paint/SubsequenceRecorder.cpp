@@ -6,60 +6,40 @@
 
 #include "platform/RuntimeEnabledFeatures.h"
 #include "platform/graphics/GraphicsContext.h"
-#include "platform/graphics/paint/CachedDisplayItem.h"
 #include "platform/graphics/paint/PaintController.h"
 #include "platform/graphics/paint/SubsequenceDisplayItem.h"
 
 namespace blink {
 
-bool SubsequenceRecorder::useCachedSubsequenceIfPossible(GraphicsContext& context, const DisplayItemClient& client)
-{
-    if (context.paintController().displayItemConstructionIsDisabled() || context.paintController().subsequenceCachingIsDisabled())
-        return false;
+SubsequenceRecorder::SubsequenceRecorder(GraphicsContext& context,
+                                         const DisplayItemClient& client)
+    : m_paintController(context.getPaintController()),
+      m_client(client),
+      m_beginSubsequenceIndex(0) {
+  if (m_paintController.displayItemConstructionIsDisabled())
+    return;
 
-    if (!context.paintController().clientCacheIsValid(client))
-        return false;
-
-    context.paintController().createAndAppend<CachedDisplayItem>(client, DisplayItem::CachedSubsequence);
-
-#if ENABLE(ASSERT)
-    // When under-invalidation checking is enabled, we output CachedSubsequence display item
-    // followed by forced painting of the subsequence.
-    if (RuntimeEnabledFeatures::slimmingPaintUnderInvalidationCheckingEnabled())
-        return false;
-#endif
-
-    return true;
+  m_beginSubsequenceIndex = m_paintController.newDisplayItemList().size();
+  m_paintController.createAndAppend<BeginSubsequenceDisplayItem>(m_client);
 }
 
-SubsequenceRecorder::SubsequenceRecorder(GraphicsContext& context, const DisplayItemClient& client)
-    : m_paintController(context.paintController())
-    , m_client(client)
-    , m_beginSubsequenceIndex(0)
-{
-    if (m_paintController.displayItemConstructionIsDisabled())
-        return;
+SubsequenceRecorder::~SubsequenceRecorder() {
+  if (m_paintController.displayItemConstructionIsDisabled())
+    return;
 
-    m_beginSubsequenceIndex = m_paintController.newDisplayItemList().size();
-    m_paintController.createAndAppend<BeginSubsequenceDisplayItem>(m_client);
-}
-
-SubsequenceRecorder::~SubsequenceRecorder()
-{
-    if (m_paintController.displayItemConstructionIsDisabled())
-        return;
-
-    if (m_paintController.lastDisplayItemIsNoopBegin()) {
-        ASSERT(m_beginSubsequenceIndex == m_paintController.newDisplayItemList().size() - 1);
-        // Remove uncacheable no-op BeginSubsequence/EndSubsequence pairs.
-        // Don't remove cacheable no-op pairs because we need to match them later with CachedSubsequences.
-        if (m_paintController.newDisplayItemList().last().skippedCache()) {
-            m_paintController.removeLastDisplayItem();
-            return;
-        }
+  if (m_paintController.lastDisplayItemIsNoopBegin()) {
+    ASSERT(m_beginSubsequenceIndex ==
+           m_paintController.newDisplayItemList().size() - 1);
+    // Remove uncacheable no-op BeginSubsequence/EndSubsequence pairs.
+    // Don't remove cacheable no-op pairs because we need to match them later
+    // with CachedSubsequences.
+    if (m_paintController.newDisplayItemList().last().skippedCache()) {
+      m_paintController.removeLastDisplayItem();
+      return;
     }
+  }
 
-    m_paintController.createAndAppend<EndSubsequenceDisplayItem>(m_client);
+  m_paintController.createAndAppend<EndSubsequenceDisplayItem>(m_client);
 }
 
-} // namespace blink
+}  // namespace blink

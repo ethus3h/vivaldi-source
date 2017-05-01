@@ -16,7 +16,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -66,7 +66,7 @@ AutocompleteMatch::Type GetTypeForShortcut(AutocompleteMatch::Type type) {
 
 ShortcutsBackend::ShortcutsBackend(
     TemplateURLService* template_url_service,
-    scoped_ptr<SearchTermsData> search_terms_data,
+    std::unique_ptr<SearchTermsData> search_terms_data,
     history::HistoryService* history_service,
     scoped_refptr<base::SequencedTaskRunner> db_runner,
     base::FilePath database_path,
@@ -159,7 +159,8 @@ ShortcutsDatabase::Shortcut::MatchCore ShortcutsBackend::MatchToMatchCore(
       AutocompleteMatch::IsSpecializedSearchType(match.type)
           ? BaseSearchProvider::CreateSearchSuggestion(
                 match.search_terms_args->search_terms, match_type,
-                (match.transition == ui::PAGE_TRANSITION_KEYWORD),
+                ui::PageTransitionCoreTypeIs(match.transition,
+                                             ui::PAGE_TRANSITION_KEYWORD),
                 match.GetTemplateURL(template_url_service, false),
                 *search_terms_data)
           : match;
@@ -227,8 +228,8 @@ void ShortcutsBackend::InitCompleted() {
   UMA_HISTOGRAM_COUNTS_10000("ShortcutsProvider.DatabaseSize",
                              shortcuts_map_.size());
   current_state_ = INITIALIZED;
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsLoaded());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsLoaded();
 }
 
 bool ShortcutsBackend::AddShortcut(
@@ -238,8 +239,8 @@ bool ShortcutsBackend::AddShortcut(
   DCHECK(guid_map_.find(shortcut.id) == guid_map_.end());
   guid_map_[shortcut.id] = shortcuts_map_.insert(
       std::make_pair(base::i18n::ToLower(shortcut.text), shortcut));
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsChanged());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsChanged();
   return no_db_access_ ||
          db_runner_->PostTask(
              FROM_HERE,
@@ -256,8 +257,8 @@ bool ShortcutsBackend::UpdateShortcut(
     shortcuts_map_.erase(it->second);
   guid_map_[shortcut.id] = shortcuts_map_.insert(
       std::make_pair(base::i18n::ToLower(shortcut.text), shortcut));
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsChanged());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsChanged();
   return no_db_access_ ||
          db_runner_->PostTask(
              FROM_HERE,
@@ -276,8 +277,8 @@ bool ShortcutsBackend::DeleteShortcutsWithIDs(
       guid_map_.erase(it);
     }
   }
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsChanged());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsChanged();
   return no_db_access_ ||
          db_runner_->PostTask(
              FROM_HERE,
@@ -302,8 +303,8 @@ bool ShortcutsBackend::DeleteShortcutsWithURL(const GURL& url,
       ++it;
     }
   }
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsChanged());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsChanged();
   return no_db_access_ ||
          db_runner_->PostTask(
              FROM_HERE,
@@ -317,8 +318,8 @@ bool ShortcutsBackend::DeleteAllShortcuts() {
     return false;
   shortcuts_map_.clear();
   guid_map_.clear();
-  FOR_EACH_OBSERVER(ShortcutsBackendObserver, observer_list_,
-                    OnShortcutsChanged());
+  for (ShortcutsBackendObserver& observer : observer_list_)
+    observer.OnShortcutsChanged();
   return no_db_access_ ||
          db_runner_->PostTask(
              FROM_HERE, base::Bind(base::IgnoreResult(

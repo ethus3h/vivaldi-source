@@ -7,8 +7,9 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/devtools/devtools_network_interceptor.h"
 #include "net/base/completion_callback.h"
@@ -20,18 +21,15 @@
 
 class DevToolsNetworkController;
 class DevToolsNetworkUploadDataStream;
-class GURL;
 
 namespace net {
 class AuthCredentials;
-class BoundNetLog;
 class HttpRequestHeaders;
 struct HttpRequestInfo;
 class HttpResponseInfo;
-class HttpNetworkSession;
 class IOBuffer;
 struct LoadTimingInfo;
-class UploadProgress;
+class NetLogWithSource;
 class X509Certificate;
 }  // namespace net
 
@@ -51,14 +49,14 @@ class DevToolsNetworkTransaction
 
   DevToolsNetworkTransaction(
       DevToolsNetworkController* controller,
-      scoped_ptr<net::HttpTransaction> network_transaction);
+      std::unique_ptr<net::HttpTransaction> network_transaction);
 
   ~DevToolsNetworkTransaction() override;
 
   // HttpTransaction methods:
   int Start(const net::HttpRequestInfo* request,
             const net::CompletionCallback& callback,
-            const net::BoundNetLog& net_log) override;
+            const net::NetLogWithSource& net_log) override;
   int RestartIgnoringLastError(
       const net::CompletionCallback& callback) override;
   int RestartWithCertificate(net::X509Certificate* client_cert,
@@ -78,7 +76,6 @@ class DevToolsNetworkTransaction
   void DoneReading() override;
   const net::HttpResponseInfo* GetResponseInfo() const override;
   net::LoadState GetLoadState() const override;
-  net::UploadProgress GetUploadProgress() const override;
   void SetQuicServerInfo(net::QuicServerInfo* quic_server_info) override;
   bool GetLoadTimingInfo(net::LoadTimingInfo* load_timing_info) const override;
   bool GetRemoteEndpoint(net::IPEndPoint* endpoint) const override;
@@ -88,8 +85,8 @@ class DevToolsNetworkTransaction
       net::WebSocketHandshakeStreamBase::CreateHelper* create_helper) override;
   void SetBeforeNetworkStartCallback(
       const BeforeNetworkStartCallback& callback) override;
-  void SetBeforeProxyHeadersSentCallback(
-      const BeforeProxyHeadersSentCallback& callback) override;
+  void SetBeforeHeadersSentCallback(
+      const BeforeHeadersSentCallback& callback) override;
   int ResumeNetworkStart() override;
   void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
 
@@ -117,13 +114,13 @@ class DevToolsNetworkTransaction
   base::WeakPtr<DevToolsNetworkInterceptor> interceptor_;
 
   // Modified upload data stream. Should be destructed after |custom_request_|.
-  scoped_ptr<DevToolsNetworkUploadDataStream> custom_upload_data_stream_;
+  std::unique_ptr<DevToolsNetworkUploadDataStream> custom_upload_data_stream_;
 
   // Modified request. Should be destructed after |network_transaction_|.
-  scoped_ptr<net::HttpRequestInfo> custom_request_;
+  std::unique_ptr<net::HttpRequestInfo> custom_request_;
 
   // Real network transaction.
-  scoped_ptr<net::HttpTransaction> network_transaction_;
+  std::unique_ptr<net::HttpTransaction> network_transaction_;
 
   const net::HttpRequestInfo* request_;
 

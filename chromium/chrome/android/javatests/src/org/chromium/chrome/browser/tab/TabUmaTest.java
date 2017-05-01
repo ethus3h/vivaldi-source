@@ -4,19 +4,18 @@
 
 package org.chromium.chrome.browser.tab;
 
-import android.test.suitebuilder.annotation.MediumTest;
+import android.support.test.filters.MediumTest;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.MetricsUtils.HistogramDelta;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabSelectionType;
 import org.chromium.chrome.test.ChromeActivityTestCaseBase;
-import org.chromium.chrome.test.util.TestHttpServerClient;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.net.test.EmbeddedTestServer;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -24,10 +23,13 @@ import java.util.concurrent.ExecutionException;
 /**
  * Tests for Tab-related histogram collection.
  */
+@RetryOnFailure
 public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
 
-    private static final String TEST_URL =
-            TestHttpServerClient.getUrl("chrome/test/data/android/about.html");
+    private static final String TEST_PATH = "/chrome/test/data/android/about.html";
+
+    private EmbeddedTestServer mTestServer;
+    private String mTestUrl;
 
     public TabUmaTest() {
         super(ChromeActivity.class);
@@ -38,11 +40,23 @@ public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
         startMainActivityOnBlankPage();
     }
 
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        mTestServer = EmbeddedTestServer.createAndStartServer(getInstrumentation().getContext());
+        mTestUrl = mTestServer.getURL(TEST_PATH);
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        mTestServer.stopAndDestroyServer();
+        super.tearDown();
+    }
+
     /**
      * Verify that Tab.StatusWhenSwitchedBackToForeground is correctly recording lazy loads.
      */
     @MediumTest
-    @CommandLineFlags.Add(ChromeSwitches.DISABLE_DOCUMENT_MODE)
     @Feature({"Uma"})
     public void testTabStatusWhenSwitchedToLazyLoads() throws ExecutionException {
         final Tab tab = ThreadUtils.runOnUiThreadBlocking(new Callable<Tab>() {
@@ -50,7 +64,7 @@ public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
             public Tab call() {
                 Tab bgTab = Tab.createTabForLazyLoad(getActivity(), false,
                         getActivity().getWindowAndroid(), TabLaunchType.FROM_LONGPRESS_BACKGROUND,
-                        Tab.INVALID_TAB_ID, new LoadUrlParams(TEST_URL));
+                        Tab.INVALID_TAB_ID, new LoadUrlParams(mTestUrl));
                 bgTab.initialize(null, null, new TabDelegateFactory(), true, false);
                 return bgTab;
             }
@@ -105,7 +119,7 @@ public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
                         getActivity().getWindowAndroid(), TabLaunchType.FROM_LONGPRESS_BACKGROUND,
                         Tab.INVALID_TAB_ID, true);
                 bgTab.initialize(null, null, new TabDelegateFactory(), true, false);
-                bgTab.loadUrl(new LoadUrlParams(TEST_URL));
+                bgTab.loadUrl(new LoadUrlParams(mTestUrl));
                 bgTab.show(TabSelectionType.FROM_USER);
                 return bgTab;
             }
@@ -122,7 +136,7 @@ public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
                         getActivity().getWindowAndroid(), TabLaunchType.FROM_LONGPRESS_BACKGROUND,
                         Tab.INVALID_TAB_ID, true);
                 bgTab.initialize(null, null, new TabDelegateFactory(), true, false);
-                bgTab.loadUrl(new LoadUrlParams(TEST_URL));
+                bgTab.loadUrl(new LoadUrlParams(mTestUrl));
                 // Simulate the renderer being killed by the OS.
                 bgTab.simulateRendererKilledForTesting(false);
                 bgTab.show(TabSelectionType.FROM_USER);
@@ -139,7 +153,7 @@ public class TabUmaTest extends ChromeActivityTestCaseBase<ChromeActivity> {
             public Tab call() {
                 Tab bgTab = Tab.createTabForLazyLoad(getActivity(), false,
                         getActivity().getWindowAndroid(), TabLaunchType.FROM_LONGPRESS_BACKGROUND,
-                        Tab.INVALID_TAB_ID, new LoadUrlParams(TEST_URL));
+                        Tab.INVALID_TAB_ID, new LoadUrlParams(mTestUrl));
                 bgTab.initialize(null, null, new TabDelegateFactory(), true, false);
                 bgTab.show(TabSelectionType.FROM_USER);
                 return bgTab;

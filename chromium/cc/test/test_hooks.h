@@ -12,24 +12,26 @@
 
 namespace cc {
 
+class CompositorFrame;
+
 // Used by test stubs to notify the test when something interesting happens.
 class TestHooks : public AnimationDelegate {
  public:
   TestHooks();
   ~TestHooks() override;
 
-  void ReadSettings(const LayerTreeSettings& settings);
-
-  virtual void CreateResourceAndTileTaskWorkerPool(
+  // Compositor thread hooks.
+  virtual void CreateResourceAndRasterBufferProvider(
       LayerTreeHostImpl* host_impl,
-      scoped_ptr<TileTaskWorkerPool>* tile_task_worker_pool,
-      scoped_ptr<ResourcePool>* resource_pool);
+      std::unique_ptr<RasterBufferProvider>* raster_buffer_provider,
+      std::unique_ptr<ResourcePool>* resource_pool);
   virtual void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
                                           const BeginFrameArgs& args) {}
   virtual void DidFinishImplFrameOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void BeginMainFrameAbortedOnThread(LayerTreeHostImpl* host_impl,
                                              CommitEarlyOutReason reason) {}
-  virtual void WillPrepareTiles(LayerTreeHostImpl* host_impl) {}
+  virtual void ReadyToCommitOnThread(LayerTreeHostImpl* host_impl) {}
+  virtual void WillPrepareTilesOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void BeginCommitOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void WillCommitCompleteOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void CommitCompleteOnThread(LayerTreeHostImpl* host_impl) {}
@@ -37,104 +39,81 @@ class TestHooks : public AnimationDelegate {
   virtual void DidActivateTreeOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void InitializedRendererOnThread(LayerTreeHostImpl* host_impl,
                                            bool success) {}
+  virtual void WillPrepareToDrawOnThread(LayerTreeHostImpl* host_impl) {}
   virtual DrawResult PrepareToDrawOnThread(
       LayerTreeHostImpl* host_impl,
       LayerTreeHostImpl::FrameData* frame_data,
       DrawResult draw_result);
   virtual void DrawLayersOnThread(LayerTreeHostImpl* host_impl) {}
-  virtual void SwapBuffersOnThread(LayerTreeHostImpl* host_impl, bool result) {}
-  virtual void SwapBuffersCompleteOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyReadyToActivateOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyReadyToDrawOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyAllTileTasksCompleted(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyTileStateChangedOnThread(LayerTreeHostImpl* host_impl,
                                               const Tile* tile) {}
+  virtual void DidSetVisibleOnImplTree(LayerTreeHostImpl* host_impl,
+                                       bool visible) {}
   virtual void AnimateLayers(LayerTreeHostImpl* host_impl,
                              base::TimeTicks monotonic_time) {}
   virtual void UpdateAnimationState(LayerTreeHostImpl* host_impl,
                                     bool has_unfinished_animation) {}
   virtual void WillAnimateLayers(LayerTreeHostImpl* host_impl,
                                  base::TimeTicks monotonic_time) {}
+
+  // Asynchronous compositor thread hooks.
+  // These are called asynchronously from the LayerTreeHostImpl performing its
+  // draw, so you should record state you want to use here in
+  // DrawLayersOnThread() instead. For that reason these methods do not receive
+  // a LayerTreeHostImpl pointer.
+  virtual void DisplayReceivedCompositorFrameOnThread(
+      const CompositorFrame& frame) {}
+  virtual void DisplayWillDrawAndSwapOnThread(
+      bool will_draw_and_swap,
+      const RenderPassList& render_passes) {}
+  virtual void DisplayDidDrawAndSwapOnThread() {}
+
+  // Main thread hooks.
   virtual void ApplyViewportDeltas(
       const gfx::Vector2dF& inner_delta,
       const gfx::Vector2dF& outer_delta,
       const gfx::Vector2dF& elastic_overscroll_delta,
       float scale,
       float top_controls_delta) {}
+  virtual void BeginMainFrameNotExpectedSoon() {}
   virtual void BeginMainFrame(const BeginFrameArgs& args) {}
   virtual void WillBeginMainFrame() {}
   virtual void DidBeginMainFrame() {}
   virtual void UpdateLayerTreeHost() {}
-  virtual void DidInitializeOutputSurface() {}
-  virtual void DidFailToInitializeOutputSurface() {}
+  virtual void DidInitializeCompositorFrameSink() {}
+  virtual void DidFailToInitializeCompositorFrameSink() {}
   virtual void DidAddAnimation() {}
   virtual void WillCommit() {}
   virtual void DidCommit() {}
   virtual void DidCommitAndDrawFrame() {}
-  virtual void DidCompleteSwapBuffers() {}
-  virtual void DidSetVisibleOnImplTree(LayerTreeHostImpl* host_impl,
-                                       bool visible) {}
+  virtual void DidReceiveCompositorFrameAck() {}
   virtual void ScheduleComposite() {}
-  virtual void DidSetNeedsUpdateLayers() {}
   virtual void DidActivateSyncTree() {}
 
-  // Hooks for SchedulerClient.
-  virtual void ScheduledActionWillSendBeginMainFrame() {}
-  virtual void ScheduledActionSendBeginMainFrame() {}
-  virtual void ScheduledActionDrawAndSwapIfPossible() {}
-  virtual void ScheduledActionCommit() {}
-  virtual void ScheduledActionBeginOutputSurfaceCreation() {}
-  virtual void ScheduledActionPrepareTiles() {}
-  virtual void ScheduledActionInvalidateOutputSurface() {}
-  virtual void SendBeginFramesToChildren(const BeginFrameArgs& args) {}
-  virtual void SendBeginMainFrameNotExpectedSoon() {}
-
-  // Hooks for ProxyImpl
-  virtual void SetThrottleFrameProductionOnImpl(bool throttle) {}
-  virtual void UpdateTopControlsStateOnImpl(TopControlsState constraints,
-                                            TopControlsState current,
-                                            bool animate) {}
-  virtual void InitializeOutputSurfaceOnImpl(OutputSurface* output_surface) {}
-  virtual void MainThreadHasStoppedFlingingOnImpl() {}
-  virtual void SetInputThrottledUntilCommitOnImpl(bool is_throttled) {}
-  virtual void SetDeferCommitsOnImpl(bool defer_commits) {}
-  virtual void BeginMainFrameAbortedOnImpl(CommitEarlyOutReason reason) {}
-  virtual void SetNeedsRedrawOnImpl(const gfx::Rect& damage_rect) {}
-  virtual void SetNeedsCommitOnImpl() {}
-  virtual void FinishAllRenderingOnImpl() {}
-  virtual void SetVisibleOnImpl(bool visible) {}
-  virtual void ReleaseOutputSurfaceOnImpl() {}
-  virtual void FinishGLOnImpl() {}
-  virtual void StartCommitOnImpl() {}
-
-  // Hooks for ProxyMain
-  virtual void ReceivedDidCompleteSwapBuffers() {}
-  virtual void ReceivedSetRendererCapabilitiesMainCopy(
-      const RendererCapabilities& capabilities) {}
-  virtual void ReceivedBeginMainFrameNotExpectedSoon() {}
-  virtual void ReceivedDidCommitAndDrawFrame() {}
-  virtual void ReceivedSetAnimationEvents() {}
-  virtual void ReceivedDidLoseOutputSurface() {}
-  virtual void ReceivedRequestNewOutputSurface() {}
-  virtual void ReceivedDidInitializeOutputSurface(
-      bool success,
-      const RendererCapabilities& capabilities) {}
-  virtual void ReceivedDidCompletePageScaleAnimation() {}
-  virtual void ReceivedPostFrameTimingEventsOnMain() {}
-  virtual void ReceivedBeginMainFrame() {}
-
-  // Implementation of AnimationDelegate:
+  // AnimationDelegate implementation.
   void NotifyAnimationStarted(base::TimeTicks monotonic_time,
-                              Animation::TargetProperty target_property,
+                              TargetProperty::Type target_property,
                               int group) override {}
   void NotifyAnimationFinished(base::TimeTicks monotonic_time,
-                               Animation::TargetProperty target_property,
+                               TargetProperty::Type target_property,
                                int group) override {}
   void NotifyAnimationAborted(base::TimeTicks monotonic_time,
-                              Animation::TargetProperty target_property,
+                              TargetProperty::Type target_property,
                               int group) override {}
+  void NotifyAnimationTakeover(base::TimeTicks monotonic_time,
+                               TargetProperty::Type target_property,
+                               double animation_start_time,
+                               std::unique_ptr<AnimationCurve> curve) override {
+  }
 
-  virtual void RequestNewOutputSurface() = 0;
+  // OutputSurface indirections to the LayerTreeTest, that can be further
+  // overridden.
+  virtual void RequestNewCompositorFrameSink() = 0;
+  virtual std::unique_ptr<OutputSurface> CreateDisplayOutputSurfaceOnThread(
+      scoped_refptr<ContextProvider> compositor_context_provider) = 0;
 };
 
 }  // namespace cc

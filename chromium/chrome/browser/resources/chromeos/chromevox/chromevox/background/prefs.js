@@ -60,7 +60,10 @@ cvox.ChromeVoxPrefs = function() {
  */
 cvox.ChromeVoxPrefs.DEFAULT_PREFS = {
   'active': true,
+  'audioStrategy': 'audioNormal',
+  'autoRead': false,
   'brailleCaptions': false,
+  'brailleSideBySide': true,
   // TODO(dtseng): Leaking state about multiple key maps here until we have a
   // class to manage multiple key maps. Also, this doesn't belong as a pref;
   // should just store in local storage.
@@ -70,6 +73,7 @@ cvox.ChromeVoxPrefs.DEFAULT_PREFS = {
   'focusFollowsMouse': false,
   'granularity': undefined,
   'position': '{}',
+  'siteSpecificEnhancements': true,
   'siteSpecificScriptBase':
       'https://ssl.gstatic.com/accessibility/javascript/ext/',
   'siteSpecificScriptLoader':
@@ -77,8 +81,8 @@ cvox.ChromeVoxPrefs.DEFAULT_PREFS = {
   'sticky': false,
   'typingEcho': 0,
   'useIBeamCursor': cvox.ChromeVox.isMac,
+  'useClassic': false,
   'useVerboseMode': true,
-  'siteSpecificEnhancements': true
 };
 
 
@@ -106,10 +110,17 @@ cvox.ChromeVoxPrefs.prototype.init = function(pullFromLocalStorage) {
  * cvox.KeyMap.AVAIABLE_KEYMAP_INFO.
 */
 cvox.ChromeVoxPrefs.prototype.switchToKeyMap = function(selectedKeyMap) {
+  // Switching key maps potentially affects the key codes that involve
+  // sequencing. Without resetting this list, potentially stale key
+  // codes remain. The key codes themselves get pushed in
+  // cvox.KeySequence.deserialize which gets called by cvox.KeyMap.
+  cvox.ChromeVox.sequenceSwitchKeyCodes = [];
+
   // TODO(dtseng): Leaking state about multiple key maps here until we have a
   // class to manage multiple key maps.
   localStorage['currentKeyMap'] = selectedKeyMap;
   this.keyMap_ = cvox.KeyMap.fromCurrentKeyMap();
+  cvox.ChromeVoxKbHandler.handlerKeyMap = this.keyMap_;
   this.keyMap_.toLocalStorage();
   this.keyMap_.resetModifier();
   this.sendPrefsToAllTabs(false, true);

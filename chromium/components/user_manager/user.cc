@@ -36,10 +36,6 @@ bool User::TypeHasGaiaAccount(UserType user_type) {
          user_type == USER_TYPE_CHILD;
 }
 
-const std::string& User::email() const {
-  return account_id_.GetUserEmail();
-}
-
 // Also used for regular supervised users.
 class RegularUser : public User {
  public:
@@ -55,6 +51,15 @@ class RegularUser : public User {
   bool is_child_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(RegularUser);
+};
+
+class ActiveDirectoryUser : public RegularUser {
+ public:
+  explicit ActiveDirectoryUser(const AccountId& account_id);
+  ~ActiveDirectoryUser() override;
+  // Overridden from User:
+  UserType GetType() const override;
+  bool CanSyncImage() const override;
 };
 
 class GuestUser : public User {
@@ -79,6 +84,7 @@ class DeviceLocalAccountUserBase : public User {
   ~DeviceLocalAccountUserBase() override;
   // User:
   void SetAffiliation(bool) override;
+  bool IsDeviceLocalAccount() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountUserBase);
@@ -94,6 +100,18 @@ class KioskAppUser : public DeviceLocalAccountUserBase {
 
  private:
   DISALLOW_COPY_AND_ASSIGN(KioskAppUser);
+};
+
+class ArcKioskAppUser : public DeviceLocalAccountUserBase {
+ public:
+  explicit ArcKioskAppUser(const AccountId& arc_kiosk_account_id);
+  ~ArcKioskAppUser() override;
+
+  // Overridden from User:
+  UserType GetType() const override;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(ArcKioskAppUser);
 };
 
 class SupervisedUser : public User {
@@ -121,7 +139,12 @@ class PublicAccountUser : public DeviceLocalAccountUserBase {
   DISALLOW_COPY_AND_ASSIGN(PublicAccountUser);
 };
 
-std::string User::GetEmail() const {
+User::User(const AccountId& account_id)
+    : account_id_(account_id), user_image_(new UserImage) {}
+
+User::~User() {}
+
+std::string User::GetDisplayEmail() const {
   return display_email();
 }
 
@@ -136,7 +159,7 @@ base::string16 User::GetGivenName() const {
 }
 
 const gfx::ImageSkia& User::GetImage() const {
-  return user_image_.image();
+  return user_image_->image();
 }
 
 const AccountId& User::GetAccountId() const {
@@ -153,6 +176,10 @@ void User::SetIsChild(bool is_child) {
 
 bool User::HasGaiaAccount() const {
   return TypeHasGaiaAccount(GetType());
+}
+
+bool User::IsActiveDirectoryUser() const {
+  return GetType() == user_manager::USER_TYPE_ACTIVE_DIRECTORY;
 }
 
 bool User::IsSupervised() const {
@@ -204,7 +231,13 @@ void User::SetAffiliation(bool is_affiliated) {
   is_affiliated_ = is_affiliated;
 }
 
+bool User::IsDeviceLocalAccount() const {
+  return false;
+}
+
 User* User::CreateRegularUser(const AccountId& account_id) {
+  if (account_id.GetAccountType() == AccountType::ACTIVE_DIRECTORY)
+    return new ActiveDirectoryUser(account_id);
   return new RegularUser(account_id);
 }
 
@@ -216,6 +249,10 @@ User* User::CreateKioskAppUser(const AccountId& kiosk_app_account_id) {
   return new KioskAppUser(kiosk_app_account_id);
 }
 
+User* User::CreateArcKioskAppUser(const AccountId& arc_kiosk_account_id) {
+  return new ArcKioskAppUser(arc_kiosk_account_id);
+}
+
 User* User::CreateSupervisedUser(const AccountId& account_id) {
   return new SupervisedUser(account_id);
 }
@@ -224,34 +261,37 @@ User* User::CreatePublicAccountUser(const AccountId& account_id) {
   return new PublicAccountUser(account_id);
 }
 
-User::User(const AccountId& account_id) : account_id_(account_id) {}
-
-User::~User() {
-}
-
 void User::SetAccountLocale(const std::string& resolved_account_locale) {
   account_locale_.reset(new std::string(resolved_account_locale));
 }
 
-void User::SetImage(const UserImage& user_image, int image_index) {
-  user_image_ = user_image;
+void User::SetImage(std::unique_ptr<UserImage> user_image, int image_index) {
+  user_image_ = std::move(user_image);
   image_index_ = image_index;
   image_is_stub_ = false;
   image_is_loading_ = false;
-  DCHECK(HasDefaultImage() || user_image.has_raw_image());
+  DCHECK(HasDefaultImage() || user_image_->has_image_bytes());
 }
 
 void User::SetImageURL(const GURL& image_url) {
-  user_image_.set_url(image_url);
+  user_image_->set_url(image_url);
 }
 
-void User::SetStubImage(const UserImage& stub_user_image,
+void User::SetStubImage(std::unique_ptr<UserImage> stub_user_image,
                         int image_index,
                         bool is_loading) {
-  user_image_ = stub_user_image;
+  user_image_ = std::move(stub_user_image);
   image_index_ = image_index;
   image_is_stub_ = true;
   image_is_loading_ = is_loading;
+}
+
+UserType ActiveDirectoryUser::GetType() const {
+  return user_manager::USER_TYPE_ACTIVE_DIRECTORY;
+}
+
+bool ActiveDirectoryUser::CanSyncImage() const {
+  return false;
 }
 
 RegularUser::RegularUser(const AccountId& account_id) : User(account_id) {
@@ -259,8 +299,13 @@ RegularUser::RegularUser(const AccountId& account_id) : User(account_id) {
   set_display_email(account_id.GetUserEmail());
 }
 
+ActiveDirectoryUser::ActiveDirectoryUser(const AccountId& account_id)
+    : RegularUser(account_id) {}
+
 RegularUser::~RegularUser() {
 }
+
+ActiveDirectoryUser::~ActiveDirectoryUser() {}
 
 UserType RegularUser::GetType() const {
   return is_child_ ? user_manager::USER_TYPE_CHILD :
@@ -305,6 +350,10 @@ void DeviceLocalAccountUserBase::SetAffiliation(bool) {
   NOTREACHED();
 }
 
+bool DeviceLocalAccountUserBase::IsDeviceLocalAccount() const {
+  return true;
+}
+
 KioskAppUser::KioskAppUser(const AccountId& kiosk_app_account_id)
     : DeviceLocalAccountUserBase(kiosk_app_account_id) {
   set_display_email(kiosk_app_account_id.GetUserEmail());
@@ -315,6 +364,18 @@ KioskAppUser::~KioskAppUser() {
 
 UserType KioskAppUser::GetType() const {
   return user_manager::USER_TYPE_KIOSK_APP;
+}
+
+ArcKioskAppUser::ArcKioskAppUser(const AccountId& arc_kiosk_account_id)
+    : DeviceLocalAccountUserBase(arc_kiosk_account_id) {
+  set_display_email(arc_kiosk_account_id.GetUserEmail());
+}
+
+ArcKioskAppUser::~ArcKioskAppUser() {
+}
+
+UserType ArcKioskAppUser::GetType() const {
+  return user_manager::USER_TYPE_ARC_KIOSK_APP;
 }
 
 SupervisedUser::SupervisedUser(const AccountId& account_id) : User(account_id) {
@@ -343,8 +404,8 @@ UserType PublicAccountUser::GetType() const {
 }
 
 bool User::has_gaia_account() const {
-  static_assert(user_manager::NUM_USER_TYPES == 7,
-                "NUM_USER_TYPES should equal 7");
+  static_assert(user_manager::NUM_USER_TYPES == 9,
+                "NUM_USER_TYPES should equal 9");
   switch (GetType()) {
     case user_manager::USER_TYPE_REGULAR:
     case user_manager::USER_TYPE_CHILD:
@@ -353,6 +414,8 @@ bool User::has_gaia_account() const {
     case user_manager::USER_TYPE_PUBLIC_ACCOUNT:
     case user_manager::USER_TYPE_SUPERVISED:
     case user_manager::USER_TYPE_KIOSK_APP:
+    case user_manager::USER_TYPE_ARC_KIOSK_APP:
+    case user_manager::USER_TYPE_ACTIVE_DIRECTORY:
       return false;
     default:
       NOTREACHED();

@@ -32,6 +32,10 @@ namespace content {
 class WebContents;
 }
 
+namespace rappor {
+class RapporServiceImpl;
+}
+
 // The hierarchy of bubble models:
 //
 // ContentSettingsBubbleModel                  - base class
@@ -41,14 +45,16 @@ class WebContents;
 //     ContentSettingRPHBubbleModel                - protocol handlers
 //     ContentSettingMidiSysExBubbleModel          - midi sysex
 //     ContentSettingDomainListBubbleModel         - domain list (geolocation)
+//     ContentSettingPluginBubbleModel             - plugins
 //     ContentSettingSingleRadioGroup              - radio group
 //       ContentSettingCookiesBubbleModel            - cookies
-//       ContentSettingPluginBubbleModel             - plugins
 //       ContentSettingPopupBubbleModel              - popups
+//   ContentSettingSubresourceFilterBubbleModel  - filtered subresources
 
 // Forward declaration necessary for downcasts.
-class ContentSettingSimpleBubbleModel;
 class ContentSettingMediaStreamBubbleModel;
+class ContentSettingSimpleBubbleModel;
+class ContentSettingSubresourceFilterBubbleModel;
 
 // This model provides data for ContentSettingBubble, and also controls
 // the action triggered when the allow / block radio buttons are triggered.
@@ -83,6 +89,7 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
 
   struct DomainList {
     DomainList();
+    DomainList(const DomainList& other);
     ~DomainList();
 
     std::string title;
@@ -91,6 +98,7 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
 
   struct MediaMenu {
     MediaMenu();
+    MediaMenu(const MediaMenu& other);
     ~MediaMenu();
 
     std::string label;
@@ -104,14 +112,16 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
     BubbleContent();
     ~BubbleContent();
 
-    std::string title;
+    base::string16 title;
+    base::string16 message;
     ListItems list_items;
     RadioGroup radio_group;
     bool radio_group_enabled;
     std::vector<DomainList> domain_lists;
     std::string custom_link;
     bool custom_link_enabled;
-    std::string manage_link;
+    std::string manage_text;
+    bool show_manage_text_as_button;
     MediaMenuMap media_menus;
     std::string learn_more_link;
 
@@ -160,6 +170,19 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
   // Cast this bubble into ContentSettingMediaStreamBubbleModel if possible.
   virtual ContentSettingMediaStreamBubbleModel* AsMediaStreamBubbleModel();
 
+  // Cast this bubble into ContentSettingSubresourceFilterBubbleModel
+  // if possible.
+  virtual ContentSettingSubresourceFilterBubbleModel*
+  AsSubresourceFilterBubbleModel();
+
+  // Sets the Rappor service used for testing.
+  void SetRapporServiceImplForTesting(
+      rappor::RapporServiceImpl* rappor_service) {
+    rappor_service_ = rappor_service;
+  }
+
+  static const int kAllowButtonIndex;
+
  protected:
   ContentSettingBubbleModel(
       Delegate* delegate,
@@ -170,7 +193,10 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
   Profile* profile() const { return profile_; }
   Delegate* delegate() const { return delegate_; }
 
-  void set_title(const std::string& title) { bubble_content_.title = title; }
+  void set_title(const base::string16& title) { bubble_content_.title = title; }
+  void set_message(const base::string16& message) {
+    bubble_content_.message = message;
+  }
   void add_list_item(const ListItem& item) {
     bubble_content_.list_items.push_back(item);
   }
@@ -189,8 +215,11 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
   void set_custom_link_enabled(bool enabled) {
     bubble_content_.custom_link_enabled = enabled;
   }
-  void set_manage_link(const std::string& link) {
-    bubble_content_.manage_link = link;
+  void set_manage_text(const std::string& link) {
+    bubble_content_.manage_text = link;
+  }
+  void set_show_manage_text_as_button(bool show_manage_text_as_button) {
+    bubble_content_.show_manage_text_as_button = show_manage_text_as_button;
   }
   void set_learn_more_link(const std::string& link) {
     bubble_content_.learn_more_link = link;
@@ -201,16 +230,11 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
   void set_selected_device(const content::MediaStreamDevice& device) {
     bubble_content_.media_menus[device.type].selected_device = device;
   }
-  bool setting_is_managed() {
-    return setting_is_managed_;
-  }
-  void set_setting_is_managed(bool managed) {
-    setting_is_managed_ = managed;
-  }
+  rappor::RapporServiceImpl* rappor_service() const { return rappor_service_; }
 
  private:
   virtual void SetTitle() = 0;
-  virtual void SetManageLink() = 0;
+  virtual void SetManageText() = 0;
 
   content::WebContents* web_contents_;
   Profile* profile_;
@@ -218,9 +242,8 @@ class ContentSettingBubbleModel : public content::NotificationObserver {
   BubbleContent bubble_content_;
   // A registrar for listening for WEB_CONTENTS_DESTROYED notifications.
   content::NotificationRegistrar registrar_;
-  // A flag that indicates if the content setting managed i.e. can't be
-  // controlled by the user.
-  bool setting_is_managed_;
+  // The service used to record Rappor metrics. Can be set for testing.
+  rappor::RapporServiceImpl* rappor_service_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSettingBubbleModel);
 };
@@ -241,7 +264,7 @@ class ContentSettingSimpleBubbleModel : public ContentSettingBubbleModel {
  private:
   // ContentSettingBubbleModel implementation.
   void SetTitle() override;
-  void SetManageLink() override;
+  void SetManageText() override;
   void OnManageLinkClicked() override;
   void SetCustomLink();
   void OnCustomLinkClicked() override;
@@ -258,6 +281,7 @@ class ContentSettingRPHBubbleModel : public ContentSettingSimpleBubbleModel {
                                content::WebContents* web_contents,
                                Profile* profile,
                                ProtocolHandlerRegistry* registry);
+  ~ContentSettingRPHBubbleModel() override;
 
   void OnRadioClicked(int radio_index) override;
   void OnDoneClicked() override;
@@ -269,11 +293,38 @@ class ContentSettingRPHBubbleModel : public ContentSettingSimpleBubbleModel {
   void ClearOrSetPreviousHandler();
 
   int selected_item_;
+  // Initially false, set to true if the user explicitly interacts with the
+  // bubble.
+  bool interacted_;
   ProtocolHandlerRegistry* registry_;
   ProtocolHandler pending_handler_;
   ProtocolHandler previous_handler_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSettingRPHBubbleModel);
+};
+
+// The model for the deceptive content bubble.
+class ContentSettingSubresourceFilterBubbleModel
+    : public ContentSettingBubbleModel {
+ public:
+  ContentSettingSubresourceFilterBubbleModel(Delegate* delegate,
+                                             content::WebContents* web_contents,
+                                             Profile* profile);
+
+  ~ContentSettingSubresourceFilterBubbleModel() override;
+
+  void OnManageLinkClicked() override;
+  ContentSettingSubresourceFilterBubbleModel* AsSubresourceFilterBubbleModel()
+      override;
+
+ private:
+  void SetMessage();
+
+  // ContentSettingBubbleModel:
+  void SetTitle() override;
+  void SetManageText() override;
+
+  DISALLOW_COPY_AND_ASSIGN(ContentSettingSubresourceFilterBubbleModel);
 };
 
 // The model of the content settings bubble for media settings.
@@ -297,7 +348,7 @@ class ContentSettingMediaStreamBubbleModel : public ContentSettingBubbleModel {
 
   // ContentSettingBubbleModel:
   void SetTitle() override;
-  void SetManageLink() override;
+  void SetManageText() override;
 
   // Sets the data for the radio buttons of the bubble.
   void SetRadioGroup();

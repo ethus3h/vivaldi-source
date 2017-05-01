@@ -12,20 +12,20 @@ namespace blink {
 class DoesNeedFinalizer : public GarbageCollectedFinalized<DoesNeedFinalizer> {
 public:
     ~DoesNeedFinalizer() { ; }
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 class DoesNotNeedFinalizer
     : public GarbageCollectedFinalized<DoesNotNeedFinalizer> {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 class DoesNotNeedFinalizer2
     : public GarbageCollectedFinalized<DoesNotNeedFinalizer2> {
 public:
     ~DoesNotNeedFinalizer2();
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 class HasEmptyDtor {
@@ -33,11 +33,13 @@ public:
     virtual ~HasEmptyDtor() { }
 };
 
-class DoesNotNeedFinalizer3
-    : public GarbageCollectedFinalized<DoesNotNeedFinalizer3>,
+// If there are any virtual destructors involved, give up.
+
+class DoesNeedFinalizer2
+    : public GarbageCollectedFinalized<DoesNeedFinalizer2>,
       public HasEmptyDtor {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 }

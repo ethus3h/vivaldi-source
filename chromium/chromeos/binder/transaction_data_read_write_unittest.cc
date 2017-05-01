@@ -4,14 +4,17 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
-
-#include <linux/android/binder.h>
 
 #include <vector>
 
+#include "base/files/file.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chromeos/binder/binder_driver_api.h"
 #include "chromeos/binder/command_broker.h"
 #include "chromeos/binder/driver.h"
 #include "chromeos/binder/local_object.h"
@@ -229,7 +232,7 @@ TEST(BinderTransactionDataReadWriteTest, Object) {
   CommandBroker command_broker(&driver);
 
   scoped_refptr<LocalObject> local(
-      new LocalObject(scoped_ptr<LocalObject::TransactionHandler>()));
+      new LocalObject(std::unique_ptr<LocalObject::TransactionHandler>()));
 
   const int32_t kDummyHandle = 42;
   scoped_refptr<RemoteObject> remote(
@@ -274,6 +277,42 @@ TEST(BinderTransactionDataReadWriteTest, Object) {
             static_cast<RemoteObject*>(result.get())->GetHandle());
 
   EXPECT_FALSE(reader.HasMoreData());
+}
+
+TEST(BinderTransactionDataReadWriteTest, FileDescriptor) {
+  // Prepare a test file.
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath path;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(temp_dir.GetPath(), &path));
+
+  base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  ASSERT_TRUE(file.IsValid());
+
+  base::ScopedFD scoped_fd(file.TakePlatformFile());
+  int kFdValue = scoped_fd.get();
+
+  // Write the file descriptor.
+  WritableTransactionData data;
+  data.WriteFileDescriptor(std::move(scoped_fd));
+
+  // Check object offsets.
+  ASSERT_EQ(1u, data.GetNumObjectOffsets());
+  EXPECT_EQ(0u, data.GetObjectOffsets()[0]);
+  {
+    // Check the written file descriptor.
+    BufferReader reader(reinterpret_cast<const char*>(data.GetData()),
+                        data.GetDataSize());
+    flat_binder_object result = {};
+    EXPECT_TRUE(reader.Read(&result, sizeof(result)));
+    EXPECT_EQ(BINDER_TYPE_FD, result.type);
+    EXPECT_EQ(kFdValue, result.handle);
+  }
+  // Read the file descriptor.
+  TransactionDataReader reader(data);
+  int result = -1;
+  EXPECT_TRUE(reader.ReadFileDescriptor(&result));
+  EXPECT_EQ(kFdValue, result);
 }
 
 }  // namespace binder

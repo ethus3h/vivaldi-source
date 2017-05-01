@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "media/base/decrypt_config.h"
 #include "media/base/media_export.h"
 #include "media/base/media_log.h"
 #include "media/base/video_codecs.h"
@@ -19,24 +20,24 @@
 #include "media/formats/mp4/avc.h"
 #include "media/formats/mp4/box_reader.h"
 #include "media/formats/mp4/fourccs.h"
+#include "media/media_features.h"
 
 namespace media {
 namespace mp4 {
 
-enum TrackType {
-  kInvalid = 0,
-  kVideo,
-  kAudio,
-  kHint
-};
+// Size in bytes needed to store largest IV.
+const int kInitializationVectorSize = 16;
+
+enum TrackType { kInvalid = 0, kVideo, kAudio, kText, kHint };
 
 enum SampleFlags {
   kSampleIsNonSyncSample = 0x10000
 };
 
-#define DECLARE_BOX_METHODS(T) \
-  T(); \
-  ~T() override; \
+#define DECLARE_BOX_METHODS(T)            \
+  T();                                    \
+  T(const T& other);                      \
+  ~T() override;                          \
   bool Parse(BoxReader* reader) override; \
   FourCC BoxType() const override;
 
@@ -78,6 +79,40 @@ struct MEDIA_EXPORT SampleAuxiliaryInformationSize : Box {
   std::vector<uint8_t> sample_info_sizes;
 };
 
+// Represent an entry in SampleEncryption box or CENC auxiliary info.
+struct MEDIA_EXPORT SampleEncryptionEntry {
+  SampleEncryptionEntry();
+  SampleEncryptionEntry(const SampleEncryptionEntry& other);
+  ~SampleEncryptionEntry();
+
+  // Parse SampleEncryptionEntry from |reader|.
+  // |iv_size| specifies the size of initialization vector. |has_subsamples|
+  // indicates whether this sample encryption entry constains subsamples.
+  // Returns false if parsing fails.
+  bool Parse(BufferReader* reader, uint8_t iv_size, bool has_subsamples);
+
+  // Get accumulated size of subsamples. Returns false if there is an overflow
+  // anywhere.
+  bool GetTotalSizeOfSubsamples(size_t* total_size) const;
+
+  uint8_t initialization_vector[kInitializationVectorSize];
+  std::vector<SubsampleEntry> subsamples;
+};
+
+// ISO/IEC 23001-7:2015 8.1.1.
+struct MEDIA_EXPORT SampleEncryption : Box {
+  enum SampleEncryptionFlags {
+    kUseSubsampleEncryption = 2,
+  };
+
+  DECLARE_BOX_METHODS(SampleEncryption);
+
+  bool use_subsample_encryption;
+  // We may not know |iv_size| before reading this box, so we store the box
+  // data for parsing later when |iv_size| is known.
+  std::vector<uint8_t> sample_encryption_data;
+};
+
 struct MEDIA_EXPORT OriginalFormat : Box {
   DECLARE_BOX_METHODS(OriginalFormat);
 
@@ -98,6 +133,12 @@ struct MEDIA_EXPORT TrackEncryption : Box {
   bool is_encrypted;
   uint8_t default_iv_size;
   std::vector<uint8_t> default_kid;
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  uint8_t default_crypt_byte_block;
+  uint8_t default_skip_byte_block;
+  uint8_t default_constant_iv_size;
+  uint8_t default_constant_iv[kInitializationVectorSize];
+#endif
 };
 
 struct MEDIA_EXPORT SchemeInfo : Box {
@@ -112,11 +153,14 @@ struct MEDIA_EXPORT ProtectionSchemeInfo : Box {
   OriginalFormat format;
   SchemeType type;
   SchemeInfo info;
+
+  bool HasSupportedScheme() const;
 };
 
 struct MEDIA_EXPORT MovieHeader : Box {
   DECLARE_BOX_METHODS(MovieHeader);
 
+  uint8_t version;
   uint64_t creation_time;
   uint64_t modification_time;
   uint32_t timescale;
@@ -163,6 +207,7 @@ struct MEDIA_EXPORT HandlerReference : Box {
   DECLARE_BOX_METHODS(HandlerReference);
 
   TrackType type;
+  std::string name;
 };
 
 struct MEDIA_EXPORT AVCDecoderConfigurationRecord : Box {
@@ -190,6 +235,12 @@ struct MEDIA_EXPORT AVCDecoderConfigurationRecord : Box {
  private:
   bool ParseInternal(BufferReader* reader,
                      const scoped_refptr<MediaLog>& media_log);
+};
+
+struct MEDIA_EXPORT VPCodecConfigurationRecord : Box {
+  DECLARE_BOX_METHODS(VPCodecConfigurationRecord);
+
+  VideoCodecProfile profile;
 };
 
 struct MEDIA_EXPORT PixelAspectRatioBox : Box {
@@ -249,11 +300,19 @@ struct MEDIA_EXPORT SampleDescription : Box {
 
 struct MEDIA_EXPORT CencSampleEncryptionInfoEntry {
   CencSampleEncryptionInfoEntry();
+  CencSampleEncryptionInfoEntry(const CencSampleEncryptionInfoEntry& other);
   ~CencSampleEncryptionInfoEntry();
+  bool Parse(BoxReader* reader);
 
   bool is_encrypted;
   uint8_t iv_size;
   std::vector<uint8_t> key_id;
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  uint8_t crypt_byte_block;
+  uint8_t skip_byte_block;
+  uint8_t constant_iv_size;
+  uint8_t constant_iv[kInitializationVectorSize];
+#endif
 };
 
 struct MEDIA_EXPORT SampleGroupDescription : Box {  // 'sgpd'.
@@ -277,10 +336,13 @@ struct MEDIA_EXPORT SampleTable : Box {
 struct MEDIA_EXPORT MediaHeader : Box {
   DECLARE_BOX_METHODS(MediaHeader);
 
+  std::string language() const;
+
   uint64_t creation_time;
   uint64_t modification_time;
   uint32_t timescale;
   uint64_t duration;
+  uint16_t language_code;
 };
 
 struct MEDIA_EXPORT MediaInformation : Box {
@@ -426,6 +488,7 @@ struct MEDIA_EXPORT TrackFragment : Box {
   IndependentAndDisposableSamples sdtp;
   SampleGroupDescription sample_group_description;
   SampleToGroup sample_to_group;
+  SampleEncryption sample_encryption;
 };
 
 struct MEDIA_EXPORT MovieFragment : Box {

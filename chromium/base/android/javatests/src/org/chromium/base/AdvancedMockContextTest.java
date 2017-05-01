@@ -9,6 +9,7 @@ import android.content.ComponentCallbacks;
 import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.content.res.Configuration;
+import android.support.test.filters.SmallTest;
 import android.test.InstrumentationTestCase;
 
 import org.chromium.base.test.util.AdvancedMockContext;
@@ -41,6 +42,7 @@ public class AdvancedMockContextTest extends InstrumentationTestCase {
         }
     }
 
+    @SmallTest
     public void testComponentCallbacksForTargetContext() {
         Context targetContext = getInstrumentation().getTargetContext();
         Application targetApplication = (Application) targetContext.getApplicationContext();

@@ -8,16 +8,18 @@
 #include <alsa/asoundlib.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/threading/thread.h"
 #include "base/timer/timer.h"
+#include "chromecast/media/cma/backend/alsa/audio_filter_interface.h"
 #include "chromecast/media/cma/backend/alsa/media_pipeline_backend_alsa.h"
+#include "chromecast/media/cma/backend/alsa/stream_mixer_alsa_input.h"
+#include "chromecast/public/cast_media_shlib.h"
 
 namespace media {
 class AudioBus;
@@ -26,7 +28,6 @@ class AudioBus;
 namespace chromecast {
 namespace media {
 class AlsaWrapper;
-class StreamMixerAlsaInputImpl;
 
 // Mixer implementation. The mixer has one or more input queues; these can be
 // added/removed at any time. When an input source pushes frames to an input
@@ -62,10 +63,6 @@ class StreamMixerAlsa {
     // positive.
     virtual int input_samples_per_second() const = 0;
 
-    // This number will be used to scale the stream before it is mixed. The
-    // result must be in the range (0.0, 1.0].
-    virtual float volume_multiplier() const = 0;
-
     // Returns true if the stream is primary. Primary streams will be given
     // precedence for sample rates and will dictate when data is polled.
     virtual bool primary() const = 0;
@@ -91,6 +88,21 @@ class StreamMixerAlsa {
     // MaxReadSize(), and |dest->frames()| shall be >= |frames|.
     virtual void GetResampledData(::media::AudioBus* dest, int frames) = 0;
 
+    // Scale |frames| frames at |src| by the current volume (smoothing as
+    // needed). Add the scaled result to |dest|.
+    // VolumeScaleAccumulate will be called once for each channel of audio
+    // present and |repeat_transition| will be true for channels 2 through n.
+    // |src| and |dest| should be 16-byte aligned.
+    virtual void VolumeScaleAccumulate(bool repeat_transition,
+                                       const float* src,
+                                       int frames,
+                                       float* dest) = 0;
+
+    // Called when this input has been skipped for output due to not having any
+    // data available. This indicates that there will be a gap in the playback
+    // from this stream.
+    virtual void OnSkipped() = 0;
+
     // This is called for every InputQueue when the mixer writes data to ALSA
     // for any of its input streams.
     virtual void AfterWriteFrames(
@@ -98,7 +110,7 @@ class StreamMixerAlsa {
             mixer_rendering_delay) = 0;
 
     // This will be called when a fatal error occurs in the mixer.
-    virtual void SignalError() = 0;
+    virtual void SignalError(StreamMixerAlsaInput::MixerError error) = 0;
 
     // Notifies the input that it is being removed by the upper layers, and
     // should do whatever is necessary to become ready to delete from the mixer.
@@ -126,7 +138,7 @@ class StreamMixerAlsa {
 
   // Adds an input to the mixer. The input will live at least until
   // RemoveInput(input) is called. Can be called on any thread.
-  void AddInput(scoped_ptr<InputQueue> input);
+  void AddInput(std::unique_ptr<InputQueue> input);
   // Instructs the mixer to remove an input. The input should not be referenced
   // after this is called. Can be called on any thread.
   void RemoveInput(InputQueue* input);
@@ -135,9 +147,15 @@ class StreamMixerAlsa {
   // mixer thread.
   void OnFramesQueued();
 
-  void SetAlsaWrapperForTest(scoped_ptr<AlsaWrapper> alsa_wrapper);
+  void SetAlsaWrapperForTest(std::unique_ptr<AlsaWrapper> alsa_wrapper);
   void WriteFramesForTest();  // Can be called on any thread.
   void ClearInputsForTest();  // Removes all inputs.
+
+  void AddLoopbackAudioObserver(
+      CastMediaShlib::LoopbackAudioObserver* observer);
+
+  void RemoveLoopbackAudioObserver(
+      CastMediaShlib::LoopbackAudioObserver* observer);
 
  protected:
   StreamMixerAlsa();
@@ -146,6 +164,7 @@ class StreamMixerAlsa {
  private:
   void ResetTaskRunnerForTest();
   void FinalizeOnMixerThread();
+  void FinishFinalize();
 
   // Reads the buffer size, period size, start threshold, and avail min value
   // from the provided command line flags or uses default values if no flags are
@@ -160,9 +179,10 @@ class StreamMixerAlsa {
   int SetAlsaPlaybackParams();
   void Start();
   void Stop();
-  void ClosePcm();
+  void Close();
   void SignalError();
   void CheckChangeOutputRate(int input_samples_per_second);
+  unsigned int DetermineOutputRate(unsigned int requested_rate);
 
   // Deletes an input queue that has finished preparing to delete itself.
   // May be called on any thread.
@@ -175,16 +195,19 @@ class StreamMixerAlsa {
 
   void WriteFrames();
   bool TryWriteFrames();
-  void WriteMixedPcm(const ::media::AudioBus& mixed, int frames);
+  void WriteMixedPcm(const ::media::AudioBus& mixed, int frames,
+      bool is_silence);
   void UpdateRenderingDelay(int newly_pushed_frames);
   ssize_t BytesPerOutputFormatSample();
 
   static bool single_threaded_for_test_;
 
-  scoped_ptr<AlsaWrapper> alsa_;
-  scoped_ptr<base::Thread> mixer_thread_;
+  std::unique_ptr<AlsaWrapper> alsa_;
+  std::unique_ptr<base::Thread> mixer_thread_;
   scoped_refptr<base::SingleThreadTaskRunner> mixer_task_runner_;
 
+  unsigned int fixed_output_samples_per_second_;
+  unsigned int low_sample_rate_cutoff_;
   int requested_output_samples_per_second_;
   int output_samples_per_second_;
   snd_pcm_t* pcm_;
@@ -203,8 +226,8 @@ class StreamMixerAlsa {
 
   State state_;
 
-  ScopedVector<InputQueue> inputs_;
-  ScopedVector<InputQueue> ignored_inputs_;
+  std::vector<std::unique_ptr<InputQueue>> inputs_;
+  std::vector<std::unique_ptr<InputQueue>> ignored_inputs_;
   MediaPipelineBackendAlsa::RenderingDelay rendering_delay_;
   // Buffer to write final interleaved data before sending to snd_pcm_writei().
   std::vector<uint8_t> interleaved_;
@@ -212,13 +235,19 @@ class StreamMixerAlsa {
   // Buffers that hold audio data while it is mixed, before it is passed to the
   // ALSA layer. These are kept as members of this class to minimize copies and
   // allocations.
-  scoped_ptr<::media::AudioBus> temp_;
-  scoped_ptr<::media::AudioBus> mixed_;
+  std::unique_ptr<::media::AudioBus> temp_;
+  std::unique_ptr<::media::AudioBus> mixed_;
 
-  scoped_ptr<base::Timer> retry_write_frames_timer_;
+  std::unique_ptr<base::Timer> retry_write_frames_timer_;
 
   int check_close_timeout_;
-  scoped_ptr<base::Timer> check_close_timer_;
+  std::unique_ptr<base::Timer> check_close_timer_;
+
+  std::vector<CastMediaShlib::LoopbackAudioObserver*> loopback_observers_;
+
+  std::unique_ptr<AudioFilterInterface> pre_loopback_filter_;
+  std::unique_ptr<AudioFilterInterface> post_loopback_filter_;
+  int silence_frames_filtered_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(StreamMixerAlsa);
 };

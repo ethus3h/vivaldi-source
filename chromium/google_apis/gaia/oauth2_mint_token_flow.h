@@ -26,10 +26,6 @@ namespace content {
 class URLFetcher;
 }
 
-namespace net {
-class URLRequestContextGetter;
-}
-
 // IssueAdvice: messages to show to the user to get a user's approval.
 // The structure is as follows:
 // * Description 1
@@ -44,6 +40,7 @@ class URLRequestContextGetter;
 struct IssueAdviceInfoEntry {
  public:
   IssueAdviceInfoEntry();
+  IssueAdviceInfoEntry(const IssueAdviceInfoEntry& other);
   ~IssueAdviceInfoEntry();
 
   base::string16 description;
@@ -81,6 +78,7 @@ class OAuth2MintTokenFlow : public OAuth2ApiCallFlow {
                const std::vector<std::string>& scopes_arg,
                const std::string& device_id,
                Mode mode_arg);
+    Parameters(const Parameters& other);
     ~Parameters();
 
     std::string extension_id;

@@ -1,51 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <grit-part>
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_CDMA1XRTT"
-           file="cr_elements/network/badge_1x.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_3G"
-           file="cr_elements/network/badge_3g.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_4G"
-           file="cr_elements/network/badge_4g.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_EDGE"
-           file="cr_elements/network/badge_edge.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_EVDO"
-           file="cr_elements/network/badge_evdo.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_GPRS"
-           file="cr_elements/network/badge_gsm.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_HSPA"
-           file="cr_elements/network/badge_hspa.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_HSPA_PLUS"
-           file="cr_elements/network/badge_hspa_plus.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_LTE"
-           file="cr_elements/network/badge_lte.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_LTE_ADVANCED"
-           file="cr_elements/network/badge_lte_advanced.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_ROAMING"
-           file="cr_elements/network/badge_roaming.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_BADGE_SECURE"
-           file="cr_elements/network/badge_secure.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_ICON_ETHERNET"
-           file="cr_elements/network/ethernet.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_ICON_MOBILE"
-           file="cr_elements/network/mobile.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_ICON_VPN"
-           file="cr_elements/network/vpn.png" 
-           type="BINDATA" />
-  <include name="IDR_WEBUI_CR_ELEMENTS_NETWORK_ICON_WIFI"
-           file="cr_elements/network/wifi.png" 
-           type="BINDATA" />
+  <if expr="chromeos">
+    <include name="IDR_CR_ELEMENTS_CELLULAR_0_SVG"
+             file="cr_elements/network/cellular_0.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_CELLULAR_1_SVG"
+             file="cr_elements/network/cellular_1.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_CELLULAR_2_SVG"
+             file="cr_elements/network/cellular_2.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_CELLULAR_3_SVG"
+             file="cr_elements/network/cellular_3.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_CELLULAR_4_SVG"
+             file="cr_elements/network/cellular_4.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_ETHERNET_SVG"
+             file="cr_elements/network/ethernet.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_VPN_SVG"
+             file="cr_elements/network/vpn.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_0_SVG"
+             file="cr_elements/network/wifi_0.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_1_SVG"
+             file="cr_elements/network/wifi_1.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_2_SVG"
+             file="cr_elements/network/wifi_2.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_3_SVG"
+             file="cr_elements/network/wifi_3.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_4_SVG"
+             file="cr_elements/network/wifi_4.svg" type="BINDATA" />
+    <include name="IDR_CR_ELEMENTS_WIFI_OFF_SVG"
+             file="cr_elements/network/wifi_off.svg" type="BINDATA" />
+  </if>
 </grit-part>

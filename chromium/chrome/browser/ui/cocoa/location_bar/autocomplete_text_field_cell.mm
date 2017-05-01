@@ -10,14 +10,19 @@
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_logging.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/ui/cocoa/l10n_util.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_decoration.h"
+#import "chrome/browser/ui/cocoa/themed_window.h"
+#include "chrome/grit/theme_resources.h"
 #import "extensions/common/feature_switch.h"
-#include "grit/theme_resources.h"
 #import "third_party/mozilla/NSPasteboard+Utils.h"
 #import "ui/base/cocoa/appkit_utils.h"
+#import "ui/base/cocoa/tracking_area.h"
 #import "ui/base/cocoa/nsview_additions.h"
 #include "ui/base/cocoa/scoped_cg_context_smooth_fonts.h"
+#include "ui/base/material_design/material_design_controller.h"
 
 using extensions::FeatureSwitch;
 
@@ -28,17 +33,12 @@ const CGFloat kCornerRadius = 3.0;
 
 // How far to inset the left- and right-hand decorations from the field's
 // bounds.
-const CGFloat kLeftDecorationXOffset = 5.0;
-const CGFloat kRightDecorationXOffset = 5.0;
+const CGFloat kTrailingDecorationXPadding = 2.0;
+const CGFloat kLeadingDecorationXPadding = 1.0;
 
-// The amount of padding on either side reserved for drawing
-// decorations.  [Views has |kItemPadding| == 3.]
-const CGFloat kDecorationHorizontalPad = 3.0;
-
-const ui::NinePartImageIds kPopupBorderImageIds =
-    IMAGE_GRID(IDR_OMNIBOX_POPUP_BORDER_AND_SHADOW);
-
-const ui::NinePartImageIds kNormalBorderImageIds = IMAGE_GRID(IDR_TEXTFIELD);
+// How much the text frame needs to overlap the outermost leading
+// decoration.
+const CGFloat kTextFrameDecorationOverlap = 5.0;
 
 // How long to wait for mouse-up on the location icon before assuming
 // that the user wants to drag.
@@ -71,7 +71,7 @@ void CalculatePositionsHelper(
 
   for (size_t i = 0; i < all_decorations.size(); ++i) {
     if (all_decorations[i]->IsVisible()) {
-      CGFloat padding = kDecorationHorizontalPad;
+      CGFloat padding = 0;
       if (is_first_visible_decoration) {
         padding = regular_padding;
         is_first_visible_decoration = false;
@@ -99,9 +99,6 @@ void CalculatePositionsHelper(
         decorations->push_back(all_decorations[i]);
         decoration_frames->push_back(decoration_frame);
         DCHECK_EQ(decorations->size(), decoration_frames->size());
-
-        // Adjust padding for between decorations.
-        padding = kDecorationHorizontalPad;
       }
     }
   }
@@ -111,47 +108,64 @@ void CalculatePositionsHelper(
 }
 
 // Helper function for calculating placement of decorations w/in the cell.
-// |frame| is the cell's boundary rectangle, |remaining_frame| will get any
-// space left after decorations are laid out (for text).  |left_decorations| is
-// a set of decorations for the left-hand side of the cell, |right_decorations|
-// for the right-hand side.
+// |frame| is the cell's boundary rectangle, |text_frame| will get any
+// space left after decorations are laid out (for text).
+// |leading_decorations| is a set of decorations for the leading side of
+// the cell, |trailing_decorations| for the right-hand side.
 // |decorations| will contain the resulting visible decorations, and
 // |decoration_frames| will contain their frames in the same coordinates as
-// |frame|.  Decorations will be ordered left to right. As a convenience returns
-// the index of the first right-hand decoration.
+// |frame|.  Decorations will be ordered left to right in LTR, and right to
+// left.
+// As a convenience, returns the index of the first right-hand decoration.
 size_t CalculatePositionsInFrame(
-    NSRect frame,
-    const std::vector<LocationBarDecoration*>& left_decorations,
-    const std::vector<LocationBarDecoration*>& right_decorations,
+    const NSRect frame,
+    const std::vector<LocationBarDecoration*>& leading_decorations,
+    const std::vector<LocationBarDecoration*>& trailing_decorations,
     std::vector<LocationBarDecoration*>* decorations,
     std::vector<NSRect>* decoration_frames,
-    NSRect* remaining_frame) {
+    NSRect* text_frame) {
   decorations->clear();
   decoration_frames->clear();
+  *text_frame = frame;
 
-  // Layout |left_decorations| against the LHS.
-  CalculatePositionsHelper(frame, left_decorations, NSMinXEdge,
-                           kLeftDecorationXOffset, decorations,
-                           decoration_frames, &frame);
+  // Layout |leading_decorations| against the leading side.
+  CalculatePositionsHelper(*text_frame, leading_decorations, NSMinXEdge,
+                           kLeadingDecorationXPadding, decorations,
+                           decoration_frames, text_frame);
   DCHECK_EQ(decorations->size(), decoration_frames->size());
 
-  // Capture the number of visible left-hand decorations.
-  const size_t left_count = decorations->size();
+  // Capture the number of visible leading decorations.
+  size_t leading_count = decorations->size();
 
-  // Layout |right_decorations| against the RHS.
-  CalculatePositionsHelper(frame, right_decorations, NSMaxXEdge,
-                           kRightDecorationXOffset, decorations,
-                           decoration_frames, &frame);
+  // Extend the text frame so that it slightly overlaps the rightmost left
+  // decoration.
+  if (leading_count) {
+    text_frame->origin.x -= kTextFrameDecorationOverlap;
+    text_frame->size.width += kTextFrameDecorationOverlap;
+  }
+
+  // Layout |trailing_decorations| against the trailing side.
+  CalculatePositionsHelper(*text_frame, trailing_decorations, NSMaxXEdge,
+                           kTrailingDecorationXPadding, decorations,
+                           decoration_frames, text_frame);
   DCHECK_EQ(decorations->size(), decoration_frames->size());
 
   // Reverse the right-hand decorations so that overall everything is
   // sorted left to right.
-  std::reverse(decorations->begin() + left_count, decorations->end());
-  std::reverse(decoration_frames->begin() + left_count,
+  std::reverse(decorations->begin() + leading_count, decorations->end());
+  std::reverse(decoration_frames->begin() + leading_count,
                decoration_frames->end());
 
-  *remaining_frame = frame;
-  return left_count;
+  // Flip all frames in RTL.
+  if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout()) {
+    for (NSRect& rect : *decoration_frames)
+      rect.origin.x = NSWidth(frame) - NSWidth(rect) - NSMinX(rect);
+    text_frame->origin.x =
+        NSWidth(frame) - NSWidth(*text_frame) - NSMinX(*text_frame);
+    leading_count = decorations->size() - leading_count;
+  }
+
+  return leading_count;
 }
 
 }  // namespace
@@ -159,6 +173,7 @@ size_t CalculatePositionsInFrame(
 @implementation AutocompleteTextFieldCell
 
 @synthesize isPopupMode = isPopupMode_;
+@synthesize singlePixelLineWidth = singlePixelLineWidth_;
 
 - (CGFloat)topTextFrameOffset {
   return 3.0;
@@ -180,24 +195,32 @@ size_t CalculatePositionsInFrame(
   return 17;
 }
 
+- (void)clearTrackingArea {
+  for (auto& decoration : mouseTrackingDecorations_)
+    decoration->RemoveTrackingArea();
+
+  mouseTrackingDecorations_.clear();
+}
+
 - (void)clearDecorations {
-  leftDecorations_.clear();
-  rightDecorations_.clear();
+  leadingDecorations_.clear();
+  trailingDecorations_.clear();
+  [self clearTrackingArea];
 }
 
-- (void)addLeftDecoration:(LocationBarDecoration*)decoration {
-  leftDecorations_.push_back(decoration);
+- (void)addLeadingDecoration:(LocationBarDecoration*)decoration {
+  leadingDecorations_.push_back(decoration);
 }
 
-- (void)addRightDecoration:(LocationBarDecoration*)decoration {
-  rightDecorations_.push_back(decoration);
+- (void)addTrailingDecoration:(LocationBarDecoration*)decoration {
+  trailingDecorations_.push_back(decoration);
 }
 
 - (CGFloat)availableWidthInFrame:(const NSRect)frame {
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame;
-  CalculatePositionsInFrame(frame, leftDecorations_, rightDecorations_,
+  CalculatePositionsInFrame(frame, leadingDecorations_, trailingDecorations_,
                             &decorations, &decorationFrames, &textFrame);
 
   return NSWidth(textFrame);
@@ -213,8 +236,9 @@ size_t CalculatePositionsInFrame(
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame;
-  CalculatePositionsInFrame(cellFrame, leftDecorations_, rightDecorations_,
-                            &decorations, &decorationFrames, &textFrame);
+  CalculatePositionsInFrame(cellFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &textFrame);
 
   // Find our decoration and return the corresponding frame.
   std::vector<LocationBarDecoration*>::const_iterator iter =
@@ -231,14 +255,39 @@ size_t CalculatePositionsInFrame(
   return NSZeroRect;
 }
 
+- (NSRect)backgroundFrameForDecoration:(LocationBarDecoration*)decoration
+                               inFrame:(NSRect)cellFrame
+                      isLeftDecoration:(BOOL*)isLeftDecoration {
+  NSRect decorationFrame =
+      [self frameForDecoration:decoration inFrame:cellFrame];
+  std::vector<LocationBarDecoration*>& left_decorations =
+      cocoa_l10n_util::ShouldDoExperimentalRTLLayout() ? trailingDecorations_
+                                                       : leadingDecorations_;
+  *isLeftDecoration =
+      std::find(left_decorations.begin(), left_decorations.end(), decoration) !=
+      left_decorations.end();
+  return decoration->GetBackgroundFrame(decorationFrame);
+}
+
 // Overriden to account for the decorations.
 - (NSRect)textFrameForFrame:(NSRect)cellFrame {
   // Get the frame adjusted for decorations.
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame = [super textFrameForFrame:cellFrame];
-  CalculatePositionsInFrame(textFrame, leftDecorations_, rightDecorations_,
-                            &decorations, &decorationFrames, &textFrame);
+  CalculatePositionsInFrame(textFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &textFrame);
+
+  // The text needs to be slightly higher than its default position to match the
+  // Material Design spec. It turns out this adjustment is equal to the single
+  // pixel line width (so 1 on non-Retina, 0.5 on Retina). Make this adjustment
+  // after computing decoration positions because the decorations are already
+  // correctly positioned. The spec also calls for positioning the text 1pt to
+  // the right of its default position.
+  textFrame.origin.x += 1;
+  textFrame.size.width -= 1;
+  textFrame.origin.y -= singlePixelLineWidth_;
 
   // NOTE: This function must closely match the logic in
   // |-drawInteriorWithFrame:inView:|.
@@ -250,9 +299,9 @@ size_t CalculatePositionsInFrame(
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame;
-  size_t left_count =
-      CalculatePositionsInFrame(cellFrame, leftDecorations_, rightDecorations_,
-                                &decorations, &decorationFrames, &textFrame);
+  size_t left_count = CalculatePositionsInFrame(
+      cellFrame, leadingDecorations_, trailingDecorations_, &decorations,
+      &decorationFrames, &textFrame);
 
   // Determine the left-most extent for the i-beam cursor.
   CGFloat minX = NSMinX(textFrame);
@@ -261,11 +310,10 @@ size_t CalculatePositionsInFrame(
       break;
 
     // If at leftmost decoration, expand to edge of cell.
-    if (!index) {
+    if (!index)
       minX = NSMinX(cellFrame);
-    } else {
-      minX = NSMinX(decorationFrames[index]) - kDecorationHorizontalPad;
-    }
+    else
+      minX = NSMinX(decorationFrames[index]);
   }
 
   // Determine the right-most extent for the i-beam cursor.
@@ -275,11 +323,10 @@ size_t CalculatePositionsInFrame(
       break;
 
     // If at rightmost decoration, expand to edge of cell.
-    if (index == decorations.size() - 1) {
+    if (index == decorations.size() - 1)
       maxX = NSMaxX(cellFrame);
-    } else {
-      maxX = NSMaxX(decorationFrames[index]) + kDecorationHorizontalPad;
-    }
+    else
+      maxX = NSMaxX(decorationFrames[index]);
   }
 
   // I-beam cursor covers left-most to right-most.
@@ -287,87 +334,128 @@ size_t CalculatePositionsInFrame(
 }
 
 - (void)drawWithFrame:(NSRect)frame inView:(NSView*)controlView {
-  // Background color.
-  const CGFloat lineWidth = [controlView cr_lineWidth];
-  if (isPopupMode_) {
-    [[self backgroundColor] set];
-    NSRectFillUsingOperation(NSInsetRect(frame, 1, 1), NSCompositeSourceOver);
-  } else {
-    CGFloat insetSize = lineWidth == 0.5 ? 1.5 : 2.0;
-    NSRect fillRect = NSInsetRect(frame, insetSize, insetSize);
-    [[self backgroundColor] set];
-    [[NSBezierPath bezierPathWithRoundedRect:fillRect
-                                     xRadius:kCornerRadius
-                                     yRadius:kCornerRadius] fill];
+  BOOL inDarkMode = [[controlView window] inIncognitoModeWithSystemTheme];
+  BOOL showingFirstResponder = [self showsFirstResponder];
+  // Adjust the inset by 1/2 the line width to get a crisp line (screen pixels
+  // lay between cooridnate space lines).
+  CGFloat insetSize = 1 - singlePixelLineWidth_ / 2.;
+  if (showingFirstResponder && !inDarkMode) {
+    insetSize++;
   }
 
-  // Border.
-  ui::DrawNinePartImage(frame,
-                        isPopupMode_ ? kPopupBorderImageIds
-                                     : kNormalBorderImageIds,
-                        NSCompositeSourceOver,
-                        1.0,
-                        true);
+  // Compute the border's bezier path.
+  NSRect pathRect = NSInsetRect(frame, insetSize, insetSize);
+  NSBezierPath* path =
+      [NSBezierPath bezierPathWithRoundedRect:pathRect
+                                      xRadius:kCornerRadius
+                                      yRadius:kCornerRadius];
+  [path setLineWidth:showingFirstResponder ? singlePixelLineWidth_ * 2
+                                           : singlePixelLineWidth_];
 
-  // Interior contents. Drawn after the border as some of the interior controls
-  // draw over the border.
+  // Fill the background.
+  [[self backgroundColor] set];
+  if (isPopupMode_) {
+    NSRectFillUsingOperation(NSInsetRect(frame, 1, 1), NSCompositeSourceOver);
+  } else {
+    [path fill];
+  }
+
+  // Draw the border.
+  if (!inDarkMode) {
+    const CGFloat kNormalStrokeGray = 168 / 255.;
+    [[NSColor colorWithCalibratedWhite:kNormalStrokeGray alpha:1] set];
+  } else {
+    const CGFloat k30PercentAlpha = 0.3;
+    [[NSColor colorWithCalibratedWhite:0 alpha:k30PercentAlpha] set];
+  }
+  [path stroke];
+
+  // Draw the interior contents. We do this after drawing the border as some
+  // of the interior controls draw over it.
   [self drawInteriorWithFrame:frame inView:controlView];
 
-  // Focus ring.
-  if ([self showsFirstResponder]) {
-    NSRect focusRingRect = NSInsetRect(frame, lineWidth, lineWidth);
-    [[[NSColor keyboardFocusIndicatorColor]
-        colorWithAlphaComponent:0.5 / lineWidth] set];
-    NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:focusRingRect
-                                                         xRadius:kCornerRadius
-                                                         yRadius:kCornerRadius];
-    [path setLineWidth:lineWidth * 2.0];
+  // Draw the focus ring.
+  if (showingFirstResponder) {
+    CGFloat alphaComponent = 0.5 / singlePixelLineWidth_;
+    if (inDarkMode) {
+      // Special focus color for Material Incognito.
+      [[NSColor colorWithSRGBRed:123 / 255.
+                           green:170 / 255.
+                            blue:247 / 255.
+                           alpha:1] set];
+    } else {
+      [[[NSColor keyboardFocusIndicatorColor]
+          colorWithAlphaComponent:alphaComponent] set];
+    }
     [path stroke];
   }
 }
 
 - (void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView*)controlView {
+  ui::ScopedCGContextSmoothFonts fontSmoothing;
+  [super drawInteriorWithFrame:cellFrame inView:controlView];
+
+  // NOTE: This method must closely match the logic in |-textFrameForFrame:|.
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect workingFrame;
 
-  CalculatePositionsInFrame(cellFrame, leftDecorations_, rightDecorations_,
-                            &decorations, &decorationFrames, &workingFrame);
+  CalculatePositionsInFrame(cellFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &workingFrame);
 
-  // Draw the decorations.
+  // Draw the decorations. Do this after drawing the interior because the
+  // field editor's background rect overlaps the right edge of the security
+  // decoration's hover rounded rect.
   for (size_t i = 0; i < decorations.size(); ++i) {
     if (decorations[i]) {
-      NSRect background_frame = NSInsetRect(
-          decorationFrames[i], -(kDecorationHorizontalPad + 1) / 2, 2);
-      decorations[i]->DrawWithBackgroundInFrame(
-          background_frame, decorationFrames[i], controlView);
+      decorations[i]->DrawWithBackgroundInFrame(decorationFrames[i],
+                                                controlView);
     }
   }
+}
 
-  // NOTE: This function must closely match the logic in
-  // |-textFrameForFrame:|.
+- (BOOL)canDropAtLocationInWindow:(NSPoint)location
+                           ofView:(AutocompleteTextField*)controlView {
+  NSRect cellFrame = [controlView bounds];
+  const NSPoint locationInView =
+      [controlView convertPoint:location fromView:nil];
 
-  // Superclass draws text portion WRT original |cellFrame|.
-  ui::ScopedCGContextSmoothFonts fontSmoothing;
-  [super drawInteriorWithFrame:cellFrame inView:controlView];
+  NSRect textFrame;
+  std::vector<LocationBarDecoration*> decorations;
+  std::vector<NSRect> decorationFrames;
+  CalculatePositionsInFrame(cellFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &textFrame);
+  return NSPointInRect(locationInView, textFrame);
 }
 
 - (LocationBarDecoration*)decorationForEvent:(NSEvent*)theEvent
                                       inRect:(NSRect)cellFrame
                                       ofView:(AutocompleteTextField*)controlView
 {
+  return [self decorationForLocationInWindow:[theEvent locationInWindow]
+                                      inRect:cellFrame
+                                      ofView:controlView];
+}
+
+- (LocationBarDecoration*)decorationForLocationInWindow:(NSPoint)location
+                                                 inRect:(NSRect)cellFrame
+                                                 ofView:(AutocompleteTextField*)
+                                                            controlView {
   const BOOL flipped = [controlView isFlipped];
-  const NSPoint location =
-      [controlView convertPoint:[theEvent locationInWindow] fromView:nil];
+  const NSPoint locationInView =
+      [controlView convertPoint:location fromView:nil];
 
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame;
-  CalculatePositionsInFrame(cellFrame, leftDecorations_, rightDecorations_,
-                            &decorations, &decorationFrames, &textFrame);
+  CalculatePositionsInFrame(cellFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &textFrame);
 
   for (size_t i = 0; i < decorations.size(); ++i) {
-    if (NSMouseInRect(location, decorationFrames[i], flipped))
+    if (NSMouseInRect(locationInView, decorationFrames[i], flipped))
       return decorations[i];
   }
 
@@ -401,6 +489,8 @@ size_t CalculatePositionsInFrame(
   if (!decoration || !decoration->AcceptsMousePress())
     return NO;
 
+  decoration->OnMouseDown();
+
   NSRect decorationRect =
       [self frameForDecoration:decoration inFrame:cellFrame];
 
@@ -430,6 +520,8 @@ size_t CalculatePositionsInFrame(
       dragImageRect.origin =
           NSMakePoint(mousePoint.x - NSWidth(dragImageRect) / 2.0,
                       mousePoint.y - NSHeight(dragImageRect));
+      draggedDecoration_ = decoration;
+      draggedDecoration_->SetActive(true);
 
       // -[NSView dragImage:at:*] wants the images lower-left point,
       // regardless of -isFlipped.  Converting the rect to window base
@@ -451,6 +543,7 @@ size_t CalculatePositionsInFrame(
 
     // On mouse-up fall through to mouse-pressed case.
     DCHECK_EQ([event type], NSLeftMouseUp);
+    decoration->OnMouseUp();
   }
 
   const NSPoint mouseLocation = [theEvent locationInWindow];
@@ -460,72 +553,13 @@ size_t CalculatePositionsInFrame(
                                   point.y - decorationRect.origin.y));
 }
 
-// Given a newly created .webloc plist url file, also give it a resource
-// fork and insert 'TEXT and 'url ' resources holding further copies of the
-// url data. This is required for apps such as Terminal and Safari to accept it
-// as a real webloc file when dragged in.
-// It's expected that the resource fork requirement will go away at some
-// point and this code can then be deleted.
-OSErr WriteURLToNewWebLocFileResourceFork(NSURL* file, NSString* urlStr) {
-  ResFileRefNum refNum = kResFileNotOpened;
-  ResFileRefNum prevResRef = CurResFile();
-  FSRef fsRef;
-  OSErr err = noErr;
-  HFSUniStr255 resourceForkName;
-  FSGetResourceForkName(&resourceForkName);
-
-  if (![[NSFileManager defaultManager] fileExistsAtPath:[file path]])
-    return fnfErr;
-
-  if (!CFURLGetFSRef((CFURLRef)file, &fsRef))
-    return fnfErr;
-
-  err = FSCreateResourceFork(&fsRef,
-                             resourceForkName.length,
-                             resourceForkName.unicode,
-                             0);
-  if (err)
-    return err;
-  err = FSOpenResourceFile(&fsRef,
-                           resourceForkName.length,
-                           resourceForkName.unicode,
-                           fsRdWrPerm, &refNum);
-  if (err)
-    return err;
-
-  const char* utf8URL = [urlStr UTF8String];
-  int urlChars = strlen(utf8URL);
-
-  Handle urlHandle = NewHandle(urlChars);
-  memcpy(*urlHandle, utf8URL, urlChars);
-
-  Handle textHandle = NewHandle(urlChars);
-  memcpy(*textHandle, utf8URL, urlChars);
-
-  // Data for the 'drag' resource.
-  // This comes from derezzing webloc files made by the Finder.
-  // It's bigendian data, so it's represented here as chars to preserve
-  // byte order.
-  char dragData[] = {
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // Header.
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-    0x54, 0x45, 0x58, 0x54, 0x00, 0x00, 0x01, 0x00, // 'TEXT', 0, 256
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x75, 0x72, 0x6C, 0x20, 0x00, 0x00, 0x01, 0x00, // 'url ', 0, 256
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-  };
-  Handle dragHandle = NewHandleClear(sizeof(dragData));
-  memcpy(*dragHandle, &dragData[0], sizeof(dragData));
-
-  // Save the resources to the file.
-  ConstStr255Param noName = {0};
-  AddResource(dragHandle, 'drag', 128, noName);
-  AddResource(textHandle, 'TEXT', 256, noName);
-  AddResource(urlHandle, 'url ', 256, noName);
-
-  CloseResFile(refNum);
-  UseResFile(prevResRef);
-  return noErr;
+- (void)mouseUp:(NSEvent*)theEvent
+         inRect:(NSRect)cellFrame
+         ofView:(AutocompleteTextField*)controlView {
+  LocationBarDecoration* decoration =
+      [self decorationForEvent:theEvent inRect:cellFrame ofView:controlView];
+  if (decoration)
+    decoration->OnMouseUp();
 }
 
 // Returns the file path for file |name| if saved at NSURL |base|.
@@ -589,12 +623,15 @@ static NSString* UnusedLegalNameForNewDropFile(NSURL* saveLocation,
   NSPasteboard* pboard = [NSPasteboard pasteboardWithName:NSDragPboard];
   NSFileManager* fileManager = [NSFileManager defaultManager];
 
-  if (![pboard containsURLData])
+  if (![pboard containsURLDataConvertingTextToURL:YES])
     return NULL;
 
   NSArray *urls = NULL;
   NSArray* titles = NULL;
-  [pboard getURLs:&urls andTitles:&titles convertingFilenames:YES];
+  [pboard getURLs:&urls
+                andTitles:&titles
+      convertingFilenames:YES
+      convertingTextToURL:YES];
 
   NSString* urlStr = [urls objectAtIndex:0];
   NSString* nameStr = [titles objectAtIndex:0];
@@ -623,9 +660,6 @@ static NSString* UnusedLegalNameForNewDropFile(NSURL* saveLocation,
   [fileManager setAttributes:attr
                 ofItemAtPath:[outputURL path]
                        error:nil];
-  // Add resource data.
-  OSErr resStatus = WriteURLToNewWebLocFileResourceFork(outputURL, urlStr);
-  OSSTATUS_DCHECK(resStatus == noErr, resStatus);
 
   return [NSArray arrayWithObject:nameWithExtensionStr];
 }
@@ -634,15 +668,31 @@ static NSString* UnusedLegalNameForNewDropFile(NSURL* saveLocation,
   return NSDragOperationCopy;
 }
 
-- (void)updateToolTipsInRect:(NSRect)cellFrame
-                      ofView:(AutocompleteTextField*)controlView {
+- (void)draggingSession:(NSDraggingSession*)session
+           endedAtPoint:(NSPoint)screenPoint
+              operation:(NSDragOperation)operation {
+  DCHECK(draggedDecoration_);
+  draggedDecoration_->SetActive(false);
+  draggedDecoration_ = nullptr;
+}
+
+- (void)updateMouseTrackingAndToolTipsInRect:(NSRect)cellFrame
+                                      ofView:
+                                          (AutocompleteTextField*)controlView {
   std::vector<LocationBarDecoration*> decorations;
   std::vector<NSRect> decorationFrames;
   NSRect textFrame;
-  CalculatePositionsInFrame(cellFrame, leftDecorations_, rightDecorations_,
-                            &decorations, &decorationFrames, &textFrame);
+  CalculatePositionsInFrame(cellFrame, leadingDecorations_,
+                            trailingDecorations_, &decorations,
+                            &decorationFrames, &textFrame);
+  [self clearTrackingArea];
 
   for (size_t i = 0; i < decorations.size(); ++i) {
+    CrTrackingArea* trackingArea =
+        decorations[i]->SetupTrackingArea(decorationFrames[i], controlView);
+    if (trackingArea)
+      mouseTrackingDecorations_.push_back(decorations[i]);
+
     NSString* tooltip = decorations[i]->GetToolTip();
     if ([tooltip length] > 0)
       [controlView addToolTip:tooltip forRect:decorationFrames[i]];
@@ -674,6 +724,14 @@ static NSString* UnusedLegalNameForNewDropFile(NSURL* saveLocation,
     const bool controlDown = ([event modifierFlags] & NSControlKeyMask) != 0;
     [controlView observer]->OnSetFocus(controlDown);
   }
+}
+
+@end
+
+@implementation AutocompleteTextFieldCell (TestingAPI)
+
+- (const std::vector<LocationBarDecoration*>&)mouseTrackingDecorations {
+  return mouseTrackingDecorations_;
 }
 
 @end

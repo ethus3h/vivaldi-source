@@ -6,16 +6,22 @@ package org.chromium.chrome.browser;
 
 import android.content.Context;
 import android.content.Intent;
-import android.test.suitebuilder.annotation.MediumTest;
+import android.support.test.filters.MediumTest;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.FlakyTest;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.test.ChromeTabbedActivityTestBase;
 import org.chromium.chrome.test.util.ApplicationTestUtils;
-import org.chromium.content.browser.test.util.CallbackHelper;
+
+import java.util.concurrent.Callable;
 
 /**
  * Tests for the PowerBroadcastReceiver.
  */
+@RetryOnFailure
 public class PowerBroadcastReceiverTest extends ChromeTabbedActivityTestBase {
     private static final long MS_INTERVAL = 1000;
     private static final long MS_RUNNABLE_DELAY = 2500;
@@ -81,8 +87,13 @@ public class PowerBroadcastReceiverTest extends ChromeTabbedActivityTestBase {
     public void setUp() throws Exception {
         super.setUp();
 
-        ChromeApplication application = (ChromeApplication) getActivity().getApplication();
-        mReceiver = application.getPowerBroadcastReceiver();
+        mReceiver = ThreadUtils.runOnUiThreadBlocking(new Callable<PowerBroadcastReceiver>() {
+            @Override
+            public PowerBroadcastReceiver call() throws Exception {
+                return ChromeActivitySessionTracker.getInstance()
+                        .getPowerBroadcastReceiverForTesting();
+            }
+        });
 
         // Set up our mock runnable.
         mRunnable = new MockServiceRunnable();
@@ -114,6 +125,7 @@ public class PowerBroadcastReceiverTest extends ChromeTabbedActivityTestBase {
     /**
      * Check that the runnable gets posted and canceled when Main is sent to the background.
      */
+    @FlakyTest(message = "https://crbug.com/579363")
     @MediumTest
     @Feature({"Omaha", "Sync"})
     public void testRunnableGetsCanceled() throws Exception {
@@ -138,6 +150,7 @@ public class PowerBroadcastReceiverTest extends ChromeTabbedActivityTestBase {
      */
     @MediumTest
     @Feature({"Omaha", "Sync"})
+    @FlakyTest(message = "https://crbug.com/587138")
     public void testRunnableGetsRunWhenScreenIsOn() throws Exception {
         // Claim the screen is off.
         mReceiver.setPowerManagerHelperForTests(sScreenOff);

@@ -7,18 +7,17 @@
 
 #include "base/macros.h"
 #include "ui/display/types/display_snapshot.h"
-#include "ui/ozone/ozone_base_export.h"
 
 namespace ui {
 
 struct DisplaySnapshot_Params;
 
-class OZONE_BASE_EXPORT DisplaySnapshotProxy : public DisplaySnapshot {
+class DisplaySnapshotProxy : public display::DisplaySnapshot {
  public:
   DisplaySnapshotProxy(const DisplaySnapshot_Params& params);
   ~DisplaySnapshotProxy() override;
 
-  // DisplaySnapshot override:
+  // display::DisplaySnapshot override:
   std::string ToString() const override;
 
  private:

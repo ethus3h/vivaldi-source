@@ -7,13 +7,15 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ppapi/c/pp_completion_callback.h"
 #include "ppapi/shared_impl/ppapi_shared_export.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/thunk/ppb_graphics_3d_api.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace gpu {
 class CommandBuffer;
@@ -40,8 +42,10 @@ class PPAPI_SHARED_EXPORT PPB_Graphics3D_Shared
   int32_t SetAttribs(const int32_t attrib_list[]) override;
   int32_t GetError() override;
   int32_t ResizeBuffers(int32_t width, int32_t height) override;
-  int32_t SwapBuffers(scoped_refptr<TrackedCallback> callback,
-                      const gpu::SyncToken& sync_token) override;
+  int32_t SwapBuffers(scoped_refptr<TrackedCallback> callback) override;
+  int32_t SwapBuffersWithSyncToken(scoped_refptr<TrackedCallback> callback,
+                                   const gpu::SyncToken& sync_token,
+                                   const gfx::Size& size) override;
   int32_t GetAttribMaxValue(int32_t attribute, int32_t* value) override;
 
   void* MapTexSubImage2DCHROMIUM(GLenum target,
@@ -63,12 +67,14 @@ class PPAPI_SHARED_EXPORT PPB_Graphics3D_Shared
 
  protected:
   PPB_Graphics3D_Shared(PP_Instance instance);
-  PPB_Graphics3D_Shared(const HostResource& host_resource);
+  PPB_Graphics3D_Shared(const HostResource& host_resource,
+                        const gfx::Size& size);
   ~PPB_Graphics3D_Shared() override;
 
   virtual gpu::CommandBuffer* GetCommandBuffer() = 0;
   virtual gpu::GpuControl* GetGpuControl() = 0;
-  virtual int32_t DoSwapBuffers(const gpu::SyncToken& sync_token) = 0;
+  virtual int32_t DoSwapBuffers(const gpu::SyncToken& sync_token,
+                                const gfx::Size& size) = 0;
 
   bool HasPendingSwap() const;
   bool CreateGLES2Impl(int32_t command_buffer_size,
@@ -77,9 +83,13 @@ class PPAPI_SHARED_EXPORT PPB_Graphics3D_Shared
   void DestroyGLES2Impl();
 
  private:
-  scoped_ptr<gpu::gles2::GLES2CmdHelper> gles2_helper_;
-  scoped_ptr<gpu::TransferBuffer> transfer_buffer_;
-  scoped_ptr<gpu::gles2::GLES2Implementation> gles2_impl_;
+  std::unique_ptr<gpu::gles2::GLES2CmdHelper> gles2_helper_;
+  std::unique_ptr<gpu::TransferBuffer> transfer_buffer_;
+  std::unique_ptr<gpu::gles2::GLES2Implementation> gles2_impl_;
+
+  // A local cache of the size of the viewport. This is only valid in plugin
+  // resources.
+  gfx::Size size_;
 
   // Callback that needs to be executed when swap-buffers is completed.
   scoped_refptr<TrackedCallback> swap_callback_;

@@ -4,8 +4,7 @@
 
 import os
 
-from telemetry.page import action_runner
-from telemetry.page import page_test
+from telemetry.page import legacy_page_test
 from telemetry.timeline.model import TimelineModel
 from telemetry.timeline import tracing_config
 from telemetry.value import list_of_scalar_values
@@ -72,7 +71,7 @@ def _AddTracingResults(thread, results):
     if event.name == 'ThreadHeap::coalesce':
       values['oilpan_coalesce'].append(duration)
       continue
-    if event.name == 'Heap::collectGarbage':
+    if event.name == 'BlinkGCMarking':
       if reason is not None:
         values['oilpan_%s_mark' % reason].append(mark_time)
         values['oilpan_%s_lazy_sweep' % reason].append(lazy_sweep_time)
@@ -130,20 +129,23 @@ def _AddTracingResults(thread, results):
   results.AddValue(scalar.ScalarValue(page, 'oilpan_gc', unit, gc_time))
 
 
-class _OilpanGCTimesBase(page_test.PageTest):
+class _OilpanGCTimesBase(legacy_page_test.LegacyPageTest):
+
   def __init__(self, action_name=''):
     super(_OilpanGCTimesBase, self).__init__(action_name)
 
   def WillNavigateToPage(self, page, tab):
+    del page  # unused
     # FIXME: Remove webkit.console when blink.console lands in chromium and
     # the ref builds are updated. crbug.com/386847
     config = tracing_config.TracingConfig()
     for c in ['webkit.console', 'blink.console', 'blink_gc']:
-      config.tracing_category_filter.AddIncludedCategory(c)
+      config.chrome_trace_config.category_filter.AddIncludedCategory(c)
     config.enable_chrome_trace = True
     tab.browser.platform.tracing_controller.StartTracing(config, timeout=1000)
 
   def ValidateAndMeasurePage(self, page, tab, results):
+    del page  # unused
     timeline_data = tab.browser.platform.tracing_controller.StopTracing()
     timeline_model = TimelineModel(timeline_data)
     threads = timeline_model.GetAllThreads()
@@ -157,13 +159,14 @@ class _OilpanGCTimesBase(page_test.PageTest):
 
 
 class OilpanGCTimesForSmoothness(_OilpanGCTimesBase):
+
   def __init__(self):
     super(OilpanGCTimesForSmoothness, self).__init__()
     self._interaction = None
 
   def DidNavigateToPage(self, page, tab):
-    runner = action_runner.ActionRunner(tab)
-    self._interaction = runner.CreateInteraction(_RUN_SMOOTH_ACTIONS)
+    del page  # unused
+    self._interaction = tab.action_runner.CreateInteraction(_RUN_SMOOTH_ACTIONS)
     self._interaction.Begin()
 
   def ValidateAndMeasurePage(self, page, tab, results):
@@ -173,6 +176,7 @@ class OilpanGCTimesForSmoothness(_OilpanGCTimesBase):
 
 
 class OilpanGCTimesForBlinkPerf(_OilpanGCTimesBase):
+
   def __init__(self):
     super(OilpanGCTimesForBlinkPerf, self).__init__()
     with open(os.path.join(os.path.dirname(__file__), '..', 'benchmarks',
@@ -190,6 +194,7 @@ class OilpanGCTimesForBlinkPerf(_OilpanGCTimesBase):
 
 
 class OilpanGCTimesForInternals(OilpanGCTimesForBlinkPerf):
+
   def __init__(self):
     super(OilpanGCTimesForInternals, self).__init__()
 

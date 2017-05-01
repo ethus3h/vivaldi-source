@@ -9,6 +9,7 @@
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
+#include "chrome/browser/ui/views/task_manager_view.h"
 #include "chrome/browser/ui/views/website_settings/website_settings_popup_view.h"
 
 // This file provides definitions of desktop browser dialog-creation methods for
@@ -23,26 +24,46 @@ void ShowWebsiteSettingsBubbleViewsAtPoint(
     const gfx::Point& anchor_point,
     Profile* profile,
     content::WebContents* web_contents,
-    const GURL& url,
-    const security_state::SecurityStateModel::SecurityInfo& security_info) {
+    const GURL& virtual_url,
+    const security_state::SecurityInfo& security_info) {
+  // Don't show the bubble again if it's already showing. A second click on the
+  // location icon in the omnibox will dismiss an open bubble. This behaviour is
+  // consistent with the non-Mac views implementation.
+  // Note that when the browser is toolkit-views, IsPopupShowing() is checked
+  // earlier because the popup is shown on mouse release (but dismissed on
+  // mouse pressed). A Cocoa browser does both on mouse pressed, so a check
+  // when showing is sufficient.
+  if (WebsiteSettingsPopupView::GetShownPopupType() !=
+      WebsiteSettingsPopupView::POPUP_NONE) {
+    return;
+  }
+
   WebsiteSettingsPopupView::ShowPopup(
-      nullptr, gfx::Rect(anchor_point, gfx::Size()), profile, web_contents, url,
-      security_info);
+      nullptr, gfx::Rect(anchor_point, gfx::Size()), profile, web_contents,
+      virtual_url, security_info);
 }
 
 void ShowBookmarkBubbleViewsAtPoint(const gfx::Point& anchor_point,
                                     gfx::NativeView parent,
                                     bookmarks::BookmarkBubbleObserver* observer,
                                     Browser* browser,
-                                    const GURL& url,
+                                    const GURL& virtual_url,
                                     bool already_bookmarked) {
   // The Views dialog may prompt for sign in.
-  scoped_ptr<BubbleSyncPromoDelegate> delegate(
+  std::unique_ptr<BubbleSyncPromoDelegate> delegate(
       new BookmarkBubbleSignInDelegate(browser));
 
-  BookmarkBubbleView::ShowBubble(nullptr, gfx::Rect(anchor_point, gfx::Size()),
-                                 parent, observer, std::move(delegate),
-                                 browser->profile(), url, already_bookmarked);
+  BookmarkBubbleView::ShowBubble(
+      nullptr, gfx::Rect(anchor_point, gfx::Size()), parent, observer,
+      std::move(delegate), browser->profile(), virtual_url, already_bookmarked);
+}
+
+task_manager::TaskManagerTableModel* ShowTaskManagerViews(Browser* browser) {
+  return task_manager::TaskManagerView::Show(browser);
+}
+
+void HideTaskManagerViews() {
+  task_manager::TaskManagerView::Hide();
 }
 
 void ContentSettingBubbleViewsBridge::Show(gfx::NativeView parent_view,
@@ -54,7 +75,7 @@ void ContentSettingBubbleViewsBridge::Show(gfx::NativeView parent_view,
           views::BubbleBorder::Arrow::TOP_RIGHT);
   contents->set_parent_window(parent_view);
   contents->SetAnchorRect(gfx::Rect(anchor, gfx::Size()));
-  views::BubbleDelegateView::CreateBubble(contents)->Show();
+  views::BubbleDialogDelegateView::CreateBubble(contents)->Show();
 }
 
 }  // namespace chrome

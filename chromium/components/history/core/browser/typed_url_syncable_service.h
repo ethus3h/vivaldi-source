@@ -12,21 +12,17 @@
 
 #include "base/macros.h"
 #include "base/scoped_observer.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "components/history/core/browser/history_backend_observer.h"
 #include "components/history/core/browser/history_types.h"
-#include "sync/api/sync_change.h"
-#include "sync/api/sync_data.h"
-#include "sync/api/sync_error.h"
-#include "sync/api/sync_error_factory.h"
-#include "sync/api/syncable_service.h"
+#include "components/sync/model/sync_change.h"
+#include "components/sync/model/sync_data.h"
+#include "components/sync/model/sync_error.h"
+#include "components/sync/model/sync_error_factory.h"
+#include "components/sync/model/syncable_service.h"
 #include "ui/base/page_transition_types.h"
 
 class GURL;
-
-namespace base {
-class MessageLoop;
-};
 
 namespace sync_pb {
 class TypedUrlSpecifics;
@@ -50,8 +46,8 @@ class TypedUrlSyncableService : public syncer::SyncableService,
   syncer::SyncMergeResult MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
-      scoped_ptr<syncer::SyncChangeProcessor> sync_processor,
-      scoped_ptr<syncer::SyncErrorFactory> error_handler) override;
+      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
+      std::unique_ptr<syncer::SyncErrorFactory> error_handler) override;
   void StopSyncing(syncer::ModelType type) override;
   syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
   syncer::SyncError ProcessSyncChanges(
@@ -228,15 +224,15 @@ class TypedUrlSyncableService : public syncer::SyncableService,
 
   // We receive ownership of |sync_processor_| and |error_handler_| in
   // MergeDataAndStartSyncing() and destroy them in StopSyncing().
-  scoped_ptr<syncer::SyncChangeProcessor> sync_processor_;
-  scoped_ptr<syncer::SyncErrorFactory> sync_error_handler_;
+  std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
+  std::unique_ptr<syncer::SyncErrorFactory> sync_error_handler_;
 
   // Statistics for the purposes of tracking the percentage of DB accesses that
   // fail for each client via UMA.
   int num_db_accesses_;
   int num_db_errors_;
 
-  base::ThreadChecker thread_checker_;
+  base::SequenceChecker sequence_checker_;
 
   ScopedObserver<history::HistoryBackend, history::HistoryBackendObserver>
       history_backend_observer_;

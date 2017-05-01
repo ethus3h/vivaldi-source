@@ -7,13 +7,13 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/device/input_service_proxy.h"
 #include "chrome/browser/chromeos/login/screens/base_screen.h"
@@ -48,10 +48,8 @@ class HIDDetectionScreen : public HIDDetectionModel,
   ~HIDDetectionScreen() override;
 
   // HIDDetectionModel implementation:
-  void PrepareToShow() override;
   void Show() override;
   void Hide() override;
-  void Initialize(::login::ScreenContext* context) override;
   void OnContinueButtonClicked() override;
   void OnViewDestroyed(HIDDetectionView* view) override;
   void CheckIsScreenRequired(
@@ -84,6 +82,8 @@ class HIDDetectionScreen : public HIDDetectionModel,
   void OnInputDeviceRemoved(const std::string& id) override;
 
  private:
+  friend class HIDDetectionScreenTest;
+
   // Types of dialog leaving scenarios for UMA metric.
   enum ContinueScenarioType {
     // Only pointing device detected, user pressed 'Continue'.
@@ -133,11 +133,16 @@ class HIDDetectionScreen : public HIDDetectionModel,
   // Called by device::BluetoothAdapter in response to a successful request
   // to initiate a discovery session.
   void OnStartDiscoverySession(
-      scoped_ptr<device::BluetoothDiscoverySession> discovery_session);
+      std::unique_ptr<device::BluetoothDiscoverySession> discovery_session);
 
   // Called by device::BluetoothAdapter in response to a failure to
   // initiate a discovery session.
   void FindDevicesError();
+
+  // Check the input devices returned by InputServiceProxy one by one and power
+  // off the BT adapter if there is no bluetooth device.
+  void OnGetInputDevicesForPowerOff(
+      const std::vector<InputDeviceInfo>& devices);
 
   // Called by device::BluetoothAdapter in response to a failure to
   // power BT adapter.
@@ -158,13 +163,13 @@ class HIDDetectionScreen : public HIDDetectionModel,
 
   // Called by device::BluetoothDevice on a successful pairing and connection
   // to a device.
-  void BTConnected(device::BluetoothDevice::DeviceType device_type);
+  void BTConnected(device::BluetoothDeviceType device_type);
 
   // Called by device::BluetoothDevice in response to a failure to
   // connect to the device with bluetooth address |address| due to an error
   // encoded in |error_code|.
   void BTConnectError(const std::string& address,
-                      device::BluetoothDevice::DeviceType device_type,
+                      device::BluetoothDeviceType device_type,
                       device::BluetoothDevice::ConnectErrorCode error_code);
 
   // Sends a notification to the Web UI of the status of available Bluetooth/USB
@@ -178,6 +183,9 @@ class HIDDetectionScreen : public HIDDetectionModel,
   // Helper method. Sets device name or placeholder if the name is empty.
   void SetKeyboardDeviceName_(const std::string& name);
 
+  scoped_refptr<device::BluetoothAdapter> GetAdapterForTesting();
+  void SetAdapterInitialPoweredForTesting(bool powered);
+
   HIDDetectionView* view_;
 
   // Default bluetooth adapter, used for all operations.
@@ -188,25 +196,27 @@ class HIDDetectionScreen : public HIDDetectionModel,
   // The current device discovery session. Only one active discovery session is
   // kept at a time and the instance that |discovery_session_| points to gets
   // replaced by a new one when a new discovery session is initiated.
-  scoped_ptr<device::BluetoothDiscoverySession> discovery_session_;
+  std::unique_ptr<device::BluetoothDiscoverySession> discovery_session_;
 
   // Current pointing device, if any. Device name is kept in screen context.
   std::string pointing_device_id_;
-  bool mouse_is_pairing_;
-  InputDeviceInfo::Type pointing_device_connect_type_;
+  bool mouse_is_pairing_ = false;
+  InputDeviceInfo::Type pointing_device_connect_type_ =
+      InputDeviceInfo::TYPE_UNKNOWN;
 
   // Current keyboard device, if any. Device name is kept in screen context.
   std::string keyboard_device_id_;
-  bool keyboard_is_pairing_;
-  InputDeviceInfo::Type keyboard_device_connect_type_;
+  bool keyboard_is_pairing_ = false;
+  InputDeviceInfo::Type keyboard_device_connect_type_ =
+      InputDeviceInfo::TYPE_UNKNOWN;
   std::string keyboard_device_name_;
 
   // State of BT adapter before screen-initiated changes.
-  scoped_ptr<bool> adapter_initially_powered_;
+  std::unique_ptr<bool> adapter_initially_powered_;
 
-  bool switch_on_adapter_when_ready_;
+  bool switch_on_adapter_when_ready_ = false;
 
-  bool showing_;
+  bool showing_ = false;
 
   base::WeakPtrFactory<HIDDetectionScreen> weak_ptr_factory_;
 

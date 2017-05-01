@@ -7,19 +7,22 @@
 #include <stddef.h>
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "third_party/WebKit/public/platform/URLConversion.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/WebKit/public/platform/WebURL.h"
 #include "third_party/WebKit/public/platform/WebVector.h"
 #include "third_party/WebKit/public/platform/modules/notifications/WebNotificationAction.h"
 
 using blink::WebNotificationData;
+using blink::WebString;
 
 namespace content {
 
 PlatformNotificationData ToPlatformNotificationData(
     const WebNotificationData& web_data) {
   PlatformNotificationData platform_data;
-  platform_data.title = web_data.title;
+  platform_data.title = web_data.title.utf16();
 
   switch (web_data.direction) {
     case WebNotificationData::DirectionLeftToRight:
@@ -35,20 +38,42 @@ PlatformNotificationData ToPlatformNotificationData(
       break;
   }
 
-  platform_data.lang = base::UTF16ToUTF8(base::StringPiece16(web_data.lang));
-  platform_data.body = web_data.body;
-  platform_data.tag = base::UTF16ToUTF8(base::StringPiece16(web_data.tag));
-  platform_data.icon = GURL(web_data.icon.string());
+  platform_data.lang = web_data.lang.utf8(
+      WebString::UTF8ConversionMode::kStrictReplacingErrorsWithFFFD);
+  platform_data.body = web_data.body.utf16();
+  platform_data.tag = web_data.tag.utf8(
+      WebString::UTF8ConversionMode::kStrictReplacingErrorsWithFFFD);
+  platform_data.image = WebStringToGURL(web_data.image.string());
+  platform_data.icon = WebStringToGURL(web_data.icon.string());
+  platform_data.badge = WebStringToGURL(web_data.badge.string());
   platform_data.vibration_pattern.assign(web_data.vibrate.begin(),
                                          web_data.vibrate.end());
+  platform_data.timestamp = base::Time::FromJsTime(web_data.timestamp);
+  platform_data.renotify = web_data.renotify;
   platform_data.silent = web_data.silent;
   platform_data.require_interaction = web_data.requireInteraction;
   platform_data.data.assign(web_data.data.begin(), web_data.data.end());
   platform_data.actions.resize(web_data.actions.size());
   for (size_t i = 0; i < web_data.actions.size(); ++i) {
-    platform_data.actions[i].action =
-        base::UTF16ToUTF8(base::StringPiece16(web_data.actions[i].action));
-    platform_data.actions[i].title = web_data.actions[i].title;
+    switch (web_data.actions[i].type) {
+      case blink::WebNotificationAction::Button:
+        platform_data.actions[i].type =
+            PLATFORM_NOTIFICATION_ACTION_TYPE_BUTTON;
+        break;
+      case blink::WebNotificationAction::Text:
+        platform_data.actions[i].type = PLATFORM_NOTIFICATION_ACTION_TYPE_TEXT;
+        break;
+      default:
+        NOTREACHED() << "Unknown notification action type: "
+                     << web_data.actions[i].type;
+    }
+    platform_data.actions[i].action = web_data.actions[i].action.utf8(
+        WebString::UTF8ConversionMode::kStrictReplacingErrorsWithFFFD);
+    platform_data.actions[i].title = web_data.actions[i].title.utf16();
+    platform_data.actions[i].icon =
+        WebStringToGURL(web_data.actions[i].icon.string());
+    platform_data.actions[i].placeholder =
+        WebString::toNullableString16(web_data.actions[i].placeholder);
   }
 
   return platform_data;
@@ -57,7 +82,7 @@ PlatformNotificationData ToPlatformNotificationData(
 WebNotificationData ToWebNotificationData(
     const PlatformNotificationData& platform_data) {
   WebNotificationData web_data;
-  web_data.title = platform_data.title;
+  web_data.title = WebString::fromUTF16(platform_data.title);
 
   switch (platform_data.direction) {
     case PlatformNotificationData::DIRECTION_LEFT_TO_RIGHT:
@@ -71,11 +96,15 @@ WebNotificationData ToWebNotificationData(
       break;
   }
 
-  web_data.lang = blink::WebString::fromUTF8(platform_data.lang);
-  web_data.body = platform_data.body;
-  web_data.tag = blink::WebString::fromUTF8(platform_data.tag);
+  web_data.lang = WebString::fromUTF8(platform_data.lang);
+  web_data.body = WebString::fromUTF16(platform_data.body);
+  web_data.tag = WebString::fromUTF8(platform_data.tag);
+  web_data.image = blink::WebURL(platform_data.image);
   web_data.icon = blink::WebURL(platform_data.icon);
+  web_data.badge = blink::WebURL(platform_data.badge);
   web_data.vibrate = platform_data.vibration_pattern;
+  web_data.timestamp = platform_data.timestamp.ToJsTime();
+  web_data.renotify = platform_data.renotify;
   web_data.silent = platform_data.silent;
   web_data.requireInteraction = platform_data.require_interaction;
   web_data.data = platform_data.data;
@@ -83,9 +112,24 @@ WebNotificationData ToWebNotificationData(
       platform_data.actions.size());
   web_data.actions.swap(resized);
   for (size_t i = 0; i < platform_data.actions.size(); ++i) {
+    switch (platform_data.actions[i].type) {
+      case PLATFORM_NOTIFICATION_ACTION_TYPE_BUTTON:
+        web_data.actions[i].type = blink::WebNotificationAction::Button;
+        break;
+      case PLATFORM_NOTIFICATION_ACTION_TYPE_TEXT:
+        web_data.actions[i].type = blink::WebNotificationAction::Text;
+        break;
+      default:
+        NOTREACHED() << "Unknown platform data type: "
+                     << platform_data.actions[i].type;
+    }
     web_data.actions[i].action =
-        blink::WebString::fromUTF8(platform_data.actions[i].action);
-    web_data.actions[i].title = platform_data.actions[i].title;
+        WebString::fromUTF8(platform_data.actions[i].action);
+    web_data.actions[i].title =
+        WebString::fromUTF16(platform_data.actions[i].title);
+    web_data.actions[i].icon = blink::WebURL(platform_data.actions[i].icon);
+    web_data.actions[i].placeholder =
+        WebString::fromUTF16(platform_data.actions[i].placeholder);
   }
 
   return web_data;

@@ -8,7 +8,7 @@
 
 #include "base/mac/scoped_nsobject.h"
 #include "base/strings/sys_string_conversions.h"
-#include "chrome/browser/ui/chrome_style.h"
+#include "chrome/browser/ui/cocoa/chrome_style.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_alert.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_button.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_control_utils.h"
@@ -102,8 +102,8 @@ MediaGalleriesDialogCocoa::MediaGalleriesDialogCocoa(
     base::scoped_nsobject<CustomConstrainedWindowSheet> sheet(
         [[CustomConstrainedWindowSheet alloc]
             initWithCustomWindow:[alert_ window]]);
-    window_.reset(new ConstrainedWindowMac(
-        this, controller->WebContents(), sheet));
+    window_ = CreateAndShowWebModalDialogMac(
+        this, controller->WebContents(), sheet);
   }
 }
 
@@ -187,8 +187,7 @@ CGFloat MediaGalleriesDialogCocoa::CreateCheckboxes(
         [[MediaGalleryListEntry alloc]
             initWithFrame:NSZeroRect
                controller:this
-                 prefInfo:entry.pref_info
-         showFolderViewer:controller_->ShouldShowFolderViewer(entry)]);
+                 prefInfo:entry.pref_info]);
 
     [checkbox_entry setState:entry.selected];
 
@@ -266,11 +265,6 @@ void MediaGalleriesDialogCocoa::OnCheckboxToggled(MediaGalleryPrefId pref_id,
 
   [[[alert_ buttons] objectAtIndex:0] setEnabled:
       controller_->IsAcceptAllowed()];
-}
-
-void MediaGalleriesDialogCocoa::OnFolderViewerClicked(
-    MediaGalleryPrefId prefId) {
-  controller_->DidClickOpenFolderViewer(prefId);
 }
 
 ui::MenuModel* MediaGalleriesDialogCocoa::GetContextMenu(

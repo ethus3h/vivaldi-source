@@ -9,7 +9,6 @@
 #include <set>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "components/invalidation/public/invalidation_util.h"
 #include "components/invalidation/public/invalidator_state.h"
@@ -19,7 +18,6 @@ class DictionaryValue;
 }  // namespace base
 
 namespace syncer {
-class InvalidationHandler;
 class ObjectIdInvalidationMap;
 }  // namespace syncer
 

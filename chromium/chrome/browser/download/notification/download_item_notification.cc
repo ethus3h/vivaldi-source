@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include "base/files/file_util.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -19,10 +18,10 @@
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/notifications/profile_notification.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/mime_util/mime_util.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/browser_context.h"
@@ -32,7 +31,6 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/theme_resources.h"
 #include "net/base/mime_util.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -46,6 +44,10 @@
 #include "ui/gfx/vector_icons_public.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_style.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/note_taking_helper.h"
+#endif  // defined(OS_CHROMEOS)
 
 using base::UserMetricsAction;
 
@@ -166,6 +168,10 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
       content::RecordAction(
           UserMetricsAction("DownloadNotification.Button_CopyToClipboard"));
       break;
+    case DownloadCommands::ANNOTATE:
+      content::RecordAction(
+          UserMetricsAction("DownloadNotification.Button_Annotate"));
+      break;
   }
 }
 
@@ -194,7 +200,6 @@ DownloadItemNotification::DownloadItemNotification(
 
   notification_->set_progress(0);
   notification_->set_never_timeout(false);
-  notification_->set_adjust_icon(false);
 
   Update();
 }
@@ -247,7 +252,7 @@ void DownloadItemNotification::OnNotificationClick() {
           UserMetricsAction("DownloadNotification.Click_Stopped"));
       GetBrowser()->OpenURL(content::OpenURLParams(
           GURL(chrome::kChromeUIDownloadsURL), content::Referrer(),
-          NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
+          WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
           false /* is_renderer_initiated */));
       CloseNotificationByUser();
       break;
@@ -382,6 +387,7 @@ void DownloadItemNotification::UpdateNotificationData(
           // Negative progress value shows an indeterminate progress bar.
           notification_->set_progress(-1);
         }
+
         notification_->set_type(message_center::NOTIFICATION_TYPE_PROGRESS);
         break;
       }
@@ -414,7 +420,8 @@ void DownloadItemNotification::UpdateNotificationData(
   UpdateNotificationIcon();
 
   std::vector<message_center::ButtonInfo> notification_actions;
-  scoped_ptr<std::vector<DownloadCommands::Command>> actions(GetExtraActions());
+  std::unique_ptr<std::vector<DownloadCommands::Command>> actions(
+      GetExtraActions());
 
   button_actions_.reset(new std::vector<DownloadCommands::Command>);
   for (auto it = actions->begin(); it != actions->end(); it++) {
@@ -472,22 +479,7 @@ void DownloadItemNotification::UpdateNotificationData(
 
     image_decode_status_ = IN_PROGRESS;
 
-    bool maybe_image = false;
-    if (mime_util::IsSupportedImageMimeType(item_->GetMimeType())) {
-      maybe_image = true;
-    } else {
-      std::string mime;
-      base::FilePath::StringType extension_with_dot =
-          item_->GetTargetFilePath().FinalExtension();
-      if (!extension_with_dot.empty() &&
-          net::GetWellKnownMimeTypeFromExtension(extension_with_dot.substr(1),
-                                                 &mime) &&
-          mime_util::IsSupportedImageMimeType(mime)) {
-        maybe_image = true;
-      }
-    }
-
-    if (maybe_image) {
+    if (model.HasSupportedImageMimeType()) {
       base::FilePath file_path = item_->GetFullPath();
       base::PostTaskAndReplyWithResult(
           content::BrowserThread::GetBlockingPool(), FROM_HERE,
@@ -629,9 +621,9 @@ void DownloadItemNotification::OnDecodeImageFailed() {
   UpdateNotificationData(UPDATE);
 }
 
-scoped_ptr<std::vector<DownloadCommands::Command>>
+std::unique_ptr<std::vector<DownloadCommands::Command>>
 DownloadItemNotification::GetExtraActions() const {
-  scoped_ptr<std::vector<DownloadCommands::Command>> actions(
+  std::unique_ptr<std::vector<DownloadCommands::Command>> actions(
       new std::vector<DownloadCommands::Command>());
 
   if (item_->IsDangerous()) {
@@ -660,8 +652,13 @@ DownloadItemNotification::GetExtraActions() const {
       break;
     case content::DownloadItem::COMPLETE:
       actions->push_back(DownloadCommands::SHOW_IN_FOLDER);
-      if (!notification_->image().IsEmpty())
+      if (!notification_->image().IsEmpty()) {
         actions->push_back(DownloadCommands::COPY_TO_CLIPBOARD);
+#if defined(OS_CHROMEOS)
+        if (chromeos::NoteTakingHelper::Get()->IsAppAvailable(profile()))
+          actions->push_back(DownloadCommands::ANNOTATE);
+#endif  // defined(OS_CHROMEOS)
+      }
       break;
     case content::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
@@ -748,6 +745,9 @@ base::string16 DownloadItemNotification::GetCommandLabel(
       break;
     case DownloadCommands::COPY_TO_CLIPBOARD:
       id = IDS_DOWNLOAD_NOTIFICATION_COPY_TO_CLIPBOARD;
+      break;
+    case DownloadCommands::ANNOTATE:
+      id = IDS_DOWNLOAD_NOTIFICATION_ANNOTATE;
       break;
     case DownloadCommands::ALWAYS_OPEN_TYPE:
     case DownloadCommands::PLATFORM_OPEN:
@@ -845,10 +845,8 @@ base::string16 DownloadItemNotification::GetStatusString() const {
     return GetWarningStatusString();
 
   // The hostname. (E.g.:"example.com" or "127.0.0.1")
-  base::string16 host_name =
-      url_formatter::FormatUrlForSecurityDisplayOmitScheme(
-          item_->GetURL(),
-          profile()->GetPrefs()->GetString(prefs::kAcceptLanguages));
+  base::string16 host_name = url_formatter::FormatUrlForSecurityDisplay(
+      item_->GetURL(), url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
 
   DownloadItemModel model(item_);
   base::string16 sub_status_text;
@@ -916,8 +914,7 @@ base::string16 DownloadItemNotification::GetStatusString() const {
 }
 
 Browser* DownloadItemNotification::GetBrowser() const {
-  chrome::ScopedTabbedBrowserDisplayer browser_displayer(
-      profile(), chrome::GetActiveDesktop());
+  chrome::ScopedTabbedBrowserDisplayer browser_displayer(profile());
   DCHECK(browser_displayer.browser());
   return browser_displayer.browser();
 }
@@ -940,7 +937,7 @@ bool DownloadItemNotification::IsNotificationVisible() const {
 
   message_center::NotificationList::Notifications visible_notifications =
       message_center_->GetVisibleNotifications();
-  for (const auto& notification : visible_notifications) {
+  for (auto* notification : visible_notifications) {
     if (notification->id() == notification_id_in_message_center)
       return true;
   }

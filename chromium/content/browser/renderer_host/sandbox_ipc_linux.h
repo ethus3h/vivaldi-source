@@ -2,20 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// http://code.google.com/p/chromium/wiki/LinuxSandboxIPC
+// https://chromium.googlesource.com/chromium/src/+/master/docs/linux_sandbox_ipc.md
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_SANDBOX_IPC_LINUX_H_
 #define CONTENT_BROWSER_RENDERER_HOST_SANDBOX_IPC_LINUX_H_
 
+#include <memory>
 #include <vector>
 
 #include "base/files/scoped_file.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
 #include "base/threading/simple_thread.h"
-#include "content/child/blink_platform_impl.h"
-#include "skia/ext/skia_utils_base.h"
+
+class SkString;
 
 namespace content {
 
@@ -30,8 +30,6 @@ class SandboxIPCHandler : public base::DelegateSimpleThread::Delegate {
   void Run() override;
 
  private:
-  void EnsureWebKitInitialized();
-
   int FindOrAddPath(const SkString& path);
 
   void HandleRequestFromRenderer(int fd);
@@ -70,8 +68,7 @@ class SandboxIPCHandler : public base::DelegateSimpleThread::Delegate {
 
   const int lifeline_fd_;
   const int browser_socket_;
-  scoped_ptr<BlinkPlatformImpl> blink_platform_impl_;
-  SkTDArray<SkString*> paths_;
+  std::vector<SkString> paths_;
 
   DISALLOW_COPY_AND_ASSIGN(SandboxIPCHandler);
 };

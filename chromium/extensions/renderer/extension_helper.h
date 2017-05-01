@@ -8,8 +8,9 @@
 #include <string>
 
 #include "base/macros.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/renderer/render_view_observer.h"
+
+#include "content/public/browser/web_contents.h"
 
 namespace extensions {
 class Dispatcher;
@@ -24,6 +25,7 @@ class ExtensionHelper : public content::RenderViewObserver {
   // RenderViewObserver implementation.
   bool OnMessageReceived(const IPC::Message& message) override;
   void DraggableRegionsChanged(blink::WebFrame* frame) override;
+  void OnDestruct() override;
 
   void OnZoomVivaldiUI(double zoom_factor);
   void OnUpdateBrowserWindowId(int window_id);

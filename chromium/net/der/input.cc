@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/der/input.h"
+
 #include <string.h>
 
 #include <algorithm>
 
 #include "base/logging.h"
-#include "net/der/input.h"
 
 namespace net {
 
@@ -24,18 +25,22 @@ Input::Input(const base::StringPiece& in)
 
 Input::Input(const std::string* s) : Input(base::StringPiece(*s)) {}
 
-bool Input::Equals(const Input& other) const {
-  if (len_ != other.len_)
-    return false;
-  return memcmp(data_, other.data_, len_) == 0;
-}
-
 std::string Input::AsString() const {
   return std::string(reinterpret_cast<const char*>(data_), len_);
 }
 
 base::StringPiece Input::AsStringPiece() const {
   return base::StringPiece(reinterpret_cast<const char*>(data_), len_);
+}
+
+bool operator==(const Input& lhs, const Input& rhs) {
+  if (lhs.Length() != rhs.Length())
+    return false;
+  return memcmp(lhs.UnsafeData(), rhs.UnsafeData(), lhs.Length()) == 0;
+}
+
+bool operator!=(const Input& lhs, const Input& rhs) {
+  return !(lhs == rhs);
 }
 
 bool operator<(const Input& lhs, const Input& rhs) {
@@ -69,47 +74,10 @@ bool ByteReader::HasMore() {
   return len_ > 0;
 }
 
-Mark ByteReader::NewMark() {
-  return Mark(data_);
-}
-
-bool ByteReader::AdvanceToMark(Mark mark) {
-  if (mark.ptr_ < data_)
-    return false;
-  // mark.ptr_ >= data_, so no concern of integer underflow here.
-  size_t advance_len = mark.ptr_ - data_;
-  if (advance_len > len_)
-    return false;
-  Advance(advance_len);
-  return true;
-}
-
-bool ByteReader::ReadToMark(Mark mark, Input* out) {
-  if (mark.ptr_ < data_)
-    return false;
-  // mark.ptr_ >= data_, so no concern of integer underflow here.
-  size_t len = mark.ptr_ - data_;
-  return ReadBytes(len, out);
-}
-
 void ByteReader::Advance(size_t len) {
   CHECK_LE(len, len_);
   data_ += len;
   len_ -= len;
-}
-
-Mark Mark::NullMark() {
-  return Mark();
-}
-
-bool Mark::IsEmpty() {
-  return ptr_ == nullptr;
-}
-
-Mark::Mark(const uint8_t* ptr) : ptr_(ptr) {
-}
-
-Mark::Mark() : ptr_(nullptr) {
 }
 
 }  // namespace der

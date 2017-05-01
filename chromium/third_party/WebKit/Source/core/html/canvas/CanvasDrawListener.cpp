@@ -4,27 +4,27 @@
 
 #include "core/html/canvas/CanvasDrawListener.h"
 
+#include "third_party/skia/include/core/SkImage.h"
+#include <memory>
+
 namespace blink {
 
 CanvasDrawListener::~CanvasDrawListener() {}
 
-bool CanvasDrawListener::needsNewFrame() const
-{
-    return m_handler->needsNewFrame();
+void CanvasDrawListener::sendNewFrame(sk_sp<SkImage> image) {
+  m_handler->sendNewFrame(image.get());
 }
 
-void CanvasDrawListener::sendNewFrame(const WTF::PassRefPtr<SkImage>& image)
-{
-    m_handler->sendNewFrame(image.get());
+bool CanvasDrawListener::needsNewFrame() const {
+  return m_frameCaptureRequested && m_handler->needsNewFrame();
 }
 
-void CanvasDrawListener::requestFrame()
-{
+void CanvasDrawListener::requestFrame() {
+  m_frameCaptureRequested = true;
 }
 
-CanvasDrawListener::CanvasDrawListener(const PassOwnPtr<WebCanvasCaptureHandler> handler)
-    : m_handler(handler)
-{
-}
+CanvasDrawListener::CanvasDrawListener(
+    std::unique_ptr<WebCanvasCaptureHandler> handler)
+    : m_frameCaptureRequested(true), m_handler(std::move(handler)) {}
 
-} // namespace blink
+}  // namespace blink

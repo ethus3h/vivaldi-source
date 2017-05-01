@@ -47,8 +47,7 @@ bool VectorContainsURL(const std::vector<GURL>& urls, const GURL& url) {
 
 // Returns whether |field| should be considered a text field. Implementation
 // mirrors that of password_controller.js.
-// TODO(dconnelly): Figure out how (and if) to determine if |field| is visible.
-// http://crbug.com/433856
+// TODO(crbug.com/433856): Figure out how to determine if |field| is visible.
 bool IsTextField(const autofill::FormFieldData& field) {
   return field.form_control_type == "text" ||
          field.form_control_type == "email" ||
@@ -85,9 +84,6 @@ bool IsTextField(const autofill::FormFieldData& field) {
 // when selected by the user. The resulting field is stored in
 // |_passwordGenerationField|. This logic is nearly identical to that of the
 // upstream autofill::PasswordGenerationAgent::DetermineGenerationElement.
-// TODO(dconnelly): Try to find a way to share this code with the upstream
-// implementation, even though it lives in the renderer.
-// http://crbug.com/434679.
 - (void)determinePasswordGenerationField;
 
 // Returns YES if the specified form and field should trigger the
@@ -121,24 +117,20 @@ bool IsTextField(const autofill::FormFieldData& field) {
 
 @implementation PasswordGenerationAgent {
   // Bridge to observe the web state from Objective-C.
-  scoped_ptr<web::WebStateObserverBridge> _webStateObserverBridge;
-
-  // The origin URLs of forms on the current page that contain account creation
-  // forms as reported by autofill.
-  std::vector<GURL> _accountCreationFormOrigins;
+  std::unique_ptr<web::WebStateObserverBridge> _webStateObserverBridge;
 
   // The origin URLs of forms on the current page that have not been blacklisted
   // by the password manager.
   std::vector<GURL> _allowedGenerationFormOrigins;
 
   // Stores the account creation form we detected on the page.
-  scoped_ptr<autofill::PasswordForm> _possibleAccountCreationForm;
+  std::unique_ptr<autofill::PasswordForm> _possibleAccountCreationForm;
 
   // Password fields found in |_possibleAccountCreationForm|.
   std::vector<autofill::FormFieldData> _passwordFields;
 
   // The password field that triggers the password generation UI.
-  scoped_ptr<autofill::FormFieldData> _passwordGenerationField;
+  std::unique_ptr<autofill::FormFieldData> _passwordGenerationField;
 
   // Wrapper for suggestion JavaScript. Used for form navigation.
   base::scoped_nsobject<JsSuggestionManager> _JSSuggestionManager;
@@ -231,7 +223,6 @@ bool IsTextField(const autofill::FormFieldData& field) {
 
 - (void)clearState {
   [self hideAlert];
-  _accountCreationFormOrigins.clear();
   _allowedGenerationFormOrigins.clear();
   _possibleAccountCreationForm.reset();
   _passwordFields.clear();
@@ -264,13 +255,6 @@ bool IsTextField(const autofill::FormFieldData& field) {
   return passwordFields;
 }
 
-- (void)registerAccountCreationForms:
-    (const std::vector<autofill::FormData>&)forms {
-  for (const auto& form : forms)
-    _accountCreationFormOrigins.push_back(form.origin);
-  [self determinePasswordGenerationField];
-}
-
 - (void)allowPasswordGenerationForForm:(const autofill::PasswordForm&)form {
   _allowedGenerationFormOrigins.push_back(form.origin);
   [self determinePasswordGenerationField];
@@ -278,8 +262,6 @@ bool IsTextField(const autofill::FormFieldData& field) {
 
 - (void)processParsedPasswordForms:
     (const std::vector<autofill::PasswordForm>&)forms {
-  // TODO(dconnelly): Find a way to share some of this logic with the desktop
-  // agent. http://crbug.com/434679.
   for (const auto& passwordForm : forms) {
     if ([self formHasGAIARealm:passwordForm])
       continue;
@@ -311,8 +293,6 @@ bool IsTextField(const autofill::FormFieldData& field) {
   GURL origin = _possibleAccountCreationForm->origin;
   if (!experimental_flags::UseOnlyLocalHeuristicsForPasswordGeneration()) {
     if (!VectorContainsURL(_allowedGenerationFormOrigins, origin))
-      return;
-    if (!VectorContainsURL(_accountCreationFormOrigins, origin))
       return;
   }
 
@@ -354,7 +334,7 @@ bool IsTextField(const autofill::FormFieldData& field) {
 #pragma mark -
 #pragma mark CRWWebStateObserver
 
-- (void)webStateDidLoadPage:(web::WebState*)webState {
+- (void)webState:(web::WebState*)webState didLoadPageWithSuccess:(BOOL)success {
   [self clearState];
 }
 

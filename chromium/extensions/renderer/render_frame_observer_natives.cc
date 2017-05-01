@@ -5,8 +5,10 @@
 #include "extensions/renderer/render_frame_observer_natives.h"
 
 #include "base/bind.h"
+#include "base/location.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "extensions/renderer/extension_frame_helper.h"
@@ -24,21 +26,22 @@ class LoadWatcher : public content::RenderFrameObserver {
       : content::RenderFrameObserver(frame), callback_(callback) {}
 
   void DidCreateDocumentElement() override {
-    // The callback must be run as soon as the root element is available.
-    // Running the callback may trigger DidCreateDocumentElement or
-    // DidFailProvisionalLoad, so delete this before running the callback.
-    base::Callback<void(bool)> callback = callback_;
+    // Defer the callback instead of running it now to avoid re-entrancy caused
+    // by the JavaScript callback.
+    ExtensionFrameHelper::Get(render_frame())
+        ->ScheduleAtDocumentStart(base::Bind(callback_, true));
     delete this;
-    callback.Run(true);
   }
 
   void DidFailProvisionalLoad(const blink::WebURLError& error) override {
     // Use PostTask to avoid running user scripts while handling this
     // DidFailProvisionalLoad notification.
-    base::MessageLoop::current()->PostTask(FROM_HERE,
-                                           base::Bind(callback_, false));
+    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
+                                                  base::Bind(callback_, false));
     delete this;
   }
+
+  void OnDestruct() override { delete this; }
 
  private:
   base::Callback<void(bool)> callback_;
@@ -51,7 +54,7 @@ class LoadWatcher : public content::RenderFrameObserver {
 RenderFrameObserverNatives::RenderFrameObserverNatives(ScriptContext* context)
     : ObjectBackedNativeHandler(context), weak_ptr_factory_(this) {
   RouteFunction(
-      "OnDocumentElementCreated",
+      "OnDocumentElementCreated", "app.window",
       base::Bind(&RenderFrameObserverNatives::OnDocumentElementCreated,
                  base::Unretained(this)));
 }
@@ -86,8 +89,8 @@ void RenderFrameObserverNatives::OnDocumentElementCreated(
     // If the document element is already created, then we can call the callback
     // immediately (though use PostTask to ensure that the callback is called
     // asynchronously).
-    base::MessageLoop::current()->PostTask(FROM_HERE,
-                                           base::Bind(callback, true));
+    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
+                                                  base::Bind(callback, true));
   } else {
     new LoadWatcher(frame, callback);
   }
@@ -101,8 +104,8 @@ void RenderFrameObserverNatives::InvokeCallback(
   v8::Isolate* isolate = context()->isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Value> args[] = {v8::Boolean::New(isolate, succeeded)};
-  context()->CallFunction(v8::Local<v8::Function>::New(isolate, callback),
-                          arraysize(args), args);
+  context()->SafeCallFunction(v8::Local<v8::Function>::New(isolate, callback),
+                              arraysize(args), args);
 }
 
 }  // namespace extensions

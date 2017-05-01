@@ -14,7 +14,7 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_factory_chromeos.h"
+#include "chrome/browser/chromeos/policy/user_policy_manager_factory_chromeos.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/policy/test/local_policy_test_server.h"
@@ -25,7 +25,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_switches.h"
-#include "policy/proto/device_management_backend.pb.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -37,13 +37,14 @@ std::string BuildPolicy(const base::DictionaryValue& mandatory,
                         const base::DictionaryValue& recommended,
                         const std::string& policyType,
                         const std::string& account_id) {
-  scoped_ptr<base::DictionaryValue> policy_type_dict(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> policy_type_dict(
+      new base::DictionaryValue);
   policy_type_dict->SetWithoutPathExpansion("mandatory",
                                             mandatory.CreateDeepCopy());
   policy_type_dict->SetWithoutPathExpansion("recommended",
                                             recommended.CreateDeepCopy());
 
-  scoped_ptr<base::ListValue> managed_users_list(new base::ListValue);
+  std::unique_ptr<base::ListValue> managed_users_list(new base::ListValue);
   managed_users_list->AppendString("*");
 
   base::DictionaryValue root_dict;
@@ -90,7 +91,8 @@ void UserPolicyTestHelper::WaitForInitialPolicy(Profile* profile) {
   connector->ScheduleServiceInitialization(0);
 
   UserCloudPolicyManagerChromeOS* const policy_manager =
-      UserCloudPolicyManagerFactoryChromeOS::GetForProfile(profile);
+      UserPolicyManagerFactoryChromeOS::GetCloudPolicyManagerForProfile(
+          profile);
 
   // Give a bogus OAuth token to the |policy_manager|. This should make its
   // CloudPolicyClient fetch the DMToken.
@@ -128,6 +130,10 @@ void UserPolicyTestHelper::UpdatePolicy(
   run_loop.Run();
 }
 
+void UserPolicyTestHelper::DeletePolicyFile() {
+  base::DeleteFile(PolicyFilePath(), false);
+}
+
 void UserPolicyTestHelper::WritePolicyFile(
     const base::DictionaryValue& mandatory,
     const base::DictionaryValue& recommended) {
@@ -139,7 +145,7 @@ void UserPolicyTestHelper::WritePolicyFile(
 }
 
 base::FilePath UserPolicyTestHelper::PolicyFilePath() const {
-  return temp_dir_.path().AppendASCII("policy.json");
+  return temp_dir_.GetPath().AppendASCII("policy.json");
 }
 
 }  // namespace policy

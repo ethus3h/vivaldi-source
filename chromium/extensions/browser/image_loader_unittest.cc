@@ -11,8 +11,8 @@
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_browser_thread.h"
 #include "extensions/browser/extension_registry.h"
@@ -33,7 +33,6 @@
 #include "ui/gfx/image/image_skia.h"
 
 using content::BrowserThread;
-using content::NotificationService;
 
 namespace extensions {
 
@@ -44,8 +43,7 @@ class ImageLoaderTest : public ExtensionsTest {
         quit_in_image_loaded_(false),
         ui_thread_(BrowserThread::UI, &ui_loop_),
         file_thread_(BrowserThread::FILE),
-        io_thread_(BrowserThread::IO),
-        notification_service_(NotificationService::Create()) {}
+        io_thread_(BrowserThread::IO) {}
 
   void OnImageLoaded(const gfx::Image& image) {
     image_loaded_count_++;
@@ -63,7 +61,7 @@ class ImageLoaderTest : public ExtensionsTest {
 
   void WaitForImageLoad() {
     quit_in_image_loaded_ = true;
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     quit_in_image_loaded_ = false;
   }
 
@@ -86,8 +84,9 @@ class ImageLoaderTest : public ExtensionsTest {
     std::string error;
     JSONFileValueDeserializer deserializer(
         extension_dir.AppendASCII("manifest.json"));
-    scoped_ptr<base::DictionaryValue> valid_value = base::DictionaryValue::From(
-        deserializer.Deserialize(&error_code, &error));
+    std::unique_ptr<base::DictionaryValue> valid_value =
+        base::DictionaryValue::From(
+            deserializer.Deserialize(&error_code, &error));
     EXPECT_EQ(0, error_code) << error;
     if (error_code != 0)
       return NULL;
@@ -116,7 +115,6 @@ class ImageLoaderTest : public ExtensionsTest {
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread io_thread_;
-  scoped_ptr<NotificationService> notification_service_;
 };
 
 // Tests loading an image works correctly.
@@ -209,10 +207,8 @@ TEST_F(ImageLoaderTest, MultipleImages) {
     ExtensionResource resource = IconsInfo::GetIconResource(
         extension.get(), sizes[i], ExtensionIconSet::MATCH_EXACTLY);
     info_list.push_back(ImageLoader::ImageRepresentation(
-        resource,
-        ImageLoader::ImageRepresentation::RESIZE_WHEN_LARGER,
-        gfx::Size(sizes[i], sizes[i]),
-        ui::SCALE_FACTOR_NONE));
+        resource, ImageLoader::ImageRepresentation::RESIZE_WHEN_LARGER,
+        gfx::Size(sizes[i], sizes[i]), 1.f));
   }
 
   ImageLoader loader;
@@ -254,10 +250,8 @@ TEST_F(ImageLoaderTest, LoadImageFamily) {
     ExtensionResource resource = IconsInfo::GetIconResource(
         extension.get(), sizes[i], ExtensionIconSet::MATCH_EXACTLY);
     info_list.push_back(ImageLoader::ImageRepresentation(
-        resource,
-        ImageLoader::ImageRepresentation::NEVER_RESIZE,
-        gfx::Size(sizes[i], sizes[i]),
-        ui::SCALE_FACTOR_100P));
+        resource, ImageLoader::ImageRepresentation::NEVER_RESIZE,
+        gfx::Size(sizes[i], sizes[i]), 1.f));
   }
 
   // Add a second icon of 200P which should get grouped with the smaller icon's
@@ -267,11 +261,10 @@ TEST_F(ImageLoaderTest, LoadImageFamily) {
                                  extension_misc::EXTENSION_ICON_SMALLISH,
                                  ExtensionIconSet::MATCH_EXACTLY);
   info_list.push_back(ImageLoader::ImageRepresentation(
-      resource,
-      ImageLoader::ImageRepresentation::NEVER_RESIZE,
+      resource, ImageLoader::ImageRepresentation::NEVER_RESIZE,
       gfx::Size(extension_misc::EXTENSION_ICON_BITTY,
                 extension_misc::EXTENSION_ICON_BITTY),
-      ui::SCALE_FACTOR_200P));
+      2.f));
 
   ImageLoader loader;
   loader.LoadImageFamilyAsync(extension.get(),

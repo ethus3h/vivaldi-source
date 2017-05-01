@@ -12,10 +12,6 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/vector_icons_public.h"
 
-#if defined(OS_MACOSX)
-#include "grit/theme_resources.h"
-#endif
-
 namespace {
 
 base::string16 GetProtocolName(
@@ -37,42 +33,14 @@ RegisterProtocolHandlerPermissionRequest
       bool user_gesture)
     : registry_(registry),
       handler_(handler),
-      url_(url),
-      user_gesture_(user_gesture) {}
+      origin_(url.GetOrigin()) {}
 
 RegisterProtocolHandlerPermissionRequest::
 ~RegisterProtocolHandlerPermissionRequest() {}
 
-gfx::VectorIconId RegisterProtocolHandlerPermissionRequest::GetVectorIconId()
+PermissionRequest::IconId RegisterProtocolHandlerPermissionRequest::GetIconId()
     const {
-#if defined(OS_MACOSX)
-  return gfx::VectorIconId::VECTOR_ICON_NONE;
-#else
   return gfx::VectorIconId::PROTOCOL_HANDLER;
-#endif
-}
-
-int RegisterProtocolHandlerPermissionRequest::GetIconId() const {
-#if defined(OS_MACOSX)
-  return IDR_REGISTER_PROTOCOL_HANDLER;
-#else
-  return 0;
-#endif
-}
-
-base::string16
-RegisterProtocolHandlerPermissionRequest::GetMessageText() const {
-  ProtocolHandler old_handler = registry_->GetHandlerFor(handler_.protocol());
-  return old_handler.IsEmpty() ?
-      l10n_util::GetStringFUTF16(
-          IDS_REGISTER_PROTOCOL_HANDLER_CONFIRM,
-          base::UTF8ToUTF16(handler_.url().host()),
-          GetProtocolName(handler_)) :
-      l10n_util::GetStringFUTF16(
-          IDS_REGISTER_PROTOCOL_HANDLER_CONFIRM_REPLACE,
-          base::UTF8ToUTF16(handler_.url().host()),
-          GetProtocolName(handler_),
-          base::UTF8ToUTF16(old_handler.url().host()));
 }
 
 base::string16
@@ -85,15 +53,11 @@ RegisterProtocolHandlerPermissionRequest::GetMessageTextFragment() const {
       l10n_util::GetStringFUTF16(
           IDS_REGISTER_PROTOCOL_HANDLER_CONFIRM_REPLACE_FRAGMENT,
           GetProtocolName(handler_),
-          base::UTF8ToUTF16(old_handler.url().host()));
+          base::UTF8ToUTF16(old_handler.url().host_piece()));
 }
 
-bool RegisterProtocolHandlerPermissionRequest::HasUserGesture() const {
-  return user_gesture_;
-}
-
-GURL RegisterProtocolHandlerPermissionRequest::GetRequestingHostname() const {
-  return url_;
+GURL RegisterProtocolHandlerPermissionRequest::GetOrigin() const {
+  return origin_;
 }
 
 void RegisterProtocolHandlerPermissionRequest::PermissionGranted() {
@@ -116,4 +80,9 @@ void RegisterProtocolHandlerPermissionRequest::Cancelled() {
 
 void RegisterProtocolHandlerPermissionRequest::RequestFinished() {
   delete this;
+}
+
+PermissionRequestType
+RegisterProtocolHandlerPermissionRequest::GetPermissionRequestType() const {
+  return PermissionRequestType::REGISTER_PROTOCOL_HANDLER;
 }

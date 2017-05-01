@@ -11,6 +11,7 @@
 #include "cc/test/geometry_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/quad_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/transform.h"
@@ -58,6 +59,75 @@ TEST(MathUtilTest, ProjectionOfAlmostPerpendicularPlane) {
   EXPECT_EQ(0, projected_rect.x());
   EXPECT_EQ(0, projected_rect.y());
   EXPECT_TRUE(projected_rect.IsEmpty()) << projected_rect.ToString();
+}
+
+TEST(MathUtilTest, EnclosingClippedRectHandlesInfinityY) {
+  HomogeneousCoordinate h1(100, 10, 0, 1);
+  HomogeneousCoordinate h2(10, 10, 0, 1);
+  HomogeneousCoordinate h3(-10, -1, 0, -1);
+  HomogeneousCoordinate h4(-100, -1, 0, -1);
+
+  // The bounds of the enclosing clipped rect should be 100 to 10 for x
+  // and 10 to infinity for y. However, if there is a bug where the result
+  // is set so big as to destroy the precision of ymin, we can't deal well
+  // with the resulting rect.
+  gfx::RectF result = MathUtil::ComputeEnclosingClippedRect(h1, h2, h3, h4);
+
+  EXPECT_FALSE(result.IsEmpty());
+  EXPECT_TRUE(result.Contains(50.0f, 50.0f));
+  EXPECT_TRUE(result.Contains(10.1f, 10.1f));
+  EXPECT_TRUE(result.Contains(50.0f, 50000.0f));
+  EXPECT_FALSE(result.Contains(100.1f, 50.0f));
+  EXPECT_FALSE(result.Contains(9.9f, 50.0f));
+  EXPECT_FALSE(result.Contains(50.0f, 9.9f));
+}
+
+TEST(MathUtilTest, EnclosingClippedRectHandlesNegativeInfinityX) {
+  HomogeneousCoordinate h1(100, 10, 0, 1);
+  HomogeneousCoordinate h2(-110, -10, 0, -1);
+  HomogeneousCoordinate h3(-110, -100, 0, -1);
+  HomogeneousCoordinate h4(100, 100, 0, 1);
+
+  // The bounds of the enclosing clipped rect should be 100 to -infinity for x
+  // and 10 to 100 for y. However, if there is a bug where the result
+  // is set so big as to destroy the precision of ymin, we can't deal well
+  // with the resulting rect.
+  gfx::RectF result = MathUtil::ComputeEnclosingClippedRect(h1, h2, h3, h4);
+
+  EXPECT_FALSE(result.IsEmpty());
+  EXPECT_TRUE(result.Contains(50.0f, 50.0f));
+  EXPECT_TRUE(result.Contains(10.1f, 10.1f));
+  EXPECT_TRUE(result.Contains(0.0f, 99.9f));
+  EXPECT_FALSE(result.Contains(100.1f, 50.0f));
+  EXPECT_FALSE(result.Contains(50.0f, 100.1f));
+  EXPECT_FALSE(result.Contains(50.0f, 9.9f));
+}
+
+TEST(MathUtilTest, EnclosingClippedRectHandlesInfinityXY) {
+  HomogeneousCoordinate h1(10, 10, 0, 1);
+  HomogeneousCoordinate h2(0, 0, 0, -1);
+  HomogeneousCoordinate h3(20, -10, 0, 1);
+  HomogeneousCoordinate h4(10, -10, 0, 1);
+
+  // The bounds of the enclosing clipped rect should be 10 to infinity for x
+  // and -infinity to infinity for y.
+  // It would be quite easy for this result to not include anything useful.
+  gfx::RectF result = MathUtil::ComputeEnclosingClippedRect(h1, h2, h3, h4);
+
+  // Notes: (A) In the mapped shape, (B) In the enclosing rect, but not the
+  // mapped shape, (C) In the mapped shape, but clipped.
+  EXPECT_FALSE(result.IsEmpty());
+  EXPECT_TRUE(result.Contains(10.0f, 10.0f));      // Note (A)
+  EXPECT_TRUE(result.Contains(10.11f, 10.1f));     // Note (A)
+  EXPECT_TRUE(result.Contains(10.1f, 10.11f));     // Note (B)
+  EXPECT_TRUE(result.Contains(1000.1f, 1000.2f));  // Note (B)
+  EXPECT_TRUE(result.Contains(20.0f, -10.0f));     // Note (A)
+  EXPECT_TRUE(result.Contains(20.1f, -10.0f));     // Note (A)
+  EXPECT_TRUE(result.Contains(20.0f, -10.1f));     // Note (B)
+  EXPECT_TRUE(result.Contains(10.0f, -10.0f));     // Note (A)
+  EXPECT_TRUE(result.Contains(10.0f, -10.1f));     // Note (B)
+  EXPECT_FALSE(result.Contains(0.0f, 0.0f));       // Note (C)
+  EXPECT_FALSE(result.Contains(0.0f, -9.9f));      // Note (C)
 }
 
 TEST(MathUtilTest, EnclosingClippedRectUsesCorrectInitialBounds) {
@@ -384,6 +454,177 @@ TEST(MathUtilTest, RoundDownUnderflow) {
   // int16_t.
   EXPECT_FALSE(MathUtil::VerifyRoundDown<int8_t>(-123, 50));
   EXPECT_TRUE(MathUtil::VerifyRoundDown<int16_t>(-123, 50));
+}
+
+#define EXPECT_SIMILAR_VALUE(x, y) \
+  EXPECT_TRUE(MathUtil::IsNearlyTheSameForTesting(x, y))
+#define EXPECT_DISSIMILAR_VALUE(x, y) \
+  EXPECT_FALSE(MathUtil::IsNearlyTheSameForTesting(x, y))
+
+// Arbitrary point that shouldn't be different from zero.
+static const float zeroish = 1.0e-11f;
+
+TEST(MathUtilTest, Approximate) {
+  // Same should be similar.
+  EXPECT_SIMILAR_VALUE(1.0f, 1.0f);
+
+  // Zero should not cause similarity issues.
+  EXPECT_SIMILAR_VALUE(0.0f, 0.0f);
+
+  // Chosen sensitivity makes hardware sense, whether small or large.
+  EXPECT_SIMILAR_VALUE(0.0f, std::nextafter(0.0f, 1.0f));
+  EXPECT_SIMILAR_VALUE(1000000.0f, std::nextafter(1000000.0f, 0.0f));
+
+  // Make sure that neither the side you approach, nor the order of
+  // parameters matter at the borderline case.
+  EXPECT_SIMILAR_VALUE(std::nextafter(0.0f, 1.0f), 0.0f);
+  EXPECT_SIMILAR_VALUE(std::nextafter(1000000.0f, 0.0f), 1000000.0f);
+  EXPECT_SIMILAR_VALUE(0.0f, std::nextafter(0.0f, -1.0f));
+  EXPECT_SIMILAR_VALUE(1000000.0f, std::nextafter(1000000.0f, 1e9f));
+  EXPECT_SIMILAR_VALUE(std::nextafter(0.0f, -1.0f), 0.0f);
+  EXPECT_SIMILAR_VALUE(std::nextafter(1000000.0f, 1e9f), 1000000.0f);
+
+  // Double check our arbitrary constant.  Mostly this is for the
+  // following Point tests.
+  EXPECT_SIMILAR_VALUE(0.0f, zeroish);
+
+  // Arbitrary point that is different from one for Approximate tests.
+  EXPECT_SIMILAR_VALUE(1.0f, 1.000001f);
+
+  // Arbitrary (large) difference close to 1.
+  EXPECT_SIMILAR_VALUE(10000000.0f, 10000001.0f);
+
+  // Make sure one side being zero doesn't hide real differences.
+  EXPECT_DISSIMILAR_VALUE(0.0f, 1.0f);
+  EXPECT_DISSIMILAR_VALUE(1.0f, 0.0f);
+
+  // Make sure visible differences don't disappear.
+  EXPECT_DISSIMILAR_VALUE(1.0f, 2.0f);
+  EXPECT_DISSIMILAR_VALUE(10000.0f, 10001.0f);
+}
+
+#define EXPECT_SIMILAR_POINT_F(x, y) \
+  EXPECT_TRUE(MathUtil::IsNearlyTheSameForTesting(gfx::PointF x, gfx::PointF y))
+#define EXPECT_DISSIMILAR_POINT_F(x, y) \
+  EXPECT_FALSE(                         \
+      MathUtil::IsNearlyTheSameForTesting(gfx::PointF x, gfx::PointF y))
+
+TEST(MathUtilTest, ApproximatePointF) {
+  // Same is similar.
+  EXPECT_SIMILAR_POINT_F((0.0f, 0.0f), (0.0f, 0.0f));
+
+  // Not over sensitive on each axis.
+  EXPECT_SIMILAR_POINT_F((zeroish, 0.0f), (0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_F((0.0f, zeroish), (0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_F((0.0f, 0.0f), (zeroish, 0.0f));
+  EXPECT_SIMILAR_POINT_F((0.0f, 0.0f), (0.0f, zeroish));
+
+  // Still sensitive to any axis.
+  EXPECT_DISSIMILAR_POINT_F((1.0f, 0.0f), (0.0f, 0.0f));
+  EXPECT_DISSIMILAR_POINT_F((0.0f, 1.0f), (0.0f, 0.0f));
+  EXPECT_DISSIMILAR_POINT_F((0.0f, 0.0f), (1.0f, 0.0f));
+  EXPECT_DISSIMILAR_POINT_F((0.0f, 0.0f), (0.0f, 1.0f));
+
+  // Not crossed over, sensitive on each side of each axis.
+  EXPECT_SIMILAR_POINT_F((0.0f, 1.0f), (0.0f, 1.0f));
+  EXPECT_SIMILAR_POINT_F((1.0f, 2.0f), (1.0f, 2.0f));
+  EXPECT_DISSIMILAR_POINT_F((3.0f, 2.0f), (1.0f, 2.0f));
+  EXPECT_DISSIMILAR_POINT_F((1.0f, 3.0f), (1.0f, 1.0f));
+  EXPECT_DISSIMILAR_POINT_F((1.0f, 2.0f), (3.0f, 2.0f));
+  EXPECT_DISSIMILAR_POINT_F((1.0f, 2.0f), (1.0f, 3.0f));
+}
+
+#define EXPECT_SIMILAR_POINT_3F(x, y) \
+  EXPECT_TRUE(                        \
+      MathUtil::IsNearlyTheSameForTesting(gfx::Point3F x, gfx::Point3F y))
+#define EXPECT_DISSIMILAR_POINT_3F(x, y) \
+  EXPECT_FALSE(                          \
+      MathUtil::IsNearlyTheSameForTesting(gfx::Point3F x, gfx::Point3F y))
+
+TEST(MathUtilTest, ApproximatePoint3F) {
+  // Same same.
+  EXPECT_SIMILAR_POINT_3F((0.0f, 0.0f, 0.0f), (0.0f, 0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((zeroish, 0.0f, 0.0f), (0.0f, 0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((0.0f, zeroish, 0.0f), (0.0f, 0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((0.0f, 0.0f, zeroish), (0.0f, 0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((0.0f, 0.0f, 0.0f), (zeroish, 0.0f, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((0.0f, 0.0f, 0.0f), (0.0f, zeroish, 0.0f));
+  EXPECT_SIMILAR_POINT_3F((0.0f, 0.0f, 0.0f), (0.0f, 0.0f, zeroish));
+
+  // Not crossed over, sensitive on each side of each axis.
+  EXPECT_SIMILAR_POINT_3F((1.0f, 2.0f, 3.0f), (1.0f, 2.0f, 3.0f));
+  EXPECT_DISSIMILAR_POINT_3F((4.0f, 2.0f, 3.0f), (1.0f, 2.0f, 3.0f));
+  EXPECT_DISSIMILAR_POINT_3F((1.0f, 4.0f, 3.0f), (1.0f, 1.0f, 3.0f));
+  EXPECT_DISSIMILAR_POINT_3F((1.0f, 2.0f, 4.0f), (1.0f, 2.0f, 1.0f));
+  EXPECT_DISSIMILAR_POINT_3F((1.0f, 2.0f, 3.0f), (4.0f, 2.0f, 3.0f));
+  EXPECT_DISSIMILAR_POINT_3F((1.0f, 2.0f, 3.0f), (1.0f, 4.0f, 3.0f));
+  EXPECT_DISSIMILAR_POINT_3F((1.0f, 2.0f, 3.0f), (1.0f, 2.0f, 4.0f));
+}
+
+// This takes a quad for which two points, (at x = -99) are behind and below
+// the eyepoint and checks to make sure we build a triangle.  We used to build
+// a degenerate quad.
+TEST(MathUtilTest, MapClippedQuadDuplicateTriangle) {
+  gfx::Transform transform;
+  transform.MakeIdentity();
+  transform.ApplyPerspectiveDepth(50.0);
+  transform.RotateAboutYAxis(89.0);
+  // We are amost looking along the X-Y plane from (-50, almost 0)
+
+  gfx::QuadF src_quad(gfx::PointF(0.0f, 100.0f), gfx::PointF(0.0f, -100.0f),
+                      gfx::PointF(-99.0f, -300.0f),
+                      gfx::PointF(-99.0f, -100.0f));
+
+  gfx::Point3F clipped_quad[8];
+  int num_vertices_in_clipped_quad;
+
+  MathUtil::MapClippedQuad3d(transform, src_quad, clipped_quad,
+                             &num_vertices_in_clipped_quad);
+
+  EXPECT_EQ(num_vertices_in_clipped_quad, 3);
+}
+
+// This takes a quad for which two points, (at x = -99) are behind and below
+// the eyepoint and checks to make sure we build a triangle.  We used to build
+// a degenerate quad.  The quirk here is that the two shared points are first
+// and last, not sequential.
+TEST(MathUtilTest, MapClippedQuadDuplicateTriangleWrapped) {
+  gfx::Transform transform;
+  transform.MakeIdentity();
+  transform.ApplyPerspectiveDepth(50.0);
+  transform.RotateAboutYAxis(89.0);
+
+  gfx::QuadF src_quad(gfx::PointF(-99.0f, -100.0f), gfx::PointF(0.0f, 100.0f),
+                      gfx::PointF(0.0f, -100.0f), gfx::PointF(-99.0f, -300.0f));
+
+  gfx::Point3F clipped_quad[8];
+  int num_vertices_in_clipped_quad;
+
+  MathUtil::MapClippedQuad3d(transform, src_quad, clipped_quad,
+                             &num_vertices_in_clipped_quad);
+
+  EXPECT_EQ(num_vertices_in_clipped_quad, 3);
+}
+
+// Here we map and clip a quad with only one point that disappears to infinity
+// behind us.  We don't want two vertices at infinity crossing in and out
+// of w < 0 space.
+TEST(MathUtilTest, MapClippedQuadDuplicateQuad) {
+  gfx::Transform transform;
+  transform.MakeIdentity();
+  transform.ApplyPerspectiveDepth(50.0);
+  transform.RotateAboutYAxis(89.0);
+
+  gfx::QuadF src_quad(gfx::PointF(0.0f, 100.0f), gfx::PointF(400.0f, 0.0f),
+                      gfx::PointF(0.0f, -100.0f), gfx::PointF(-99.0f, -300.0f));
+
+  gfx::Point3F clipped_quad[8];
+  int num_vertices_in_clipped_quad;
+
+  MathUtil::MapClippedQuad3d(transform, src_quad, clipped_quad,
+                             &num_vertices_in_clipped_quad);
+
+  EXPECT_EQ(num_vertices_in_clipped_quad, 4);
 }
 
 }  // namespace

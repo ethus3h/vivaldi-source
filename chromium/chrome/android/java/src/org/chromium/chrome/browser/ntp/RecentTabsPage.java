@@ -89,7 +89,7 @@ public class RecentTabsPage
         LayoutInflater inflater = LayoutInflater.from(activity);
         mView = (ViewGroup) inflater.inflate(R.layout.recent_tabs_page, null);
         mListView = (ExpandableListView) mView.findViewById(R.id.odp_listview);
-        mAdapter = buildAdapter(activity, recentTabsManager);
+        mAdapter = new RecentTabsRowAdapter(activity, recentTabsManager);
         mListView.setAdapter(mAdapter);
         mListView.setOnChildClickListener(this);
         mListView.setGroupIndicator(null);
@@ -102,11 +102,6 @@ public class RecentTabsPage
         // {@link #mInForeground} will be updated once the view is attached to the window.
 
         onUpdated();
-    }
-
-    private static RecentTabsRowAdapter buildAdapter(Activity activity,
-            RecentTabsManager recentTabsManager) {
-        return new RecentTabsRowAdapter(activity, recentTabsManager);
     }
 
     /**
@@ -154,6 +149,11 @@ public class RecentTabsPage
     }
 
     @Override
+    public boolean needsToolbarShadow() {
+        return true;
+    }
+
+    @Override
     public View getView() {
         return mView;
     }
@@ -165,7 +165,7 @@ public class RecentTabsPage
 
     @Override
     public void destroy() {
-        assert getView().getParent() == null : "Destroy called before removed from window";
+        assert !mIsAttachedToWindow : "Destroy called before removed from window";
         mRecentTabsManager.destroy();
         mRecentTabsManager = null;
         mAdapter.notifyDataSetInvalidated();
@@ -195,6 +195,11 @@ public class RecentTabsPage
         // another tab.
         mIsAttachedToWindow = true;
         updateForegroundState();
+
+        // Work around a bug on Samsung devices where the recent tabs page does not appear after
+        // toggling the Sync quick setting.  For some reason, the layout is being dropped on the
+        // flow and we need to force a root level layout to get the UI to appear.
+        view.getRootView().requestLayout();
     }
 
     @Override

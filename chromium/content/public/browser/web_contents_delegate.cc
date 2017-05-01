@@ -4,7 +4,6 @@
 
 #include "content/public/browser/web_contents_delegate.h"
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
@@ -13,9 +12,11 @@
 #include "content/public/browser/security_style_explanations.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/bindings_policy.h"
-#include "content/public/common/security_style.h"
 #include "content/public/common/url_constants.h"
+#include "net/cert/x509_certificate.h"
 #include "ui/gfx/geometry/rect.h"
+
+#include "base/bind.h"
 
 namespace content {
 
@@ -37,7 +38,8 @@ WebContents* WebContentsDelegate::OpenURLFromTab(WebContents* source,
   return nullptr;
 }
 
-bool WebContentsDelegate::ShouldTransferNavigation() {
+bool WebContentsDelegate::ShouldTransferNavigation(
+    bool is_main_frame_navigation) {
   return true;
 }
 
@@ -47,10 +49,6 @@ bool WebContentsDelegate::IsPopupOrPanel(const WebContents* source) const {
 
 bool WebContentsDelegate::CanOverscrollContent() const { return false; }
 
-gfx::Rect WebContentsDelegate::GetRootWindowResizerRect() const {
-  return gfx::Rect();
-}
-
 bool WebContentsDelegate::ShouldSuppressDialogs(WebContents* source) {
   return false;
 }
@@ -59,11 +57,12 @@ bool WebContentsDelegate::ShouldPreserveAbortedURLs(WebContents* source) {
   return false;
 }
 
-bool WebContentsDelegate::AddMessageToConsole(WebContents* source,
-                                              int32_t level,
-                                              const base::string16& message,
-                                              int32_t line_no,
-                                              const base::string16& source_id) {
+bool WebContentsDelegate::DidAddMessageToConsole(
+    WebContents* source,
+    int32_t level,
+    const base::string16& message,
+    int32_t line_no,
+    const base::string16& source_id) {
   return false;
 }
 
@@ -116,9 +115,10 @@ void WebContentsDelegate::ViewSourceForTab(WebContents* source,
   // It suffers from http://crbug.com/523 and that is why browser overrides
   // it with proper implementation.
   GURL url = GURL(kViewSourceScheme + std::string(":") + page_url.spec());
-  OpenURLFromTab(source, OpenURLParams(url, Referrer(),
-                                       NEW_FOREGROUND_TAB,
-                                       ui::PAGE_TRANSITION_LINK, false));
+  OpenURLFromTab(
+      source,
+      OpenURLParams(url, Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                    ui::PAGE_TRANSITION_LINK, false));
 }
 
 void WebContentsDelegate::ViewSourceForFrame(WebContents* source,
@@ -126,9 +126,10 @@ void WebContentsDelegate::ViewSourceForFrame(WebContents* source,
                                              const PageState& page_state) {
   // Same as ViewSourceForTab, but for given subframe.
   GURL url = GURL(kViewSourceScheme + std::string(":") + frame_url.spec());
-  OpenURLFromTab(source, OpenURLParams(url, Referrer(),
-                                       NEW_FOREGROUND_TAB,
-                                       ui::PAGE_TRANSITION_LINK, false));
+  OpenURLFromTab(
+      source,
+      OpenURLParams(url, Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                    ui::PAGE_TRANSITION_LINK, false));
 }
 
 bool WebContentsDelegate::PreHandleKeyboardEvent(
@@ -157,10 +158,12 @@ bool WebContentsDelegate::OnGoToEntryOffset(int offset) {
 
 bool WebContentsDelegate::ShouldCreateWebContents(
     WebContents* web_contents,
+    SiteInstance* source_site_instance,
     int32_t route_id,
     int32_t main_frame_route_id,
     int32_t main_frame_widget_route_id,
     WindowContainerType window_container_type,
+    const GURL& opener_url,
     const std::string& frame_name,
     const GURL& target_url,
     const std::string& partition_id,
@@ -173,10 +176,9 @@ JavaScriptDialogManager* WebContentsDelegate::GetJavaScriptDialogManager(
   return nullptr;
 }
 
-scoped_ptr<BluetoothChooser> WebContentsDelegate::RunBluetoothChooser(
-    WebContents* web_contents,
-    const BluetoothChooser::EventHandler& event_handler,
-    const GURL& origin) {
+std::unique_ptr<BluetoothChooser> WebContentsDelegate::RunBluetoothChooser(
+    RenderFrameHost* frame,
+    const BluetoothChooser::EventHandler& event_handler) {
   return nullptr;
 }
 
@@ -207,9 +209,8 @@ void WebContentsDelegate::RequestMediaAccessPermission(
     const MediaResponseCallback& callback) {
   LOG(ERROR) << "WebContentsDelegate::RequestMediaAccessPermission: "
              << "Not supported.";
-  callback.Run(MediaStreamDevices(),
-               MEDIA_DEVICE_NOT_SUPPORTED,
-               scoped_ptr<MediaStreamUI>());
+  callback.Run(MediaStreamDevices(), MEDIA_DEVICE_NOT_SUPPORTED,
+               std::unique_ptr<MediaStreamUI>());
 }
 
 bool WebContentsDelegate::CheckMediaAccessPermission(
@@ -226,6 +227,15 @@ void WebContentsDelegate::RequestMediaDecodePermission(
     WebContents* web_contents,
     const base::Callback<void(bool)>& callback) {
   callback.Run(false);
+}
+
+base::android::ScopedJavaLocalRef<jobject>
+WebContentsDelegate::GetContentVideoViewEmbedder() {
+  return base::android::ScopedJavaLocalRef<jobject>();
+}
+
+bool WebContentsDelegate::ShouldBlockMediaRequest(const GURL& url) {
+  return false;
 }
 #endif
 
@@ -268,10 +278,10 @@ bool WebContentsDelegate::SaveFrame(const GURL& url, const Referrer& referrer) {
   return false;
 }
 
-SecurityStyle WebContentsDelegate::GetSecurityStyle(
+blink::WebSecurityStyle WebContentsDelegate::GetSecurityStyle(
     WebContents* web_contents,
     SecurityStyleExplanations* security_style_explanations) {
-  return content::SECURITY_STYLE_UNKNOWN;
+  return blink::WebSecurityStyleUnknown;
 }
 
 DownloadInformation::DownloadInformation(
@@ -296,7 +306,11 @@ DownloadItemAction::~DownloadItemAction() {
 
 void WebContentsDelegate::ShowCertificateViewerInDevTools(
     WebContents* web_contents,
-    int cert_id) {
+    scoped_refptr<net::X509Certificate> certificate) {
+}
+
+void WebContentsDelegate::RequestAppBannerFromDevTools(
+    content::WebContents* web_contents) {
 }
 
 }  // namespace content

@@ -8,8 +8,9 @@
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
+#include "base/trace_event/trace_config_memory_test_util.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -25,12 +26,23 @@ namespace {
 
 using base::trace_event::MemoryDumpManager;
 using base::trace_event::MemoryDumpType;
-using tracing::BeginTracingWithWatch;
-using tracing::WaitForWatchEvent;
+using tracing::BeginTracingWithTraceConfig;
 using tracing::EndTracing;
 
-const char g_category[] = "test_tracing";
-const char g_event[] = "TheEvent";
+void RequestGlobalDumpCallback(base::Closure quit_closure,
+                               uint64_t,
+                               bool success) {
+  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, quit_closure);
+  ASSERT_TRUE(success);
+}
+
+void OnStartTracingDoneCallback(
+    base::trace_event::MemoryDumpLevelOfDetail explicit_dump_type,
+    base::Closure quit_closure) {
+  base::trace_event::MemoryDumpManager::GetInstance()->RequestGlobalDump(
+      MemoryDumpType::EXPLICITLY_TRIGGERED, explicit_dump_type,
+      Bind(&RequestGlobalDumpCallback, quit_closure));
+}
 
 class TracingBrowserTest : public InProcessBrowserTest {
  protected:
@@ -44,123 +56,63 @@ class TracingBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(content::ExecuteScript(rvh, ";"));
   }
 
-  void PerformDumpMemoryTestActions() {
-    std::string json_events;
-    base::TimeDelta no_timeout;
-
+  void PerformDumpMemoryTestActions(
+      const base::trace_event::TraceConfig& trace_config,
+      base::trace_event::MemoryDumpLevelOfDetail explicit_dump_type) {
     GURL url1("about:blank");
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url1, NEW_FOREGROUND_TAB,
+        browser(), url1, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
     ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
 
-    // Begin tracing and watch for multiple periodic dump trace events.
-    std::string event_name = base::trace_event::MemoryDumpTypeToString(
-        MemoryDumpType::PERIODIC_INTERVAL);
-    ASSERT_TRUE(BeginTracingWithWatch(MemoryDumpManager::kTraceCategory,
-                                      MemoryDumpManager::kTraceCategory,
-                                      event_name, 10));
+    // Begin tracing and trigger dump once start is broadcasted to all
+    // processes.
+    base::RunLoop run_loop;
+    ASSERT_TRUE(BeginTracingWithTraceConfig(
+        trace_config, Bind(&OnStartTracingDoneCallback, explicit_dump_type,
+                           run_loop.QuitClosure())));
 
-    GURL url2("chrome://credits/");
+    // Create and destroy renderers while tracing is enabled.
+    GURL url2("chrome://credits");
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url2, NEW_FOREGROUND_TAB,
+        browser(), url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
     ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
 
-    EXPECT_TRUE(WaitForWatchEvent(no_timeout));
+    // Close the current tab.
+    browser()->tab_strip_model()->CloseSelectedTabs();
+
+    GURL url3("chrome://chrome-urls");
+    ui_test_utils::NavigateToURLWithDisposition(
+        browser(), url3, WindowOpenDisposition::CURRENT_TAB,
+        ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
+    ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
+
+    run_loop.Run();
+    std::string json_events;
     ASSERT_TRUE(EndTracing(&json_events));
 
     // Expect the basic memory dumps to be present in the trace.
     EXPECT_NE(std::string::npos, json_events.find("process_totals"));
-
     EXPECT_NE(std::string::npos, json_events.find("v8"));
     EXPECT_NE(std::string::npos, json_events.find("blink_gc"));
   }
 };
 
-class SingleProcessTracingBrowserTest : public TracingBrowserTest {
- protected:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    InProcessBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kSingleProcess);
-  }
-};
-
-void AddEvents(int num) {
-  for (int i = 0; i < num; ++i)
-    TRACE_EVENT_INSTANT0(g_category, g_event, TRACE_EVENT_SCOPE_THREAD);
-}
-
-IN_PROC_BROWSER_TEST_F(TracingBrowserTest, BeginTracingWithWatch) {
-  base::TimeDelta no_timeout;
-  base::TimeDelta short_timeout = base::TimeDelta::FromMilliseconds(5);
-  std::string json_events;
-
-  // One event before wait.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 1));
-  AddEvents(1);
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // One event after wait.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 1));
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                base::Bind(&AddEvents, 1));
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // Not enough events timeout.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 2));
-  AddEvents(1);
-  EXPECT_FALSE(WaitForWatchEvent(short_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // Multi event before wait.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 5));
-  AddEvents(5);
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // Multi event after wait.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 5));
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                base::Bind(&AddEvents, 5));
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // Child process events from same process.
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category,
-                                    "OnJavaScriptExecuteRequestForTests", 2));
-  ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
-  ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-
-  // Child process events from different processes.
-  GURL url1("chrome://tracing/");
-  GURL url2("chrome://credits/");
-  ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category,
-                                    "OnJavaScriptExecuteRequestForTests", 2));
-  // Open two tabs to different URLs to encourage two separate renderer
-  // processes. Each will fire an event that will be counted towards the total.
-  ui_test_utils::NavigateToURLWithDisposition(browser(), url1,
-      NEW_FOREGROUND_TAB, ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
-  ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
-  ui_test_utils::NavigateToURLWithDisposition(browser(), url2,
-      NEW_FOREGROUND_TAB, ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
-  ASSERT_NO_FATAL_FAILURE(ExecuteJavascriptOnCurrentTab());
-  EXPECT_TRUE(WaitForWatchEvent(no_timeout));
-  ASSERT_TRUE(EndTracing(&json_events));
-}
-
-// Multi-process mode.
 IN_PROC_BROWSER_TEST_F(TracingBrowserTest, TestMemoryInfra) {
-  PerformDumpMemoryTestActions();
+  PerformDumpMemoryTestActions(
+      base::trace_event::TraceConfig(
+          base::trace_event::TraceConfigMemoryTestUtil::
+              GetTraceConfig_EmptyTriggers()),
+      base::trace_event::MemoryDumpLevelOfDetail::DETAILED);
 }
 
-// Single-process mode.
-IN_PROC_BROWSER_TEST_F(SingleProcessTracingBrowserTest, TestMemoryInfra) {
-  PerformDumpMemoryTestActions();
+IN_PROC_BROWSER_TEST_F(TracingBrowserTest, TestBackgroundMemoryInfra) {
+  PerformDumpMemoryTestActions(
+      base::trace_event::TraceConfig(
+          base::trace_event::TraceConfigMemoryTestUtil::
+              GetTraceConfig_BackgroundTrigger(200)),
+      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND);
 }
 
 }  // namespace

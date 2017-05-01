@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-<include src="extension_command_list.js">
+// <include src="extension_command_list.js">
 
 cr.define('extensions', function() {
   'use strict';
 
   // The Extension Commands list object that will be used to show the commands
   // on the page.
-  var ExtensionCommandList = options.ExtensionCommandList;
+  var ExtensionCommandList = extensions.ExtensionCommandList;
 
   /**
    * ExtensionCommandsOverlay class

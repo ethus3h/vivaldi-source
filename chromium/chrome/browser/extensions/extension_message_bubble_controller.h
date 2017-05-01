@@ -8,20 +8,24 @@
 #include <stddef.h>
 
 #include <string>
+
 #include "base/macros.h"
+#include "base/scoped_observer.h"
+#include "chrome/browser/ui/browser_list_observer.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/common/extension.h"
 
 class Browser;
+class BrowserList;
 class ExtensionService;
+class ToolbarActionsModel;
 class Profile;
 
 namespace extensions {
 
-class ExtensionPrefs;
 class ExtensionRegistry;
 
-class ExtensionMessageBubbleController {
+class ExtensionMessageBubbleController : public chrome::BrowserListObserver {
  public:
   // UMA histogram constants.
   enum BubbleAction {
@@ -82,6 +86,12 @@ class ExtensionMessageBubbleController {
     // state specific to the type (e.g., shown for profiles).
     virtual const char* GetKey() = 0;
 
+    // Returns true if the bubble is informing about a single extension that can
+    // be policy-installed.
+    // E.g. A proxy-type extension can be policy installed, but a developer-type
+    // extension cannot.
+    virtual bool SupportsPolicyIndicator() = 0;
+
     // Whether the "shown for profiles" set should be cleared if an action is
     // taken on the bubble. This defaults to true, since once an action is
     // taken, the extension will usually either be acknowledged or removed, and
@@ -121,7 +131,7 @@ class ExtensionMessageBubbleController {
   };
 
   ExtensionMessageBubbleController(Delegate* delegate, Browser* browser);
-  virtual ~ExtensionMessageBubbleController();
+  ~ExtensionMessageBubbleController() override;
 
   Delegate* delegate() const { return delegate_.get(); }
   Profile* profile();
@@ -140,6 +150,10 @@ class ExtensionMessageBubbleController {
   // Obtains a list of all extensions (by id) the controller knows about.
   const ExtensionIdList& GetExtensionIdList();
 
+  // Checks if each extension entry is installed, and if not, removes it from
+  // the list.
+  void UpdateExtensionIdList();
+
   // Whether to close the bubble when it loses focus.
   bool CloseOnDeactivate();
 
@@ -156,12 +170,18 @@ class ExtensionMessageBubbleController {
   virtual void OnBubbleDismiss(bool dismissed_by_deactivation);
   virtual void OnLinkClicked();
 
+  // Sets this bubble as the active bubble being shown.
+  void SetIsActiveBubble();
+
   void ClearProfileListForTesting();
 
   static void set_should_ignore_learn_more_for_testing(
       bool should_ignore_learn_more);
 
  private:
+  // BrowserListObserver:
+  void OnBrowserRemoved(Browser* browser) override;
+
   // Iterate over the known extensions and acknowledge each one.
   void AcknowledgeExtensions();
 
@@ -176,6 +196,9 @@ class ExtensionMessageBubbleController {
   // A weak pointer to the Browser we are associated with. Not owned by us.
   Browser* browser_;
 
+  // The associated ToolbarActionsModel. Not owned.
+  ToolbarActionsModel* model_;
+
   // The list of extensions found.
   ExtensionIdList extension_list_;
 
@@ -183,13 +206,18 @@ class ExtensionMessageBubbleController {
   BubbleAction user_action_;
 
   // Our delegate supplying information about what to show in the dialog.
-  scoped_ptr<Delegate> delegate_;
+  std::unique_ptr<Delegate> delegate_;
 
   // Whether this class has initialized.
   bool initialized_;
 
   // Whether or not the bubble is highlighting extensions.
-  bool did_highlight_;
+  bool is_highlighting_;
+
+  // Whether or not this bubble is the active bubble being shown.
+  bool is_active_bubble_;
+
+  ScopedObserver<BrowserList, BrowserListObserver> browser_list_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionMessageBubbleController);
 };

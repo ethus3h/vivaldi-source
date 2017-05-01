@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -17,9 +19,10 @@
 #include "net/base/completion_callback.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
 #include "net/proxy/proxy_info.h"
 #include "net/proxy/proxy_service.h"
+#include "net/socket/next_proto.h"
 #include "net/socket/stream_socket.h"
 #include "net/ssl/ssl_config_service.h"
 #include "url/gurl.h"
@@ -64,12 +67,11 @@ class ProxyResolvingClientSocket : public net::StreamSocket {
   bool IsConnectedAndIdle() const override;
   int GetPeerAddress(net::IPEndPoint* address) const override;
   int GetLocalAddress(net::IPEndPoint* address) const override;
-  const net::BoundNetLog& NetLog() const override;
+  const net::NetLogWithSource& NetLog() const override;
   void SetSubresourceSpeculation() override;
   void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
-  bool UsingTCPFastOpen() const override;
-  bool WasNpnNegotiated() const override;
+  bool WasAlpnNegotiated() const override;
   net::NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(net::SSLInfo* ssl_info) override;
   void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
@@ -92,10 +94,10 @@ class ProxyResolvingClientSocket : public net::StreamSocket {
   net::CompletionCallback proxy_resolve_callback_;
   net::CompletionCallback connect_callback_;
 
-  scoped_ptr<net::HttpNetworkSession> network_session_;
+  std::unique_ptr<net::HttpNetworkSession> network_session_;
 
   // The transport socket.
-  scoped_ptr<net::ClientSocketHandle> transport_;
+  std::unique_ptr<net::ClientSocketHandle> transport_;
 
   const net::SSLConfig ssl_config_;
   net::ProxyService::PacRequest* pac_request_;
@@ -103,7 +105,7 @@ class ProxyResolvingClientSocket : public net::StreamSocket {
   const net::HostPortPair dest_host_port_pair_;
   const GURL proxy_url_;
   bool tried_direct_connect_fallback_;
-  net::BoundNetLog bound_net_log_;
+  net::NetLogWithSource net_log_;
 
   // The callback passed to Connect().
   net::CompletionCallback user_connect_callback_;

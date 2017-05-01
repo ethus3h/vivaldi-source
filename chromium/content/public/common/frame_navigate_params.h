@@ -12,6 +12,7 @@
 
 #include "content/common/content_export.h"
 #include "content/public/common/referrer.h"
+#include "ipc/ipc_message_utils.h"
 #include "net/base/host_port_pair.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -19,15 +20,13 @@
 namespace content {
 
 // Struct used by WebContentsObserver.
-struct CONTENT_EXPORT FrameNavigateParams {
+// Note that we derived from IPC::NoParams here, because this struct is used in
+// an IPC struct as a parent. Deriving from NoParams allows us to by-pass the
+// out of line constructor checks in our clang plugins.
+struct CONTENT_EXPORT FrameNavigateParams : public IPC::NoParams {
   FrameNavigateParams();
+  FrameNavigateParams(const FrameNavigateParams& other);
   ~FrameNavigateParams();
-
-  // Page ID of this navigation. The renderer creates a new unique page ID
-  // anytime a new session history entry is created. This means you'll get new
-  // page IDs for user actions, and the old page IDs will be reloaded when
-  // iframes are loaded automatically.
-  int32_t page_id;
 
   // The unique ID of the NavigationEntry for browser-initiated navigations.
   // This value was given to the render process in the HistoryNavigationParams
@@ -75,10 +74,6 @@ struct CONTENT_EXPORT FrameNavigateParams {
   // Set to false if we want to update the session history but not update
   // the browser history.  E.g., on unreachable urls.
   bool should_update_history;
-
-  // See SearchableFormData for a description of these.
-  GURL searchable_form_url;
-  std::string searchable_form_encoding;
 
   // Contents MIME type of main frame.
   std::string contents_mime_type;

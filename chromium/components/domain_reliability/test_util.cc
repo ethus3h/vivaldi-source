@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/memory/ptr_util.h"
 #include "components/domain_reliability/scheduler.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -118,8 +119,8 @@ MockTime::~MockTime() {}
 base::Time MockTime::Now() { return now_; }
 base::TimeTicks MockTime::NowTicks() { return now_ticks_; }
 
-scoped_ptr<MockableTime::Timer> MockTime::CreateTimer() {
-  return scoped_ptr<MockableTime::Timer>(new MockTimer(this));
+std::unique_ptr<MockableTime::Timer> MockTime::CreateTimer() {
+  return std::unique_ptr<MockableTime::Timer>(new MockTimer(this));
 }
 
 void MockTime::Advance(base::TimeDelta delta) {
@@ -161,21 +162,22 @@ DomainReliabilityScheduler::Params MakeTestSchedulerParams() {
   return params;
 }
 
-scoped_ptr<DomainReliabilityConfig> MakeTestConfig() {
+std::unique_ptr<DomainReliabilityConfig> MakeTestConfig() {
   return MakeTestConfigWithOrigin(GURL("https://example/"));
 }
 
-scoped_ptr<DomainReliabilityConfig> MakeTestConfigWithOrigin(
+std::unique_ptr<DomainReliabilityConfig> MakeTestConfigWithOrigin(
     const GURL& origin) {
   DomainReliabilityConfig* config = new DomainReliabilityConfig();
   config->origin = origin;
-  config->collectors.push_back(new GURL("https://exampleuploader/upload"));
+  config->collectors.push_back(
+      base::MakeUnique<GURL>("https://exampleuploader/upload"));
   config->failure_sample_rate = 1.0;
   config->success_sample_rate = 0.0;
 
   DCHECK(config->IsValid());
 
-  return scoped_ptr<DomainReliabilityConfig>(config);
+  return std::unique_ptr<DomainReliabilityConfig>(config);
 }
 
 }  // namespace domain_reliability

@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/external_protocol_dialog_delegate.h"
@@ -35,9 +34,8 @@ const int kMessageWidth = 400;
 void ExternalProtocolHandler::RunExternalProtocolDialog(
     const GURL& url, int render_process_host_id, int routing_id,
     ui::PageTransition page_transition, bool has_user_gesture) {
-  scoped_ptr<ExternalProtocolDialogDelegate> delegate(
-      new ExternalProtocolDialogDelegate(url,
-                                         render_process_host_id,
+  std::unique_ptr<ExternalProtocolDialogDelegate> delegate(
+      new ExternalProtocolDialogDelegate(url, render_process_host_id,
                                          routing_id));
   if (delegate->program_name().empty()) {
     // ShellExecute won't do anything. Don't bother warning the user.
@@ -64,10 +62,7 @@ int ExternalProtocolDialog::GetDefaultDialogButton() const {
 
 base::string16 ExternalProtocolDialog::GetDialogButtonLabel(
     ui::DialogButton button) const {
-  if (button == ui::DIALOG_BUTTON_OK)
-    return l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_OK_BUTTON_TEXT);
-  else
-    return l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_CANCEL_BUTTON_TEXT);
+  return delegate_->GetDialogButtonLabel(button);
 }
 
 base::string16 ExternalProtocolDialog::GetWindowTitle() const {
@@ -79,12 +74,12 @@ void ExternalProtocolDialog::DeleteDelegate() {
 }
 
 bool ExternalProtocolDialog::Cancel() {
-  // We also get called back here if the user closes the dialog or presses
-  // escape. In these cases it would be preferable to ignore the state of the
-  // check box but MessageBox doesn't distinguish this from pressing the cancel
-  // button.
-  delegate_->DoCancel(delegate_->url(),
-                      message_box_view_->IsCheckBoxSelected());
+  bool is_checked = message_box_view_->IsCheckBoxSelected();
+  delegate_->DoCancel(delegate_->url(), is_checked);
+
+  ExternalProtocolHandler::RecordCheckboxStateMetrics(is_checked);
+  ExternalProtocolHandler::RecordHandleStateMetrics(
+      is_checked, ExternalProtocolHandler::BLOCK);
 
   // Returning true closes the dialog.
   return true;
@@ -97,10 +92,23 @@ bool ExternalProtocolDialog::Accept() {
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.launch_url",
                            base::TimeTicks::Now() - creation_time_);
 
-  delegate_->DoAccept(delegate_->url(),
-                      message_box_view_->IsCheckBoxSelected());
+  bool is_checked = message_box_view_->IsCheckBoxSelected();
+  ExternalProtocolHandler::RecordCheckboxStateMetrics(is_checked);
+  ExternalProtocolHandler::RecordHandleStateMetrics(
+      is_checked, ExternalProtocolHandler::DONT_BLOCK);
+
+  delegate_->DoAccept(delegate_->url(), is_checked);
 
   // Returning true closes the dialog.
+  return true;
+}
+
+bool ExternalProtocolDialog::Close() {
+  // If the user dismisses the dialog without interacting with the buttons (e.g.
+  // via pressing Esc or the X), act as though they cancelled the request, but
+  // ignore the checkbox state. This ensures that if they check the checkbox but
+  // dismiss the dialog, we don't stop prompting them forever.
+  delegate_->DoCancel(delegate_->url(), false);
   return true;
 }
 
@@ -124,7 +132,7 @@ ui::ModalType ExternalProtocolDialog::GetModalType() const {
 // ExternalProtocolDialog, private:
 
 ExternalProtocolDialog::ExternalProtocolDialog(
-    scoped_ptr<const ProtocolDialogDelegate> delegate,
+    std::unique_ptr<const ProtocolDialogDelegate> delegate,
     int render_process_host_id,
     int routing_id)
     : delegate_(std::move(delegate)),

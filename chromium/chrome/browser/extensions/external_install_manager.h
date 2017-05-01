@@ -6,13 +6,14 @@
 #define CHROME_BROWSER_EXTENSIONS_EXTERNAL_INSTALL_MANAGER_H_
 
 #include <map>
+#include <memory>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/scoped_observer.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/common/extension_id.h"
 
 namespace content {
 class BrowserContext;
@@ -33,6 +34,9 @@ class ExternalInstallManager : public ExtensionRegistryObserver,
                          bool is_first_run);
   ~ExternalInstallManager() override;
 
+  // Returns true if prompting for external extensions is enabled.
+  static bool IsPromptingEnabled();
+
   // Removes the error associated with a given extension.
   void RemoveExternalInstallError(const std::string& extension_id);
 
@@ -42,6 +46,20 @@ class ExternalInstallManager : public ExtensionRegistryObserver,
   // Given a (presumably just-installed) extension id, mark that extension as
   // acknowledged.
   void AcknowledgeExternalExtension(const std::string& extension_id);
+
+  // Notifies the manager that |external_install_error| has changed its alert
+  // visibility.
+  void DidChangeInstallAlertVisibility(
+      ExternalInstallError* external_install_error,
+      bool visible);
+
+  bool has_currently_visible_install_alert() {
+    return currently_visible_install_alert_ != nullptr;
+  }
+
+  ExternalInstallError* currently_visible_install_alert_for_testing() const {
+    return currently_visible_install_alert_;
+  }
 
   // Returns a mutable copy of the list of global errors for testing purposes.
   std::vector<ExternalInstallError*> GetErrorsForTesting();
@@ -69,7 +87,7 @@ class ExternalInstallManager : public ExtensionRegistryObserver,
 
   // Returns true if this extension is an external one that has yet to be
   // marked as acknowledged.
-  bool IsUnacknowledgedExternalExtension(const Extension* extension) const;
+  bool IsUnacknowledgedExternalExtension(const Extension& extension) const;
 
   // The associated BrowserContext.
   content::BrowserContext* browser_context_;
@@ -81,9 +99,18 @@ class ExternalInstallManager : public ExtensionRegistryObserver,
   ExtensionPrefs* extension_prefs_;
 
   // The collection of ExternalInstallErrors.
-  std::map<std::string, scoped_ptr<ExternalInstallError>> errors_;
+  std::map<std::string, std::unique_ptr<ExternalInstallError>> errors_;
 
-  std::set<std::string> shown_ids_;
+  // The set of ids of unacknowledged external extensions. Populated at
+  // initialization, and then updated as extensions are added, removed,
+  // acknowledged, etc.
+  std::set<ExtensionId> unacknowledged_ids_;
+
+  // The set of ids of extensions that we have warned about in this session.
+  std::set<ExtensionId> shown_ids_;
+
+  // The error that is currently showing an alert dialog/bubble.
+  ExternalInstallError* currently_visible_install_alert_;
 
   content::NotificationRegistrar registrar_;
 

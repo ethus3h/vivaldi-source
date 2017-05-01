@@ -4,8 +4,8 @@
 
 #include "chrome/browser/chromeos/login/ui/simple_web_view_dialog.h"
 
+#include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
-#include "ash/shell_window_ids.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -15,21 +15,21 @@
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ssl/chrome_security_state_model_client.h"
+#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model_delegate.h"
-#include "chrome/browser/ui/toolbar/toolbar_model_impl.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/password_manager/core/browser/password_manager.h"
-#include "components/security_state/security_state_model.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/toolbar/toolbar_model_impl.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/components_strings.h"
+#include "content/public/common/content_constants.h"
 #include "ipc/ipc_message.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/theme_provider.h"
@@ -135,7 +135,7 @@ SimpleWebViewDialog::SimpleWebViewDialog(Profile* profile)
   command_updater_->UpdateCommandEnabled(IDC_FORWARD, true);
   command_updater_->UpdateCommandEnabled(IDC_STOP, true);
   command_updater_->UpdateCommandEnabled(IDC_RELOAD, true);
-  command_updater_->UpdateCommandEnabled(IDC_RELOAD_IGNORING_CACHE, true);
+  command_updater_->UpdateCommandEnabled(IDC_RELOAD_BYPASSING_CACHE, true);
   command_updater_->UpdateCommandEnabled(IDC_RELOAD_CLEARING_CACHE, true);
 }
 
@@ -164,9 +164,9 @@ void SimpleWebViewDialog::StartLoad(const GURL& url) {
 void SimpleWebViewDialog::Init() {
   // Create the security state model that the toolbar model needs.
   if (web_view_->GetWebContents())
-    ChromeSecurityStateModelClient::CreateForWebContents(
-        web_view_->GetWebContents());
-  toolbar_model_.reset(new ToolbarModelImpl(this));
+    SecurityStateTabHelper::CreateForWebContents(web_view_->GetWebContents());
+  toolbar_model_.reset(
+      new ToolbarModelImpl(this, content::kMaxURLDisplayChars));
 
   set_background(views::Background::CreateSolidBackground(kDialogColor));
 
@@ -246,10 +246,6 @@ void SimpleWebViewDialog::Layout() {
   views::WidgetDelegateView::Layout();
 }
 
-views::View* SimpleWebViewDialog::GetContentsView() {
-  return this;
-}
-
 views::View* SimpleWebViewDialog::GetInitiallyFocusedView() {
   return web_view_;
 }
@@ -294,20 +290,13 @@ const ToolbarModel* SimpleWebViewDialog::GetToolbarModel() const {
   return toolbar_model_.get();
 }
 
-views::Widget* SimpleWebViewDialog::CreateViewsBubble(
-    views::BubbleDelegateView* bubble_delegate) {
-  return views::BubbleDelegateView::CreateBubble(bubble_delegate);
-}
-
 ContentSettingBubbleModelDelegate*
 SimpleWebViewDialog::GetContentSettingBubbleModelDelegate() {
   return bubble_model_delegate_.get();
 }
 
 void SimpleWebViewDialog::ShowWebsiteSettings(
-    content::WebContents* web_contents,
-    const GURL& url,
-    const security_state::SecurityStateModel::SecurityInfo& security_info) {
+    content::WebContents* web_contents) {
   NOTIMPLEMENTED();
   // TODO (markusheintz@): implement this
 }
@@ -346,11 +335,12 @@ void SimpleWebViewDialog::ExecuteCommandWithDisposition(
       web_contents->Stop();
       break;
     case IDC_RELOAD:
-      // Always reload ignoring cache.
-    case IDC_RELOAD_IGNORING_CACHE:
+    // Always reload bypassing cache.
+    case IDC_RELOAD_BYPASSING_CACHE:
     case IDC_RELOAD_CLEARING_CACHE:
       location_bar_->Revert();
-      web_contents->GetController().ReloadIgnoringCache(true);
+      web_contents->GetController().Reload(content::ReloadType::BYPASSING_CACHE,
+                                           true);
       break;
     default:
       NOTREACHED();

@@ -5,6 +5,7 @@
 #include "components/autofill/core/browser/webdata/autocomplete_syncable_service.h"
 
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/location.h"
@@ -12,12 +13,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
+#include "components/sync/model/sync_error.h"
+#include "components/sync/model/sync_error_factory.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
+#include "components/sync/protocol/sync.pb.h"
 #include "components/webdata/common/web_database.h"
 #include "net/base/escape.h"
-#include "sync/api/sync_error.h"
-#include "sync/api/sync_error_factory.h"
-#include "sync/protocol/autofill_specifics.pb.h"
-#include "sync/protocol/sync.pb.h"
 
 namespace autofill {
 namespace {
@@ -101,8 +102,8 @@ void AutocompleteSyncableService::InjectStartSyncFlare(
 syncer::SyncMergeResult AutocompleteSyncableService::MergeDataAndStartSyncing(
     syncer::ModelType type,
     const syncer::SyncDataList& initial_sync_data,
-    scoped_ptr<syncer::SyncChangeProcessor> sync_processor,
-    scoped_ptr<syncer::SyncErrorFactory> error_handler) {
+    std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
+    std::unique_ptr<syncer::SyncErrorFactory> error_handler) {
   DCHECK(CalledOnValidThread());
   DCHECK(!sync_processor_);
   DCHECK(sync_processor);
@@ -158,6 +159,8 @@ syncer::SyncMergeResult AutocompleteSyncableService::MergeDataAndStartSyncing(
   // Sync error when that item's deletion is propagated to Sync.
   web_data_backend_->RemoveExpiredFormElements();
 
+  web_data_backend_->NotifyThatSyncHasStarted(type);
+
   return merge_result;
 }
 
@@ -203,7 +206,7 @@ syncer::SyncError AutocompleteSyncableService::ProcessSyncChanges(
 
   // Data is loaded only if we get new ADD/UPDATE change.
   std::vector<AutofillEntry> entries;
-  scoped_ptr<AutocompleteEntryMap> db_entries;
+  std::unique_ptr<AutocompleteEntryMap> db_entries;
   std::vector<AutofillEntry> new_entries;
 
   syncer::SyncError list_processing_error;
@@ -314,7 +317,7 @@ void AutocompleteSyncableService::CreateOrUpdateEntry(
   if (it == loaded_data->end()) {
     // New entry.
     base::Time date_created, date_last_used;
-    if (timestamps.size() > 0) {
+    if (!timestamps.empty()) {
       date_created = base::Time::FromInternalValue(*timestamps.begin());
       date_last_used = base::Time::FromInternalValue(*timestamps.rbegin());
     }

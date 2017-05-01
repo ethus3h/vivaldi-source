@@ -14,43 +14,36 @@ namespace blink {
 class WebGL2RenderingContextBase;
 
 class WebGLTransformFeedback : public WebGLSharedPlatform3DObject {
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    ~WebGLTransformFeedback() override;
+  DEFINE_WRAPPERTYPEINFO();
 
-    static WebGLTransformFeedback* create(WebGL2RenderingContextBase*);
+ public:
+  ~WebGLTransformFeedback() override;
 
-    GLenum getTarget() const { return m_target; }
-    void setTarget(GLenum);
+  static WebGLTransformFeedback* create(WebGL2RenderingContextBase*);
 
-    bool hasEverBeenBound() const { return object() && m_target; }
+  GLenum getTarget() const { return m_target; }
+  void setTarget(GLenum);
 
-    bool isActive() const { return m_active; }
-    bool isPaused() const { return m_paused; }
-    void setActive(bool);
-    void setPaused(bool);
+  bool hasEverBeenBound() const { return object() && m_target; }
 
-    WebGLProgram* getProgram() const { return m_program; }
-    void setProgram(WebGLProgram*);
+  WebGLProgram* getProgram() const { return m_program; }
+  void setProgram(WebGLProgram*);
 
-    DECLARE_TRACE();
+  DECLARE_TRACE();
 
-protected:
-    explicit WebGLTransformFeedback(WebGL2RenderingContextBase*);
+ protected:
+  explicit WebGLTransformFeedback(WebGL2RenderingContextBase*);
 
-    void deleteObjectImpl(WebGraphicsContext3D*) override;
+  void deleteObjectImpl(gpu::gles2::GLES2Interface*) override;
 
-private:
-    bool isTransformFeedback() const override { return true; }
+ private:
+  bool isTransformFeedback() const override { return true; }
 
-    GLenum m_target;
+  GLenum m_target;
 
-    bool m_active;
-    bool m_paused;
-
-    Member<WebGLProgram> m_program;
+  Member<WebGLProgram> m_program;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // WebGLTransformFeedback_h
+#endif  // WebGLTransformFeedback_h

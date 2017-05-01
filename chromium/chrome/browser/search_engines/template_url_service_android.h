@@ -5,10 +5,11 @@
 #ifndef CHROME_BROWSER_SEARCH_ENGINES_TEMPLATE_URL_SERVICE_ANDROID_H_
 #define CHROME_BROWSER_SEARCH_ENGINES_TEMPLATE_URL_SERVICE_ANDROID_H_
 
+#include <memory>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_service_observer.h"
 
@@ -26,18 +27,22 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
   void SetUserSelectedDefaultSearchProvider(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
-      jint selected_index);
-  jint GetDefaultSearchProvider(
+      const base::android::JavaParamRef<jstring>& jkeyword);
+
+  jint GetDefaultSearchProviderIndex(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
-  jint GetTemplateUrlCount(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
-  jboolean IsLoaded(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj);
-  base::android::ScopedJavaLocalRef<jobject> GetPrepopulatedTemplateUrlAt(
+      const base::android::JavaParamRef<jobject>& obj) const;
+
+  jint GetTemplateUrlCount(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj) const;
+  jboolean IsLoaded(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj) const;
+  base::android::ScopedJavaLocalRef<jobject> GetTemplateUrlAt(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
-      jint index);
+      jint index) const;
   jboolean IsSearchProviderManaged(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj);
@@ -65,30 +70,54 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
       const base::android::JavaParamRef<jobject>& obj,
       const base::android::JavaParamRef<jstring>& jquery,
       const base::android::JavaParamRef<jstring>& jalternate_term,
-      jboolean jshould_prefetch);
+      jboolean jshould_prefetch,
+      const base::android::JavaParamRef<jstring>& jprotocol_version);
   base::android::ScopedJavaLocalRef<jstring> GetSearchEngineUrlFromTemplateUrl(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
-      jint index);
+      const base::android::JavaParamRef<jstring>& jkeyword);
+
+  // Adds a custom search engine, sets |jkeyword| as its short_name and keyword,
+  // and sets its date_created as |age_in_days| days before the current time.
+  base::android::ScopedJavaLocalRef<jstring> AddSearchEngineForTesting(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj,
+      const base::android::JavaParamRef<jstring>& jkeyword,
+      jint age_in_days);
+
+  // Finds the search engine whose keyword matches |jkeyword| and sets its
+  // last_visited time as the current time.
+  base::android::ScopedJavaLocalRef<jstring> UpdateLastVisitedForTesting(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj,
+      const base::android::JavaParamRef<jstring>& jkeyword);
 
   static bool Register(JNIEnv* env);
 
  private:
   ~TemplateUrlServiceAndroid() override;
 
-  bool IsPrepopulatedTemplate(TemplateURL* url);
-
   void OnTemplateURLServiceLoaded();
 
   // TemplateUrlServiceObserver:
   void OnTemplateURLServiceChanged() override;
+
+  // Updates |template_urls_| to contain all TemplateURLs.  It sorts this list
+  // with prepopulated engines first, then any default non-prepopulated engine,
+  // then other non-prepopulated engines based on last_visited in descending
+  // order.
+  void LoadTemplateURLs();
 
   JavaObjectWeakGlobalRef weak_java_obj_;
 
   // Pointer to the TemplateUrlService for the main profile.
   TemplateURLService* template_url_service_;
 
-  scoped_ptr<TemplateURLService::Subscription> template_url_subscription_;
+  std::unique_ptr<TemplateURLService::Subscription> template_url_subscription_;
+
+  // Caches the up-to-date TemplateURL list so that calls from Android could
+  // directly get data from it.
+  std::vector<TemplateURL*> template_urls_;
 
   DISALLOW_COPY_AND_ASSIGN(TemplateUrlServiceAndroid);
 };

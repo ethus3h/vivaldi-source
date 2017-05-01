@@ -4,8 +4,13 @@
 
 #include "content/public/test/test_renderer_host.h"
 
+#include <utility>
+
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "content/browser/compositor/test/no_transport_image_transport_factory.h"
 #include "content/browser/frame_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
@@ -13,15 +18,24 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/browser_side_navigation_policy.h"
+#include "content/public/test/browser_side_navigation_test_utils.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
-#include "content/test/browser_side_navigation_test_utils.h"
 #include "content/test/content_browser_sanity_checker.h"
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_render_frame_host_factory.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_render_view_host_factory.h"
 #include "content/test/test_web_contents.h"
+#include "ui/base/material_design/material_design_controller.h"
+#include "ui/base/test/material_design_controller_test_api.h"
+
+#if defined(OS_ANDROID)
+#include "content/browser/renderer_host/context_provider_factory_impl_android.h"
+#include "content/test/mock_gpu_channel_establish_factory.h"
+#include "ui/android/dummy_screen_android.h"
+#include "ui/display/screen.h"
+#endif
 
 #if defined(OS_WIN)
 #include "ui/base/win/scoped_ole_initializer.h"
@@ -31,6 +45,10 @@
 #include "ui/aura/test/aura_test_helper.h"
 #include "ui/compositor/test/context_factories_for_test.h"
 #include "ui/wm/core/default_activation_client.h"
+#endif
+
+#if defined(OS_MACOSX)
+#include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
 #endif
 
 namespace content {
@@ -43,16 +61,46 @@ RenderFrameHostTester* RenderFrameHostTester::For(RenderFrameHost* host) {
 }
 
 // static
-RenderFrameHost* RenderFrameHostTester::GetPendingForController(
+void RenderFrameHostTester::CommitPendingLoad(
     NavigationController* controller) {
-  WebContentsImpl* web_contents = static_cast<WebContentsImpl*>(
-      controller->GetWebContents());
-  return web_contents->GetRenderManagerForTesting()->pending_frame_host();
-}
+  // This function is currently used by BrowserWithTestWindowTest. It would be
+  // ideal to instead make the users of that class create TestWebContents
+  // (rather than WebContentsImpl directly). This would allow the implementation
+  // of PrepareForCommitIfNecessary() to live directly in
+  // TestWebContents::CommitPendingNavigation() which could then be the only
+  // place to handle this simulation. Unfortunately, it is not trivial to make
+  // that change, so for now we have this extra simulation for
+  // non-TestWebContents.
+  RenderFrameHost* old_rfh = controller->GetWebContents()->GetMainFrame();
+  TestRenderFrameHost* old_rfh_tester =
+      static_cast<TestRenderFrameHost*>(old_rfh);
+  old_rfh_tester->PrepareForCommitIfNecessary();
 
-// static
-bool RenderFrameHostTester::IsRenderFrameHostSwappedOut(RenderFrameHost* rfh) {
-  return static_cast<RenderFrameHostImpl*>(rfh)->is_swapped_out();
+  WebContentsImpl* web_contents =
+      static_cast<WebContentsImpl*>(controller->GetWebContents());
+  RenderFrameHost* pending_rfh =
+      IsBrowserSideNavigationEnabled()
+          ? web_contents->GetRenderManagerForTesting()
+                ->speculative_render_frame_host_.get()
+          : web_contents->GetRenderManagerForTesting()->pending_frame_host();
+
+  // Commit on the pending_rfh, if one exists.
+  RenderFrameHost* test_rfh = pending_rfh ? pending_rfh : old_rfh;
+  RenderFrameHostTester* test_rfh_tester = For(test_rfh);
+
+  if (controller->GetPendingEntryIndex() >= 0) {
+    test_rfh_tester->SendNavigateWithTransition(
+        controller->GetPendingEntry()->GetUniqueID(),
+        false,
+        controller->GetPendingEntry()->GetURL(),
+        controller->GetPendingEntry()->GetTransitionType());
+  } else {
+    test_rfh_tester->SendNavigateWithTransition(
+        controller->GetPendingEntry()->GetUniqueID(),
+        true,
+        controller->GetPendingEntry()->GetURL(),
+        controller->GetPendingEntry()->GetTransitionType());
+  }
 }
 
 // RenderViewHostTester -------------------------------------------------------
@@ -82,9 +130,39 @@ bool RenderViewHostTester::HasTouchEventHandler(RenderViewHost* rvh) {
 RenderViewHostTestEnabler::RenderViewHostTestEnabler()
     : rph_factory_(new MockRenderProcessHostFactory()),
       rvh_factory_(new TestRenderViewHostFactory(rph_factory_.get())),
-      rfh_factory_(new TestRenderFrameHostFactory()) {}
+      rfh_factory_(new TestRenderFrameHostFactory()) {
+#if !defined(OS_ANDROID)
+  ImageTransportFactory::InitializeForUnitTests(
+      base::WrapUnique(new NoTransportImageTransportFactory));
+#else
+  gpu_channel_factory_ = base::MakeUnique<MockGpuChannelEstablishFactory>();
+  ContextProviderFactoryImpl::Initialize(gpu_channel_factory_.get());
+  ui::ContextProviderFactory::SetInstance(
+      ContextProviderFactoryImpl::GetInstance());
+  if (!screen_)
+    screen_.reset(ui::CreateDummyScreenAndroid());
+  display::Screen::SetScreenInstance(screen_.get());
+#endif
+#if defined(OS_MACOSX)
+  if (base::ThreadTaskRunnerHandle::IsSet())
+    ui::WindowResizeHelperMac::Get()->Init(base::ThreadTaskRunnerHandle::Get());
+#endif  // OS_MACOSX
+}
 
 RenderViewHostTestEnabler::~RenderViewHostTestEnabler() {
+#if defined(OS_MACOSX)
+  ui::WindowResizeHelperMac::Get()->ShutdownForTests();
+#endif  // OS_MACOSX
+#if !defined(OS_ANDROID)
+  // RenderWidgetHostView holds on to a reference to SurfaceManager, so it
+  // must be shut down before the ImageTransportFactory.
+  ImageTransportFactory::Terminate();
+#else
+  display::Screen::SetScreenInstance(nullptr);
+  ui::ContextProviderFactory::SetInstance(nullptr);
+  ContextProviderFactoryImpl::Terminate();
+  gpu_channel_factory_.reset();
+#endif
 }
 
 
@@ -151,11 +229,11 @@ WebContents* RenderViewHostTestHarness::CreateTestWebContents() {
   DCHECK(aura_test_helper_ != NULL);
 #endif
 
-  // This will be deleted when the WebContentsImpl goes away.
-  SiteInstance* instance = SiteInstance::Create(browser_context_.get());
+  scoped_refptr<SiteInstance> instance =
+      SiteInstance::Create(browser_context_.get());
   instance->GetProcess()->Init();
 
-  return TestWebContents::Create(browser_context_.get(), instance);
+  return TestWebContents::Create(browser_context_.get(), std::move(instance));
 }
 
 void RenderViewHostTestHarness::NavigateAndCommit(const GURL& url) {
@@ -165,9 +243,9 @@ void RenderViewHostTestHarness::NavigateAndCommit(const GURL& url) {
 void RenderViewHostTestHarness::Reload() {
   NavigationEntry* entry = controller().GetLastCommittedEntry();
   DCHECK(entry);
-  controller().Reload(false);
+  controller().Reload(ReloadType::NORMAL, false);
   RenderFrameHostTester::For(main_rfh())
-      ->SendNavigateWithTransition(entry->GetPageID(), entry->GetUniqueID(),
+      ->SendNavigateWithTransition(entry->GetUniqueID(),
                                    false, entry->GetURL(),
                                    ui::PAGE_TRANSITION_RELOAD);
 }
@@ -175,27 +253,34 @@ void RenderViewHostTestHarness::Reload() {
 void RenderViewHostTestHarness::FailedReload() {
   NavigationEntry* entry = controller().GetLastCommittedEntry();
   DCHECK(entry);
-  controller().Reload(false);
+  controller().Reload(ReloadType::NORMAL, false);
   RenderFrameHostTester::For(main_rfh())
-      ->SendFailedNavigate(entry->GetPageID(), entry->GetUniqueID(), false,
-                           entry->GetURL());
+      ->SendFailedNavigate(entry->GetUniqueID(), false, entry->GetURL());
 }
 
 void RenderViewHostTestHarness::SetUp() {
+  // ContentTestSuiteBase might have already initialized
+  // MaterialDesignController in unit_tests suite.
+  ui::test::MaterialDesignControllerTestAPI::Uninitialize();
+  ui::MaterialDesignController::Initialize();
   thread_bundle_.reset(new TestBrowserThreadBundle(thread_bundle_options_));
+
+  rvh_test_enabler_.reset(new RenderViewHostTestEnabler);
+  if (factory_)
+    rvh_test_enabler_->rvh_factory_->set_render_process_host_factory(factory_);
 
 #if defined(OS_WIN)
   ole_initializer_.reset(new ui::ScopedOleInitializer());
 #endif
 #if defined(USE_AURA)
-  // The ContextFactory must exist before any Compositors are created.
-  bool enable_pixel_output = false;
   ui::ContextFactory* context_factory =
-      ui::InitializeContextFactoryForTests(enable_pixel_output);
+      ImageTransportFactory::GetInstance()->GetContextFactory();
+  ui::ContextFactoryPrivate* context_factory_private =
+      ImageTransportFactory::GetInstance()->GetContextFactoryPrivate();
 
   aura_test_helper_.reset(
       new aura::test::AuraTestHelper(base::MessageLoopForUI::current()));
-  aura_test_helper_->SetUp(context_factory);
+  aura_test_helper_->SetUp(context_factory, context_factory_private);
   new wm::DefaultActivationClient(aura_test_helper_->root_window());
 #endif
 
@@ -228,8 +313,10 @@ void RenderViewHostTestHarness::TearDown() {
 #endif
 
   // Delete any RenderProcessHosts before the BrowserContext goes away.
-  if (rvh_test_enabler_.rph_factory_)
-    rvh_test_enabler_.rph_factory_.reset();
+  if (rvh_test_enabler_->rph_factory_)
+    rvh_test_enabler_->rph_factory_.reset();
+
+  rvh_test_enabler_.reset();
 
   // Release the browser context by posting itself on the end of the task
   // queue. This is preferable to immediate deletion because it will behave
@@ -247,7 +334,10 @@ BrowserContext* RenderViewHostTestHarness::CreateBrowserContext() {
 
 void RenderViewHostTestHarness::SetRenderProcessHostFactory(
     RenderProcessHostFactory* factory) {
-  rvh_test_enabler_.rvh_factory_->set_render_process_host_factory(factory);
+  if (rvh_test_enabler_)
+    rvh_test_enabler_->rvh_factory_->set_render_process_host_factory(factory);
+  else
+    factory_ = factory;
 }
 
 }  // namespace content

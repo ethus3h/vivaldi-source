@@ -5,26 +5,79 @@
 #include "content/renderer/media/webrtc/media_stream_video_webrtc_sink.h"
 
 #include "base/location.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "base/timer/timer.h"
 #include "content/common/media/media_stream_options.h"
+#include "content/public/renderer/media_stream_utils.h"
+#include "content/renderer/media/media_stream_constraints_util.h"
 #include "content/renderer/media/media_stream_video_track.h"
 #include "content/renderer/media/webrtc/peer_connection_dependency_factory.h"
+#include "media/base/limits.h"
+#include "third_party/webrtc/api/videosourceproxy.h"
+#include "third_party/webrtc/api/videotracksource.h"
+
+namespace content {
+
+class MediaStreamVideoWebRtcSink::WebRtcVideoSource
+    : public webrtc::VideoTrackSource {
+ public:
+  WebRtcVideoSource(WebRtcVideoCapturerAdapter* capture_adapter,
+                    bool is_screencast,
+                    rtc::Optional<bool> needs_denoising)
+      : VideoTrackSource(capture_adapter, false),
+        capture_adapter_(capture_adapter),
+        is_screencast_(is_screencast),
+        needs_denoising_(needs_denoising) {}
+
+  WebRtcVideoCapturerAdapter* capture_adapter() const {
+    return capture_adapter_.get();
+  }
+
+  bool is_screencast() const override { return is_screencast_; }
+  rtc::Optional<bool> needs_denoising() const override {
+    return needs_denoising_;
+  }
+
+ private:
+  std::unique_ptr<WebRtcVideoCapturerAdapter> const capture_adapter_;
+  const bool is_screencast_;
+  const rtc::Optional<bool> needs_denoising_;
+};
 
 namespace {
 
-bool ConstraintKeyExists(const blink::WebMediaConstraints& constraints,
-                         const blink::WebString& name) {
-  blink::WebString value_str;
-  return constraints.getMandatoryConstraintValue(name, value_str) ||
-      constraints.getOptionalConstraintValue(name, value_str);
+// The default number of microseconds that should elapse since the last video
+// frame was received, before requesting a refresh frame.
+const int64_t kDefaultRefreshIntervalMicros =
+    base::Time::kMicrosecondsPerSecond;
+
+// A lower-bound for the refresh interval.
+const int64_t kLowerBoundRefreshIntervalMicros =
+    base::Time::kMicrosecondsPerSecond / media::limits::kMaxFramesPerSecond;
+
+webrtc::VideoTrackInterface::ContentHint ContentHintTypeToWebRtcContentHint(
+    blink::WebMediaStreamTrack::ContentHintType content_hint) {
+  switch (content_hint) {
+    case blink::WebMediaStreamTrack::ContentHintType::None:
+      return webrtc::VideoTrackInterface::ContentHint::kNone;
+    case blink::WebMediaStreamTrack::ContentHintType::AudioSpeech:
+    case blink::WebMediaStreamTrack::ContentHintType::AudioMusic:
+      NOTREACHED();
+      break;
+    case blink::WebMediaStreamTrack::ContentHintType::VideoMotion:
+      return webrtc::VideoTrackInterface::ContentHint::kFluid;
+    case blink::WebMediaStreamTrack::ContentHintType::VideoDetail:
+      return webrtc::VideoTrackInterface::ContentHint::kDetailed;
+  }
+  NOTREACHED();
+  return webrtc::VideoTrackInterface::ContentHint::kNone;
 }
 
-}  // anonymouse namespace
-
-namespace content {
+}  // namespace
 
 // Simple help class used for receiving video frames on the IO-thread from a
 // MediaStreamVideoTrack and forward the frames to a WebRtcVideoCapturerAdapter
@@ -33,11 +86,11 @@ namespace content {
 class MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter
     : public base::RefCountedThreadSafe<WebRtcVideoSourceAdapter> {
  public:
-  WebRtcVideoSourceAdapter(
-      const scoped_refptr<base::SingleThreadTaskRunner>&
-          libjingle_worker_thread,
-      const scoped_refptr<webrtc::VideoSourceInterface>& source,
-      WebRtcVideoCapturerAdapter* capture_adapter);
+  WebRtcVideoSourceAdapter(const scoped_refptr<base::SingleThreadTaskRunner>&
+                               libjingle_worker_thread,
+                           const scoped_refptr<WebRtcVideoSource>& source,
+                           base::TimeDelta refresh_interval,
+                           const base::Closure& refresh_callback);
 
   // MediaStreamVideoWebRtcSink can be destroyed on the main render thread or
   // libjingles worker thread since it posts video frames on that thread. But
@@ -47,14 +100,26 @@ class MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter
   // destroyed.
   void ReleaseSourceOnMainThread();
 
+  void SetContentHint(blink::WebMediaStreamTrack::ContentHintType content_hint);
+
   void OnVideoFrameOnIO(const scoped_refptr<media::VideoFrame>& frame,
                         base::TimeTicks estimated_capture_time);
 
  private:
+  friend class base::RefCountedThreadSafe<WebRtcVideoSourceAdapter>;
+
   void OnVideoFrameOnWorkerThread(
       const scoped_refptr<media::VideoFrame>& frame);
-  friend class base::RefCountedThreadSafe<WebRtcVideoSourceAdapter>;
+
+  void SetContentHintOnWorkerThread(
+      blink::WebMediaStreamTrack::ContentHintType content_hint);
+
   virtual ~WebRtcVideoSourceAdapter();
+
+  // Called whenever a video frame was just delivered on the IO thread. This
+  // restarts the delay period before the |refresh_timer_| will fire the next
+  // time.
+  void ResetRefreshTimerOnMainThread();
 
   scoped_refptr<base::SingleThreadTaskRunner> render_thread_task_runner_;
 
@@ -67,7 +132,7 @@ class MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter
   // IO-thread.
   scoped_refptr<base::SingleThreadTaskRunner> libjingle_worker_thread_;
 
-  scoped_refptr<webrtc::VideoSourceInterface> video_source_;
+  scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_;
 
   // Used to protect |capture_adapter_|. It is taken by libjingle's worker
   // thread for each video frame that is delivered but only taken on the
@@ -76,17 +141,37 @@ class MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter
   base::Lock capture_adapter_stop_lock_;
   // |capture_adapter_| is owned by |video_source_|
   WebRtcVideoCapturerAdapter* capture_adapter_;
+
+  // Requests a refresh frame at regular intervals. The delay on this timer is
+  // reset each time a frame is received so that it will not fire for at least
+  // an additional period. This means refresh frames will only be requested when
+  // the source has halted delivery (e.g., a screen capturer stops sending
+  // frames because the screen is not being updated).
+  //
+  // This mechanism solves a number of problems. First, it will ensure that
+  // remote clients that join a distributed session receive a first video frame
+  // in a timely manner. Second, it will allow WebRTC's internal bandwidth
+  // estimation logic to maintain a more optimal state, since sending a video
+  // frame will "prime it." Third, it allows lossy encoders to clean up
+  // artifacts in a still image.  http://crbug.com/486274
+  base::RepeatingTimer refresh_timer_;
 };
 
 MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::WebRtcVideoSourceAdapter(
     const scoped_refptr<base::SingleThreadTaskRunner>& libjingle_worker_thread,
-    const scoped_refptr<webrtc::VideoSourceInterface>& source,
-    WebRtcVideoCapturerAdapter* capture_adapter)
+    const scoped_refptr<WebRtcVideoSource>& source,
+    base::TimeDelta refresh_interval,
+    const base::Closure& refresh_callback)
     : render_thread_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       libjingle_worker_thread_(libjingle_worker_thread),
       video_source_(source),
-      capture_adapter_(capture_adapter) {
+      capture_adapter_(source->capture_adapter()) {
   io_thread_checker_.DetachFromThread();
+  if (!refresh_interval.is_zero()) {
+    VLOG(1) << "Starting frame refresh timer with interval "
+            << refresh_interval.InMillisecondsF() << " ms.";
+    refresh_timer_.Start(FROM_HERE, refresh_interval, refresh_callback);
+  }
 }
 
 MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
@@ -101,7 +186,14 @@ MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
 }
 
 void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
-ReleaseSourceOnMainThread() {
+    ResetRefreshTimerOnMainThread() {
+  DCHECK(render_thread_checker_.CalledOnValidThread());
+  if (refresh_timer_.IsRunning())
+    refresh_timer_.Reset();
+}
+
+void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
+    ReleaseSourceOnMainThread() {
   DCHECK(render_thread_checker_.CalledOnValidThread());
   // Since frames are posted to the worker thread, this object might be deleted
   // on that thread. However, since |video_source_| was created on the render
@@ -112,10 +204,32 @@ ReleaseSourceOnMainThread() {
   video_source_ = NULL;
 }
 
+void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::SetContentHint(
+    blink::WebMediaStreamTrack::ContentHintType content_hint) {
+  DCHECK(render_thread_checker_.CalledOnValidThread());
+  libjingle_worker_thread_->PostTask(
+      FROM_HERE,
+      base::Bind(&WebRtcVideoSourceAdapter::SetContentHintOnWorkerThread, this,
+                 content_hint));
+}
+
+void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
+    SetContentHintOnWorkerThread(
+        blink::WebMediaStreamTrack::ContentHintType content_hint) {
+  DCHECK(libjingle_worker_thread_->BelongsToCurrentThread());
+  base::AutoLock auto_lock(capture_adapter_stop_lock_);
+  if (capture_adapter_)
+    capture_adapter_->SetContentHint(content_hint);
+}
+
 void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::OnVideoFrameOnIO(
     const scoped_refptr<media::VideoFrame>& frame,
     base::TimeTicks estimated_capture_time) {
   DCHECK(io_thread_checker_.CalledOnValidThread());
+  render_thread_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&WebRtcVideoSourceAdapter::ResetRefreshTimerOnMainThread,
+                 this));
   libjingle_worker_thread_->PostTask(
       FROM_HERE,
       base::Bind(&WebRtcVideoSourceAdapter::OnVideoFrameOnWorkerThread,
@@ -134,34 +248,93 @@ void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
 MediaStreamVideoWebRtcSink::MediaStreamVideoWebRtcSink(
     const blink::WebMediaStreamTrack& track,
     PeerConnectionDependencyFactory* factory)
-    : web_track_(track) {
+    : weak_factory_(this) {
+  DCHECK(MediaStreamVideoTrack::GetVideoTrack(track));
   const blink::WebMediaConstraints& constraints =
       MediaStreamVideoTrack::GetVideoTrack(track)->constraints();
 
-  bool is_screencast = ConstraintKeyExists(
-      constraints, base::UTF8ToUTF16(kMediaStreamSource));
-  WebRtcVideoCapturerAdapter* capture_adapter =
-      factory->CreateVideoCapturer(is_screencast);
+  // Check for presence of mediaStreamSource constraint. The value is ignored.
+  std::string value;
+  bool is_screencast = GetConstraintValueAsString(
+      constraints, &blink::WebMediaTrackConstraintSet::mediaStreamSource,
+      &value);
 
-  // |video_source| owns |capture_adapter|
-  scoped_refptr<webrtc::VideoSourceInterface> video_source(
-      factory->CreateVideoSource(capture_adapter,
-                                 track.source().constraints()));
+  // Extract denoising preference, if no value is set this currently falls back
+  // to a codec-specific default inside webrtc, hence the tri-state of {on, off
+  // unset}.
+  // TODO(pbos): Add tests that make sure that googNoiseReduction has properly
+  // propagated from getUserMedia down to a VideoTrackSource.
+  rtc::Optional<bool> needs_denoising;
+  bool denoising_value;
+  if (GetConstraintValueAsBoolean(
+          constraints, &blink::WebMediaTrackConstraintSet::googNoiseReduction,
+          &denoising_value)) {
+    needs_denoising = rtc::Optional<bool>(denoising_value);
+  }
 
-  video_track_ = factory->CreateLocalVideoTrack(web_track_.id().utf8(),
-                                                video_source.get());
+  // Enable automatic frame refreshes for the screen capture sources, which will
+  // stop producing frames whenever screen content is not changing. Check the
+  // frameRate constraint to determine the rate of refreshes. If a minimum
+  // frameRate is provided, use that. Otherwise, use the maximum frameRate if it
+  // happens to be less than the default.
+  base::TimeDelta refresh_interval = base::TimeDelta::FromMicroseconds(0);
+  if (is_screencast) {
+    // Start with the default refresh interval, and refine based on constraints.
+    refresh_interval =
+        base::TimeDelta::FromMicroseconds(kDefaultRefreshIntervalMicros);
+    double value = 0.0;
+    if (GetConstraintMinAsDouble(
+            constraints, &blink::WebMediaTrackConstraintSet::frameRate,
+            &value) &&
+        value > 0.0) {
+      refresh_interval =
+          base::TimeDelta::FromMicroseconds(base::saturated_cast<int64_t>(
+              base::Time::kMicrosecondsPerSecond / value));
+    }
+    if (GetConstraintMaxAsDouble(
+            constraints, &blink::WebMediaTrackConstraintSet::frameRate,
+            &value) &&
+        value > 0.0) {
+      const base::TimeDelta alternate_refresh_interval =
+          base::TimeDelta::FromMicroseconds(base::saturated_cast<int64_t>(
+              base::Time::kMicrosecondsPerSecond / value));
+      refresh_interval = std::max(refresh_interval, alternate_refresh_interval);
+    }
+    if (refresh_interval.InMicroseconds() < kLowerBoundRefreshIntervalMicros) {
+      refresh_interval =
+          base::TimeDelta::FromMicroseconds(kLowerBoundRefreshIntervalMicros);
+    }
+  }
 
-  video_track_->set_enabled(web_track_.isEnabled());
+  // TODO(pbos): Consolidate WebRtcVideoCapturerAdapter into WebRtcVideoSource
+  // by removing the need for and dependency on a cricket::VideoCapturer.
+  video_source_ = scoped_refptr<WebRtcVideoSource>(
+      new rtc::RefCountedObject<WebRtcVideoSource>(
+          new WebRtcVideoCapturerAdapter(is_screencast, track.contentHint()),
+          is_screencast, needs_denoising));
+
+  // TODO(pbos): Consolidate the local video track with the source proxy and
+  // move into PeerConnectionDependencyFactory. This now separately holds on a
+  // reference to the proxy object because
+  // PeerConnectionFactory::CreateVideoTrack doesn't do reference counting.
+  video_source_proxy_ =
+      factory->CreateVideoTrackSourceProxy(video_source_.get());
+  video_track_ = factory->CreateLocalVideoTrack(track.id().utf8(),
+                                                video_source_proxy_.get());
+
+  video_track_->set_content_hint(
+      ContentHintTypeToWebRtcContentHint(track.contentHint()));
+  video_track_->set_enabled(track.isEnabled());
 
   source_adapter_ = new WebRtcVideoSourceAdapter(
-      factory->GetWebRtcWorkerThread(),
-      video_source,
-      capture_adapter);
+      factory->GetWebRtcWorkerThread(), video_source_.get(), refresh_interval,
+      base::Bind(&MediaStreamVideoWebRtcSink::RequestRefreshFrame,
+                 weak_factory_.GetWeakPtr()));
 
-  AddToVideoTrack(
-      this,
+  MediaStreamVideoSink::ConnectToTrack(
+      track,
       base::Bind(&WebRtcVideoSourceAdapter::OnVideoFrameOnIO, source_adapter_),
-      web_track_);
+      false);
 
   DVLOG(3) << "MediaStreamVideoWebRtcSink ctor() : is_screencast "
            << is_screencast;
@@ -170,13 +343,32 @@ MediaStreamVideoWebRtcSink::MediaStreamVideoWebRtcSink(
 MediaStreamVideoWebRtcSink::~MediaStreamVideoWebRtcSink() {
   DCHECK(thread_checker_.CalledOnValidThread());
   DVLOG(3) << "MediaStreamVideoWebRtcSink dtor().";
-  RemoveFromVideoTrack(this, web_track_);
+  weak_factory_.InvalidateWeakPtrs();
+  MediaStreamVideoSink::DisconnectFromTrack();
   source_adapter_->ReleaseSourceOnMainThread();
 }
 
 void MediaStreamVideoWebRtcSink::OnEnabledChanged(bool enabled) {
   DCHECK(thread_checker_.CalledOnValidThread());
   video_track_->set_enabled(enabled);
+}
+
+void MediaStreamVideoWebRtcSink::OnContentHintChanged(
+    blink::WebMediaStreamTrack::ContentHintType content_hint) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  source_adapter_->SetContentHint(content_hint);
+  video_track_->set_content_hint(
+      ContentHintTypeToWebRtcContentHint(content_hint));
+}
+
+void MediaStreamVideoWebRtcSink::RequestRefreshFrame() {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  content::RequestRefreshFrameFromVideoTrack(connected_track());
+}
+
+rtc::Optional<bool> MediaStreamVideoWebRtcSink::SourceNeedsDenoisingForTesting()
+    const {
+  return video_source_->needs_denoising();
 }
 
 }  // namespace content

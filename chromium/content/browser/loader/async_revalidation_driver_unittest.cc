@@ -13,7 +13,9 @@
 #include "base/callback.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/test_browser_thread_bundle.h"
@@ -63,8 +65,8 @@ class ResourceThrottleStub : public ResourceThrottle {
 // There are multiple layers of boilerplate needed to use a URLRequestTestJob
 // subclass.  Subclasses of AsyncRevalidationDriverTest can use
 // BindCreateProtocolHandlerCallback() to bypass most of that boilerplate.
-using CreateProtocolHandlerCallback =
-    base::Callback<scoped_ptr<net::URLRequestJobFactory::ProtocolHandler>()>;
+using CreateProtocolHandlerCallback = base::Callback<
+    std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>()>;
 
 template <typename T>
 CreateProtocolHandlerCallback BindCreateProtocolHandlerCallback() {
@@ -75,8 +77,9 @@ CreateProtocolHandlerCallback BindCreateProtocolHandlerCallback() {
   class TemplatedProtocolHandler
       : public net::URLRequestJobFactory::ProtocolHandler {
    public:
-    static scoped_ptr<net::URLRequestJobFactory::ProtocolHandler> Create() {
-      return make_scoped_ptr(new TemplatedProtocolHandler());
+    static std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>
+    Create() {
+      return base::MakeUnique<TemplatedProtocolHandler>();
     }
 
     // URLRequestJobFactory::ProtocolHandler implementation:
@@ -132,14 +135,15 @@ class AsyncRevalidationDriverTest : public testing::Test {
   }
 
   void SetUpAsyncRevalidationDriverWithRequestToUrl(const GURL& url) {
-    scoped_ptr<net::URLRequest> request(test_url_request_context_.CreateRequest(
-        url, net::DEFAULT_PRIORITY, nullptr /* delegate */));
+    std::unique_ptr<net::URLRequest> request(
+        test_url_request_context_.CreateRequest(url, net::DEFAULT_PRIORITY,
+                                                nullptr /* delegate */));
     raw_ptr_request_ = request.get();
     raw_ptr_resource_throttle_ = new ResourceThrottleStub();
     // This use of base::Unretained() is safe because |driver_|, and the closure
     // passed to it, will be destroyed before this object is.
     driver_.reset(new AsyncRevalidationDriver(
-        std::move(request), make_scoped_ptr(raw_ptr_resource_throttle_),
+        std::move(request), base::WrapUnique(raw_ptr_resource_throttle_),
         base::Bind(&AsyncRevalidationDriverTest::OnAsyncRevalidationComplete,
                    base::Unretained(this))));
   }
@@ -170,7 +174,7 @@ class AsyncRevalidationDriverTest : public testing::Test {
   // The AsyncRevalidationDriver owns the URLRequest and the ResourceThrottle.
   ResourceThrottleStub* raw_ptr_resource_throttle_;
   net::URLRequest* raw_ptr_request_;
-  scoped_ptr<AsyncRevalidationDriver> driver_;
+  std::unique_ptr<AsyncRevalidationDriver> driver_;
   bool async_revalidation_complete_called_ = false;
 };
 
@@ -198,8 +202,9 @@ TEST_F(AsyncRevalidationDriverTest, ResumeDeferredRequestWorks) {
   driver_->StartRequest();
   base::RunLoop().RunUntilIdle();
 
-  ResourceController* driver_as_resource_controller = driver_.get();
-  driver_as_resource_controller->Resume();
+  ResourceThrottle::Delegate* driver_as_resource_throttle_delegate =
+      driver_.get();
+  driver_as_resource_throttle_delegate->Resume();
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(async_revalidation_complete_called());
 }
@@ -233,7 +238,8 @@ class MockClientCertURLRequestJob : public net::URLRequestTestJob {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::Bind(&MockClientCertURLRequestJob::NotifyCertificateRequested,
-                   weak_factory_.GetWeakPtr(), cert_request_info));
+                   weak_factory_.GetWeakPtr(),
+                   base::RetainedRef(cert_request_info)));
   }
 
   void ContinueWithCertificate(
@@ -276,7 +282,7 @@ class ScopedDontSelectCertificateBrowserClient
   void SelectClientCertificate(
       WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
-      scoped_ptr<ClientCertificateDelegate> delegate) override {
+      std::unique_ptr<ClientCertificateDelegate> delegate) override {
     ADD_FAILURE() << "SelectClientCertificate was called.";
   }
 

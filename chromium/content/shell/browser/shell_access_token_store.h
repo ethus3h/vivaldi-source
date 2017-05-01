@@ -7,14 +7,14 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "content/public/browser/access_token_store.h"
+#include "device/geolocation/access_token_store.h"
 #include "net/url_request/url_request_context_getter.h"
 
 namespace content {
 class ShellBrowserContext;
 
 // Dummy access token store used to initialise the network location provider.
-class ShellAccessTokenStore : public content::AccessTokenStore {
+class ShellAccessTokenStore : public device::AccessTokenStore {
  public:
   explicit ShellAccessTokenStore(
       content::ShellBrowserContext* shell_browser_context);
@@ -24,10 +24,10 @@ class ShellAccessTokenStore : public content::AccessTokenStore {
 
   void GetRequestContextOnUIThread(
       content::ShellBrowserContext* shell_browser_context);
-  void RespondOnOriginatingThread(const LoadAccessTokensCallbackType& callback);
+  void RespondOnOriginatingThread(const LoadAccessTokensCallback& callback);
 
   // AccessTokenStore
-  void LoadAccessTokens(const LoadAccessTokensCallbackType& callback) override;
+  void LoadAccessTokens(const LoadAccessTokensCallback& callback) override;
 
   void SaveAccessToken(const GURL& server_url,
                        const base::string16& access_token) override;

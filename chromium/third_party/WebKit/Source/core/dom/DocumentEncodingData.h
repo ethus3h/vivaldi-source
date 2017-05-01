@@ -39,38 +39,34 @@ namespace blink {
 class TextResourceDecoder;
 
 class DocumentEncodingData {
-    DISALLOW_NEW();
-public:
-    DocumentEncodingData();
-    explicit DocumentEncodingData(const TextResourceDecoder&);
+  DISALLOW_NEW();
 
-    const WTF::TextEncoding& encoding() const { return m_encoding; }
-    void setEncoding(const WTF::TextEncoding&);
-    bool wasDetectedHeuristically() const { return m_wasDetectedHeuristically; }
-    bool sawDecodingError() const { return m_sawDecodingError; }
-    bool attemptedToDetermineEncodingFromContentSniffing() const { return m_attemptedToDetermineEncodingFromContentSniffing; }
-    bool encodingWasDetectedFromContentSniffing() const { return m_encodingWasDetectedFromContentSniffing; }
+ public:
+  DocumentEncodingData();
+  explicit DocumentEncodingData(const TextResourceDecoder&);
 
-private:
-    WTF::TextEncoding m_encoding;
-    bool m_wasDetectedHeuristically;
-    bool m_attemptedToDetermineEncodingFromContentSniffing;
-    bool m_encodingWasDetectedFromContentSniffing;
-    bool m_sawDecodingError;
+  const WTF::TextEncoding& encoding() const { return m_encoding; }
+  void setEncoding(const WTF::TextEncoding&);
+  bool wasDetectedHeuristically() const { return m_wasDetectedHeuristically; }
+  bool sawDecodingError() const { return m_sawDecodingError; }
+
+ private:
+  WTF::TextEncoding m_encoding;
+  bool m_wasDetectedHeuristically;
+  bool m_sawDecodingError;
 };
 
-template<> struct CrossThreadCopierBase<false, false, false, DocumentEncodingData> : public CrossThreadCopierPassThrough<DocumentEncodingData> {
-};
+template <>
+struct CrossThreadCopier<DocumentEncodingData>
+    : public CrossThreadCopierPassThrough<DocumentEncodingData> {};
 
-inline bool operator!=(const DocumentEncodingData& a, const DocumentEncodingData& b)
-{
-    return a.encoding() != b.encoding()
-        || a.wasDetectedHeuristically() != b.wasDetectedHeuristically()
-        || a.attemptedToDetermineEncodingFromContentSniffing() != b.attemptedToDetermineEncodingFromContentSniffing()
-        || a.encodingWasDetectedFromContentSniffing() != b.encodingWasDetectedFromContentSniffing()
-        || a.sawDecodingError() != b.sawDecodingError();
+inline bool operator!=(const DocumentEncodingData& a,
+                       const DocumentEncodingData& b) {
+  return a.encoding() != b.encoding() ||
+         a.wasDetectedHeuristically() != b.wasDetectedHeuristically() ||
+         a.sawDecodingError() != b.sawDecodingError();
 }
 
-} // namespace blink
+}  // namespace blink
 
-#endif // DocumentEncodingData_h
+#endif  // DocumentEncodingData_h

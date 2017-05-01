@@ -32,15 +32,16 @@ class ImageWriterUtilityTest : public testing::Test {
  protected:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    ASSERT_TRUE(base::CreateTemporaryFileInDir(temp_dir_.path(), &image_path_));
     ASSERT_TRUE(
-        base::CreateTemporaryFileInDir(temp_dir_.path(), &device_path_));
+        base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &image_path_));
+    ASSERT_TRUE(
+        base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &device_path_));
   }
 
   void TearDown() override {}
 
   void FillFile(const base::FilePath& path, int pattern) {
-    scoped_ptr<char[]> buffer(new char[kTestFileSize]);
+    std::unique_ptr<char[]> buffer(new char[kTestFileSize]);
     memset(buffer.get(), pattern, kTestFileSize);
 
     ASSERT_TRUE(base::WriteFile(path, buffer.get(), kTestFileSize));

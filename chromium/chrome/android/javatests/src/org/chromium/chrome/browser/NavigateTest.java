@@ -4,17 +4,20 @@
 
 package org.chromium.chrome.browser;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_TABLET;
-
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.Smoke;
+import android.content.pm.ActivityInfo;
+import android.support.test.filters.MediumTest;
 import android.text.TextUtils;
+import android.util.Base64;
 import android.view.KeyEvent;
+
+import junit.framework.Assert;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
@@ -25,9 +28,9 @@ import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.test.ChromeTabbedActivityTestBase;
+import org.chromium.chrome.test.util.ChromeRestriction;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
-import org.chromium.chrome.test.util.TestHttpServerClient;
 import org.chromium.chrome.test.util.browser.TabLoadObserver;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
@@ -35,9 +38,9 @@ import org.chromium.content.browser.test.util.DOMUtils;
 import org.chromium.content.browser.test.util.JavaScriptUtils;
 import org.chromium.content.browser.test.util.KeyUtils;
 import org.chromium.content.browser.test.util.UiUtils;
+import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.net.test.util.TestWebServer;
 
-import java.net.URLEncoder;
 import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -51,18 +54,41 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
     private static final String HTTP_SCHEME = "http://";
     private static final String NEW_TAB_PAGE = "chrome-native://newtab/";
 
+    private EmbeddedTestServer mTestServer;
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        mTestServer = EmbeddedTestServer.createAndStartServer(getInstrumentation().getContext());
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        mTestServer.stopAndDestroyServer();
+        super.tearDown();
+    }
+
     private void navigateAndObserve(final String startUrl, final String endUrl)
             throws Exception {
         new TabLoadObserver(getActivity().getActivityTab()).fullyLoadUrl(startUrl);
 
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+        CriteriaHelper.pollUiThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 final UrlBar urlBar = (UrlBar) getActivity().findViewById(R.id.url_bar);
                 assertNotNull("urlBar is null", urlBar);
 
-                return TextUtils.equals(expectedLocation(endUrl), urlBar.getText().toString())
-                        && TextUtils.equals(endUrl, getActivity().getActivityTab().getUrl());
+                if (!TextUtils.equals(expectedLocation(endUrl), urlBar.getText().toString())) {
+                    updateFailureReason(Assert.format(
+                            "Url bar text", expectedLocation(endUrl), urlBar.getText().toString()));
+                    return false;
+                }
+                if (!TextUtils.equals(endUrl, getActivity().getActivityTab().getUrl())) {
+                    updateFailureReason(Assert.format(
+                            "Tab url", endUrl, getActivity().getActivityTab().getUrl()));
+                    return false;
+                }
+                return true;
             }
         });
     }
@@ -113,23 +139,24 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
     /**
      * Verify Selection on the Location Bar.
      */
-    @Smoke
     @MediumTest
     @Feature({"Navigation", "Main"})
+    @RetryOnFailure
     public void testNavigate() throws Exception {
-        String url = TestHttpServerClient.getUrl("chrome/test/data/android/navigate/simple.html");
+        String url = mTestServer.getURL("/chrome/test/data/android/navigate/simple.html");
         String result = typeInOmniboxAndNavigate(url, "Simple");
         assertEquals(expectedLocation(url), result);
     }
 
-    @Restriction(RESTRICTION_TYPE_TABLET)
+    @DisabledTest(message = "crbug.com/516018")
+    @Restriction(ChromeRestriction.RESTRICTION_TYPE_TABLET)
     @MediumTest
     @Feature({"Navigation"})
     public void testNavigateMany() throws Exception {
         final String[] urls = {
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/one.html"),
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/two.html"),
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/three.html")
+                mTestServer.getURL("/chrome/test/data/android/navigate/one.html"),
+                mTestServer.getURL("/chrome/test/data/android/navigate/two.html"),
+                mTestServer.getURL("/chrome/test/data/android/navigate/three.html")
         };
         final String[] titles = {"One", "Two", "Three"};
         final int repeats = 3;
@@ -147,10 +174,10 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
      */
     @MediumTest
     @Feature({"Navigation"})
+    @RetryOnFailure
     public void testNavigateLandscape() throws Exception {
-        // '0' is Landscape Mode. '1' is Portrait.
-        getActivity().setRequestedOrientation(0);
-        String url = TestHttpServerClient.getUrl("chrome/test/data/android/navigate/simple.html");
+        getActivity().setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        String url = mTestServer.getURL("/chrome/test/data/android/navigate/simple.html");
         String result = typeInOmniboxAndNavigate(url, "Simple");
         assertEquals(expectedLocation(url), result);
     }
@@ -160,9 +187,10 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
      */
     @MediumTest
     @Feature({"Navigation"})
+    @RetryOnFailure
     public void testOpenAndNavigate() throws Exception {
         final String url =
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/simple.html");
+                mTestServer.getURL("/chrome/test/data/android/navigate/simple.html");
         navigateAndObserve(url, url);
 
         final int tabCount = getActivity().getCurrentTabModel().getCount();
@@ -180,9 +208,10 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
      */
     @MediumTest
     @Feature({"Navigation"})
+    @RetryOnFailure
     public void testOpenLink() throws Exception {
-        String url1 = TestHttpServerClient.getUrl("chrome/test/data/android/google.html");
-        String url2 = TestHttpServerClient.getUrl("chrome/test/data/android/about.html");
+        String url1 = mTestServer.getURL("/chrome/test/data/android/google.html");
+        String url2 = mTestServer.getURL("/chrome/test/data/android/about.html");
 
         navigateAndObserve(url1, url1);
         assertWaitForPageScaleFactorMatch(0.5f);
@@ -199,9 +228,10 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
      */
     @MediumTest
     @Feature({"Navigation"})
+    @RetryOnFailure
     public void testTabObserverOnPageLoadStarted() throws Exception {
-        final String url1 = TestHttpServerClient.getUrl("chrome/test/data/android/google.html");
-        final String url2 = TestHttpServerClient.getUrl("chrome/test/data/android/about.html");
+        final String url1 = mTestServer.getURL("/chrome/test/data/android/google.html");
+        final String url2 = mTestServer.getURL("/chrome/test/data/android/about.html");
 
         navigateAndObserve(url1, url1);
         assertWaitForPageScaleFactorMatch(0.5f);
@@ -229,17 +259,18 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
     @Feature({"Navigation"})
     public void testNavigateRedirect() throws Exception {
         final String initialUrl =
-                TestHttpServerClient.getUrl("chrome/test/data/android/redirect/about.html");
+                mTestServer.getURL("/chrome/test/data/android/redirect/about.html");
         final String redirectedUrl =
-                TestHttpServerClient.getUrl("chrome/test/data/android/redirect/one.html");
+                mTestServer.getURL("/chrome/test/data/android/redirect/one.html");
         typeInOmniboxAndNavigate(initialUrl, null);
 
-        CriteriaHelper.pollForCriteria(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return getActivity().getActivityTab().getUrl().equals(redirectedUrl);
-            }
-        });
+        CriteriaHelper.pollInstrumentationThread(
+                Criteria.equals(redirectedUrl, new Callable<String>() {
+                    @Override
+                    public String call() {
+                        return getActivity().getActivityTab().getUrl();
+                    }
+                }));
     }
 
     /**
@@ -252,24 +283,26 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
         getInstrumentation().waitForIdleSync();
         assertEquals(NEW_TAB_PAGE, getActivity().getActivityTab().getUrl());
 
-        final String redirectionUrl =
-                TestHttpServerClient.getUrl("chrome/test/data/android/redirect/about.html");
-        final String initialUrl = TestHttpServerClient.getUrl(
-                "chrome/test/data/android/redirect/js_redirect.cgi?location="
-                + URLEncoder.encode("intent://non_existent/#Intent;scheme=non_existent;"
-                + "S.browser_fallback_url=" + redirectionUrl + ";end",
-                "UTF-8"));
+        final String fallbackUrl =
+                mTestServer.getURL("/chrome/test/data/android/redirect/about.html");
+        final String redirectUrl = "intent://non_existent/#Intent;scheme=non_existent;"
+                + "S.browser_fallback_url=" + fallbackUrl + ";end";
+        final String initialUrl = mTestServer.getURL(
+                "/chrome/test/data/android/redirect/js_redirect.html"
+                + "?replace_text="
+                + Base64.encodeToString("PARAM_URL".getBytes("utf-8"), Base64.URL_SAFE) + ":"
+                + Base64.encodeToString(redirectUrl.getBytes("utf-8"), Base64.URL_SAFE));
         final String targetUrl =
-                TestHttpServerClient.getUrl("chrome/test/data/android/redirect/one.html");
+                mTestServer.getURL("/chrome/test/data/android/redirect/one.html");
         typeInOmniboxAndNavigate(initialUrl, null);
 
         // Now intent fallback should be triggered assuming 'non_existent' scheme cannot be handled.
-        CriteriaHelper.pollForCriteria(new Criteria() {
+        CriteriaHelper.pollInstrumentationThread(Criteria.equals(targetUrl, new Callable<String>() {
             @Override
-            public boolean isSatisfied() {
-                return getActivity().getActivityTab().getUrl().equals(targetUrl);
+            public String call() {
+                return getActivity().getActivityTab().getUrl();
             }
-        });
+        }));
 
         // Check if Java redirections were removed from the history.
         // Note that if we try to go back in the test: NavigateToEntry() is called, but
@@ -287,14 +320,14 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
     /**
      * Test back and forward buttons.
      */
-    @Restriction(RESTRICTION_TYPE_TABLET)
+    @Restriction(ChromeRestriction.RESTRICTION_TYPE_TABLET)
     @MediumTest
     @Feature({"Navigation"})
     public void testNavigateBackAndForwardButtons() throws Exception {
         final String[] urls = {
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/one.html"),
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/two.html"),
-                TestHttpServerClient.getUrl("chrome/test/data/android/navigate/three.html")
+                mTestServer.getURL("/chrome/test/data/android/navigate/one.html"),
+                mTestServer.getURL("/chrome/test/data/android/navigate/two.html"),
+                mTestServer.getURL("/chrome/test/data/android/navigate/three.html")
         };
 
         for (String url : urls) {
@@ -335,6 +368,7 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
     @MediumTest
     @Feature({"Navigation"})
     public void testWindowOpenUrlSpoof() throws Exception {
+        // TODO(jbudorick): Convert this from TestWebServer to EmbeddedTestServer.
         TestWebServer webServer = TestWebServer.start();
         try {
             // Make sure that we start with one tab.
@@ -391,12 +425,13 @@ public class NavigateTest extends ChromeTabbedActivityTestBase {
             // Wait for the url to change.
             final Tab tab = TabModelUtils.getCurrentTab(model);
             assertWaitForPageScaleFactorMatch(0.75f);
-            CriteriaHelper.pollForCriteria(new Criteria("Page url didn't change") {
-                @Override
-                public boolean isSatisfied() {
-                    return mockedUrl.equals(getTabUrlOnUIThread(tab));
-                }
-            }, 5000, 50);
+            CriteriaHelper.pollInstrumentationThread(
+                    Criteria.equals(mockedUrl, new Callable<String>() {
+                        @Override
+                        public String call() {
+                            return getTabUrlOnUIThread(tab);
+                        }
+                    }), 5000, 50);
 
             // Make sure that we're showing new content now.
             assertEquals("Still showing spoofed data", "\"Real\"", getTabBodyText(tab));

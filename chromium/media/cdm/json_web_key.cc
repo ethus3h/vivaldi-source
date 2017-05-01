@@ -6,17 +6,19 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/base64url.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
+#include "media/base/content_decryption_module.h"
 
 namespace media {
 
@@ -46,7 +48,7 @@ static std::string ShortenTo64Characters(const std::string& input) {
   return escaped_str.substr(0, 61).append("...");
 }
 
-static scoped_ptr<base::DictionaryValue> CreateJSONDictionary(
+static std::unique_ptr<base::DictionaryValue> CreateJSONDictionary(
     const uint8_t* key,
     int key_length,
     const uint8_t* key_id,
@@ -59,7 +61,7 @@ static scoped_ptr<base::DictionaryValue> CreateJSONDictionary(
       base::StringPiece(reinterpret_cast<const char*>(key_id), key_id_length),
       base::Base64UrlEncodePolicy::OMIT_PADDING, &key_id_string);
 
-  scoped_ptr<base::DictionaryValue> jwk(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> jwk(new base::DictionaryValue());
   jwk->SetString(kKeyTypeTag, kKeyTypeOct);
   jwk->SetString(kKeyTag, key_string);
   jwk->SetString(kKeyIdTag, key_id_string);
@@ -71,9 +73,8 @@ std::string GenerateJWKSet(const uint8_t* key,
                            const uint8_t* key_id,
                            int key_id_length) {
   // Create the JWK, and wrap it into a JWK Set.
-  scoped_ptr<base::ListValue> list(new base::ListValue());
-  list->Append(
-      CreateJSONDictionary(key, key_length, key_id, key_id_length).release());
+  std::unique_ptr<base::ListValue> list(new base::ListValue());
+  list->Append(CreateJSONDictionary(key, key_length, key_id, key_id_length));
   base::DictionaryValue jwk_set;
   jwk_set.Set(kKeysTag, list.release());
 
@@ -85,27 +86,26 @@ std::string GenerateJWKSet(const uint8_t* key,
 }
 
 std::string GenerateJWKSet(const KeyIdAndKeyPairs& keys,
-                           MediaKeys::SessionType session_type) {
-  scoped_ptr<base::ListValue> list(new base::ListValue());
+                           CdmSessionType session_type) {
+  std::unique_ptr<base::ListValue> list(new base::ListValue());
   for (const auto& key_pair : keys) {
     list->Append(CreateJSONDictionary(
-                     reinterpret_cast<const uint8_t*>(key_pair.second.data()),
-                     key_pair.second.length(),
-                     reinterpret_cast<const uint8_t*>(key_pair.first.data()),
-                     key_pair.first.length())
-                     .release());
+        reinterpret_cast<const uint8_t*>(key_pair.second.data()),
+        key_pair.second.length(),
+        reinterpret_cast<const uint8_t*>(key_pair.first.data()),
+        key_pair.first.length()));
   }
 
   base::DictionaryValue jwk_set;
   jwk_set.Set(kKeysTag, list.release());
   switch (session_type) {
-    case MediaKeys::TEMPORARY_SESSION:
+    case CdmSessionType::TEMPORARY_SESSION:
       jwk_set.SetString(kTypeTag, kTemporarySession);
       break;
-    case MediaKeys::PERSISTENT_LICENSE_SESSION:
+    case CdmSessionType::PERSISTENT_LICENSE_SESSION:
       jwk_set.SetString(kTypeTag, kPersistentLicenseSession);
       break;
-    case MediaKeys::PERSISTENT_RELEASE_MESSAGE_SESSION:
+    case CdmSessionType::PERSISTENT_RELEASE_MESSAGE_SESSION:
       jwk_set.SetString(kTypeTag, kPersistentReleaseMessageSession);
       break;
   }
@@ -165,14 +165,14 @@ static bool ConvertJwkToKeyPair(const base::DictionaryValue& jwk,
 
 bool ExtractKeysFromJWKSet(const std::string& jwk_set,
                            KeyIdAndKeyPairs* keys,
-                           MediaKeys::SessionType* session_type) {
+                           CdmSessionType* session_type) {
   if (!base::IsStringASCII(jwk_set)) {
     DVLOG(1) << "Non ASCII JWK Set: " << jwk_set;
     return false;
   }
 
-  scoped_ptr<base::Value> root(base::JSONReader().ReadToValue(jwk_set));
-  if (!root.get() || root->GetType() != base::Value::TYPE_DICTIONARY) {
+  std::unique_ptr<base::Value> root(base::JSONReader().ReadToValue(jwk_set));
+  if (!root.get() || root->GetType() != base::Value::Type::DICTIONARY) {
     DVLOG(1) << "Not valid JSON: " << jwk_set << ", root: " << root.get();
     return false;
   }
@@ -211,16 +211,16 @@ bool ExtractKeysFromJWKSet(const std::string& jwk_set,
   std::string session_type_id;
   if (!dictionary->Get(kTypeTag, &value)) {
     // Not specified, so use the default type.
-    *session_type = MediaKeys::TEMPORARY_SESSION;
+    *session_type = CdmSessionType::TEMPORARY_SESSION;
   } else if (!value->GetAsString(&session_type_id)) {
     DVLOG(1) << "Invalid '" << kTypeTag << "' value";
     return false;
   } else if (session_type_id == kTemporarySession) {
-    *session_type = MediaKeys::TEMPORARY_SESSION;
+    *session_type = CdmSessionType::TEMPORARY_SESSION;
   } else if (session_type_id == kPersistentLicenseSession) {
-    *session_type = MediaKeys::PERSISTENT_LICENSE_SESSION;
+    *session_type = CdmSessionType::PERSISTENT_LICENSE_SESSION;
   } else if (session_type_id == kPersistentReleaseMessageSession) {
-    *session_type = MediaKeys::PERSISTENT_RELEASE_MESSAGE_SESSION;
+    *session_type = CdmSessionType::PERSISTENT_RELEASE_MESSAGE_SESSION;
   } else {
     DVLOG(1) << "Invalid '" << kTypeTag << "' value: " << session_type_id;
     return false;
@@ -240,8 +240,8 @@ bool ExtractKeyIdsFromKeyIdsInitData(const std::string& input,
     return false;
   }
 
-  scoped_ptr<base::Value> root(base::JSONReader().ReadToValue(input));
-  if (!root.get() || root->GetType() != base::Value::TYPE_DICTIONARY) {
+  std::unique_ptr<base::Value> root(base::JSONReader().ReadToValue(input));
+  if (!root.get() || root->GetType() != base::Value::Type::DICTIONARY) {
     error_message->assign("Not valid JSON: ");
     error_message->append(ShortenTo64Characters(input));
     return false;
@@ -299,11 +299,11 @@ bool ExtractKeyIdsFromKeyIdsInitData(const std::string& input,
 }
 
 void CreateLicenseRequest(const KeyIdList& key_ids,
-                          MediaKeys::SessionType session_type,
+                          CdmSessionType session_type,
                           std::vector<uint8_t>* license) {
   // Create the license request.
-  scoped_ptr<base::DictionaryValue> request(new base::DictionaryValue());
-  scoped_ptr<base::ListValue> list(new base::ListValue());
+  std::unique_ptr<base::DictionaryValue> request(new base::DictionaryValue());
+  std::unique_ptr<base::ListValue> list(new base::ListValue());
   for (const auto& key_id : key_ids) {
     std::string key_id_string;
     base::Base64UrlEncode(
@@ -316,13 +316,13 @@ void CreateLicenseRequest(const KeyIdList& key_ids,
   request->Set(kKeyIdsTag, list.release());
 
   switch (session_type) {
-    case MediaKeys::TEMPORARY_SESSION:
+    case CdmSessionType::TEMPORARY_SESSION:
       request->SetString(kTypeTag, kTemporarySession);
       break;
-    case MediaKeys::PERSISTENT_LICENSE_SESSION:
+    case CdmSessionType::PERSISTENT_LICENSE_SESSION:
       request->SetString(kTypeTag, kPersistentLicenseSession);
       break;
-    case MediaKeys::PERSISTENT_RELEASE_MESSAGE_SESSION:
+    case CdmSessionType::PERSISTENT_RELEASE_MESSAGE_SESSION:
       request->SetString(kTypeTag, kPersistentReleaseMessageSession);
       break;
   }
@@ -340,8 +340,9 @@ void CreateLicenseRequest(const KeyIdList& key_ids,
 void CreateKeyIdsInitData(const KeyIdList& key_ids,
                           std::vector<uint8_t>* init_data) {
   // Create the init_data.
-  scoped_ptr<base::DictionaryValue> dictionary(new base::DictionaryValue());
-  scoped_ptr<base::ListValue> list(new base::ListValue());
+  std::unique_ptr<base::DictionaryValue> dictionary(
+      new base::DictionaryValue());
+  std::unique_ptr<base::ListValue> list(new base::ListValue());
   for (const auto& key_id : key_ids) {
     std::string key_id_string;
     base::Base64UrlEncode(
@@ -373,8 +374,9 @@ bool ExtractFirstKeyIdFromLicenseRequest(const std::vector<uint8_t>& license,
     return false;
   }
 
-  scoped_ptr<base::Value> root(base::JSONReader().ReadToValue(license_as_str));
-  if (!root.get() || root->GetType() != base::Value::TYPE_DICTIONARY) {
+  std::unique_ptr<base::Value> root(
+      base::JSONReader().ReadToValue(license_as_str));
+  if (!root.get() || root->GetType() != base::Value::Type::DICTIONARY) {
     DVLOG(1) << "Not valid JSON: " << license_as_str;
     return false;
   }

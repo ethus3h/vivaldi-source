@@ -5,10 +5,10 @@
 #include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler.h"
 
 #include <algorithm>
+#include <memory>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "build/build_config.h"
@@ -43,10 +43,8 @@ const int64_t CloudPolicyRefreshScheduler::kUnmanagedRefreshDelayMs =
     24 * 60 * 60 * 1000;  // 1 day.
 // Delay for periodic refreshes when the invalidations service is available,
 // in milliseconds.
-// TODO(joaodasilva): increase this value once we're confident that the
-// invalidations channel works as expected.
 const int64_t CloudPolicyRefreshScheduler::kWithInvalidationsRefreshDelayMs =
-    3 * 60 * 60 * 1000;  // 3 hours.
+    24 * 60 * 60 * 1000;  // 1 day.
 const int64_t CloudPolicyRefreshScheduler::kInitialErrorRetryDelayMs =
     5 * 60 * 1000;  // 5 minutes.
 const int64_t CloudPolicyRefreshScheduler::kRefreshDelayMinMs =
@@ -81,14 +79,33 @@ CloudPolicyRefreshScheduler::~CloudPolicyRefreshScheduler() {
   net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
 }
 
-void CloudPolicyRefreshScheduler::SetRefreshDelay(int64_t refresh_delay) {
+void CloudPolicyRefreshScheduler::SetDesiredRefreshDelay(
+    int64_t refresh_delay) {
   refresh_delay_ms_ = std::min(std::max(refresh_delay, kRefreshDelayMinMs),
                                kRefreshDelayMaxMs);
   ScheduleRefresh();
 }
 
+int64_t CloudPolicyRefreshScheduler::GetActualRefreshDelay() const {
+  // Returns the refresh delay, possibly modified/lengthened due to the presence
+  // of invalidations (we don't have to poll as often if we have policy
+  // invalidations because policy invalidations provide for timely refreshes.
+  if (invalidations_available_) {
+    // If policy invalidations are available then periodic updates are done at
+    // a much lower rate; otherwise use the |refresh_delay_ms_| value.
+    return std::max(refresh_delay_ms_, kWithInvalidationsRefreshDelayMs);
+  } else {
+    return refresh_delay_ms_;
+  }
+}
+
 void CloudPolicyRefreshScheduler::RefreshSoon() {
-  RefreshNow();
+  // If the client isn't registered, there is nothing to do.
+  if (!client_->is_registered())
+    return;
+
+  is_scheduled_for_soon_ = true;
+  RefreshAfter(0);
 }
 
 void CloudPolicyRefreshScheduler::SetInvalidationServiceAvailability(
@@ -124,7 +141,7 @@ void CloudPolicyRefreshScheduler::OnRegistrationStateChanged(
   error_retry_delay_ms_ = kInitialErrorRetryDelayMs;
 
   // The client might have registered, so trigger an immediate refresh.
-  RefreshNow();
+  RefreshSoon();
 }
 
 void CloudPolicyRefreshScheduler::OnClientError(CloudPolicyClient* client) {
@@ -217,39 +234,35 @@ void CloudPolicyRefreshScheduler::UpdateLastRefreshFromPolicy() {
 #endif
 }
 
-void CloudPolicyRefreshScheduler::RefreshNow() {
-  last_refresh_ = base::Time();
-  ScheduleRefresh();
-}
-
 void CloudPolicyRefreshScheduler::ScheduleRefresh() {
   // If the client isn't registered, there is nothing to do.
   if (!client_->is_registered()) {
-    refresh_callback_.Cancel();
+    CancelRefresh();
     return;
   }
 
-  // If policy invalidations are available then periodic updates are done at
-  // a much lower rate; otherwise use the |refresh_delay_ms_| value.
-  int64_t refresh_delay_ms = invalidations_available_
-                                 ? kWithInvalidationsRefreshDelayMs
-                                 : refresh_delay_ms_;
+  // Ignore the refresh request if there's a request scheduled for soon.
+  if (is_scheduled_for_soon_) {
+    DCHECK(!refresh_callback_.IsCancelled());
+    return;
+  }
 
   // If there is a registration, go by the client's status. That will tell us
   // what the appropriate refresh delay should be.
   switch (client_->status()) {
     case DM_STATUS_SUCCESS:
       if (store_->is_managed())
-        RefreshAfter(refresh_delay_ms);
+        RefreshAfter(GetActualRefreshDelay());
       else
         RefreshAfter(kUnmanagedRefreshDelayMs);
       return;
     case DM_STATUS_SERVICE_ACTIVATION_PENDING:
     case DM_STATUS_SERVICE_POLICY_NOT_FOUND:
-      RefreshAfter(refresh_delay_ms);
+      RefreshAfter(GetActualRefreshDelay());
       return;
     case DM_STATUS_REQUEST_FAILED:
     case DM_STATUS_TEMPORARY_UNAVAILABLE:
+    case DM_STATUS_CANNOT_SIGN_REQUEST:
       RefreshAfter(error_retry_delay_ms_);
       return;
     case DM_STATUS_REQUEST_INVALID:
@@ -266,7 +279,7 @@ void CloudPolicyRefreshScheduler::ScheduleRefresh() {
     case DM_STATUS_SERVICE_DEPROVISIONED:
     case DM_STATUS_SERVICE_DOMAIN_MISMATCH:
       // Need a re-registration, no use in retrying.
-      refresh_callback_.Cancel();
+      CancelRefresh();
       return;
   }
 
@@ -275,6 +288,8 @@ void CloudPolicyRefreshScheduler::ScheduleRefresh() {
 }
 
 void CloudPolicyRefreshScheduler::PerformRefresh() {
+  CancelRefresh();
+
   if (client_->is_registered()) {
     // Update |last_refresh_| so another fetch isn't triggered inadvertently.
     last_refresh_ = base::Time::NowFromSystemTime();
@@ -292,7 +307,6 @@ void CloudPolicyRefreshScheduler::PerformRefresh() {
 
 void CloudPolicyRefreshScheduler::RefreshAfter(int delta_ms) {
   base::TimeDelta delta(base::TimeDelta::FromMilliseconds(delta_ms));
-  refresh_callback_.Cancel();
 
   // Schedule the callback.
   base::TimeDelta delay =
@@ -302,6 +316,11 @@ void CloudPolicyRefreshScheduler::RefreshAfter(int delta_ms) {
       base::Bind(&CloudPolicyRefreshScheduler::PerformRefresh,
                  base::Unretained(this)));
   task_runner_->PostDelayedTask(FROM_HERE, refresh_callback_.callback(), delay);
+}
+
+void CloudPolicyRefreshScheduler::CancelRefresh() {
+  refresh_callback_.Cancel();
+  is_scheduled_for_soon_ = false;
 }
 
 }  // namespace policy

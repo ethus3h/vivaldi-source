@@ -8,6 +8,7 @@
 
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
 
@@ -17,12 +18,13 @@
 using base::IntToString;
 using base::SysCFStringRefToUTF8;
 using std::string;
+using midi::mojom::PortState;
+using midi::mojom::Result;
 
 // NB: System MIDI types are pointer types in 32-bit and integer types in
 // 64-bit. Therefore, the initialization is the simplest one that satisfies both
 // (if possible).
 
-namespace media {
 namespace midi {
 
 namespace {
@@ -86,7 +88,7 @@ MidiPortInfo GetPortInfoFromEndpoint(MIDIEndpointRef endpoint) {
                   << result;
   }
 
-  const MidiPortState state = MIDI_PORT_OPENED;
+  const PortState state = PortState::OPENED;
   return MidiPortInfo(id, manufacturer, name, version, state);
 }
 
@@ -152,7 +154,7 @@ void MidiManagerMac::RunOnClientThread(const base::Closure& closure) {
   if (!client_thread_.IsRunning())
     client_thread_.Start();
 
-  client_thread_.message_loop()->PostTask(FROM_HERE, closure);
+  client_thread_.task_runner()->PostTask(FROM_HERE, closure);
 }
 
 void MidiManagerMac::InitializeCoreMIDI() {
@@ -264,7 +266,7 @@ void MidiManagerMac::ReceiveMidiNotify(const MIDINotification* message) {
               coremidi_input_, endpoint, reinterpret_cast<void*>(endpoint));
         }
       } else {
-        SetInputPortState(it->second, MIDI_PORT_OPENED);
+        SetInputPortState(it->second, PortState::OPENED);
       }
     } else if (notification->childType == kMIDIObjectType_Destination) {
       // Attaching device is an output device.
@@ -277,7 +279,7 @@ void MidiManagerMac::ReceiveMidiNotify(const MIDINotification* message) {
           AddOutputPort(info);
         }
       } else {
-        SetOutputPortState(it - destinations_.begin(), MIDI_PORT_OPENED);
+        SetOutputPortState(it - destinations_.begin(), PortState::OPENED);
       }
     }
   } else if (kMIDIMsgObjectRemoved == message->messageID) {
@@ -290,12 +292,12 @@ void MidiManagerMac::ReceiveMidiNotify(const MIDINotification* message) {
       // Detaching device is an input device.
       auto it = source_map_.find(endpoint);
       if (it != source_map_.end())
-        SetInputPortState(it->second, MIDI_PORT_DISCONNECTED);
+        SetInputPortState(it->second, PortState::DISCONNECTED);
     } else if (notification->childType == kMIDIObjectType_Destination) {
       // Detaching device is an output device.
       auto it = std::find(destinations_.begin(), destinations_.end(), endpoint);
       if (it != destinations_.end())
-        SetOutputPortState(it - destinations_.begin(), MIDI_PORT_DISCONNECTED);
+        SetOutputPortState(it - destinations_.begin(), PortState::DISCONNECTED);
     }
   }
 }
@@ -386,4 +388,3 @@ void MidiManagerMac::SendMidiData(MidiManagerClient* client,
 }
 
 }  // namespace midi
-}  // namespace media

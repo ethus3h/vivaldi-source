@@ -8,7 +8,6 @@
     LegacyTreatAsPartialInterface,
     NoInterfaceObject, // Always used on target of 'implements'
 ] interface NonDocumentTypeChildNode {
-    [PerWorldBindings] readonly attribute Element previousElementSibling;
-    [PerWorldBindings] readonly attribute Element nextElementSibling;
-    [RuntimeEnabled=ShadowDOMV1, ImplementedAs=assignedSlotForBinding] readonly attribute HTMLSlotElement assignedSlot;
+    [PerWorldBindings] readonly attribute Element? previousElementSibling;
+    [PerWorldBindings] readonly attribute Element? nextElementSibling;
 };

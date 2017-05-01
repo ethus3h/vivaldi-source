@@ -7,8 +7,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <linux/android/binder.h>
-
+#include "base/logging.h"
+#include "chromeos/binder/binder_driver_api.h"
 #include "chromeos/binder/local_object.h"
 #include "chromeos/binder/object.h"
 #include "chromeos/binder/remote_object.h"
@@ -26,8 +26,7 @@ size_t AddPadding(size_t n) {
 }  // namespace
 
 TransactionDataReader::TransactionDataReader(const TransactionData& data)
-    : data_(data),
-      reader_(reinterpret_cast<const char*>(data.GetData()),
+    : reader_(reinterpret_cast<const char*>(data.GetData()),
               data.GetDataSize()) {}
 
 TransactionDataReader::~TransactionDataReader() {}
@@ -126,6 +125,15 @@ scoped_refptr<Object> TransactionDataReader::ReadObject(
       return make_scoped_refptr(reinterpret_cast<LocalObject*>(obj.cookie));
   }
   return scoped_refptr<Object>();
+}
+
+bool TransactionDataReader::ReadFileDescriptor(int* fd) {
+  flat_binder_object obj = {};
+  if (!ReadData(&obj, sizeof(obj)) || obj.type != BINDER_TYPE_FD) {
+    return false;
+  }
+  *fd = obj.handle;
+  return true;
 }
 
 }  // namespace binder

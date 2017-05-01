@@ -7,189 +7,173 @@
 
 #include "core/CoreExport.h"
 #include "core/css/CSSPrimitiveValue.h"
-#include "core/css/parser/CSSParserString.h"
 #include "wtf/Allocator.h"
+#include "wtf/text/StringView.h"
 
 namespace blink {
 
 enum CSSParserTokenType {
-    IdentToken = 0,
-    FunctionToken,
-    AtKeywordToken,
-    HashToken,
-    UrlToken,
-    BadUrlToken,
-    DelimiterToken,
-    NumberToken,
-    PercentageToken,
-    DimensionToken,
-    IncludeMatchToken,
-    DashMatchToken,
-    PrefixMatchToken,
-    SuffixMatchToken,
-    SubstringMatchToken,
-    ColumnToken,
-    UnicodeRangeToken,
-    WhitespaceToken,
-    CDOToken,
-    CDCToken,
-    ColonToken,
-    SemicolonToken,
-    CommaToken,
-    LeftParenthesisToken,
-    RightParenthesisToken,
-    LeftBracketToken,
-    RightBracketToken,
-    LeftBraceToken,
-    RightBraceToken,
-    StringToken,
-    BadStringToken,
-    EOFToken,
-    CommentToken,
+  IdentToken = 0,
+  FunctionToken,
+  AtKeywordToken,
+  HashToken,
+  UrlToken,
+  BadUrlToken,
+  DelimiterToken,
+  NumberToken,
+  PercentageToken,
+  DimensionToken,
+  IncludeMatchToken,
+  DashMatchToken,
+  PrefixMatchToken,
+  SuffixMatchToken,
+  SubstringMatchToken,
+  ColumnToken,
+  UnicodeRangeToken,
+  WhitespaceToken,
+  CDOToken,
+  CDCToken,
+  ColonToken,
+  SemicolonToken,
+  CommaToken,
+  LeftParenthesisToken,
+  RightParenthesisToken,
+  LeftBracketToken,
+  RightBracketToken,
+  LeftBraceToken,
+  RightBraceToken,
+  StringToken,
+  BadStringToken,
+  EOFToken,
+  CommentToken,
 };
 
 enum NumericSign {
-    NoSign,
-    PlusSign,
-    MinusSign,
+  NoSign,
+  PlusSign,
+  MinusSign,
 };
 
 enum NumericValueType {
-    IntegerValueType,
-    NumberValueType,
+  IntegerValueType,
+  NumberValueType,
 };
 
 enum HashTokenType {
-    HashTokenId,
-    HashTokenUnrestricted,
+  HashTokenId,
+  HashTokenUnrestricted,
 };
 
 class CORE_EXPORT CSSParserToken {
-    USING_FAST_MALLOC(CSSParserToken);
-public:
-    enum BlockType {
-        NotBlock,
-        BlockStart,
-        BlockEnd,
-    };
+  USING_FAST_MALLOC(CSSParserToken);
 
-    CSSParserToken(CSSParserTokenType, BlockType = NotBlock);
-    CSSParserToken(CSSParserTokenType, CSSParserString, BlockType = NotBlock);
+ public:
+  enum BlockType {
+    NotBlock,
+    BlockStart,
+    BlockEnd,
+  };
 
-    CSSParserToken(CSSParserTokenType, UChar); // for DelimiterToken
-    CSSParserToken(CSSParserTokenType, double, NumericValueType, NumericSign); // for NumberToken
-    CSSParserToken(CSSParserTokenType, UChar32, UChar32); // for UnicodeRangeToken
+  CSSParserToken(CSSParserTokenType, BlockType = NotBlock);
+  CSSParserToken(CSSParserTokenType, StringView, BlockType = NotBlock);
 
-    CSSParserToken(HashTokenType, CSSParserString);
+  CSSParserToken(CSSParserTokenType, UChar);  // for DelimiterToken
+  CSSParserToken(CSSParserTokenType,
+                 double,
+                 NumericValueType,
+                 NumericSign);  // for NumberToken
+  CSSParserToken(CSSParserTokenType,
+                 UChar32,
+                 UChar32);  // for UnicodeRangeToken
 
-    bool operator==(const CSSParserToken& other) const
-    {
-        if (m_type != other.m_type)
-            return false;
-        switch (m_type) {
-        case DelimiterToken:
-            return delimiter() == other.delimiter();
-        case HashToken:
-            if (m_hashTokenType != other.m_hashTokenType)
-                return false;
-            // fallthrough
-        case IdentToken:
-        case FunctionToken:
-        case StringToken:
-        case UrlToken:
-            return m_valueDataCharRaw == other.m_valueDataCharRaw && m_valueLength == other.m_valueLength && m_valueIs8Bit == other.m_valueIs8Bit;
-        case NumberToken:
-            if (m_numericSign != other.m_numericSign)
-                return false;
-            // fallthrough
-        case DimensionToken:
-            if (m_valueDataCharRaw != other.m_valueDataCharRaw || m_valueLength != other.m_valueLength || m_valueIs8Bit != other.m_valueIs8Bit)
-                return false;
-            // fallthrough
-        case PercentageToken:
-            return m_numericValue == other.m_numericValue && m_numericValueType == other.m_numericValueType;
-        case UnicodeRangeToken:
-            return m_unicodeRange.start == other.m_unicodeRange.start && m_unicodeRange.end == other.m_unicodeRange.end;
-        default:
-            return true;
-        }
-    }
+  CSSParserToken(HashTokenType, StringView);
 
-    // Converts NumberToken to DimensionToken.
-    void convertToDimensionWithUnit(CSSParserString);
+  bool operator==(const CSSParserToken& other) const;
+  bool operator!=(const CSSParserToken& other) const {
+    return !(*this == other);
+  }
 
-    // Converts NumberToken to PercentageToken.
-    void convertToPercentage();
+  // Converts NumberToken to DimensionToken.
+  void convertToDimensionWithUnit(StringView);
 
-    CSSParserTokenType type() const { return static_cast<CSSParserTokenType>(m_type); }
-    CSSParserString value() const
-    {
-        CSSParserString ret;
-        ret.initRaw(m_valueDataCharRaw, m_valueLength, m_valueIs8Bit);
-        return ret;
-    }
-    bool valueEqualsIgnoringCase(const char* str) const { return value().equalIgnoringCase(str); }
+  // Converts NumberToken to PercentageToken.
+  void convertToPercentage();
 
-    UChar delimiter() const;
-    NumericSign numericSign() const;
-    NumericValueType numericValueType() const;
-    double numericValue() const;
-    HashTokenType hashTokenType() const { ASSERT(m_type == HashToken); return m_hashTokenType; }
-    BlockType blockType() const { return static_cast<BlockType>(m_blockType); }
-    CSSPrimitiveValue::UnitType unitType() const { return static_cast<CSSPrimitiveValue::UnitType>(m_unit); }
-    UChar32 unicodeRangeStart() const { ASSERT(m_type == UnicodeRangeToken); return m_unicodeRange.start; }
-    UChar32 unicodeRangeEnd() const { ASSERT(m_type == UnicodeRangeToken); return m_unicodeRange.end; }
-    CSSValueID id() const;
-    CSSValueID functionId() const;
+  CSSParserTokenType type() const {
+    return static_cast<CSSParserTokenType>(m_type);
+  }
+  StringView value() const {
+    if (m_valueIs8Bit)
+      return StringView(reinterpret_cast<const LChar*>(m_valueDataCharRaw),
+                        m_valueLength);
+    return StringView(reinterpret_cast<const UChar*>(m_valueDataCharRaw),
+                      m_valueLength);
+  }
 
-    bool hasStringBacking() const;
+  UChar delimiter() const;
+  NumericSign numericSign() const;
+  NumericValueType numericValueType() const;
+  double numericValue() const;
+  HashTokenType getHashTokenType() const {
+    ASSERT(m_type == HashToken);
+    return m_hashTokenType;
+  }
+  BlockType getBlockType() const { return static_cast<BlockType>(m_blockType); }
+  CSSPrimitiveValue::UnitType unitType() const {
+    return static_cast<CSSPrimitiveValue::UnitType>(m_unit);
+  }
+  UChar32 unicodeRangeStart() const {
+    ASSERT(m_type == UnicodeRangeToken);
+    return m_unicodeRange.start;
+  }
+  UChar32 unicodeRangeEnd() const {
+    ASSERT(m_type == UnicodeRangeToken);
+    return m_unicodeRange.end;
+  }
+  CSSValueID id() const;
+  CSSValueID functionId() const;
 
-    CSSPropertyID parseAsUnresolvedCSSPropertyID() const;
+  bool hasStringBacking() const;
 
-    void serialize(StringBuilder&) const;
+  CSSPropertyID parseAsUnresolvedCSSPropertyID() const;
 
-    CSSParserToken copyWithUpdatedString(const CSSParserString&) const;
+  void serialize(StringBuilder&) const;
 
-private:
-    void initValueFromCSSParserString(const CSSParserString& value)
-    {
-        m_valueLength = value.m_length;
-        m_valueIs8Bit = value.m_is8Bit;
-        m_valueDataCharRaw = value.m_data.charactersRaw;
-    }
-    unsigned m_type : 6; // CSSParserTokenType
-    unsigned m_blockType : 2; // BlockType
-    unsigned m_numericValueType : 1; // NumericValueType
-    unsigned m_numericSign : 2; // NumericSign
-    unsigned m_unit : 7; // CSSPrimitiveValue::UnitType
+  CSSParserToken copyWithUpdatedString(const StringView&) const;
 
-    // m_value... is an unpacked CSSParserString so that we can pack it
-    // tightly with the rest of this object for a smaller object size.
-    bool m_valueIs8Bit : 1;
-    unsigned m_valueLength;
-    const void* m_valueDataCharRaw; // Either LChar* or UChar*.
+ private:
+  void initValueFromStringView(StringView string) {
+    m_valueLength = string.length();
+    m_valueIs8Bit = string.is8Bit();
+    m_valueDataCharRaw = string.bytes();
+  }
+  unsigned m_type : 6;              // CSSParserTokenType
+  unsigned m_blockType : 2;         // BlockType
+  unsigned m_numericValueType : 1;  // NumericValueType
+  unsigned m_numericSign : 2;       // NumericSign
+  unsigned m_unit : 7;              // CSSPrimitiveValue::UnitType
 
-    union {
-        UChar m_delimiter;
-        HashTokenType m_hashTokenType;
-        double m_numericValue;
-        mutable int m_id;
+  bool valueDataCharRawEqual(const CSSParserToken& other) const;
 
-        struct {
-            UChar32 start;
-            UChar32 end;
-        } m_unicodeRange;
-    };
+  // m_value... is an unpacked StringView so that we can pack it
+  // tightly with the rest of this object for a smaller object size.
+  bool m_valueIs8Bit : 1;
+  unsigned m_valueLength;
+  const void* m_valueDataCharRaw;  // Either LChar* or UChar*.
+
+  union {
+    UChar m_delimiter;
+    HashTokenType m_hashTokenType;
+    double m_numericValue;
+    mutable int m_id;
+
+    struct {
+      UChar32 start;
+      UChar32 end;
+    } m_unicodeRange;
+  };
 };
 
-} // namespace blink
+}  // namespace blink
 
-namespace WTF {
-template <>
-struct IsTriviallyMoveAssignable<blink::CSSParserToken> {
-    STATIC_ONLY(IsTriviallyMoveAssignable);
-    static const bool value = true;
-};
-}
-
-#endif // CSSSParserToken_h
+#endif  // CSSSParserToken_h

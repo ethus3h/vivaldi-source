@@ -45,9 +45,11 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
   // Tell the renderer to send an accessibility tree, then wait for the
   // notification that it's been received.
   const ui::AXTree& GetAXTree(
-      AccessibilityMode accessibility_mode = AccessibilityModeComplete) {
+      AccessibilityMode accessibility_mode = ACCESSIBILITY_MODE_COMPLETE) {
     AccessibilityNotificationWaiter waiter(
-        shell(), accessibility_mode, ui::AX_EVENT_LAYOUT_COMPLETE);
+        shell()->web_contents(),
+        accessibility_mode,
+        ui::AX_EVENT_LAYOUT_COMPLETE);
     waiter.WaitForNotification();
     return waiter.GetAXTree();
   }
@@ -75,7 +77,7 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
 
  private:
 #if defined(OS_WIN)
-  scoped_ptr<base::win::ScopedCOMInitializer> com_initializer_;
+  std::unique_ptr<base::win::ScopedCOMInitializer> com_initializer_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(CrossPlatformAccessibilityBrowserTest);

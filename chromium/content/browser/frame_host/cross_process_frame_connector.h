@@ -8,16 +8,18 @@
 #include <stdint.h>
 
 #include "cc/output/compositor_frame.h"
+#include "content/browser/renderer_host/event_with_latency_info.h"
 #include "content/common/content_export.h"
+#include "content/common/input/input_event_ack_state.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace blink {
+class WebGestureEvent;
 class WebInputEvent;
-struct WebScreenInfo;
 }
 
 namespace cc {
-struct SurfaceId;
+class SurfaceId;
 struct SurfaceSequence;
 }
 
@@ -25,12 +27,8 @@ namespace IPC {
 class Message;
 }
 
-struct FrameHostMsg_CompositorFrameSwappedACK_Params;
-struct FrameHostMsg_ReclaimCompositorResources_Params;
-
 namespace content {
 class RenderFrameProxyHost;
-class RenderWidgetHostImpl;
 class RenderWidgetHostViewBase;
 class RenderWidgetHostViewChildFrame;
 class WebCursor;
@@ -87,47 +85,72 @@ class CONTENT_EXPORT CrossProcessFrameConnector {
 
   void RenderProcessGone();
 
-  virtual void ChildFrameCompositorFrameSwapped(
-      uint32_t output_surface_id,
-      int host_id,
-      int route_id,
-      scoped_ptr<cc::CompositorFrame> frame);
   virtual void SetChildFrameSurface(const cc::SurfaceId& surface_id,
                                     const gfx::Size& frame_size,
                                     float scale_factor,
                                     const cc::SurfaceSequence& sequence);
 
   gfx::Rect ChildFrameRect();
-  float device_scale_factor() const { return device_scale_factor_; }
-  void GetScreenInfo(blink::WebScreenInfo* results);
   void UpdateCursor(const WebCursor& cursor);
-  void TransformPointToRootCoordSpace(const gfx::Point& point,
-                                      cc::SurfaceId surface_id,
-                                      gfx::Point* transformed_point);
+  gfx::Point TransformPointToRootCoordSpace(const gfx::Point& point,
+                                            const cc::SurfaceId& surface_id);
+  // TransformPointToLocalCoordSpace() can only transform points between
+  // surfaces where one is embedded (not necessarily directly) within the
+  // other, and will return false if this is not the case. For points that can
+  // be in sibling surfaces, they must first be converted to the root
+  // surface's coordinate space.
+  bool TransformPointToLocalCoordSpace(const gfx::Point& point,
+                                       const cc::SurfaceId& original_surface,
+                                       const cc::SurfaceId& local_surface_id,
+                                       gfx::Point* transformed_point);
+  // Returns false if |target_view| and |view_| do not have the same root
+  // RenderWidgetHostView.
+  bool TransformPointToCoordSpaceForView(const gfx::Point& point,
+                                         RenderWidgetHostViewBase* target_view,
+                                         const cc::SurfaceId& local_surface_id,
+                                         gfx::Point* transformed_point);
+
+  // Pass acked touch events to the root view for gesture processing.
+  void ForwardProcessAckedTouchEvent(const TouchEventWithLatencyInfo& touch,
+                                     InputEventAckState ack_result);
+  // Gesture events with unused scroll deltas must be bubbled to ancestors
+  // who may consume the delta.
+  void BubbleScrollEvent(const blink::WebGestureEvent& event);
 
   // Determines whether the root RenderWidgetHostView (and thus the current
   // page) has focus.
   bool HasFocus();
+  // Focuses the root RenderWidgetHostView.
+  void FocusRootView();
+
+  // Locks the mouse. Returns true if mouse is locked.
+  bool LockMouse();
+
+  // Unlocks the mouse if the mouse is locked.
+  void UnlockMouse();
+
+  // Returns the parent RenderWidgetHostView or nullptr it it doesn't have one.
+  virtual RenderWidgetHostViewBase* GetParentRenderWidgetHostView();
+
+  // Returns the view for the top-level frame under the same WebContents.
+  RenderWidgetHostViewBase* GetRootRenderWidgetHostView();
+
+  // Exposed for tests.
+  RenderWidgetHostViewBase* GetRootRenderWidgetHostViewForTesting() {
+    return GetRootRenderWidgetHostView();
+  }
 
  private:
   // Handlers for messages received from the parent frame.
-  void OnCompositorFrameSwappedACK(
-      const FrameHostMsg_CompositorFrameSwappedACK_Params& params);
-  void OnReclaimCompositorResources(
-      const FrameHostMsg_ReclaimCompositorResources_Params& params);
   void OnForwardInputEvent(const blink::WebInputEvent* event);
   void OnFrameRectChanged(const gfx::Rect& frame_rect);
+  void OnUpdateViewportIntersection(const gfx::Rect& viewport_intersection);
   void OnVisibilityChanged(bool visible);
-  void OnInitializeChildFrame(gfx::Rect frame_rect, float scale_factor);
   void OnSatisfySequence(const cc::SurfaceSequence& sequence);
   void OnRequireSequence(const cc::SurfaceId& id,
                          const cc::SurfaceSequence& sequence);
 
-  void SetDeviceScaleFactor(float scale_factor);
-  void SetSize(gfx::Rect frame_rect);
-
-  // Retrieve the view for the top-level frame under the same WebContents.
-  RenderWidgetHostViewBase* GetRootRenderWidgetHostView();
+  void SetRect(const gfx::Rect& frame_rect);
 
   // The RenderFrameProxyHost that routes messages to the parent frame's
   // renderer process.
@@ -137,7 +160,8 @@ class CONTENT_EXPORT CrossProcessFrameConnector {
   RenderWidgetHostViewChildFrame* view_;
 
   gfx::Rect child_frame_rect_;
-  float device_scale_factor_;
+
+  bool is_scroll_bubbling_;
 };
 
 }  // namespace content

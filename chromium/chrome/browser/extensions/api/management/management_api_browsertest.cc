@@ -156,8 +156,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
   // The management API should list this extension.
   scoped_refptr<ManagementGetAllFunction> function =
       new ManagementGetAllFunction();
-  scoped_ptr<base::Value> result(util::RunFunctionAndReturnSingleResult(
-      function.get(), "[]", browser()));
+  std::unique_ptr<base::Value> result(
+      util::RunFunctionAndReturnSingleResult(function.get(), "[]", browser()));
   base::ListValue* list;
   ASSERT_TRUE(result->GetAsList(&list));
   EXPECT_EQ(1U, list->GetSize());
@@ -179,18 +179,17 @@ class ExtensionManagementApiEscalationTest :
   static const char kId[];
 
   void SetUpOnMainThread() override {
+    ExtensionManagementApiBrowserTest::SetUpOnMainThread();
     EXPECT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
     base::FilePath pem_path = test_data_dir_.
         AppendASCII("permissions_increase").AppendASCII("permissions.pem");
     base::FilePath path_v1 = PackExtensionWithOptions(
         test_data_dir_.AppendASCII("permissions_increase").AppendASCII("v1"),
-        scoped_temp_dir_.path().AppendASCII("permissions1.crx"),
-        pem_path,
+        scoped_temp_dir_.GetPath().AppendASCII("permissions1.crx"), pem_path,
         base::FilePath());
     base::FilePath path_v2 = PackExtensionWithOptions(
         test_data_dir_.AppendASCII("permissions_increase").AppendASCII("v2"),
-        scoped_temp_dir_.path().AppendASCII("permissions2.crx"),
-        pem_path,
+        scoped_temp_dir_.GetPath().AppendASCII("permissions2.crx"), pem_path,
         base::FilePath());
 
     ExtensionService* service = ExtensionSystem::Get(browser()->profile())->
@@ -242,12 +241,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiEscalationTest,
                        DisabledReason) {
   scoped_refptr<ManagementGetFunction> function =
       new ManagementGetFunction();
-  scoped_ptr<base::Value> result(util::RunFunctionAndReturnSingleResult(
-      function.get(),
-      base::StringPrintf("[\"%s\"]", kId),
-      browser()));
+  std::unique_ptr<base::Value> result(util::RunFunctionAndReturnSingleResult(
+      function.get(), base::StringPrintf("[\"%s\"]", kId), browser()));
   ASSERT_TRUE(result.get() != NULL);
-  ASSERT_TRUE(result->IsType(base::Value::TYPE_DICTIONARY));
+  ASSERT_TRUE(result->IsType(base::Value::Type::DICTIONARY));
   base::DictionaryValue* dict =
       static_cast<base::DictionaryValue*>(result.get());
   std::string reason;

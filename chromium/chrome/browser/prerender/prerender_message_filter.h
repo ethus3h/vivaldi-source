@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_PRERENDER_PRERENDER_MESSAGE_FILTER_H_
 #define CHROME_BROWSER_PRERENDER_PRERENDER_MESSAGE_FILTER_H_
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
@@ -29,6 +31,7 @@ class Message;
 namespace prerender {
 
 class PrerenderLinkManager;
+class PrerenderManager;
 
 class PrerenderMessageFilter : public content::BrowserMessageFilter {
  public:
@@ -37,6 +40,10 @@ class PrerenderMessageFilter : public content::BrowserMessageFilter {
   static void EnsureShutdownNotifierFactoryBuilt();
 
  private:
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::UI>;
+  friend class base::DeleteHelper<PrerenderMessageFilter>;
+
   ~PrerenderMessageFilter() override;
 
   // Overridden from content::BrowserMessageFilter.
@@ -44,6 +51,7 @@ class PrerenderMessageFilter : public content::BrowserMessageFilter {
   void OverrideThreadForMessage(const IPC::Message& message,
                                 content::BrowserThread::ID* thread) override;
   void OnChannelClosing() override;
+  void OnDestruct() const override;
 
   void OnAddPrerender(int prerender_id,
                       const PrerenderAttributes& attributes,
@@ -52,16 +60,20 @@ class PrerenderMessageFilter : public content::BrowserMessageFilter {
                       int render_view_route_id);
   void OnCancelPrerender(int prerender_id);
   void OnAbandonPrerender(int prerender_id);
+  void OnPrefetchFinished();
 
   void ShutdownOnUIThread();
 
   void OnChannelClosingInUIThread();
 
+  PrerenderManager* prerender_manager_;
+
   const int render_process_id_;
 
   PrerenderLinkManager* prerender_link_manager_;
 
-  scoped_ptr<KeyedServiceShutdownNotifier::Subscription> shutdown_notifier_;
+  std::unique_ptr<KeyedServiceShutdownNotifier::Subscription>
+      shutdown_notifier_;
 
   DISALLOW_COPY_AND_ASSIGN(PrerenderMessageFilter);
 };

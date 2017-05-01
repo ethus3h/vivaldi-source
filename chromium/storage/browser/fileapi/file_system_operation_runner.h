@@ -8,12 +8,12 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
 #include "base/id_map.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "storage/browser/blob/blob_data_handle.h"
 #include "storage/browser/fileapi/file_system_operation.h"
@@ -117,7 +117,7 @@ class STORAGE_EXPORT FileSystemOperationRunner
   // |url_request_context| is used to read contents in |blob|.
   OperationID Write(const net::URLRequestContext* url_request_context,
                     const FileSystemURL& url,
-                    scoped_ptr<storage::BlobDataHandle> blob,
+                    std::unique_ptr<storage::BlobDataHandle> blob,
                     int64_t offset,
                     const WriteCallback& callback);
 
@@ -252,6 +252,7 @@ class STORAGE_EXPORT FileSystemOperationRunner
     base::WeakPtr<BeginOperationScoper> scope;
 
     OperationHandle();
+    OperationHandle(const OperationHandle& other);
     ~OperationHandle();
   };
 
@@ -299,15 +300,15 @@ class STORAGE_EXPORT FileSystemOperationRunner
   void PrepareForRead(OperationID id, const FileSystemURL& url);
 
   // These must be called at the beginning and end of any async operations.
-  OperationHandle BeginOperation(FileSystemOperation* operation,
+  OperationHandle BeginOperation(std::unique_ptr<FileSystemOperation> operation,
                                  base::WeakPtr<BeginOperationScoper> scope);
   void FinishOperation(OperationID id);
 
   // Not owned; file_system_context owns this.
   FileSystemContext* file_system_context_;
 
-  // IDMap<FileSystemOperation, IDMapOwnPointer> operations_;
-  IDMap<FileSystemOperation, IDMapOwnPointer> operations_;
+  // IDMap<std::unique_ptr<FileSystemOperation>> operations_;
+  IDMap<std::unique_ptr<FileSystemOperation>> operations_;
 
   // We keep track of the file to be modified by each operation so that
   // we can notify observers when we're done.

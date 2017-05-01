@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <string>
+#include <utility>
 
 #include "base/environment.h"
 #include "base/files/scoped_file.h"
@@ -21,8 +22,11 @@
 namespace {
 
 bool IsFileSystemAccessDenied() {
-  base::ScopedFD root_dir(HANDLE_EINTR(open("/", O_RDONLY)));
-  return !root_dir.is_valid();
+  // We would rather check "/" instead of "/proc/self/exe" here, but
+  // that gives false positives when running as root.  See
+  // https://codereview.chromium.org/2578483002/#msg3
+  base::ScopedFD proc_self_exe(HANDLE_EINTR(open("/proc/self/exe", O_RDONLY)));
+  return !proc_self_exe.is_valid();
 }
 
 int GetHelperApi(base::Environment* env) {
@@ -62,13 +66,12 @@ int GetIPCDescriptor(base::Environment* env) {
 namespace sandbox {
 
 SetuidSandboxClient* SetuidSandboxClient::Create() {
-  base::Environment* environment(base::Environment::Create());
-  CHECK(environment);
-  return new SetuidSandboxClient(environment);
+  return new SetuidSandboxClient(base::Environment::Create());
 }
 
-SetuidSandboxClient::SetuidSandboxClient(base::Environment* env)
-    : env_(env), sandboxed_(false) {
+SetuidSandboxClient::SetuidSandboxClient(std::unique_ptr<base::Environment> env)
+    : env_(std::move(env)), sandboxed_(false) {
+  DCHECK(env_);
 }
 
 SetuidSandboxClient::~SetuidSandboxClient() {

@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROMECAST_MEDIA_CMA_BASE_AV_PIPELINE_IMPL_H_
-#define CHROMECAST_MEDIA_CMA_BASE_AV_PIPELINE_IMPL_H_
+#ifndef CHROMECAST_MEDIA_CMA_PIPELINE_AV_PIPELINE_IMPL_H_
+#define CHROMECAST_MEDIA_CMA_PIPELINE_AV_PIPELINE_IMPL_H_
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include <list>
+#include <memory>
+#include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "chromecast/media/cma/pipeline/av_pipeline_client.h"
@@ -28,11 +29,13 @@ class VideoDecoderConfig;
 
 namespace chromecast {
 namespace media {
-class BrowserCdmCast;
+class CastCdmContext;
 class BufferingFrameProvider;
 class BufferingState;
 class CodedFrameProvider;
 class DecoderBufferBase;
+class DecryptContextImpl;
+struct EncryptionScheme;
 
 class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
  public:
@@ -40,22 +43,19 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
                  const AvPipelineClient& client);
   ~AvPipelineImpl() override;
 
-  void SetCdm(BrowserCdmCast* media_keys);
+  void SetCdm(CastCdmContext* cast_cdm_context);
 
   // Setup the pipeline and ensure samples are available for the given media
   // time, then start rendering samples.
   bool StartPlayingFrom(base::TimeDelta time,
                         const scoped_refptr<BufferingState>& buffering_state);
-
-  bool StartFlush();
-  void Flush(const ::media::PipelineStatusCB& status_cb);
-  // Resets any pending buffers after the backend has been stopped.
-  void BackendStopped();
-
-  // Tear down the pipeline and release the hardware resources.
-  void Stop();
+  void Flush(const base::Closure& flush_cb);
 
   virtual void UpdateStatistics() = 0;
+
+  int bytes_decoded_since_last_update() const {
+    return bytes_decoded_since_last_update_;
+  }
 
  protected:
   // Pipeline states.
@@ -64,28 +64,29 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
     kPlaying,
     kFlushing,
     kFlushed,
-    kStopped,
     kError,
   };
 
   State state() const { return state_; }
+  void set_state(State state) { state_ = state; }
   const AvPipelineClient& client() const { return client_; }
 
   virtual void OnUpdateConfig(
       StreamId id,
       const ::media::AudioDecoderConfig& audio_config,
       const ::media::VideoDecoderConfig& video_config) = 0;
+  virtual const EncryptionScheme& GetEncryptionScheme(StreamId id) const = 0;
 
-  void TransitionToState(State state);
   // Setting the frame provider must be done in the |kUninitialized| state.
-  void SetCodedFrameProvider(scoped_ptr<CodedFrameProvider> frame_provider,
+  void SetCodedFrameProvider(std::unique_ptr<CodedFrameProvider> frame_provider,
                              size_t max_buffer_size,
                              size_t max_frame_size);
 
   ::media::PipelineStatistics previous_stats_;
+  int bytes_decoded_since_last_update_;
 
  private:
-  void OnFlushDone(const ::media::PipelineStatusCB& status_cb);
+  void OnFlushDone();
 
   // MediaPipelineBackend::Decoder::Delegate implementation:
   void OnPushBufferComplete(BufferStatus status) override;
@@ -96,12 +97,8 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
                           uint32_t system_code) override;
   void OnVideoResolutionChanged(const Size& size) override;
 
-  // Callback invoked when the CDM state has changed in a way that might
-  // impact media playback.
-  void OnCdmStateChange();
-
   // Feed the pipeline, getting the frames from |frame_provider_|.
-  void FetchBufferIfNeeded();
+  void FetchBuffer();
 
   // Callback invoked when receiving a new frame from |frame_provider_|.
   void OnNewFrame(const scoped_refptr<DecoderBufferBase>& buffer,
@@ -110,12 +107,16 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
 
   // Process a pending buffer.
   void ProcessPendingBuffer();
+  void PushPendingBuffer();
 
   // Callbacks:
   // - when BrowserCdm updated its state.
   // - when BrowserCdm has been destroyed.
   void OnCdmStateChanged();
   void OnCdmDestroyed();
+  void OnBufferDecrypted(std::unique_ptr<DecryptContextImpl> decrypt_context,
+                         scoped_refptr<DecoderBufferBase> buffer,
+                         bool success);
 
   // Callback invoked when a media buffer has been buffered by |frame_provider_|
   // which is a BufferingFrameProvider.
@@ -127,6 +128,9 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
 
   MediaPipelineBackend::Decoder* const decoder_;
   const AvPipelineClient client_;
+
+  // Callback provided to Flush().
+  base::Closure flush_cb_;
 
   // AV pipeline state.
   State state_;
@@ -146,7 +150,7 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
   std::list<scoped_refptr<DecoderBufferBase> > non_playable_frames_;
 
   // Buffer provider.
-  scoped_ptr<BufferingFrameProvider> frame_provider_;
+  std::unique_ptr<BufferingFrameProvider> frame_provider_;
 
   // Indicate whether the frame fetching process is active.
   bool enable_feeding_;
@@ -160,17 +164,16 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
   // Buffer that has been pushed to the device but not processed yet.
   scoped_refptr<DecoderBufferBase> pushed_buffer_;
 
-  // The media time is retrieved at regular intervals.
-  // Indicate whether time update is enabled.
-  bool enable_time_update_;
-  bool pending_time_update_task_;
-
-  // Decryption keys, if available.
-  BrowserCdmCast* media_keys_;
-  int media_keys_callback_id_;
+  // CdmContext, if available.
+  CastCdmContext* cast_cdm_context_;
+  int player_tracker_callback_id_;
 
   base::WeakPtr<AvPipelineImpl> weak_this_;
   base::WeakPtrFactory<AvPipelineImpl> weak_factory_;
+  // Special weak factory used for asynchronous decryption. This allows us to
+  // cancel pending asynchronous decryption (by invalidating this factory's weak
+  // ptrs) without affecting other bound callbacks.
+  base::WeakPtrFactory<AvPipelineImpl> decrypt_weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AvPipelineImpl);
 };
@@ -178,4 +181,4 @@ class AvPipelineImpl : MediaPipelineBackend::Decoder::Delegate {
 }  // namespace media
 }  // namespace chromecast
 
-#endif  // CHROMECAST_MEDIA_CMA_BASE_AV_PIPELINE_IMPL_H_
+#endif  // CHROMECAST_MEDIA_CMA_PIPELINE_AV_PIPELINE_IMPL_H_

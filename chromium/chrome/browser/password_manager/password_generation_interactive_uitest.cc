@@ -23,6 +23,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 namespace {
@@ -85,6 +86,8 @@ class PasswordGenerationInteractiveTest :
     ChromePasswordManagerClient* client =
         ChromePasswordManagerClient::FromWebContents(WebContents());
     client->HidePasswordGenerationPopup();
+
+    autofill::test::ReenableSystemServices();
   }
 
   std::string GetFieldValue(const std::string& field_id) {
@@ -114,9 +117,10 @@ class PasswordGenerationInteractiveTest :
   }
 
   void SendKeyToPopup(ui::KeyboardCode key) {
-    content::NativeWebKeyboardEvent event;
+    content::NativeWebKeyboardEvent event(
+        blink::WebKeyboardEvent::RawKeyDown, blink::WebInputEvent::NoModifiers,
+        blink::WebInputEvent::TimeStampForTesting);
     event.windowsKeyCode = key;
-    event.type = blink::WebKeyboardEvent::RawKeyDown;
     RenderViewHost()->GetWidget()->ForwardKeyboardEvent(event);
   }
 

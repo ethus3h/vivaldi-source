@@ -81,10 +81,12 @@ class ExceptionHandlerServerTest : public testing::Test {
  public:
   ExceptionHandlerServerTest()
       : server_(true),
-        pipe_name_(server_.CreatePipe()),
+        pipe_name_(L"\\\\.\\pipe\\test_name"),
         server_ready_(CreateEvent(nullptr, false, false, nullptr)),
         delegate_(server_ready_.get()),
-        server_thread_(&server_, &delegate_) {}
+        server_thread_(&server_, &delegate_) {
+    server_.SetPipeName(pipe_name_);
+  }
 
   TestDelegate& delegate() { return delegate_; }
   ExceptionHandlerServer& server() { return server_; }
@@ -171,10 +173,6 @@ class TestClient final : public WinChildProcess {
       ADD_FAILURE();
       return EXIT_FAILURE;
     }
-    if (!client.UseHandler()) {
-      ADD_FAILURE();
-      return EXIT_FAILURE;
-    }
     WriteWString(WritePipeHandle(), L"OK");
     return EXIT_SUCCESS;
   }
@@ -185,9 +183,12 @@ class TestClient final : public WinChildProcess {
 TEST_F(ExceptionHandlerServerTest, MultipleConnections) {
   WinChildProcess::EntryPoint<TestClient>();
 
-  scoped_ptr<WinChildProcess::Handles> handles_1 = WinChildProcess::Launch();
-  scoped_ptr<WinChildProcess::Handles> handles_2 = WinChildProcess::Launch();
-  scoped_ptr<WinChildProcess::Handles> handles_3 = WinChildProcess::Launch();
+  std::unique_ptr<WinChildProcess::Handles> handles_1 =
+      WinChildProcess::Launch();
+  std::unique_ptr<WinChildProcess::Handles> handles_2 =
+      WinChildProcess::Launch();
+  std::unique_ptr<WinChildProcess::Handles> handles_3 =
+      WinChildProcess::Launch();
 
   // Must ensure the delegate outlasts the server.
   {

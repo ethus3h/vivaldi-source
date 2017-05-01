@@ -4,9 +4,12 @@
 
 #include "chrome/browser/themes/theme_service.h"
 
+#include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/macros.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -16,6 +19,7 @@
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -28,9 +32,9 @@
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/extension.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/resource/material_design/material_design_controller.h"
+#include "ui/base/ui_base_switches.h"
 
-#if defined(ENABLE_SUPERVISED_USERS)
+#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 #include "chrome/browser/supervised_user/supervised_user_service.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #endif
@@ -44,6 +48,17 @@ class ThemeServiceTest : public extensions::ExtensionServiceTestBase {
   ThemeServiceTest() : is_supervised_(false),
                        registry_(NULL) {}
   ~ThemeServiceTest() override {}
+
+  void SetUp() override {
+    extensions::ExtensionServiceTestBase::SetUp();
+    extensions::ExtensionServiceTestBase::ExtensionServiceInitParams params =
+        CreateDefaultInitParams();
+    params.profile_is_supervised = is_supervised_;
+    InitializeExtensionService(params);
+    service_->Init();
+    registry_ = ExtensionRegistry::Get(profile_.get());
+    ASSERT_TRUE(registry_);
+  }
 
   // Moves a minimal theme to |temp_dir_path| and unpacks it from that
   // directory.
@@ -63,7 +78,7 @@ class ThemeServiceTest : public extensions::ExtensionServiceTestBase {
     std::string extension_id = observer.WaitForExtensionLoaded()->id();
 
     // Let the ThemeService finish creating the theme pack.
-    base::MessageLoop::current()->RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
 
     return extension_id;
   }
@@ -89,22 +104,28 @@ class ThemeServiceTest : public extensions::ExtensionServiceTestBase {
     }
 
     // Let the ThemeService finish creating the theme pack.
-    base::MessageLoop::current()->RunUntilIdle();
-  }
-
-  void SetUp() override {
-    extensions::ExtensionServiceTestBase::SetUp();
-    extensions::ExtensionServiceTestBase::ExtensionServiceInitParams params =
-        CreateDefaultInitParams();
-    params.profile_is_supervised = is_supervised_;
-    InitializeExtensionService(params);
-    service_->Init();
-    registry_ = ExtensionRegistry::Get(profile_.get());
-    ASSERT_TRUE(registry_);
+    base::RunLoop().RunUntilIdle();
   }
 
   const CustomThemeSupplier* get_theme_supplier(ThemeService* theme_service) {
     return theme_service->get_theme_supplier();
+  }
+
+  // Alpha blends a non-opaque foreground color against an opaque background.
+  // This is not the same as color_utils::AlphaBlend() since it gets the opacity
+  // from the foreground color and then does not blend the two colors' alpha
+  // values together.
+  static SkColor AlphaBlend(SkColor foreground, SkColor background) {
+    return color_utils::AlphaBlend(SkColorSetA(foreground, SK_AlphaOPAQUE),
+                                   background, SkColorGetA(foreground));
+  }
+
+  // Returns the separator color as the opaque result of blending it atop the
+  // frame color (which is the color we use when calculating the contrast of the
+  // separator with the tab and frame colors).
+  static SkColor GetSeparatorColor(SkColor tab_color, SkColor frame_color) {
+    return AlphaBlend(ThemeService::GetSeparatorColor(tab_color, frame_color),
+                      frame_color);
   }
 
  protected:
@@ -119,11 +140,11 @@ TEST_F(ThemeServiceTest, ThemeInstallUninstall) {
       ThemeServiceFactory::GetForProfile(profile_.get());
   theme_service->UseDefaultTheme();
   // Let the ThemeService uninstall unused themes.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  const std::string& extension_id = LoadUnpackedThemeAt(temp_dir.path());
+  const std::string& extension_id = LoadUnpackedThemeAt(temp_dir.GetPath());
   EXPECT_FALSE(theme_service->UsingDefaultTheme());
   EXPECT_EQ(extension_id, theme_service->GetThemeID());
 
@@ -143,7 +164,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
       ThemeServiceFactory::GetForProfile(profile_.get());
   theme_service->UseDefaultTheme();
   // Let the ThemeService uninstall unused themes.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   base::ScopedTempDir temp_dir1;
   ASSERT_TRUE(temp_dir1.CreateUniqueTempDir());
@@ -151,7 +172,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
   ASSERT_TRUE(temp_dir2.CreateUniqueTempDir());
 
   // 1) Installing a theme should disable the previously active theme.
-  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.path());
+  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.GetPath());
   EXPECT_FALSE(theme_service->UsingDefaultTheme());
   EXPECT_EQ(extension1_id, theme_service->GetThemeID());
   EXPECT_TRUE(service_->IsExtensionEnabled(extension1_id));
@@ -159,7 +180,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
   // Show an infobar to prevent the current theme from being uninstalled.
   theme_service->OnInfobarDisplayed();
 
-  const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.path());
+  const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.GetPath());
   EXPECT_EQ(extension2_id, theme_service->GetThemeID());
   EXPECT_TRUE(service_->IsExtensionEnabled(extension2_id));
   EXPECT_TRUE(registry_->GetExtensionById(extension1_id,
@@ -167,7 +188,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
 
   // 2) Enabling a disabled theme extension should swap the current theme.
   service_->EnableExtension(extension1_id);
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_EQ(extension1_id, theme_service->GetThemeID());
   EXPECT_TRUE(service_->IsExtensionEnabled(extension1_id));
   EXPECT_TRUE(registry_->GetExtensionById(extension2_id,
@@ -179,7 +200,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
   const extensions::Extension* extension2 =
       service_->GetInstalledExtension(extension2_id);
   theme_service->SetTheme(extension2);
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_EQ(extension2_id, theme_service->GetThemeID());
   EXPECT_TRUE(service_->IsExtensionEnabled(extension2_id));
   EXPECT_TRUE(registry_->GetExtensionById(extension1_id,
@@ -191,7 +212,7 @@ TEST_F(ThemeServiceTest, DisableUnusedTheme) {
   EXPECT_FALSE(theme_service->UsingDefaultTheme());
   service_->DisableExtension(extension2_id,
       extensions::Extension::DISABLE_USER_ACTION);
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(theme_service->UsingDefaultTheme());
   EXPECT_FALSE(service_->GetInstalledExtension(extension1_id));
   EXPECT_FALSE(service_->GetInstalledExtension(extension2_id));
@@ -204,7 +225,7 @@ TEST_F(ThemeServiceTest, ThemeUpgrade) {
       ThemeServiceFactory::GetForProfile(profile_.get());
   theme_service->UseDefaultTheme();
   // Let the ThemeService uninstall unused themes.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   theme_service->OnInfobarDisplayed();
 
@@ -213,8 +234,8 @@ TEST_F(ThemeServiceTest, ThemeUpgrade) {
   base::ScopedTempDir temp_dir2;
   ASSERT_TRUE(temp_dir2.CreateUniqueTempDir());
 
-  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.path());
-  const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.path());
+  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.GetPath());
+  const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.GetPath());
 
   // Test the initial state.
   EXPECT_TRUE(registry_->GetExtensionById(extension1_id,
@@ -247,7 +268,7 @@ TEST_F(ThemeServiceTest, IncognitoTest) {
       ThemeServiceFactory::GetForProfile(profile_.get());
   theme_service->UseDefaultTheme();
   // Let the ThemeService uninstall unused themes.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   // Should get the same ThemeService for incognito and original profiles.
   ThemeService* otr_theme_service =
@@ -262,11 +283,9 @@ TEST_F(ThemeServiceTest, IncognitoTest) {
       ThemeService::GetThemeProviderForProfile(
           profile_->GetOffTheRecordProfile());
   EXPECT_NE(&provider, &otr_provider);
-  // And (some) colors should be different in MD mode.
-  if (ui::MaterialDesignController::IsModeMaterial()) {
-    EXPECT_NE(provider.GetColor(ThemeProperties::COLOR_TOOLBAR),
-              otr_provider.GetColor(ThemeProperties::COLOR_TOOLBAR));
-  }
+  // And (some) colors should be different.
+  EXPECT_NE(provider.GetColor(ThemeProperties::COLOR_TOOLBAR),
+            otr_provider.GetColor(ThemeProperties::COLOR_TOOLBAR));
 #endif
 }
 
@@ -308,14 +327,14 @@ TEST_F(ThemeServiceTest, UninstallThemeOnThemeChangeNotification) {
       ThemeServiceFactory::GetForProfile(profile_.get());
   theme_service->UseDefaultTheme();
   // Let the ThemeService uninstall unused themes.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   base::ScopedTempDir temp_dir1;
   ASSERT_TRUE(temp_dir1.CreateUniqueTempDir());
   base::ScopedTempDir temp_dir2;
   ASSERT_TRUE(temp_dir2.CreateUniqueTempDir());
 
-  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.path());
+  const std::string& extension1_id = LoadUnpackedThemeAt(temp_dir1.GetPath());
   ASSERT_EQ(extension1_id, theme_service->GetThemeID());
 
   // Show an infobar.
@@ -326,17 +345,17 @@ TEST_F(ThemeServiceTest, UninstallThemeOnThemeChangeNotification) {
   // NOTIFICATION_BROWSER_THEME_CHANGED notification.
   {
     InfobarDestroyerOnThemeChange destroyer(profile_.get());
-    const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.path());
+    const std::string& extension2_id = LoadUnpackedThemeAt(temp_dir2.GetPath());
     ASSERT_EQ(extension2_id, theme_service->GetThemeID());
     ASSERT_FALSE(service_->GetInstalledExtension(extension1_id));
   }
 
   // Check that it is possible to reinstall extension1.
-  ASSERT_EQ(extension1_id, LoadUnpackedThemeAt(temp_dir1.path()));
+  ASSERT_EQ(extension1_id, LoadUnpackedThemeAt(temp_dir1.GetPath()));
   EXPECT_EQ(extension1_id, theme_service->GetThemeID());
 }
 
-#if defined(ENABLE_SUPERVISED_USERS)
+#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 class ThemeServiceSupervisedUserTest : public ThemeServiceTest {
  public:
   ThemeServiceSupervisedUserTest() {}
@@ -374,6 +393,114 @@ TEST_F(ThemeServiceSupervisedUserTest, SupervisedUserThemeReplacesNativeTheme) {
             CustomThemeSupplier::SUPERVISED_USER_THEME);
 }
 #endif // defined(OS_LINUX) && !defined(OS_CHROMEOS)
-#endif // defined(ENABLE_SUPERVISED_USERS)
+#endif // BUILDFLAG(ENABLE_SUPERVISED_USERS)
+
+#if !defined(OS_MACOSX)  // Mac uses different colors than other platforms.
+// Check that the function which computes the separator color behaves as
+// expected for a variety of inputs.
+TEST_F(ThemeServiceTest, SeparatorColor) {
+  // Ensure Windows 10 machines use the built-in default colors rather than the
+  // current system native colors.
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kDisableDwmComposition);
+
+  {
+    const ui::ThemeProvider& theme_provider =
+        ThemeService::GetThemeProviderForProfile(profile_.get());
+    const SkColor frame_color =
+        theme_provider.GetColor(ThemeProperties::COLOR_FRAME);
+    const SkColor tab_color =
+        theme_provider.GetColor(ThemeProperties::COLOR_TOOLBAR);
+    SCOPED_TRACE(base::StringPrintf("Tab color: 0x%08X, frame color: 0x%08X",
+                                    tab_color, frame_color));
+
+    // Check that the TOOLBAR_TOP_SEPARATOR color is the same whether we ask the
+    // theme provider or compute it manually.
+    const SkColor theme_color = AlphaBlend(
+        theme_provider.GetColor(ThemeProperties::COLOR_TOOLBAR_TOP_SEPARATOR),
+        frame_color);
+    SkColor separator_color = GetSeparatorColor(tab_color, frame_color);
+    EXPECT_EQ(theme_color, separator_color);
+
+    // For the default theme, the separator should darken the frame.
+    double frame_luminance = color_utils::GetRelativeLuminance(frame_color);
+    EXPECT_LT(color_utils::GetRelativeLuminance(separator_color),
+              frame_luminance);
+
+    // If we reverse the colors, the separator should darken the "frame" (which
+    // in this case is actually the tab color), since otherwise the contrast
+    // with the "frame" would be too minimal.  It should also be darker than the
+    // "tab" (frame color) since otherwise the contrast the contrast with the
+    // "tab color" would be too minimal.
+    separator_color = GetSeparatorColor(frame_color, tab_color);
+    double tab_luminance = color_utils::GetRelativeLuminance(tab_color);
+    double separator_luminance =
+        color_utils::GetRelativeLuminance(separator_color);
+    EXPECT_LT(separator_luminance, tab_luminance);
+    EXPECT_LT(separator_luminance, frame_luminance);
+
+    // When the frame color is black, the separator should lighten the frame,
+    // but it should still be darker than the tab color.
+    separator_color = GetSeparatorColor(tab_color, SK_ColorBLACK);
+    separator_luminance = color_utils::GetRelativeLuminance(separator_color);
+    EXPECT_GT(separator_luminance, 0);
+    EXPECT_LT(separator_luminance, tab_luminance);
+
+    // When the frame color is white, the separator should darken the frame; it
+    // should also be lighter than the tab color since otherwise the contrast
+    // with the tab would be too minimal.
+    separator_color = GetSeparatorColor(tab_color, SK_ColorWHITE);
+    separator_luminance = color_utils::GetRelativeLuminance(separator_color);
+    EXPECT_LT(separator_luminance, 1);
+    EXPECT_LT(separator_luminance, tab_luminance);
+  }
+
+  // Now make similar checks as above but for the incognito theme.
+  {
+    const ui::ThemeProvider& otr_provider =
+        ThemeService::GetThemeProviderForProfile(
+            profile_->GetOffTheRecordProfile());
+    const SkColor frame_color =
+        otr_provider.GetColor(ThemeProperties::COLOR_FRAME);
+    const SkColor tab_color =
+        otr_provider.GetColor(ThemeProperties::COLOR_TOOLBAR);
+    SCOPED_TRACE(base::StringPrintf("Tab color: 0x%08X, frame color: 0x%08X",
+                                    tab_color, frame_color));
+
+    const SkColor theme_color = AlphaBlend(
+        otr_provider.GetColor(ThemeProperties::COLOR_TOOLBAR_TOP_SEPARATOR),
+        frame_color);
+    SkColor separator_color = GetSeparatorColor(tab_color, frame_color);
+    EXPECT_EQ(theme_color, separator_color);
+
+    // For the default incognito theme, the separator should darken the frame.
+    EXPECT_LT(color_utils::GetRelativeLuminance(separator_color),
+              color_utils::GetRelativeLuminance(frame_color));
+
+    // And if we reverse the colors, the separator should lighten the "frame"
+    // (tab color).
+    separator_color = GetSeparatorColor(frame_color, tab_color);
+    double tab_luminance = color_utils::GetRelativeLuminance(tab_color);
+    EXPECT_GT(color_utils::GetRelativeLuminance(separator_color),
+              tab_luminance);
+
+    // When the frame color is black, the separator should lighten the frame; it
+    // should also be lighter than the tab color since otherwise the contrast
+    // with the tab would be too minimal.
+    separator_color = GetSeparatorColor(tab_color, SK_ColorBLACK);
+    double separator_luminance =
+        color_utils::GetRelativeLuminance(separator_color);
+    EXPECT_GT(separator_luminance, 0);
+    EXPECT_GT(separator_luminance, tab_luminance);
+
+    // When the frame color is white, the separator should darken the frame, but
+    // it should still be lighter than the tab color.
+    separator_color = GetSeparatorColor(tab_color, SK_ColorWHITE);
+    separator_luminance = color_utils::GetRelativeLuminance(separator_color);
+    EXPECT_LT(separator_luminance, 1);
+    EXPECT_GT(separator_luminance, tab_luminance);
+  }
+}
+#endif  // !defined(OS_MACOSX)
 
 }; // namespace theme_service_internal

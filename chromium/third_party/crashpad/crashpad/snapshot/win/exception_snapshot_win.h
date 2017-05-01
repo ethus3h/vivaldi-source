@@ -22,6 +22,7 @@
 #include "build/build_config.h"
 #include "snapshot/cpu_context.h"
 #include "snapshot/exception_snapshot.h"
+#include "snapshot/win/thread_snapshot_win.h"
 #include "util/misc/initialization_state_dcheck.h"
 #include "util/stdlib/pointer_container.h"
 #include "util/win/address_types.h"
@@ -35,6 +36,13 @@ namespace internal {
 
 class MemorySnapshotWin;
 
+#if defined(ARCH_CPU_X86_FAMILY)
+union CPUContextUnion {
+  CPUContextX86 x86;
+  CPUContextX86_64 x86_64;
+};
+#endif
+
 class ExceptionSnapshotWin final : public ExceptionSnapshot {
  public:
   ExceptionSnapshotWin();
@@ -45,9 +53,13 @@ class ExceptionSnapshotWin final : public ExceptionSnapshot {
   //! \param[in] process_reader A ProcessReader for the process that sustained
   //!     the exception.
   //! \param[in] thread_id The thread ID in which the exception occurred.
-  //! \param[in] exception_pointers_address The address of an
-  //!     `EXCEPTION_POINTERS` record in the target process, passed through from
-  //!     the exception handler.
+  //! \param[in] exception_pointers The address of an `EXCEPTION_POINTERS`
+  //!     record in the target process, passed through from the exception
+  //!     handler.
+  //!
+  //! \note If the exception was triggered by
+  //!     CrashpadClient::DumpAndCrashTargetProcess(), this has the side-effect
+  //!     of correcting the thread suspend counts for \a process_reader.
   //!
   //! \return `true` if the snapshot could be created, `false` otherwise with
   //!     an appropriate message logged.
@@ -69,15 +81,16 @@ class ExceptionSnapshotWin final : public ExceptionSnapshot {
   template <class ExceptionRecordType,
             class ExceptionPointersType,
             class ContextType>
-  bool InitializeFromExceptionPointers(const ProcessReaderWin& process_reader,
-                                       WinVMAddress exception_pointers_address,
-                                       ContextType* context_record);
+  bool InitializeFromExceptionPointers(
+      ProcessReaderWin* process_reader,
+      WinVMAddress exception_pointers_address,
+      DWORD exception_thread_id,
+      void (*native_to_cpu_context)(const ContextType& context_record,
+                                    CPUContext* context,
+                                    CPUContextUnion* context_union));
 
 #if defined(ARCH_CPU_X86_FAMILY)
-  union {
-    CPUContextX86 x86;
-    CPUContextX86_64 x86_64;
-  } context_union_;
+  CPUContextUnion context_union_;
 #endif
   CPUContext context_;
   std::vector<uint64_t> codes_;

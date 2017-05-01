@@ -8,12 +8,13 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/i18n/rtl.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -330,6 +331,10 @@ static void CheckCodeUnitPairs(const base::string16& text,
 #define MAYBE_ElideTextAtomicSequences ElideTextAtomicSequences
 #endif
 TEST(TextEliderTest, MAYBE_ElideTextAtomicSequences) {
+#if defined(OS_WIN)
+  // Needed to bypass DCHECK in GetFallbackFont.
+  base::MessageLoopForUI message_loop;
+#endif
   const FontList font_list;
   // The below is 'MUSICAL SYMBOL G CLEF' (U+1D11E), which is represented in
   // UTF-16 as two code units forming a surrogate pair: 0xD834 0xDD1E.
@@ -594,7 +599,7 @@ TEST(TextEliderTest, StringSlicerCombiningSurrogate) {
 TEST(TextEliderTest, ElideString) {
   struct TestData {
     const char* input;
-    int max_len;
+    size_t max_len;
     bool result;
     const char* output;
   } cases[] = {
@@ -831,7 +836,7 @@ TEST(TextEliderTest, MAYBE_ElideRectangleTextCheckLineWidth) {
   EXPECT_LE(GetStringWidthF(lines[1], font_list), kAvailableWidth);
 }
 
-#ifdef OS_CHROMEOS
+#if defined(OS_CHROMEOS)
 // This test was created specifically to test a message from crbug.com/415213.
 // It tests that width of concatenation of words equals sum of widths of the
 // words.
@@ -846,7 +851,7 @@ TEST(TextEliderTest, ElideRectangleTextCheckConcatWidthEqualsSumOfWidths) {
 #undef WIDTH
   SetFontRenderParamsDeviceScaleFactor(1.0f);
 }
-#endif // OS_CHROMEOS
+#endif  // defined(OS_CHROMEOS)
 
 // TODO(crbug.com/338784): Enable this on android.
 #if defined(OS_ANDROID)

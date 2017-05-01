@@ -4,16 +4,18 @@
 
 #include "base/metrics/statistics_recorder.h"
 
+#include <memory>
+
 #include "base/at_exit.h"
 #include "base/debug/leak_annotations.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/metrics_hashes.h"
+#include "base/metrics/persistent_histogram_allocator.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/synchronization/lock.h"
 #include "base/values.h"
 
 namespace {
@@ -31,45 +33,108 @@ bool HistogramNameLesser(const base::HistogramBase* a,
 
 namespace base {
 
+StatisticsRecorder::HistogramIterator::HistogramIterator(
+    const HistogramMap::iterator& iter, bool include_persistent)
+    : iter_(iter),
+      include_persistent_(include_persistent) {
+  // The starting location could point to a persistent histogram when such
+  // is not wanted. If so, skip it.
+  if (!include_persistent_ && iter_ != histograms_->end() &&
+      (iter_->second->flags() & HistogramBase::kIsPersistent)) {
+    // This operator will continue to skip until a non-persistent histogram
+    // is found.
+    operator++();
+  }
+}
+
+StatisticsRecorder::HistogramIterator::HistogramIterator(
+    const HistogramIterator& rhs)
+    : iter_(rhs.iter_),
+      include_persistent_(rhs.include_persistent_) {
+}
+
+StatisticsRecorder::HistogramIterator::~HistogramIterator() {}
+
+StatisticsRecorder::HistogramIterator&
+StatisticsRecorder::HistogramIterator::operator++() {
+  const HistogramMap::iterator histograms_end = histograms_->end();
+  if (iter_ == histograms_end)
+    return *this;
+
+  base::AutoLock auto_lock(lock_.Get());
+
+  for (;;) {
+    ++iter_;
+    if (iter_ == histograms_end)
+      break;
+    if (!include_persistent_ && (iter_->second->flags() &
+                                 HistogramBase::kIsPersistent)) {
+      continue;
+    }
+    break;
+  }
+
+  return *this;
+}
+
+StatisticsRecorder::~StatisticsRecorder() {
+  DCHECK(histograms_);
+  DCHECK(ranges_);
+
+  // Clean out what this object created and then restore what existed before.
+  Reset();
+  base::AutoLock auto_lock(lock_.Get());
+  histograms_ = existing_histograms_.release();
+  callbacks_ = existing_callbacks_.release();
+  ranges_ = existing_ranges_.release();
+}
+
 // static
 void StatisticsRecorder::Initialize() {
+  // Tests sometimes create local StatisticsRecorders in order to provide a
+  // contained environment of histograms that can be later discarded. If a
+  // true global instance gets created in this environment then it will
+  // eventually get disconnected when the local instance destructs and
+  // restores the previous state, resulting in no StatisticsRecorder at all.
+  // The global lazy instance, however, will remain valid thus ensuring that
+  // another never gets installed via this method. If a |histograms_| map
+  // exists then assume the StatisticsRecorder is already "initialized".
+  if (histograms_)
+    return;
+
   // Ensure that an instance of the StatisticsRecorder object is created.
   g_statistics_recorder_.Get();
 }
 
 // static
 bool StatisticsRecorder::IsActive() {
-  if (lock_ == NULL)
-    return false;
-  base::AutoLock auto_lock(*lock_);
-  return NULL != histograms_;
+  base::AutoLock auto_lock(lock_.Get());
+  return histograms_ != nullptr;
 }
 
 // static
 HistogramBase* StatisticsRecorder::RegisterOrDeleteDuplicate(
     HistogramBase* histogram) {
-  // As per crbug.com/79322 the histograms are intentionally leaked, so we need
-  // to annotate them. Because ANNOTATE_LEAKING_OBJECT_PTR may be used only once
-  // for an object, the duplicates should not be annotated.
-  // Callers are responsible for not calling RegisterOrDeleteDuplicate(ptr)
-  // twice if (lock_ == NULL) || (!histograms_).
-  if (lock_ == NULL) {
-    ANNOTATE_LEAKING_OBJECT_PTR(histogram);  // see crbug.com/79322
-    return histogram;
-  }
-
-  HistogramBase* histogram_to_delete = NULL;
-  HistogramBase* histogram_to_return = NULL;
+  HistogramBase* histogram_to_delete = nullptr;
+  HistogramBase* histogram_to_return = nullptr;
   {
-    base::AutoLock auto_lock(*lock_);
-    if (histograms_ == NULL) {
+    base::AutoLock auto_lock(lock_.Get());
+    if (!histograms_) {
       histogram_to_return = histogram;
+
+      // As per crbug.com/79322 the histograms are intentionally leaked, so we
+      // need to annotate them. Because ANNOTATE_LEAKING_OBJECT_PTR may be used
+      // only once for an object, the duplicates should not be annotated.
+      // Callers are responsible for not calling RegisterOrDeleteDuplicate(ptr)
+      // twice |if (!histograms_)|.
+      ANNOTATE_LEAKING_OBJECT_PTR(histogram);  // see crbug.com/79322
     } else {
       const std::string& name = histogram->histogram_name();
-      uint64_t name_hash = histogram->name_hash();
-      HistogramMap::iterator it = histograms_->find(name_hash);
+      HistogramMap::iterator it = histograms_->find(name);
       if (histograms_->end() == it) {
-        (*histograms_)[name_hash] = histogram;
+        // The StringKey references the name within |histogram| rather than
+        // making a copy.
+        (*histograms_)[name] = histogram;
         ANNOTATE_LEAKING_OBJECT_PTR(histogram);  // see crbug.com/79322
         // If there are callbacks for this histogram, we set the kCallbackExists
         // flag.
@@ -101,15 +166,10 @@ HistogramBase* StatisticsRecorder::RegisterOrDeleteDuplicate(
 const BucketRanges* StatisticsRecorder::RegisterOrDeleteDuplicateRanges(
     const BucketRanges* ranges) {
   DCHECK(ranges->HasValidChecksum());
-  scoped_ptr<const BucketRanges> ranges_deleter;
+  std::unique_ptr<const BucketRanges> ranges_deleter;
 
-  if (lock_ == NULL) {
-    ANNOTATE_LEAKING_OBJECT_PTR(ranges);
-    return ranges;
-  }
-
-  base::AutoLock auto_lock(*lock_);
-  if (ranges_ == NULL) {
+  base::AutoLock auto_lock(lock_.Get());
+  if (!ranges_) {
     ANNOTATE_LEAKING_OBJECT_PTR(ranges);
     return ranges;
   }
@@ -206,14 +266,11 @@ std::string StatisticsRecorder::ToJSON(const std::string& query) {
 
 // static
 void StatisticsRecorder::GetHistograms(Histograms* output) {
-  if (lock_ == NULL)
-    return;
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
     return;
 
   for (const auto& entry : *histograms_) {
-    DCHECK_EQ(entry.first, entry.second->name_hash());
     output->push_back(entry.second);
   }
 }
@@ -221,97 +278,72 @@ void StatisticsRecorder::GetHistograms(Histograms* output) {
 // static
 void StatisticsRecorder::GetBucketRanges(
     std::vector<const BucketRanges*>* output) {
-  if (lock_ == NULL)
-    return;
-  base::AutoLock auto_lock(*lock_);
-  if (ranges_ == NULL)
+  base::AutoLock auto_lock(lock_.Get());
+  if (!ranges_)
     return;
 
   for (const auto& entry : *ranges_) {
-    for (const auto& range_entry : *entry.second) {
+    for (auto* range_entry : *entry.second) {
       output->push_back(range_entry);
     }
   }
 }
 
 // static
-HistogramBase* StatisticsRecorder::FindHistogram(const std::string& name) {
-  if (lock_ == NULL)
-    return NULL;
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
-    return NULL;
+HistogramBase* StatisticsRecorder::FindHistogram(base::StringPiece name) {
+  // This must be called *before* the lock is acquired below because it will
+  // call back into this object to register histograms. Those called methods
+  // will acquire the lock at that time.
+  ImportGlobalPersistentHistograms();
 
-  HistogramMap::iterator it = histograms_->find(HashMetricName(name));
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
+    return nullptr;
+
+  HistogramMap::iterator it = histograms_->find(name);
   if (histograms_->end() == it)
-    return NULL;
-  DCHECK_EQ(name, it->second->histogram_name()) << "hash collision";
+    return nullptr;
   return it->second;
 }
 
 // static
-bool StatisticsRecorder::SetCallback(
-    const std::string& name,
-    const StatisticsRecorder::OnSampleCallback& cb) {
-  DCHECK(!cb.is_null());
-  if (lock_ == NULL)
-    return false;
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
-    return false;
+StatisticsRecorder::HistogramIterator StatisticsRecorder::begin(
+    bool include_persistent) {
+  DCHECK(histograms_);
+  ImportGlobalPersistentHistograms();
 
-  if (ContainsKey(*callbacks_, name))
-    return false;
-  callbacks_->insert(std::make_pair(name, cb));
-
-  HistogramMap::iterator it = histograms_->find(HashMetricName(name));
-  if (it != histograms_->end()) {
-    DCHECK_EQ(name, it->second->histogram_name()) << "hash collision";
-    it->second->SetFlags(HistogramBase::kCallbackExists);
+  HistogramMap::iterator iter_begin;
+  {
+    base::AutoLock auto_lock(lock_.Get());
+    iter_begin = histograms_->begin();
   }
-
-  return true;
+  return HistogramIterator(iter_begin, include_persistent);
 }
 
 // static
-void StatisticsRecorder::ClearCallback(const std::string& name) {
-  if (lock_ == NULL)
-    return;
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
-    return;
-
-  callbacks_->erase(name);
-
-  // We also clear the flag from the histogram (if it exists).
-  HistogramMap::iterator it = histograms_->find(HashMetricName(name));
-  if (it != histograms_->end()) {
-    DCHECK_EQ(name, it->second->histogram_name()) << "hash collision";
-    it->second->ClearFlags(HistogramBase::kCallbackExists);
+StatisticsRecorder::HistogramIterator StatisticsRecorder::end() {
+  HistogramMap::iterator iter_end;
+  {
+    base::AutoLock auto_lock(lock_.Get());
+    iter_end = histograms_->end();
   }
+  return HistogramIterator(iter_end, true);
 }
 
 // static
-StatisticsRecorder::OnSampleCallback StatisticsRecorder::FindCallback(
-    const std::string& name) {
-  if (lock_ == NULL)
-    return OnSampleCallback();
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
-    return OnSampleCallback();
+void StatisticsRecorder::InitLogOnShutdown() {
+  if (!histograms_)
+    return;
 
-  auto callback_iterator = callbacks_->find(name);
-  return callback_iterator != callbacks_->end() ? callback_iterator->second
-                                                : OnSampleCallback();
+  base::AutoLock auto_lock(lock_.Get());
+  g_statistics_recorder_.Get().InitLogOnShutdownWithoutLock();
 }
 
-// private static
+// static
 void StatisticsRecorder::GetSnapshot(const std::string& query,
                                      Histograms* snapshot) {
-  if (lock_ == NULL)
-    return;
-  base::AutoLock auto_lock(*lock_);
-  if (histograms_ == NULL)
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
     return;
 
   for (const auto& entry : *histograms_) {
@@ -320,27 +352,143 @@ void StatisticsRecorder::GetSnapshot(const std::string& query,
   }
 }
 
+// static
+bool StatisticsRecorder::SetCallback(
+    const std::string& name,
+    const StatisticsRecorder::OnSampleCallback& cb) {
+  DCHECK(!cb.is_null());
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
+    return false;
+
+  if (ContainsKey(*callbacks_, name))
+    return false;
+  callbacks_->insert(std::make_pair(name, cb));
+
+  auto it = histograms_->find(name);
+  if (it != histograms_->end())
+    it->second->SetFlags(HistogramBase::kCallbackExists);
+
+  return true;
+}
+
+// static
+void StatisticsRecorder::ClearCallback(const std::string& name) {
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
+    return;
+
+  callbacks_->erase(name);
+
+  // We also clear the flag from the histogram (if it exists).
+  auto it = histograms_->find(name);
+  if (it != histograms_->end())
+    it->second->ClearFlags(HistogramBase::kCallbackExists);
+}
+
+// static
+StatisticsRecorder::OnSampleCallback StatisticsRecorder::FindCallback(
+    const std::string& name) {
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
+    return OnSampleCallback();
+
+  auto callback_iterator = callbacks_->find(name);
+  return callback_iterator != callbacks_->end() ? callback_iterator->second
+                                                : OnSampleCallback();
+}
+
+// static
+size_t StatisticsRecorder::GetHistogramCount() {
+  base::AutoLock auto_lock(lock_.Get());
+  if (!histograms_)
+    return 0;
+  return histograms_->size();
+}
+
+// static
+void StatisticsRecorder::ForgetHistogramForTesting(base::StringPiece name) {
+  if (histograms_)
+    histograms_->erase(name);
+}
+
+// static
+std::unique_ptr<StatisticsRecorder>
+StatisticsRecorder::CreateTemporaryForTesting() {
+  return WrapUnique(new StatisticsRecorder());
+}
+
+// static
+void StatisticsRecorder::UninitializeForTesting() {
+  // Stop now if it's never been initialized.
+  if (!histograms_)
+    return;
+
+  // Get the global instance and destruct it. It's held in static memory so
+  // can't "delete" it; call the destructor explicitly.
+  DCHECK(g_statistics_recorder_.private_instance_);
+  g_statistics_recorder_.Get().~StatisticsRecorder();
+
+  // Now the ugly part. There's no official way to release a LazyInstance once
+  // created so it's necessary to clear out an internal variable which
+  // shouldn't be publicly visible but is for initialization reasons.
+  g_statistics_recorder_.private_instance_ = 0;
+}
+
+// static
+void StatisticsRecorder::ImportGlobalPersistentHistograms() {
+  if (!histograms_)
+    return;
+
+  // Import histograms from known persistent storage. Histograms could have
+  // been added by other processes and they must be fetched and recognized
+  // locally. If the persistent memory segment is not shared between processes,
+  // this call does nothing.
+  GlobalHistogramAllocator* allocator = GlobalHistogramAllocator::Get();
+  if (allocator)
+    allocator->ImportHistogramsToStatisticsRecorder();
+}
+
 // This singleton instance should be started during the single threaded portion
 // of main(), and hence it is not thread safe.  It initializes globals to
 // provide support for all future calls.
 StatisticsRecorder::StatisticsRecorder() {
-  DCHECK(!histograms_);
-  if (lock_ == NULL) {
-    // This will leak on purpose. It's the only way to make sure we won't race
-    // against the static uninitialization of the module while one of our
-    // static methods relying on the lock get called at an inappropriate time
-    // during the termination phase. Since it's a static data member, we will
-    // leak one per process, which would be similar to the instance allocated
-    // during static initialization and released only on  process termination.
-    lock_ = new base::Lock;
-  }
-  base::AutoLock auto_lock(*lock_);
+  base::AutoLock auto_lock(lock_.Get());
+
+  existing_histograms_.reset(histograms_);
+  existing_callbacks_.reset(callbacks_);
+  existing_ranges_.reset(ranges_);
+
   histograms_ = new HistogramMap;
   callbacks_ = new CallbackMap;
   ranges_ = new RangesMap;
 
-  if (VLOG_IS_ON(1))
+  InitLogOnShutdownWithoutLock();
+}
+
+void StatisticsRecorder::InitLogOnShutdownWithoutLock() {
+  if (!vlog_initialized_ && VLOG_IS_ON(1)) {
+    vlog_initialized_ = true;
     AtExitManager::RegisterCallback(&DumpHistogramsToVlog, this);
+  }
+}
+
+// static
+void StatisticsRecorder::Reset() {
+
+  std::unique_ptr<HistogramMap> histograms_deleter;
+  std::unique_ptr<CallbackMap> callbacks_deleter;
+  std::unique_ptr<RangesMap> ranges_deleter;
+  {
+    base::AutoLock auto_lock(lock_.Get());
+    histograms_deleter.reset(histograms_);
+    callbacks_deleter.reset(callbacks_);
+    ranges_deleter.reset(ranges_);
+    histograms_ = nullptr;
+    callbacks_ = nullptr;
+    ranges_ = nullptr;
+  }
+  // We are going to leak the histograms and the ranges.
 }
 
 // static
@@ -350,35 +498,15 @@ void StatisticsRecorder::DumpHistogramsToVlog(void* instance) {
   VLOG(1) << output;
 }
 
-StatisticsRecorder::~StatisticsRecorder() {
-  DCHECK(histograms_ && ranges_ && lock_);
-
-  // Clean up.
-  scoped_ptr<HistogramMap> histograms_deleter;
-  scoped_ptr<CallbackMap> callbacks_deleter;
-  scoped_ptr<RangesMap> ranges_deleter;
-  // We don't delete lock_ on purpose to avoid having to properly protect
-  // against it going away after we checked for NULL in the static methods.
-  {
-    base::AutoLock auto_lock(*lock_);
-    histograms_deleter.reset(histograms_);
-    callbacks_deleter.reset(callbacks_);
-    ranges_deleter.reset(ranges_);
-    histograms_ = NULL;
-    callbacks_ = NULL;
-    ranges_ = NULL;
-  }
-  // We are going to leak the histograms and the ranges.
-}
-
 
 // static
-StatisticsRecorder::HistogramMap* StatisticsRecorder::histograms_ = NULL;
+StatisticsRecorder::HistogramMap* StatisticsRecorder::histograms_ = nullptr;
 // static
-StatisticsRecorder::CallbackMap* StatisticsRecorder::callbacks_ = NULL;
+StatisticsRecorder::CallbackMap* StatisticsRecorder::callbacks_ = nullptr;
 // static
-StatisticsRecorder::RangesMap* StatisticsRecorder::ranges_ = NULL;
+StatisticsRecorder::RangesMap* StatisticsRecorder::ranges_ = nullptr;
 // static
-base::Lock* StatisticsRecorder::lock_ = NULL;
+base::LazyInstance<base::Lock>::Leaky StatisticsRecorder::lock_ =
+    LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace base

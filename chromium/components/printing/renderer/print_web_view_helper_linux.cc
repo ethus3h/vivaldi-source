@@ -9,6 +9,7 @@
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "components/printing/common/print_messages.h"
+#include "printing/features/features.h"
 #include "printing/metafile_skia_wrapper.h"
 
 #if defined(OS_ANDROID)
@@ -17,14 +18,36 @@
 #include "base/process/process_handle.h"
 #endif  // defined(OS_ANDROID)
 
+namespace {
+
+#if defined(OS_ANDROID)
+bool SaveToFD(const printing::Metafile& metafile,
+              const base::FileDescriptor& fd) {
+  DCHECK_GT(metafile.GetDataSize(), 0U);
+
+  if (fd.fd < 0) {
+    DLOG(ERROR) << "Invalid file descriptor!";
+    return false;
+  }
+  base::File file(fd.fd);
+  bool result = metafile.SaveTo(&file);
+  DLOG_IF(ERROR, !result) << "Failed to save file with fd " << fd.fd;
+
+  if (!fd.auto_close)
+    file.TakePlatformFile();
+  return result;
+}
+#endif  // defined(OS_ANDROID)
+
+}  // namespace
+
 namespace printing {
 
-#if defined(ENABLE_BASIC_PRINTING)
-bool PrintWebViewHelper::PrintPagesNative(blink::WebFrame* frame,
+#if BUILDFLAG(ENABLE_BASIC_PRINTING)
+bool PrintWebViewHelper::PrintPagesNative(blink::WebLocalFrame* frame,
                                           int page_count) {
-  PdfMetafileSkia metafile;
-  if (!metafile.Init())
-    return false;
+  PdfMetafileSkia metafile(PDF_SKIA_DOCUMENT_TYPE);
+  CHECK(metafile.Init());
 
   const PrintMsg_PrintPages_Params& params = *print_pages_params_;
   std::vector<int> printed_pages = GetPrintedPages(params, page_count);
@@ -51,7 +74,7 @@ bool PrintWebViewHelper::PrintPagesNative(blink::WebFrame* frame,
   Send(new PrintHostMsg_AllocateTempFileForPrinting(routing_id(),
                                                     &fd,
                                                     &sequence_number));
-  if (!metafile.SaveToFD(fd))
+  if (!SaveToFD(metafile, fd))
     return false;
 
   // Tell the browser we've finished writing the file.
@@ -78,6 +101,6 @@ bool PrintWebViewHelper::PrintPagesNative(blink::WebFrame* frame,
   return true;
 #endif  // defined(OS_ANDROID)
 }
-#endif  // defined(ENABLE_BASIC_PRINTING)
+#endif  // BUILDFLAG(ENABLE_BASIC_PRINTING)
 
 }  // namespace printing

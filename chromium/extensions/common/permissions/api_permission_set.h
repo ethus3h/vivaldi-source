@@ -22,7 +22,6 @@ class ListValue;
 namespace extensions {
 
 class APIPermissionSet;
-class Extension;
 
 template<>
 struct BaseSetOperatorsTraits<APIPermissionSet> {
@@ -117,6 +116,7 @@ class PermissionIDSet {
   using const_iterator = std::set<PermissionID>::const_iterator;
 
   PermissionIDSet();
+  PermissionIDSet(const PermissionIDSet& other);
   virtual ~PermissionIDSet();
 
   // Adds the given permission, and an optional parameter, to the set.
@@ -161,7 +161,7 @@ class PermissionIDSet {
   const_iterator end() const { return permissions_.end(); }
 
  private:
-  PermissionIDSet(const std::set<PermissionID>& permissions);
+  explicit PermissionIDSet(const std::set<PermissionID>& permissions);
 
   std::set<PermissionID> permissions_;
 };

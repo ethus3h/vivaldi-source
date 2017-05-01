@@ -8,11 +8,14 @@
 #include "base/metrics/field_trial.h"
 #include "base/strings/string_util.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "content/public/common/content_switches.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest_handlers/app_isolation_info.h"
 #include "extensions/common/switches.h"
+
+#include "app/vivaldi_apptools.h"
 
 namespace extensions {
 
@@ -69,7 +72,9 @@ bool CrossesExtensionProcessBoundary(
 
 bool IsIsolateExtensionsEnabled() {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kIsolateExtensions)) {
+          switches::kIsolateExtensions) ||
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kSitePerProcess)) {
     return true;
   }
 

@@ -5,12 +5,14 @@
 #include <vector>
 
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/renderer/scoped_web_frame.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
+#include "extensions/renderer/test_extensions_renderer_client.h"
 #include "gin/public/context_holder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/public/web/WebFrame.h"
@@ -21,6 +23,8 @@ namespace extensions {
 TEST(ScriptContextSetTest, Lifecycle) {
   base::MessageLoop loop;
   ScopedWebFrame web_frame;
+  // Used by ScriptContextSet::Register().
+  TestExtensionsRendererClient extensions_renderer_client;
 
   // Do this after construction of the webview, since it may construct the
   // Isolate.
@@ -35,8 +39,8 @@ TEST(ScriptContextSetTest, Lifecycle) {
 
   ExtensionIdSet active_extensions;
   ScriptContextSet context_set(&active_extensions);
-  ScriptContext* context = context_set.Register(
-      web_frame.frame(), v8_context, 0, 0);  // no extension group or world ID
+  ScriptContext* context =
+      context_set.Register(web_frame.frame(), v8_context, 0);  // no world ID
 
   // Context is valid and resembles correctness.
   EXPECT_TRUE(context->is_valid());
@@ -56,7 +60,7 @@ TEST(ScriptContextSetTest, Lifecycle) {
   EXPECT_FALSE(context->is_valid());
 
   // Run loop to do the actual deletion.
-  loop.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace extensions

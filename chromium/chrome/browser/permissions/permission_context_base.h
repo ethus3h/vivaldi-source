@@ -5,23 +5,24 @@
 #ifndef CHROME_BROWSER_PERMISSIONS_PERMISSION_CONTEXT_BASE_H_
 #define CHROME_BROWSER_PERMISSIONS_PERMISSION_CONTEXT_BASE_H_
 
-#include <map>
+#include <memory>
+#include <unordered_map>
 
-#include "base/callback.h"
-#include "base/containers/scoped_ptr_hash_map.h"
-#include "base/memory/ref_counted.h"
+#include "base/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/website_settings/permission_bubble_request.h"
+#include "chrome/browser/permissions/permission_request.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/permission_type.h"
-#include "url/gurl.h"
+
+#include <map>
 
 #if defined(OS_ANDROID)
 class PermissionQueueController;
 #endif
+class GURL;
 class PermissionRequestID;
 class Profile;
 
@@ -29,11 +30,15 @@ namespace content {
 class WebContents;
 }
 
+namespace safe_browsing {
+class SafeBrowsingDatabaseManager;
+}
+
 using BrowserPermissionCallback = base::Callback<void(ContentSetting)>;
 
 // This base class contains common operations for granting permissions.
 // It offers the following functionality:
-//   - Creates a bubble or infobar when a permission is needed
+//   - Creates a permission request when needed.
 //   - If accepted/denied the permission is saved in content settings for
 //     future uses (for the domain that requested it).
 //   - If dismissed the permission is not saved but it's considered denied for
@@ -46,8 +51,7 @@ using BrowserPermissionCallback = base::Callback<void(ContentSetting)>;
 //     new permission.
 //   - Inherit from PermissionInfobarDelegate and implement
 //     |GetMessageText|
-//   - Edit the PermissionBubbleRequestImpl methods to add the new text for
-//     the bubble.
+//   - Edit the PermissionRequestImpl methods to add the new text.
 //   - Hit several asserts for the missing plumbing and fix them :)
 // After this you can override several other methods to customize behavior,
 // in particular it is advised to override UpdateTabContext in order to manage
@@ -64,11 +68,13 @@ class PermissionContextBase : public KeyedService {
   ~PermissionContextBase() override;
 
   // A field trial used to enable the global permissions kill switch.
-  // This is public for testing purposes.
+  // This is public so permissions that don't yet inherit from
+  // PermissionContextBase can use it.
   static const char kPermissionsKillSwitchFieldStudy[];
 
   // The field trial param to enable the global permissions kill switch.
-  // This is public for testing purposes.
+  // This is public so permissions that don't yet inherit from
+  // PermissionContextBase can use it.
   static const char kPermissionsKillSwitchBlockedValue[];
 
   // The renderer is requesting permission to push messages.
@@ -80,10 +86,11 @@ class PermissionContextBase : public KeyedService {
                                  bool user_gesture,
                                  const BrowserPermissionCallback& callback);
 
-  // Returns whether the permission has been granted, denied...
-  virtual ContentSetting GetPermissionStatus(
-      const GURL& requesting_origin,
-      const GURL& embedding_origin) const;
+  // Returns whether the permission has been granted, denied etc.
+  // TODO(meredithl): Ensure that the result accurately reflects whether the
+  // origin is blacklisted for this permission.
+  ContentSetting GetPermissionStatus(const GURL& requesting_origin,
+                                     const GURL& embedding_origin) const;
 
   // Resets the permission to its default value.
   virtual void ResetPermission(const GURL& requesting_origin,
@@ -100,6 +107,10 @@ class PermissionContextBase : public KeyedService {
   bool IsPermissionKillSwitchOn() const;
 
  protected:
+  virtual ContentSetting GetPermissionStatusInternal(
+      const GURL& requesting_origin,
+      const GURL& embedding_origin) const;
+
   // Decide whether the permission should be granted.
   // Calls PermissionDecided if permission can be decided non-interactively,
   // or NotifyPermissionSet if permission decided by presenting an infobar.
@@ -114,6 +125,7 @@ class PermissionContextBase : public KeyedService {
   void PermissionDecided(const PermissionRequestID& id,
                          const GURL& requesting_origin,
                          const GURL& embedding_origin,
+                         bool user_gesture,
                          const BrowserPermissionCallback& callback,
                          bool persist,
                          ContentSetting content_setting);
@@ -122,6 +134,7 @@ class PermissionContextBase : public KeyedService {
         const PermissionRequestID& id,
         const GURL& requesting_origin,
         const GURL& embedding_origin,
+        bool user_gesture,
         const BrowserPermissionCallback& callback,
         bool allowed,
         const std::string &user_input
@@ -164,18 +177,37 @@ class PermissionContextBase : public KeyedService {
   }
 
  private:
-  // Called when a bubble is no longer used so it can be cleaned up.
-  void CleanUpBubble(const PermissionRequestID& id);
+  friend class PermissionContextBaseTests;
+
+  // Called when a request is no longer used so it can be cleaned up.
+  void CleanUpRequest(const PermissionRequestID& id);
   int RemoveBridgeID(int bridge_id);
+
+  // Called when the requesting origin and permission have been checked by Safe
+  // Browsing. |permission_blocked| determines whether to auto-block the
+  // permission request without prompting the user for a decision.
+  void ContinueRequestPermission(content::WebContents* web_contents,
+                                 const PermissionRequestID& id,
+                                 const GURL& requesting_origin,
+                                 const GURL& embedding_origin,
+                                 bool user_gesture,
+                                 const BrowserPermissionCallback& callback,
+                                 bool permission_blocked);
+
+  void SetSafeBrowsingDatabaseManagerAndTimeoutForTest(
+      scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> db_manager,
+      int timeout);
 
   Profile* profile_;
   const content::PermissionType permission_type_;
   const ContentSettingsType content_settings_type_;
+  int safe_browsing_timeout_;
+  scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> db_manager_;
 #if defined(OS_ANDROID)
-  scoped_ptr<PermissionQueueController> permission_queue_controller_;
+  std::unique_ptr<PermissionQueueController> permission_queue_controller_;
 #endif
-  base::ScopedPtrHashMap<std::string, scoped_ptr<PermissionBubbleRequest>>
-      pending_bubbles_;
+  std::unordered_map<std::string, std::unique_ptr<PermissionRequest>>
+      pending_requests_;
 
   std::map<int, int> bridge_id_to_request_id_map_;
 

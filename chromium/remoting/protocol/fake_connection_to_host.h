@@ -23,8 +23,10 @@ class FakeConnectionToHost : public protocol::ConnectionToHost {
   void set_client_stub(protocol::ClientStub* client_stub) override;
   void set_clipboard_stub(protocol::ClipboardStub* clipboard_stub) override;
   void set_video_renderer(protocol::VideoRenderer* video_renderer) override;
-  void set_audio_stub(protocol::AudioStub* audio_stub) override;
-  void Connect(scoped_ptr<protocol::Session> session,
+  virtual void InitializeAudio(
+      scoped_refptr<base::SingleThreadTaskRunner> audio_decode_task_runner,
+      base::WeakPtr<protocol::AudioStub> audio_stub) override;
+  void Connect(std::unique_ptr<protocol::Session> session,
                scoped_refptr<protocol::TransportContext> transport_context,
                HostEventCallback* event_callback) override;
   const protocol::SessionConfig& config() override;
@@ -51,7 +53,7 @@ class FakeConnectionToHost : public protocol::ConnectionToHost {
   testing::NiceMock<protocol::MockClipboardStub> mock_clipboard_stub_;
   testing::NiceMock<protocol::MockHostStub> mock_host_stub_;
   testing::NiceMock<protocol::MockInputStub> mock_input_stub_;
-  scoped_ptr<protocol::SessionConfig> session_config_;
+  std::unique_ptr<protocol::SessionConfig> session_config_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeConnectionToHost);
 };

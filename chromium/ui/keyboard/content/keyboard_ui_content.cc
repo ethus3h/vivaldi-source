@@ -26,6 +26,7 @@
 #include "ui/keyboard/keyboard_switches.h"
 #include "ui/keyboard/keyboard_util.h"
 #include "ui/wm/core/shadow.h"
+#include "ui/wm/core/shadow_types.h"
 
 namespace {
 
@@ -57,10 +58,12 @@ class KeyboardContentsDelegate : public content::WebContentsDelegate,
 
   bool ShouldCreateWebContents(
       content::WebContents* web_contents,
-      int route_id,
-      int main_frame_route_id,
-      int main_frame_widget_route_id,
+      content::SiteInstance* source_site_instance,
+      int32_t route_id,
+      int32_t main_frame_route_id,
+      int32_t main_frame_widget_route_id,
       WindowContainerType window_container_type,
+      const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
       const std::string& partition_id,
@@ -166,7 +169,7 @@ void KeyboardUIContent::UpdateInsetsForWindow(aura::Window* window) {
   if (!ShouldWindowOverscroll(window))
     return;
 
-  scoped_ptr<content::RenderWidgetHostIterator> widgets(
+  std::unique_ptr<content::RenderWidgetHostIterator> widgets(
       content::RenderWidgetHost::GetRenderWidgetHosts());
   while (content::RenderWidgetHost* widget = widgets->GetNextHost()) {
     content::RenderWidgetHostView* view = widget->GetView();
@@ -201,7 +204,7 @@ aura::Window* KeyboardUIContent::GetKeyboardWindow() {
 }
 
 bool KeyboardUIContent::HasKeyboardWindow() const {
-  return keyboard_contents_;
+  return !!keyboard_contents_;
 }
 
 bool KeyboardUIContent::ShouldWindowOverscroll(aura::Window* window) const {
@@ -230,7 +233,7 @@ void KeyboardUIContent::InitInsets(const gfx::Rect& new_bounds) {
   // display.
   // TODO(kevers): Add EnvObserver to properly initialize insets if a
   // window is created while the keyboard is visible.
-  scoped_ptr<content::RenderWidgetHostIterator> widgets(
+  std::unique_ptr<content::RenderWidgetHostIterator> widgets(
       content::RenderWidgetHost::GetRenderWidgetHosts());
   while (content::RenderWidgetHost* widget = widgets->GetNextHost()) {
     content::RenderWidgetHostView* view = widget->GetView();
@@ -238,6 +241,12 @@ void KeyboardUIContent::InitInsets(const gfx::Rect& new_bounds) {
     // the render process crashed.
     if (view) {
       aura::Window* window = view->GetNativeView();
+      // Added while we determine if RenderWidgetHostViewChildFrame can be
+      // changed to always return a non-null value: https://crbug.com/644726 .
+      // If we cannot guarantee a non-null value, then this may need to stay.
+      if (!window)
+        continue;
+
       if (ShouldWindowOverscroll(window)) {
         gfx::Rect window_bounds = window->GetBoundsInScreen();
         gfx::Rect intersect = gfx::IntersectRects(window_bounds,
@@ -255,7 +264,7 @@ void KeyboardUIContent::InitInsets(const gfx::Rect& new_bounds) {
 
 void KeyboardUIContent::ResetInsets() {
   const gfx::Insets insets;
-  scoped_ptr<content::RenderWidgetHostIterator> widgets(
+  std::unique_ptr<content::RenderWidgetHostIterator> widgets(
       content::RenderWidgetHost::GetRenderWidgetHosts());
   while (content::RenderWidgetHost* widget = widgets->GetNextHost()) {
     content::RenderWidgetHostView* view = widget->GetView();
@@ -273,7 +282,7 @@ void KeyboardUIContent::OnWindowBoundsChanged(aura::Window* window,
                                               const gfx::Rect& new_bounds) {
   if (!shadow_) {
     shadow_.reset(new wm::Shadow());
-    shadow_->Init(wm::Shadow::STYLE_ACTIVE);
+    shadow_->Init(wm::ShadowElevation::LARGE);
     shadow_->layer()->SetVisible(true);
     DCHECK(keyboard_contents_->GetNativeView()->parent());
     keyboard_contents_->GetNativeView()->parent()->layer()->Add(
@@ -296,12 +305,9 @@ const aura::Window* KeyboardUIContent::GetKeyboardRootWindow() const {
 
 void KeyboardUIContent::LoadContents(const GURL& url) {
   if (keyboard_contents_) {
-    content::OpenURLParams params(
-        url,
-        content::Referrer(),
-        SINGLETON_TAB,
-        ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-        false);
+    content::OpenURLParams params(url, content::Referrer(),
+                                  WindowOpenDisposition::SINGLETON_TAB,
+                                  ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false);
     keyboard_contents_->OpenURL(params);
   }
 }

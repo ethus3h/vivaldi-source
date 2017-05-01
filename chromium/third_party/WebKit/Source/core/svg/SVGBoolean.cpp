@@ -34,42 +34,46 @@
 
 namespace blink {
 
-String SVGBoolean::valueAsString() const
-{
-    return m_value ? "true" : "false";
+String SVGBoolean::valueAsString() const {
+  return m_value ? "true" : "false";
 }
 
-SVGParsingError SVGBoolean::setValueAsString(const String& value)
-{
-    if (value == "true") {
-        m_value = true;
-        return NoError;
-    }
-    if (value == "false") {
-        m_value = false;
-        return NoError;
-    }
-    return ParsingAttributeFailedError;
+SVGParsingError SVGBoolean::setValueAsString(const String& value) {
+  if (value == "true") {
+    m_value = true;
+    return SVGParseStatus::NoError;
+  }
+  if (value == "false") {
+    m_value = false;
+    return SVGParseStatus::NoError;
+  }
+  return SVGParseStatus::ExpectedBoolean;
 }
 
-void SVGBoolean::add(PassRefPtrWillBeRawPtr<SVGPropertyBase>, SVGElement*)
-{
-    ASSERT_NOT_REACHED();
+void SVGBoolean::add(SVGPropertyBase*, SVGElement*) {
+  ASSERT_NOT_REACHED();
 }
 
-void SVGBoolean::calculateAnimatedValue(SVGAnimationElement* animationElement, float percentage, unsigned repeatCount, PassRefPtrWillBeRawPtr<SVGPropertyBase> from, PassRefPtrWillBeRawPtr<SVGPropertyBase> to, PassRefPtrWillBeRawPtr<SVGPropertyBase>, SVGElement*)
-{
-    ASSERT(animationElement);
-    bool fromBoolean = animationElement->animationMode() == ToAnimation ? m_value : toSVGBoolean(from)->value();
-    bool toBoolean = toSVGBoolean(to)->value();
+void SVGBoolean::calculateAnimatedValue(SVGAnimationElement* animationElement,
+                                        float percentage,
+                                        unsigned repeatCount,
+                                        SVGPropertyBase* from,
+                                        SVGPropertyBase* to,
+                                        SVGPropertyBase*,
+                                        SVGElement*) {
+  ASSERT(animationElement);
+  bool fromBoolean = animationElement->getAnimationMode() == ToAnimation
+                         ? m_value
+                         : toSVGBoolean(from)->value();
+  bool toBoolean = toSVGBoolean(to)->value();
 
-    animationElement->animateDiscreteType<bool>(percentage, fromBoolean, toBoolean, m_value);
+  animationElement->animateDiscreteType<bool>(percentage, fromBoolean,
+                                              toBoolean, m_value);
 }
 
-float SVGBoolean::calculateDistance(PassRefPtrWillBeRawPtr<SVGPropertyBase>, SVGElement*)
-{
-    // No paced animations for boolean.
-    return -1;
+float SVGBoolean::calculateDistance(SVGPropertyBase*, SVGElement*) {
+  // No paced animations for boolean.
+  return -1;
 }
 
-}
+}  // namespace blink

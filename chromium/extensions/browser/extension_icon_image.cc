@@ -24,7 +24,7 @@
 // The ImageSkia provided by extensions::IconImage contains ImageSkiaReps that
 // are computed and updated using the following algorithm (if no default icon
 // was supplied, transparent icon is considered the default):
-// - |LoadImageForScaleFactors()| searches the extension for an icon of an
+// - |LoadImageForScale()| searches the extension for an icon of an
 //   appropriate size. If the extension doesn't have a icon resource needed for
 //   the image representation, the default icon's representation for the
 //   requested scale factor is returned by ImageSkiaSource.
@@ -43,13 +43,13 @@
 namespace {
 
 extensions::ExtensionResource GetExtensionIconResource(
-    const extensions::Extension* extension,
+    const extensions::Extension& extension,
     const ExtensionIconSet& icons,
     int size,
     ExtensionIconSet::MatchType match_type) {
   const std::string& path = icons.Get(size, match_type);
   return path.empty() ? extensions::ExtensionResource()
-                      : extension->GetResource(path);
+                      : extension.GetResource(path);
 }
 
 class BlankImageSource : public gfx::CanvasImageSource {
@@ -111,10 +111,8 @@ void IconImage::Source::ResetHost() {
 
 gfx::ImageSkiaRep IconImage::Source::GetImageForScale(float scale) {
   gfx::ImageSkiaRep representation;
-  if (host_) {
-    representation =
-        host_->LoadImageForScaleFactor(ui::GetSupportedScaleFactor(scale));
-  }
+  if (host_)
+    representation = host_->LoadImageForScale(scale);
 
   if (!representation.is_null())
     return representation;
@@ -163,32 +161,31 @@ void IconImage::RemoveObserver(Observer* observer) {
 }
 
 IconImage::~IconImage() {
-  FOR_EACH_OBSERVER(Observer, observers_, OnExtensionIconImageDestroyed(this));
+  for (auto& observer : observers_)
+    observer.OnExtensionIconImageDestroyed(this);
   source_->ResetHost();
 }
 
-gfx::ImageSkiaRep IconImage::LoadImageForScaleFactor(
-    ui::ScaleFactor scale_factor) {
+gfx::ImageSkiaRep IconImage::LoadImageForScale(float scale) {
   // Do nothing if extension is unloaded.
   if (!extension_)
     return gfx::ImageSkiaRep();
 
-  const float scale = ui::GetScaleForScaleFactor(scale_factor);
   const int resource_size_in_pixel =
       static_cast<int>(resource_size_in_dip_ * scale);
 
   extensions::ExtensionResource resource;
 
   // Find extension resource for non bundled component extensions.
-  resource = GetExtensionIconResource(extension_,
-                                      icon_set_,
-                                      resource_size_in_pixel,
-                                      ExtensionIconSet::MATCH_BIGGER);
+  resource =
+      GetExtensionIconResource(*extension_, icon_set_, resource_size_in_pixel,
+                               ExtensionIconSet::MATCH_BIGGER);
 
   // If resource is not found by now, try matching smaller one.
   if (resource.empty()) {
-    resource = GetExtensionIconResource(extension_, icon_set_,
-        resource_size_in_pixel, ExtensionIconSet::MATCH_SMALLER);
+    resource =
+        GetExtensionIconResource(*extension_, icon_set_, resource_size_in_pixel,
+                                 ExtensionIconSet::MATCH_SMALLER);
   }
 
   // If there is no resource found, return default icon.
@@ -198,16 +195,13 @@ gfx::ImageSkiaRep IconImage::LoadImageForScaleFactor(
   std::vector<ImageLoader::ImageRepresentation> info_list;
   info_list.push_back(ImageLoader::ImageRepresentation(
       resource, ImageLoader::ImageRepresentation::ALWAYS_RESIZE,
-      gfx::ScaleToFlooredSize(
-          gfx::Size(resource_size_in_dip_, resource_size_in_dip_), scale),
-      scale_factor));
+      gfx::Size(resource_size_in_pixel, resource_size_in_pixel), scale));
 
   extensions::ImageLoader* loader =
       extensions::ImageLoader::Get(browser_context_);
-  loader->LoadImagesAsync(extension_, info_list,
+  loader->LoadImagesAsync(extension_.get(), info_list,
                           base::Bind(&IconImage::OnImageLoaded,
-                                     weak_ptr_factory_.GetWeakPtr(),
-                                     scale));
+                                     weak_ptr_factory_.GetWeakPtr(), scale));
 
   return gfx::ImageSkiaRep();
 }
@@ -220,7 +214,7 @@ void IconImage::OnImageLoaded(float scale, const gfx::Image& image_in) {
   if (image->isNull())
     return;
 
-  gfx::ImageSkiaRep rep = image->GetRepresentation(scale);
+  const gfx::ImageSkiaRep& rep = image->GetRepresentation(scale);
   DCHECK(!rep.is_null());
   DCHECK_EQ(scale, rep.scale());
 
@@ -248,7 +242,8 @@ void IconImage::OnImageLoaded(float scale, const gfx::Image& image_in) {
   // there's no way to combine the storage of two images.
   image_ = gfx::Image(image_skia_);
 
-  FOR_EACH_OBSERVER(Observer, observers_, OnExtensionIconImageChanged(this));
+  for (auto& observer : observers_)
+    observer.OnExtensionIconImageChanged(this);
 }
 
 void IconImage::Observe(int type,
@@ -258,8 +253,8 @@ void IconImage::Observe(int type,
 
   const Extension* extension = content::Details<const Extension>(details).ptr();
 
-  if (extension_ == extension)
-    extension_ = NULL;
+  if (extension_.get() == extension)
+    extension_ = nullptr;
 }
 
 }  // namespace extensions

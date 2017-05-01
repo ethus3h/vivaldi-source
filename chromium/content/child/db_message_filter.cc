@@ -5,9 +5,14 @@
 #include "content/child/db_message_filter.h"
 
 #include "content/common/database_messages.h"
+#include "storage/common/database/database_identifier.h"
+#include "third_party/WebKit/public/platform/WebSecurityOrigin.h"
 #include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
 #include "third_party/WebKit/public/web/WebDatabase.h"
+#include "url/origin.h"
 
+using blink::WebSecurityOrigin;
 using blink::WebString;
 
 namespace content {
@@ -30,31 +35,31 @@ bool DBMessageFilter::OnMessageReceived(const IPC::Message& message) {
   return handled;
 }
 
-void DBMessageFilter::OnDatabaseUpdateSize(const std::string& origin_identifier,
+void DBMessageFilter::OnDatabaseUpdateSize(const url::Origin& origin,
                                            const base::string16& database_name,
                                            int64_t database_size) {
+  DCHECK(!origin.unique());
   blink::WebDatabase::updateDatabaseSize(
-      WebString::fromUTF8(origin_identifier), database_name, database_size);
+      origin, WebString::fromUTF16(database_name), database_size);
 }
 
-void DBMessageFilter::OnDatabaseUpdateSpaceAvailable(
-    const std::string& origin_identifier,
-    int64_t space_available) {
-  blink::WebDatabase::updateSpaceAvailable(
-      WebString::fromUTF8(origin_identifier), space_available);
+void DBMessageFilter::OnDatabaseUpdateSpaceAvailable(const url::Origin& origin,
+                                                     int64_t space_available) {
+  DCHECK(!origin.unique());
+  blink::WebDatabase::updateSpaceAvailable(origin, space_available);
 }
 
-void DBMessageFilter::OnDatabaseResetSpaceAvailable(
-    const std::string& origin_identifier) {
-  blink::WebDatabase::resetSpaceAvailable(
-      WebString::fromUTF8(origin_identifier));
+void DBMessageFilter::OnDatabaseResetSpaceAvailable(const url::Origin& origin) {
+  DCHECK(!origin.unique());
+  blink::WebDatabase::resetSpaceAvailable(origin);
 }
 
 void DBMessageFilter::OnDatabaseCloseImmediately(
-    const std::string& origin_identifier,
+    const url::Origin& origin,
     const base::string16& database_name) {
+  DCHECK(!origin.unique());
   blink::WebDatabase::closeDatabaseImmediately(
-      WebString::fromUTF8(origin_identifier), database_name);
+      origin, WebString::fromUTF16(database_name));
 }
 
 }  // namespace content

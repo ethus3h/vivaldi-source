@@ -3,14 +3,18 @@
 #ifndef EXTENSIONS_API_SETTINGS_API_H_
 #define EXTENSIONS_API_SETTINGS_API_H_
 
-#include "base/memory/ref_counted.h"
-#include "base/prefs/pref_change_registrar.h"
+#include "base/memory/singleton.h"
 #include "chrome/browser/extensions/chrome_extension_function.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_ui.h"
 
 #include "extensions/schema/settings.h"
+#include "prefs/native_settings_observer.h"
+#include "prefs/native_settings_observer_delegate.h"
+
+using vivaldi::NativeSettingsObserverDelegate;
 
 namespace extensions {
 
@@ -42,21 +46,29 @@ class VivaldiSettingsApiNotificationFactory
 
 // A class receiving the callback notification when a registered
 // prefs value has changed.
-class VivaldiSettingsApiNotification : public KeyedService {
+class VivaldiSettingsApiNotification : public KeyedService,
+  public NativeSettingsObserverDelegate {
  public:
   explicit VivaldiSettingsApiNotification(Profile*);
   VivaldiSettingsApiNotification();
   ~VivaldiSettingsApiNotification() override;
 
   static void BroadcastEvent(const std::string& eventname,
-                             scoped_ptr<base::ListValue>& args,
+                             std::unique_ptr<base::ListValue>& args,
                              content::BrowserContext* context);
 
   void OnChanged(const std::string& prefs_changed);
 
+  // NativeSettingsObserverDelegate
+  void SetPref(const char* name, const int value) override;
+  void SetPref(const char* name, const std::string& value) override;
+  void SetPref(const char* name, const bool value) override;
+
  private:
   Profile* profile_;
   PrefChangeRegistrar prefs_registrar_;
+
+  std::unique_ptr<::vivaldi::NativeSettingsObserver> native_settings_observer_;
 
   base::WeakPtrFactory<VivaldiSettingsApiNotification> weak_ptr_factory_;
 

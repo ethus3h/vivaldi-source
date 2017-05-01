@@ -222,11 +222,11 @@ std::string Message::ToStringInternal(const std::string& indent,
       case UNIX_FD: {
         CHECK(IsDBusTypeUnixFdSupported());
 
-        FileDescriptor file_descriptor;
+        base::ScopedFD file_descriptor;
         if (!reader->PopFileDescriptor(&file_descriptor))
           return kBrokenMessage;
         output += indent + "fd#" +
-                  base::IntToString(file_descriptor.value()) + "\n";
+                  base::IntToString(file_descriptor.get()) + "\n";
         break;
       }
       default:
@@ -398,23 +398,23 @@ Signal* Signal::FromRawMessage(DBusMessage* raw_message) {
 Response::Response() : Message() {
 }
 
-scoped_ptr<Response> Response::FromRawMessage(DBusMessage* raw_message) {
+std::unique_ptr<Response> Response::FromRawMessage(DBusMessage* raw_message) {
   DCHECK_EQ(DBUS_MESSAGE_TYPE_METHOD_RETURN,
             dbus_message_get_type(raw_message));
 
-  scoped_ptr<Response> response(new Response);
+  std::unique_ptr<Response> response(new Response);
   response->Init(raw_message);
   return response;
 }
 
-scoped_ptr<Response> Response::FromMethodCall(MethodCall* method_call) {
-  scoped_ptr<Response> response(new Response);
+std::unique_ptr<Response> Response::FromMethodCall(MethodCall* method_call) {
+  std::unique_ptr<Response> response(new Response);
   response->Init(dbus_message_new_method_return(method_call->raw_message()));
   return response;
 }
 
-scoped_ptr<Response> Response::CreateEmpty() {
-  scoped_ptr<Response> response(new Response);
+std::unique_ptr<Response> Response::CreateEmpty() {
+  std::unique_ptr<Response> response(new Response);
   response->Init(dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN));
   return response;
 }
@@ -426,20 +426,20 @@ scoped_ptr<Response> Response::CreateEmpty() {
 ErrorResponse::ErrorResponse() : Response() {
 }
 
-scoped_ptr<ErrorResponse> ErrorResponse::FromRawMessage(
+std::unique_ptr<ErrorResponse> ErrorResponse::FromRawMessage(
     DBusMessage* raw_message) {
   DCHECK_EQ(DBUS_MESSAGE_TYPE_ERROR, dbus_message_get_type(raw_message));
 
-  scoped_ptr<ErrorResponse> response(new ErrorResponse);
+  std::unique_ptr<ErrorResponse> response(new ErrorResponse);
   response->Init(raw_message);
   return response;
 }
 
-scoped_ptr<ErrorResponse> ErrorResponse::FromMethodCall(
+std::unique_ptr<ErrorResponse> ErrorResponse::FromMethodCall(
     MethodCall* method_call,
     const std::string& error_name,
     const std::string& error_message) {
-  scoped_ptr<ErrorResponse> response(new ErrorResponse);
+  std::unique_ptr<ErrorResponse> response(new ErrorResponse);
   response->Init(dbus_message_new_error(method_call->raw_message(),
                                         error_name.c_str(),
                                         error_message.c_str()));
@@ -599,6 +599,19 @@ void MessageWriter::AppendArrayOfBytes(const uint8_t* values, size_t length) {
   CloseContainer(&array_writer);
 }
 
+void MessageWriter::AppendArrayOfDoubles(const double* values, size_t length) {
+  DCHECK(!container_is_open_);
+  MessageWriter array_writer(message_);
+  OpenArray("d", &array_writer);
+  const bool success = dbus_message_iter_append_fixed_array(
+      &(array_writer.raw_message_iter_),
+      DBUS_TYPE_DOUBLE,
+      &values,
+      static_cast<int>(length));
+  CHECK(success) << "Unable to allocate memory";
+  CloseContainer(&array_writer);
+}
+
 void MessageWriter::AppendArrayOfStrings(
     const std::vector<std::string>& strings) {
   DCHECK(!container_is_open_);
@@ -701,15 +714,9 @@ void MessageWriter::AppendVariantOfBasic(int dbus_type, const void* value) {
   CloseContainer(&variant_writer);
 }
 
-void MessageWriter::AppendFileDescriptor(const FileDescriptor& value) {
+void MessageWriter::AppendFileDescriptor(int value) {
   CHECK(IsDBusTypeUnixFdSupported());
-
-  if (!value.is_valid()) {
-    // NB: sending a directory potentially enables sandbox escape
-    LOG(FATAL) << "Attempt to pass invalid file descriptor";
-  }
-  int fd = value.value();
-  AppendBasic(DBUS_TYPE_UNIX_FD, &fd);
+  AppendBasic(DBUS_TYPE_UNIX_FD, &value);  // This duplicates the FD.
 }
 
 //
@@ -822,7 +829,26 @@ bool MessageReader::PopArrayOfBytes(const uint8_t** bytes, size_t* length) {
   dbus_message_iter_get_fixed_array(&array_reader.raw_message_iter_,
                                     bytes,
                                     &int_length);
-  *length = static_cast<int>(int_length);
+  *length = static_cast<size_t>(int_length);
+  return true;
+}
+
+bool MessageReader::PopArrayOfDoubles(const double** doubles, size_t* length) {
+  MessageReader array_reader(message_);
+  if (!PopArray(&array_reader))
+    return false;
+  if (!array_reader.HasMoreData()) {
+    *length = 0;
+    *doubles = nullptr;
+    return true;
+  }
+  if (!array_reader.CheckDataType(DBUS_TYPE_DOUBLE))
+    return false;
+  int int_length = 0;
+  dbus_message_iter_get_fixed_array(&array_reader.raw_message_iter_,
+                                    doubles,
+                                    &int_length);
+  *length = static_cast<size_t>(int_length);
   return true;
 }
 
@@ -984,7 +1010,7 @@ bool MessageReader::PopVariantOfBasic(int dbus_type, void* value) {
   return variant_reader.PopBasic(dbus_type, value);
 }
 
-bool MessageReader::PopFileDescriptor(FileDescriptor* value) {
+bool MessageReader::PopFileDescriptor(base::ScopedFD* value) {
   CHECK(IsDBusTypeUnixFdSupported());
 
   int fd = -1;
@@ -992,8 +1018,7 @@ bool MessageReader::PopFileDescriptor(FileDescriptor* value) {
   if (!success)
     return false;
 
-  value->PutValue(fd);
-  // NB: the caller must check validity before using the value
+  *value = base::ScopedFD(fd);
   return true;
 }
 

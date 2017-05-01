@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <algorithm>
+#include <cstdlib>
 #include <sstream>
 #include <utility>
 
@@ -13,12 +14,15 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/ref_counted.h"
 #include "base/process/launch.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "tools/gn/command_format.h"
 #include "tools/gn/commands.h"
 #include "tools/gn/filesystem_utils.h"
 #include "tools/gn/input_file.h"
@@ -31,93 +35,91 @@
 #include "tools/gn/tokenizer.h"
 #include "tools/gn/trace.h"
 #include "tools/gn/value.h"
+#include "tools/gn/value_extractors.h"
 
 #if defined(OS_WIN)
 #include <windows.h>
 #endif
 
 extern const char kDotfile_Help[] =
-    ".gn file\n"
-    "\n"
-    "  When gn starts, it will search the current directory and parent\n"
-    "  directories for a file called \".gn\". This indicates the source root.\n"
-    "  You can override this detection by using the --root command-line\n"
-    "  argument\n"
-    "\n"
-    "  The .gn file in the source root will be executed. The syntax is the\n"
-    "  same as a buildfile, but with very limited build setup-specific\n"
-    "  meaning.\n"
-    "\n"
-    "  If you specify --root, by default GN will look for the file .gn in\n"
-    "  that directory. If you want to specify a different file, you can\n"
-    "  additionally pass --dotfile:\n"
-    "\n"
-    "    gn gen out/Debug --root=/home/build --dotfile=/home/my_gn_file.gn\n"
-    "\n"
-    "Variables\n"
-    "\n"
-    "  buildconfig [required]\n"
-    "      Label of the build config file. This file will be used to set up\n"
-    "      the build file execution environment for each toolchain.\n"
-    "\n"
-    "  check_targets [optional]\n"
-    "      A list of labels and label patterns that should be checked when\n"
-    "      running \"gn check\" or \"gn gen --check\". If unspecified, all\n"
-    "      targets will be checked. If it is the empty list, no targets will\n"
-    "      be checked.\n"
-    "\n"
-    "      The format of this list is identical to that of \"visibility\"\n"
-    "      so see \"gn help visibility\" for examples.\n"
-    "\n"
-    "  exec_script_whitelist [optional]\n"
-    "      A list of .gn/.gni files (not labels) that have permission to call\n"
-    "      the exec_script function. If this list is defined, calls to\n"
-    "      exec_script will be checked against this list and GN will fail if\n"
-    "      the current file isn't in the list.\n"
-    "\n"
-    "      This is to allow the use of exec_script to be restricted since\n"
-    "      is easy to use inappropriately. Wildcards are not supported.\n"
-    "      Files in the secondary_source tree (if defined) should be\n"
-    "      referenced by ignoring the secondary tree and naming them as if\n"
-    "      they are in the main tree.\n"
-    "\n"
-    "      If unspecified, the ability to call exec_script is unrestricted.\n"
-    "\n"
-    "      Example:\n"
-    "        exec_script_whitelist = [\n"
-    "          \"//base/BUILD.gn\",\n"
-    "          \"//build/my_config.gni\",\n"
-    "        ]\n"
-    "\n"
-    "  root [optional]\n"
-    "      Label of the root build target. The GN build will start by loading\n"
-    "      the build file containing this target name. This defaults to\n"
-    "      \"//:\" which will cause the file //BUILD.gn to be loaded.\n"
-    "\n"
-    "  secondary_source [optional]\n"
-    "      Label of an alternate directory tree to find input files. When\n"
-    "      searching for a BUILD.gn file (or the build config file discussed\n"
-    "      above), the file will first be looked for in the source root.\n"
-    "      If it's not found, the secondary source root will be checked\n"
-    "      (which would contain a parallel directory hierarchy).\n"
-    "\n"
-    "      This behavior is intended to be used when BUILD.gn files can't be\n"
-    "      checked in to certain source directories for whatever reason.\n"
-    "\n"
-    "      The secondary source root must be inside the main source tree.\n"
-    "\n"
-    "Example .gn file contents\n"
-    "\n"
-    "  buildconfig = \"//build/config/BUILDCONFIG.gn\"\n"
-    "\n"
-    "  check_targets = [\n"
-    "    \"//doom_melon/*\",  # Check everything in this subtree.\n"
-    "    \"//tools:mind_controlling_ant\",  # Check this specific target.\n"
-    "  ]\n"
-    "\n"
-    "  root = \"//:root\"\n"
-    "\n"
-    "  secondary_source = \"//build/config/temporary_buildfiles/\"\n";
+    R"(.gn file
+
+  When gn starts, it will search the current directory and parent directories
+  for a file called ".gn". This indicates the source root. You can override
+  this detection by using the --root command-line argument
+
+  The .gn file in the source root will be executed. The syntax is the same as a
+  buildfile, but with very limited build setup-specific meaning.
+
+  If you specify --root, by default GN will look for the file .gn in that
+  directory. If you want to specify a different file, you can additionally pass
+  --dotfile:
+
+    gn gen out/Debug --root=/home/build --dotfile=/home/my_gn_file.gn
+
+Variables
+
+  buildconfig [required]
+      Label of the build config file. This file will be used to set up the
+      build file execution environment for each toolchain.
+
+  check_targets [optional]
+      A list of labels and label patterns that should be checked when running
+      "gn check" or "gn gen --check". If unspecified, all targets will be
+      checked. If it is the empty list, no targets will be checked.
+
+      The format of this list is identical to that of "visibility" so see "gn
+      help visibility" for examples.
+
+  exec_script_whitelist [optional]
+      A list of .gn/.gni files (not labels) that have permission to call the
+      exec_script function. If this list is defined, calls to exec_script will
+      be checked against this list and GN will fail if the current file isn't
+      in the list.
+
+      This is to allow the use of exec_script to be restricted since is easy to
+      use inappropriately. Wildcards are not supported. Files in the
+      secondary_source tree (if defined) should be referenced by ignoring the
+      secondary tree and naming them as if they are in the main tree.
+
+      If unspecified, the ability to call exec_script is unrestricted.
+
+      Example:
+        exec_script_whitelist = [
+          "//base/BUILD.gn",
+          "//build/my_config.gni",
+        ]
+
+  root [optional]
+      Label of the root build target. The GN build will start by loading the
+      build file containing this target name. This defaults to "//:" which will
+      cause the file //BUILD.gn to be loaded.
+
+  secondary_source [optional]
+      Label of an alternate directory tree to find input files. When searching
+      for a BUILD.gn file (or the build config file discussed above), the file
+      will first be looked for in the source root. If it's not found, the
+      secondary source root will be checked (which would contain a parallel
+      directory hierarchy).
+
+      This behavior is intended to be used when BUILD.gn files can't be checked
+      in to certain source directories for whatever reason.
+
+      The secondary source root must be inside the main source tree.
+
+Example .gn file contents
+
+  buildconfig = "//build/config/BUILDCONFIG.gn"
+
+  check_targets = [
+    "//doom_melon/*",  # Check everything in this subtree.
+    "//tools:mind_controlling_ant",  # Check this specific target.
+  ]
+
+  root = "//:root"
+
+  secondary_source = "//build/config/temporary_buildfiles/"
+)";
 
 namespace {
 
@@ -136,13 +138,33 @@ base::FilePath FindDotFile(const base::FilePath& current_dir) {
   return FindDotFile(up_one_dir);
 }
 
+void ForwardItemDefinedToBuilderInMainThread(
+    Builder* builder_call_on_main_thread_only,
+    std::unique_ptr<Item> item) {
+  builder_call_on_main_thread_only->ItemDefined(std::move(item));
+
+  // Pair to the Increment in ItemDefinedCallback.
+  g_scheduler->DecrementWorkCount();
+}
+
 // Called on any thread. Post the item to the builder on the main thread.
-void ItemDefinedCallback(base::MessageLoop* main_loop,
-                         scoped_refptr<Builder> builder,
-                         scoped_ptr<Item> item) {
+void ItemDefinedCallback(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    Builder* builder_call_on_main_thread_only,
+    std::unique_ptr<Item> item) {
   DCHECK(item);
-  main_loop->PostTask(FROM_HERE, base::Bind(&Builder::ItemDefined, builder,
-                                            base::Passed(&item)));
+
+  // Increment the work count for the duration of defining the item with the
+  // builder. Otherwise finishing this callback will race finishing loading
+  // files. If there is no other pending work at any point in the middle of
+  // this call completing on the main thread, the 'Complete' function will
+  // be signaled and we'll stop running with an incomplete build.
+  g_scheduler->IncrementWorkCount();
+  task_runner->PostTask(
+      FROM_HERE,
+      base::Bind(&ForwardItemDefinedToBuilderInMainThread,
+                 base::Unretained(builder_call_on_main_thread_only),
+                 base::Passed(&item)));
 }
 
 void DecrementWorkCount() {
@@ -198,7 +220,7 @@ base::FilePath FindWindowsPython() {
   DWORD path_length = ::GetEnvironmentVariable(kPathEnvVarName, nullptr, 0);
   if (path_length == 0)
     return base::FilePath();
-  scoped_ptr<base::char16[]> full_path(new base::char16[path_length]);
+  std::unique_ptr<base::char16[]> full_path(new base::char16[path_length]);
   DWORD actual_path_length =
       ::GetEnvironmentVariable(kPathEnvVarName, full_path.get(), path_length);
   CHECK_EQ(path_length, actual_path_length + 1);
@@ -225,6 +247,21 @@ base::FilePath FindWindowsPython() {
 }
 #endif
 
+// Expands all ./, ../, and symbolic links in the given path.
+bool GetRealPath(const base::FilePath& path, base::FilePath* out) {
+#if defined(OS_POSIX)
+  char buf[PATH_MAX];
+  if (!realpath(path.value().c_str(), buf)) {
+    return false;
+  }
+  *out = base::FilePath(buf);
+#else
+  // Do nothing on a non-POSIX system.
+  *out = path;
+#endif
+  return true;
+}
+
 }  // namespace
 
 const char Setup::kBuildArgFileName[] = "args.gn";
@@ -232,20 +269,21 @@ const char Setup::kBuildArgFileName[] = "args.gn";
 Setup::Setup()
     : build_settings_(),
       loader_(new LoaderImpl(&build_settings_)),
-      builder_(new Builder(loader_.get())),
+      builder_(loader_.get()),
       root_build_file_("//BUILD.gn"),
       check_public_headers_(false),
       dotfile_settings_(&build_settings_, std::string()),
       dotfile_scope_(&dotfile_settings_),
       fill_arguments_(true) {
   dotfile_settings_.set_toolchain_label(Label());
+
   build_settings_.set_item_defined_callback(
-      base::Bind(&ItemDefinedCallback, scheduler_.main_loop(), builder_));
+      base::Bind(&ItemDefinedCallback, scheduler_.task_runner(), &builder_));
 
   loader_->set_complete_callback(base::Bind(&DecrementWorkCount));
-  // The scheduler's main loop wasn't created when the Loader was created, so
+  // The scheduler's task runner wasn't created when the Loader was created, so
   // we need to set it now.
-  loader_->set_main_loop(scheduler_.main_loop());
+  loader_->set_task_runner(scheduler_.task_runner());
 }
 
 Setup::~Setup() {
@@ -265,11 +303,12 @@ bool Setup::DoSetup(const std::string& build_dir, bool force_create) {
     return false;
   if (!RunConfigFile())
     return false;
-  if (!FillOtherConfig(*cmdline))
-    return false;
 
   // Must be after FillSourceDir to resolve.
   if (!FillBuildDir(build_dir, !force_create))
+    return false;
+
+  if (!FillOtherConfig(*cmdline))
     return false;
 
   // Check for unused variables in the .gn file.
@@ -283,7 +322,7 @@ bool Setup::DoSetup(const std::string& build_dir, bool force_create) {
     if (!FillArguments(*cmdline))
       return false;
   }
-  FillPythonPath();
+  FillPythonPath(*cmdline);
 
   return true;
 }
@@ -300,31 +339,33 @@ SourceFile Setup::GetBuildArgFile() const {
 }
 
 void Setup::RunPreMessageLoop() {
-  // Load the root build file.
-  loader_->Load(root_build_file_, LocationRange(), Label());
-
   // Will be decremented with the loader is drained.
   g_scheduler->IncrementWorkCount();
+
+  // Load the root build file.
+  loader_->Load(root_build_file_, LocationRange(), Label());
 }
 
 bool Setup::RunPostMessageLoop() {
   Err err;
-  if (build_settings_.check_for_bad_items()) {
-    if (!builder_->CheckForBadItems(&err)) {
-      err.PrintToStdout();
-      return false;
-    }
+  if (!builder_.CheckForBadItems(&err)) {
+    err.PrintToStdout();
+    return false;
+  }
 
-    if (!build_settings_.build_args().VerifyAllOverridesUsed(&err)) {
-      // TODO(brettw) implement a system of warnings. Until we have a better
-      // system, print the error but don't return failure.
-      err.PrintToStdout();
-      return true;
-    }
+  if (!build_settings_.build_args().VerifyAllOverridesUsed(&err)) {
+    // TODO(brettw) implement a system to have a different marker for
+    // warnings. Until we have a better system, print the error but don't
+    // return failure unless requested on the command line.
+    err.PrintToStdout();
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kFailOnUnusedArgs))
+      return false;
+    return true;
   }
 
   if (check_public_headers_) {
-    std::vector<const Target*> all_targets = builder_->GetAllResolvedTargets();
+    std::vector<const Target*> all_targets = builder_.GetAllResolvedTargets();
     std::vector<const Target*> to_check;
     if (check_patterns()) {
       commands::FilterTargetsByPatterns(all_targets, *check_patterns(),
@@ -350,17 +391,48 @@ bool Setup::RunPostMessageLoop() {
 }
 
 bool Setup::FillArguments(const base::CommandLine& cmdline) {
+
+  std::string global_args;
+  // Load arguments from HOMEDIR/.gn/args.gn into a string, add dependency
+  {
+    base::FilePath globalfile = base::GetHomeDir().AppendASCII(".gn/args.gn");
+    std::string file_contents;
+    // Ignore if file doesn't exist, continue with other args, if present.
+    if (base::ReadFileToString(globalfile, &file_contents)) {
+      global_args.append(file_contents);
+      global_args.append("\n"); // Just to be on the safe side
+      // If this file changes we want to regenerate ninja
+      g_scheduler->AddGenDependency(globalfile);
+    }
+  }
+
+  // Use args from the environment variable GN_DEFINES to generally
+  // override settings
+  const char *the_define = std::getenv("GN_DEFINES");
+  std::string gn_defines(the_define ? the_define : "\"\"");
+  if (!gn_defines.empty()) {
+    size_t len = gn_defines.length();
+    if ((gn_defines[0] == '"' && gn_defines[len-1] == '"')||
+        (gn_defines[0] == '\'' && gn_defines[len-1] == '\'')) {
+        gn_defines.erase(len-1,1);
+        gn_defines.erase(0,1);
+    }
+    global_args.append(gn_defines);
+    global_args.append("\n"); // Just to be on the safe side
+  }
+
   // Use the args on the command line if specified, and save them. Do this even
   // if the list is empty (this means clear any defaults).
   if (cmdline.HasSwitch(switches::kArgs)) {
-    if (!FillArgsFromCommandLine(cmdline.GetSwitchValueASCII(switches::kArgs)))
+    if (!FillArgsFromCommandLine(global_args + " " +
+          cmdline.GetSwitchValueASCII(switches::kArgs)))
       return false;
     SaveArgsToFile();
     return true;
   }
 
   // No command line args given, use the arguments from the build dir (if any).
-  return FillArgsFromFile();
+  return FillArgsFromFile(NULL, &global_args);
 }
 
 bool Setup::FillArgsFromCommandLine(const std::string& args) {
@@ -370,20 +442,26 @@ bool Setup::FillArgsFromCommandLine(const std::string& args) {
   return FillArgsFromArgsInputFile();
 }
 
-bool Setup::FillArgsFromFile() {
+bool Setup::FillArgsFromFile(SourceFile *arg_file,
+                             const std::string *global_args) {
   ScopedTrace setup_trace(TraceItem::TRACE_SETUP, "Load args file");
 
-  SourceFile build_arg_source_file = GetBuildArgFile();
+  SourceFile build_arg_source_file = arg_file? *arg_file : GetBuildArgFile();
   base::FilePath build_arg_file =
       build_settings_.GetFullPath(build_arg_source_file);
 
   std::string contents;
-  if (!base::ReadFileToString(build_arg_file, &contents))
-    return true;  // File doesn't exist, continue with default args.
+  if (base::ReadFileToString(build_arg_file, &contents)) {
+    // Add a dependency on the build arguments file. If this changes, we want
+    // to re-generate the build.
+    g_scheduler->AddGenDependency(build_arg_file);
+  } else {
+    if (!global_args || global_args->empty())
+      return true;  // File doesn't exist, no extra args, use default args.
+  }
 
-  // Add a dependency on the build arguments file. If this changes, we want
-  // to re-generate the build.
-  g_scheduler->AddGenDependency(build_arg_file);
+  if (global_args && !global_args->empty())
+    contents = *global_args + contents;
 
   if (contents.empty())
     return true;  // Empty file, do nothing.
@@ -414,6 +492,10 @@ bool Setup::FillArgsFromArgsInputFile() {
   }
 
   Scope arg_scope(&dotfile_settings_);
+  // Set soure dir so relative imports in args work.
+  SourceDir root_source_dir =
+      SourceDirForCurrentDirectory(build_settings_.root_path());
+  arg_scope.set_source_dir(root_source_dir);
   args_root_->Execute(&arg_scope, &err);
   if (err.has_error()) {
     err.PrintToStdout();
@@ -430,12 +512,6 @@ bool Setup::FillArgsFromArgsInputFile() {
 bool Setup::SaveArgsToFile() {
   ScopedTrace setup_trace(TraceItem::TRACE_SETUP, "Save args file");
 
-  std::ostringstream stream;
-  for (const auto& pair : build_settings_.build_args().GetAllOverrides()) {
-    stream << pair.first.as_string() << " = " << pair.second.ToString(true);
-    stream << std::endl;
-  }
-
   // For the first run, the build output dir might not be created yet, so do
   // that so we can write a file into it. Ignore errors, we'll catch the error
   // when we try to write a file to it below.
@@ -443,7 +519,8 @@ bool Setup::SaveArgsToFile() {
       build_settings_.GetFullPath(GetBuildArgFile());
   base::CreateDirectory(build_arg_file.DirName());
 
-  std::string contents = stream.str();
+  std::string contents = args_input_file_->contents();
+  commands::FormatStringToString(contents, false, &contents);
 #if defined(OS_WIN)
   // Use Windows lineendings for this file since it will often open in
   // Notepad which can't handle Unix ones.
@@ -492,7 +569,7 @@ bool Setup::FillSourceDir(const base::CommandLine& cmdline) {
       if (dotfile_name_.empty()) {
         Err(Location(), "Could not load dotfile.",
             "The file \"" + FilePathToUTF8(dot_file_path) +
-            "\" cound't be loaded.").PrintToStdout();
+            "\" couldn't be loaded.").PrintToStdout();
         return false;
       }
     }
@@ -512,9 +589,16 @@ bool Setup::FillSourceDir(const base::CommandLine& cmdline) {
     root_path = dotfile_name_.DirName();
   }
 
+  base::FilePath root_realpath;
+  if (!GetRealPath(root_path, &root_realpath)) {
+    Err(Location(), "Can't get the real root path.",
+        "I could not get the real path of \"" + FilePathToUTF8(root_path) +
+        "\".").PrintToStdout();
+    return false;
+  }
   if (scheduler_.verbose_logging())
-    scheduler_.Log("Using source root", FilePathToUTF8(root_path));
-  build_settings_.SetRootPath(root_path);
+    scheduler_.Log("Using source root", FilePathToUTF8(root_realpath));
+  build_settings_.SetRootPath(root_realpath);
 
   return true;
 }
@@ -530,11 +614,27 @@ bool Setup::FillBuildDir(const std::string& build_dir, bool require_exists) {
     return false;
   }
 
+  base::FilePath build_dir_path = build_settings_.GetFullPath(resolved);
+  if (!base::CreateDirectory(build_dir_path)) {
+    Err(Location(), "Can't create the build dir.",
+        "I could not create the build dir \"" + FilePathToUTF8(build_dir_path) +
+        "\".").PrintToStdout();
+    return false;
+  }
+  base::FilePath build_dir_realpath;
+  if (!GetRealPath(build_dir_path, &build_dir_realpath)) {
+    Err(Location(), "Can't get the real build dir path.",
+        "I could not get the real path of \"" + FilePathToUTF8(build_dir_path) +
+        "\".").PrintToStdout();
+    return false;
+  }
+  resolved = SourceDirForPath(build_settings_.root_path(),
+                              build_dir_realpath);
+
   if (scheduler_.verbose_logging())
     scheduler_.Log("Using build dir", resolved.value());
 
   if (require_exists) {
-    base::FilePath build_dir_path = build_settings_.GetFullPath(resolved);
     if (!base::PathExists(build_dir_path.Append(
             FILE_PATH_LITERAL("build.ninja")))) {
       Err(Location(), "Not a build directory.",
@@ -551,20 +651,25 @@ bool Setup::FillBuildDir(const std::string& build_dir, bool require_exists) {
   return true;
 }
 
-void Setup::FillPythonPath() {
+void Setup::FillPythonPath(const base::CommandLine& cmdline) {
   // Trace this since it tends to be a bit slow on Windows.
   ScopedTrace setup_trace(TraceItem::TRACE_SETUP, "Fill Python Path");
+  if (cmdline.HasSwitch(switches::kScriptExecutable)) {
+    build_settings_.set_python_path(
+        cmdline.GetSwitchValuePath(switches::kScriptExecutable));
+  } else {
 #if defined(OS_WIN)
-  base::FilePath python_path = FindWindowsPython();
-  if (python_path.empty()) {
-    scheduler_.Log("WARNING", "Could not find python on path, using "
-        "just \"python.exe\"");
-    python_path = base::FilePath(kPythonExeName);
-  }
-  build_settings_.set_python_path(python_path.NormalizePathSeparatorsTo('/'));
+    base::FilePath python_path = FindWindowsPython();
+    if (python_path.empty()) {
+      scheduler_.Log("WARNING", "Could not find python on path, using "
+          "just \"python.exe\"");
+      python_path = base::FilePath(kPythonExeName);
+    }
+    build_settings_.set_python_path(python_path.NormalizePathSeparatorsTo('/'));
 #else
-  build_settings_.set_python_path(base::FilePath("python"));
+    build_settings_.set_python_path(base::FilePath("python"));
 #endif
+  }
 }
 
 bool Setup::RunConfigFile() {
@@ -574,7 +679,7 @@ bool Setup::RunConfigFile() {
   dotfile_input_file_.reset(new InputFile(SourceFile("//.gn")));
   if (!dotfile_input_file_->Load(dotfile_name_)) {
     Err(Location(), "Could not load dotfile.",
-        "The file \"" + FilePathToUTF8(dotfile_name_) + "\" cound't be loaded")
+        "The file \"" + FilePathToUTF8(dotfile_name_) + "\" couldn't be loaded")
         .PrintToStdout();
     return false;
   }
@@ -603,7 +708,15 @@ bool Setup::RunConfigFile() {
 
 bool Setup::FillOtherConfig(const base::CommandLine& cmdline) {
   Err err;
-  SourceDir current_dir("//");
+
+  // <Vivaldi>
+  // May need to update the source path of the main gn file
+  root_build_file_ = SourceFile(
+          build_settings_.RemapActualToSourcePath(root_build_file_.value()),
+          root_build_file_.value());
+  // <Vivaldi>
+
+  SourceDir current_dir(build_settings_.RemapActualToSourcePath("//"));
 
   // Secondary source path, read from the config file if present.
   // Read from the config file if present.
@@ -644,31 +757,73 @@ bool Setup::FillOtherConfig(const base::CommandLine& cmdline) {
         "Your .gn file (\"" + FilePathToUTF8(dotfile_name_) + "\")\n"
         "didn't specify a \"buildconfig\" value.").PrintToStdout();
     return false;
+  } else if (build_config_value->type() == Value::LIST) {
+    std::string build_config_content;
+    for (auto value: build_config_value->list_value() ) {
+      if (!value.VerifyTypeIs(Value::STRING, &err)) {
+        err.PrintToStdout();
+        return false;
+      }
+      {
+        SourceFile build_config_filename(value.string_value());
+        base::FilePath build_config_file=
+            build_settings_.GetFullPath(build_config_filename);
+
+        std::string file_contents;
+        // Ignore if file doesn't exist, continue with other args, if present.
+        if (!base::ReadFileToString(build_config_file, &file_contents)) {
+          Err(Location(), "Build config file missing",
+              "Your .gn file (\"" + FilePathToUTF8(dotfile_name_) + "\")\n"
+              "specified a \"buildconfig\" file \"" +
+              FilePathToUTF8(build_config_file) +
+              "\" that did not exist." ).PrintToStdout();
+          return false;
+        }
+        build_config_content.append(file_contents);
+        build_config_content.append("\n"); // Just to be on the safe side
+        // If this file changes we want to regenerate ninja
+        g_scheduler->AddGenDependency(build_config_file);
+      }
+    }
+
+    SourceFile temp_build_settings_name(build_settings_.build_dir().value() +
+                                        "BUILDCONFIG.gn");
+    base::FilePath temp_build_config_file =
+        build_settings_.GetFullPath(temp_build_settings_name);
+    base::CreateDirectory(temp_build_config_file.DirName());
+
+    std::string original_tempfile_contents;
+    // Don't rewrite temp file if content hasn't changed
+    if (!base::ReadFileToString(temp_build_config_file,
+                                &original_tempfile_contents) ||
+        original_tempfile_contents != build_config_content) {
+      if (base::WriteFile(temp_build_config_file, build_config_content.c_str(),
+          static_cast<int>(build_config_content.size())) == -1) {
+        Err(Location(), "Temporary BUILDCONFIG.gn file could not be written.",
+          "The file is \"" + FilePathToUTF8(temp_build_config_file) +
+            "\"").PrintToStdout();
+        return false;
+      }
+    }
+    build_settings_.set_build_config_file(temp_build_settings_name);
   } else if (!build_config_value->VerifyTypeIs(Value::STRING, &err)) {
     err.PrintToStdout();
     return false;
-  }
+  } else {
   build_settings_.set_build_config_file(
       SourceFile(build_config_value->string_value()));
+  }
 
   // Targets to check.
   const Value* check_targets_value =
       dotfile_scope_.GetValue("check_targets", true);
   if (check_targets_value) {
-    // Fill the list of targets to check.
-    if (!check_targets_value->VerifyTypeIs(Value::LIST, &err)) {
+    check_patterns_.reset(new std::vector<LabelPattern>);
+    ExtractListOfLabelPatterns(*check_targets_value, current_dir,
+                               check_patterns_.get(), &err);
+    if (err.has_error()) {
       err.PrintToStdout();
       return false;
-    }
-
-    check_patterns_.reset(new std::vector<LabelPattern>);
-    for (const auto& item : check_targets_value->list_value()) {
-      check_patterns_->push_back(
-          LabelPattern::GetPattern(current_dir, item, &err));
-      if (err.has_error()) {
-        err.PrintToStdout();
-        return false;
-      }
     }
   }
 
@@ -681,7 +836,7 @@ bool Setup::FillOtherConfig(const base::CommandLine& cmdline) {
       err.PrintToStdout();
       return false;
     }
-    scoped_ptr<std::set<SourceFile>> whitelist(new std::set<SourceFile>);
+    std::unique_ptr<std::set<SourceFile>> whitelist(new std::set<SourceFile>);
     for (const auto& item : exec_script_whitelist_value->list_value()) {
       if (!item.VerifyTypeIs(Value::STRING, &err)) {
         err.PrintToStdout();

@@ -6,8 +6,10 @@
 #define URL_URL_UTIL_H_
 
 #include <string>
+#include <vector>
 
 #include "base/strings/string16.h"
+#include "base/strings/string_piece.h"
 #include "url/third_party/mozilla/url_parse.h"
 #include "url/url_canon.h"
 #include "url/url_constants.h"
@@ -20,7 +22,7 @@ namespace url {
 // Initialization is NOT required, it will be implicitly initialized when first
 // used. However, this implicit initialization is NOT threadsafe. If you are
 // using this library in a threaded environment and don't have a consistent
-// "first call" (an example might be calling AddStandardScheme with your special
+// "first call" (an example might be calling Add*Scheme with your special
 // application-specific schemes) then you will want to call initialize before
 // spawning any threads.
 //
@@ -35,7 +37,7 @@ URL_EXPORT void Initialize();
 // library.
 URL_EXPORT void Shutdown();
 
-// Schemes --------------------------------------------------------------------
+// Schemes ---------------------------------------------------------------------
 
 // Types of a scheme representing the requirements on the data represented by
 // the authority component of a URL with the scheme.
@@ -56,29 +58,57 @@ struct URL_EXPORT SchemeWithType {
   SchemeType type;
 };
 
+// The following Add*Scheme method are not threadsafe and can not be called
+// concurrently with any other url_util function. They will assert if the lists
+// of schemes have been locked (see LockSchemeRegistries).
+
 // Adds an application-defined scheme to the internal list of "standard-format"
 // URL schemes. A standard-format scheme adheres to what RFC 3986 calls "generic
 // URI syntax" (https://tools.ietf.org/html/rfc3986#section-3).
-//
-// This function is not threadsafe and can not be called concurrently with any
-// other url_util function. It will assert if the list of standard schemes has
-// been locked (see LockStandardSchemes).
+
 URL_EXPORT void AddStandardScheme(const char* new_scheme,
                                   SchemeType scheme_type);
 
-// Sets a flag to prevent future calls to AddStandardScheme from succeeding.
+// Adds an application-defined scheme to the internal list of schemes allowed
+// for referrers.
+URL_EXPORT void AddReferrerScheme(const char* new_scheme,
+                                  SchemeType scheme_type);
+
+// Adds an application-defined scheme to the list of schemes that do not trigger
+// mixed content warnings.
+URL_EXPORT void AddSecureScheme(const char* new_scheme);
+URL_EXPORT const std::vector<std::string>& GetSecureSchemes();
+
+// Adds an application-defined scheme to the list of schemes that normal pages
+// cannot link to or access (i.e., with the same security rules as those applied
+// to "file" URLs).
+URL_EXPORT void AddLocalScheme(const char* new_scheme);
+URL_EXPORT const std::vector<std::string>& GetLocalSchemes();
+
+// Adds an application-defined scheme to the list of schemes that cause pages
+// loaded with them to not have access to pages loaded with any other URL
+// scheme.
+URL_EXPORT void AddNoAccessScheme(const char* new_scheme);
+URL_EXPORT const std::vector<std::string>& GetNoAccessSchemes();
+
+// Adds an application-defined scheme to the list of schemes that can be sent
+// CORS requests.
+URL_EXPORT void AddCORSEnabledScheme(const char* new_scheme);
+URL_EXPORT const std::vector<std::string>& GetCORSEnabledSchemes();
+
+// Sets a flag to prevent future calls to Add*Scheme from succeeding.
 //
 // This is designed to help prevent errors for multithreaded applications.
-// Normal usage would be to call AddStandardScheme for your custom schemes at
-// the beginning of program initialization, and then LockStandardSchemes. This
-// prevents future callers from mistakenly calling AddStandardScheme when the
+// Normal usage would be to call Add*Scheme for your custom schemes at
+// the beginning of program initialization, and then LockSchemeRegistries. This
+// prevents future callers from mistakenly calling Add*Scheme when the
 // program is running with multiple threads, where such usage would be
 // dangerous.
 //
-// We could have had AddStandardScheme use a lock instead, but that would add
+// We could have had Add*Scheme use a lock instead, but that would add
 // some platform-specific dependencies we don't otherwise have now, and is
 // overkill considering the normal usage is so simple.
-URL_EXPORT void LockStandardSchemes();
+URL_EXPORT void LockSchemeRegistries();
 
 // Locates the scheme in the given string and places it into |found_scheme|,
 // which may be NULL to indicate the caller does not care about the range.
@@ -112,6 +142,10 @@ inline bool FindAndCompareScheme(const base::string16& str,
 URL_EXPORT bool IsStandard(const char* spec, const Component& scheme);
 URL_EXPORT bool IsStandard(const base::char16* spec, const Component& scheme);
 
+// Returns true if the given scheme identified by |scheme| within |spec| is in
+// the list of allowed schemes for referrers (see AddReferrerScheme).
+URL_EXPORT bool IsReferrerScheme(const char* spec, const Component& scheme);
+
 // Returns true and sets |type| to the SchemeType of the given scheme
 // identified by |scheme| within |spec| if the scheme is in the list of known
 // standard-format schemes (see AddStandardScheme).
@@ -119,7 +153,24 @@ URL_EXPORT bool GetStandardSchemeType(const char* spec,
                                       const Component& scheme,
                                       SchemeType* type);
 
-// URL library wrappers -------------------------------------------------------
+// Hosts  ----------------------------------------------------------------------
+
+// Returns true if the |canonicalized_host| matches or is in the same domain as
+// the given |lower_ascii_domain| string. For example, if the canonicalized
+// hostname is "www.google.com", this will return true for "com", "google.com",
+// and "www.google.com" domains.
+//
+// If either of the input StringPieces is empty, the return value is false. The
+// input domain should be a lower-case ASCII string in order to match the
+// canonicalized host.
+URL_EXPORT bool DomainIs(base::StringPiece canonicalized_host,
+                         base::StringPiece lower_ascii_domain);
+
+// Returns true if the hostname is an IP address. Note: this function isn't very
+// cheap, as it must re-parse the host to verify.
+URL_EXPORT bool HostIsIPAddress(base::StringPiece host);
+
+// URL library wrappers --------------------------------------------------------
 
 // Parses the given spec according to the extracted scheme type. Normal users
 // should use the URL object, although this may be useful if performance is
@@ -191,7 +242,7 @@ URL_EXPORT bool ReplaceComponents(
     CanonOutput* output,
     Parsed* out_parsed);
 
-// String helper functions ----------------------------------------------------
+// String helper functions -----------------------------------------------------
 
 // Unescapes the given string using URL escaping rules.
 URL_EXPORT void DecodeURLEscapeSequences(const char* input,

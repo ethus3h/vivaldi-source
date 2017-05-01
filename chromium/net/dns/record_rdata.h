@@ -7,14 +7,15 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_piece.h"
-#include "net/base/ip_address_number.h"
+#include "net/base/ip_address.h"
 #include "net/base/net_export.h"
 #include "net/dns/dns_protocol.h"
 
@@ -47,8 +48,8 @@ class NET_EXPORT_PRIVATE SrvRecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeSRV;
 
   ~SrvRecordRdata() override;
-  static scoped_ptr<SrvRecordRdata> Create(const base::StringPiece& data,
-                                           const DnsRecordParser& parser);
+  static std::unique_ptr<SrvRecordRdata> Create(const base::StringPiece& data,
+                                                const DnsRecordParser& parser);
 
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
@@ -78,17 +79,17 @@ class NET_EXPORT_PRIVATE ARecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeA;
 
   ~ARecordRdata() override;
-  static scoped_ptr<ARecordRdata> Create(const base::StringPiece& data,
-                                         const DnsRecordParser& parser);
+  static std::unique_ptr<ARecordRdata> Create(const base::StringPiece& data,
+                                              const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
-  const IPAddressNumber& address() const { return address_; }
+  const IPAddress& address() const { return address_; }
 
  private:
   ARecordRdata();
 
-  IPAddressNumber address_;
+  IPAddress address_;
 
   DISALLOW_COPY_AND_ASSIGN(ARecordRdata);
 };
@@ -100,17 +101,17 @@ class NET_EXPORT_PRIVATE AAAARecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeAAAA;
 
   ~AAAARecordRdata() override;
-  static scoped_ptr<AAAARecordRdata> Create(const base::StringPiece& data,
-                                         const DnsRecordParser& parser);
+  static std::unique_ptr<AAAARecordRdata> Create(const base::StringPiece& data,
+                                                 const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
-  const IPAddressNumber& address() const { return address_; }
+  const IPAddress& address() const { return address_; }
 
  private:
   AAAARecordRdata();
 
-  IPAddressNumber address_;
+  IPAddress address_;
 
   DISALLOW_COPY_AND_ASSIGN(AAAARecordRdata);
 };
@@ -122,8 +123,9 @@ class NET_EXPORT_PRIVATE CnameRecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeCNAME;
 
   ~CnameRecordRdata() override;
-  static scoped_ptr<CnameRecordRdata> Create(const base::StringPiece& data,
-                                             const DnsRecordParser& parser);
+  static std::unique_ptr<CnameRecordRdata> Create(
+      const base::StringPiece& data,
+      const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
@@ -144,8 +146,8 @@ class NET_EXPORT_PRIVATE PtrRecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypePTR;
 
   ~PtrRecordRdata() override;
-  static scoped_ptr<PtrRecordRdata> Create(const base::StringPiece& data,
-                                           const DnsRecordParser& parser);
+  static std::unique_ptr<PtrRecordRdata> Create(const base::StringPiece& data,
+                                                const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
@@ -167,8 +169,8 @@ class NET_EXPORT_PRIVATE TxtRecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeTXT;
 
   ~TxtRecordRdata() override;
-  static scoped_ptr<TxtRecordRdata> Create(const base::StringPiece& data,
-                                           const DnsRecordParser& parser);
+  static std::unique_ptr<TxtRecordRdata> Create(const base::StringPiece& data,
+                                                const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
@@ -191,13 +193,17 @@ class NET_EXPORT_PRIVATE NsecRecordRdata : public RecordRdata {
   static const uint16_t kType = dns_protocol::kTypeNSEC;
 
   ~NsecRecordRdata() override;
-  static scoped_ptr<NsecRecordRdata> Create(const base::StringPiece& data,
-                                            const DnsRecordParser& parser);
+  static std::unique_ptr<NsecRecordRdata> Create(const base::StringPiece& data,
+                                                 const DnsRecordParser& parser);
   bool IsEqual(const RecordRdata* other) const override;
   uint16_t Type() const override;
 
   // Length of the bitmap in bits.
-  unsigned bitmap_length() const { return bitmap_.size() * 8; }
+  // This will be between 8 and 256, per RFC 3845, Section 2.1.2.
+  uint16_t bitmap_length() const {
+    DCHECK_LE(bitmap_.size(), 32u);
+    return static_cast<uint16_t>(bitmap_.size() * 8);
+  }
 
   // Returns bit i-th bit in the bitmap, where bits withing a byte are organized
   // most to least significant. If it is set, a record with rrtype i exists for

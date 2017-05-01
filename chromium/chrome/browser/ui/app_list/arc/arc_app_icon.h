@@ -5,10 +5,11 @@
 #ifndef CHROME_BROWSER_UI_APP_LIST_ARC_ARC_APP_ICON_H_
 #define CHROME_BROWSER_UI_APP_LIST_ARC_ARC_APP_ICON_H_
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/base/layout.h"
 #include "ui/gfx/image/image.h"
@@ -31,7 +32,7 @@ class ArcAppIcon {
    public:
     // Invoked when a new image rep for an additional scale factor
     // is loaded and added to |image|.
-    virtual void OnIconUpdated() = 0;
+    virtual void OnIconUpdated(ArcAppIcon* icon) = 0;
 
    protected:
     virtual ~Observer() {}
@@ -43,6 +44,7 @@ class ArcAppIcon {
              Observer* observer);
   ~ArcAppIcon();
 
+  const std::string& app_id() const { return app_id_; }
   gfx::Image image() const { return image_; }
   const gfx::ImageSkia& image_skia() const { return image_skia_; }
 
@@ -63,17 +65,17 @@ class ArcAppIcon {
   // LoadImageForScaleFactor again.
   void LoadForScaleFactor(ui::ScaleFactor scale_factor);
 
-  // Disables decoding requests when unit tests are executed. This is done to
-  // avoid two problems. Problems come because icons are decoded at a separate
-  // process created by ImageDecoder. ImageDecoder has 5 seconds delay to stop
-  // since the last request (see its kBatchModeTimeoutSeconds for more details).
-  // This is unacceptably long for unit tests because the test framework waits
-  // until external process is finished. Another problem happens when we issue
-  // a decoding request, but the process has not started its processing yet by
-  // the time when a test exits. This might cause situation when
-  // g_one_utility_thread_lock from in_process_utility_thread.cc gets released
-  // in an acquired state which is crash condition in debug builds.
-  static void DisableDecodingForTesting();
+  // Disables async safe decoding requests when unit tests are executed. This is
+  // done to avoid two problems. Problems come because icons are decoded at a
+  // separate process created by ImageDecoder. ImageDecoder has 5 seconds delay
+  // to stop since the last request (see its kBatchModeTimeoutSeconds for more
+  // details). This is unacceptably long for unit tests because the test
+  // framework waits until external process is finished. Another problem happens
+  // when we issue a decoding request, but the process has not started its
+  // processing yet by the time when a test exits. This might cause situation
+  // when g_one_utility_thread_lock from in_process_utility_thread.cc gets
+  // released in an acquired state which is crash condition in debug builds.
+  static void DisableSafeDecodingForTesting();
 
  private:
   class Source;
@@ -81,10 +83,11 @@ class ArcAppIcon {
   struct ReadResult;
 
   void RequestIcon(ui::ScaleFactor scale_factor);
-  static scoped_ptr<ArcAppIcon::ReadResult> ReadOnFileThread(
+  static std::unique_ptr<ArcAppIcon::ReadResult> ReadOnFileThread(
       ui::ScaleFactor scale_factor,
-      const base::FilePath& path);
-  void OnIconRead(scoped_ptr<ArcAppIcon::ReadResult> read_result);
+      const base::FilePath& path,
+      const base::FilePath& default_app_path);
+  void OnIconRead(std::unique_ptr<ArcAppIcon::ReadResult> read_result);
   void Update(const gfx::ImageSkia* image);
   void DiscardDecodeRequest(DecodeRequest* request);
 
@@ -101,7 +104,7 @@ class ArcAppIcon {
   gfx::Image image_;
 
   // Contains pending image decode requests.
-  ScopedVector<DecodeRequest> decode_requests_;
+  std::vector<std::unique_ptr<DecodeRequest>> decode_requests_;
 
   base::WeakPtrFactory<ArcAppIcon> weak_ptr_factory_;
 

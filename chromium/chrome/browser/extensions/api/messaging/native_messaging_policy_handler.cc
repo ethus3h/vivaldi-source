@@ -7,13 +7,13 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/prefs/pref_value_map.h"
 #include "chrome/browser/extensions/api/messaging/native_messaging_host_manifest.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
-#include "grit/components_strings.h"
-#include "policy/policy_constants.h"
+#include "components/policy/policy_constants.h"
+#include "components/prefs/pref_value_map.h"
+#include "components/strings/grit/components_strings.h"
 
 namespace extensions {
 
@@ -21,7 +21,7 @@ NativeMessagingHostListPolicyHandler::NativeMessagingHostListPolicyHandler(
     const char* policy_name,
     const char* pref_path,
     bool allow_wildcards)
-    : policy::TypeCheckingPolicyHandler(policy_name, base::Value::TYPE_LIST),
+    : policy::TypeCheckingPolicyHandler(policy_name, base::Value::Type::LIST),
       pref_path_(pref_path),
       allow_wildcards_(allow_wildcards) {}
 
@@ -36,7 +36,7 @@ bool NativeMessagingHostListPolicyHandler::CheckPolicySettings(
 void NativeMessagingHostListPolicyHandler::ApplyPolicySettings(
     const policy::PolicyMap& policies,
     PrefValueMap* prefs) {
-  scoped_ptr<base::ListValue> list;
+  std::unique_ptr<base::ListValue> list;
   policy::PolicyErrorMap errors;
   if (CheckAndGetList(policies, &errors, &list) && list)
     prefs->SetValue(pref_path(), std::move(list));
@@ -49,7 +49,7 @@ const char* NativeMessagingHostListPolicyHandler::pref_path() const {
 bool NativeMessagingHostListPolicyHandler::CheckAndGetList(
     const policy::PolicyMap& policies,
     policy::PolicyErrorMap* errors,
-    scoped_ptr<base::ListValue>* names) {
+    std::unique_ptr<base::ListValue>* names) {
   const base::Value* value = NULL;
   if (!CheckAndGetValue(policies, errors, &value))
     return false;
@@ -64,15 +64,14 @@ bool NativeMessagingHostListPolicyHandler::CheckAndGetList(
   }
 
   // Filter the list, rejecting any invalid native messaging host names.
-  scoped_ptr<base::ListValue> filtered_list(new base::ListValue());
+  std::unique_ptr<base::ListValue> filtered_list(new base::ListValue());
   for (base::ListValue::const_iterator entry(list_value->begin());
        entry != list_value->end(); ++entry) {
     std::string name;
     if (!(*entry)->GetAsString(&name)) {
-      errors->AddError(policy_name(),
-                       entry - list_value->begin(),
+      errors->AddError(policy_name(), entry - list_value->begin(),
                        IDS_POLICY_TYPE_ERROR,
-                       ValueTypeToString(base::Value::TYPE_STRING));
+                       base::Value::GetTypeName(base::Value::Type::STRING));
       continue;
     }
     if (!(allow_wildcards_ && name == "*") &&
@@ -82,7 +81,7 @@ bool NativeMessagingHostListPolicyHandler::CheckAndGetList(
                        IDS_POLICY_VALUE_FORMAT_ERROR);
       continue;
     }
-    filtered_list->Append(new base::StringValue(name));
+    filtered_list->AppendString(name);
   }
 
   if (names)

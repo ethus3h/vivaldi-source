@@ -10,46 +10,49 @@
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/metrics/sparse_histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
+#include "gpu/config/gpu_switches.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_version_info.h"
+#include "ui/gl/init/gl_factory.h"
+
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+#include "ui/gl/gl_visual_picker_glx.h"
+#endif
 
 namespace {
 
-scoped_refptr<gfx::GLSurface> InitializeGLSurface() {
-  scoped_refptr<gfx::GLSurface> surface(
-      gfx::GLSurface::CreateOffscreenGLSurface(gfx::Size()));
+scoped_refptr<gl::GLSurface> InitializeGLSurface() {
+  scoped_refptr<gl::GLSurface> surface(
+      gl::init::CreateOffscreenGLSurface(gfx::Size()));
   if (!surface.get()) {
-    LOG(ERROR) << "gfx::GLContext::CreateOffscreenGLSurface failed";
+    LOG(ERROR) << "gl::GLContext::CreateOffscreenGLSurface failed";
     return NULL;
   }
 
   return surface;
 }
 
-scoped_refptr<gfx::GLContext> InitializeGLContext(gfx::GLSurface* surface) {
-
-  scoped_refptr<gfx::GLContext> context(
-      gfx::GLContext::CreateGLContext(NULL,
-                                      surface,
-                                      gfx::PreferIntegratedGpu));
+scoped_refptr<gl::GLContext> InitializeGLContext(gl::GLSurface* surface) {
+  scoped_refptr<gl::GLContext> context(
+      gl::init::CreateGLContext(nullptr, surface, gl::GLContextAttribs()));
   if (!context.get()) {
-    LOG(ERROR) << "gfx::GLContext::CreateGLContext failed";
+    LOG(ERROR) << "gl::init::CreateGLContext failed";
     return NULL;
   }
 
   if (!context->MakeCurrent(surface)) {
-    LOG(ERROR) << "gfx::GLContext::MakeCurrent() failed";
+    LOG(ERROR) << "gl::GLContext::MakeCurrent() failed";
     return NULL;
   }
 
@@ -96,21 +99,21 @@ int StringContainsName(
   return -1;
 }
 
-}  // namespace anonymous
+}  // namespace
 
 namespace gpu {
 
 CollectInfoResult CollectGraphicsInfoGL(GPUInfo* gpu_info) {
   TRACE_EVENT0("startup", "gpu_info_collector::CollectGraphicsInfoGL");
-  DCHECK_NE(gfx::GetGLImplementation(), gfx::kGLImplementationNone);
+  DCHECK_NE(gl::GetGLImplementation(), gl::kGLImplementationNone);
 
-  scoped_refptr<gfx::GLSurface> surface(InitializeGLSurface());
+  scoped_refptr<gl::GLSurface> surface(InitializeGLSurface());
   if (!surface.get()) {
     LOG(ERROR) << "Could not create surface for info collection.";
     return kCollectInfoFatalFailure;
   }
 
-  scoped_refptr<gfx::GLContext> context(InitializeGLContext(surface.get()));
+  scoped_refptr<gl::GLContext> context(InitializeGLContext(surface.get()));
   if (!context.get()) {
     LOG(ERROR) << "Could not create context for info collection.";
     return kCollectInfoFatalFailure;
@@ -118,13 +121,28 @@ CollectInfoResult CollectGraphicsInfoGL(GPUInfo* gpu_info) {
 
   gpu_info->gl_renderer = GetGLString(GL_RENDERER);
   gpu_info->gl_vendor = GetGLString(GL_VENDOR);
-  gpu_info->gl_extensions = gfx::GetGLExtensionsFromCurrentContext();
   gpu_info->gl_version = GetGLString(GL_VERSION);
+
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kGpuTestingGLVendor)) {
+    gpu_info->gl_vendor =
+        command_line->GetSwitchValueASCII(switches::kGpuTestingGLVendor);
+  }
+  if (command_line->HasSwitch(switches::kGpuTestingGLRenderer)) {
+    gpu_info->gl_renderer =
+        command_line->GetSwitchValueASCII(switches::kGpuTestingGLRenderer);
+  }
+  if (command_line->HasSwitch(switches::kGpuTestingGLVersion)) {
+    gpu_info->gl_version =
+        command_line->GetSwitchValueASCII(switches::kGpuTestingGLVersion);
+  }
+
+  gpu_info->gl_extensions = gl::GetGLExtensionsFromCurrentContext();
   std::string glsl_version_string = GetGLString(GL_SHADING_LANGUAGE_VERSION);
 
-  gfx::GLVersionInfo gl_info(gpu_info->gl_version.c_str(),
-                             gpu_info->gl_renderer.c_str(),
-                             gpu_info->gl_extensions.c_str());
+  gl::GLVersionInfo gl_info(gpu_info->gl_version.c_str(),
+                            gpu_info->gl_renderer.c_str(),
+                            gpu_info->gl_extensions.c_str());
   GLint max_samples = 0;
   if (gl_info.IsAtLeastGL(3, 0) || gl_info.IsAtLeastGLES(3, 0) ||
       gpu_info->gl_extensions.find("GL_ANGLE_framebuffer_multisample") !=
@@ -142,8 +160,8 @@ CollectInfoResult CollectGraphicsInfoGL(GPUInfo* gpu_info) {
   gpu_info->max_msaa_samples = base::IntToString(max_samples);
   UMA_HISTOGRAM_SPARSE_SLOWLY("GPU.MaxMSAASampleCount", max_samples);
 
-  gfx::GLWindowSystemBindingInfo window_system_binding_info;
-  if (GetGLWindowSystemBindingInfo(&window_system_binding_info)) {
+  gl::GLWindowSystemBindingInfo window_system_binding_info;
+  if (gl::init::GetGLWindowSystemBindingInfo(&window_system_binding_info)) {
     gpu_info->gl_ws_vendor = window_system_binding_info.vendor;
     gpu_info->gl_ws_version = window_system_binding_info.version;
     gpu_info->gl_ws_extensions = window_system_binding_info.extensions;
@@ -158,6 +176,14 @@ CollectInfoResult CollectGraphicsInfoGL(GPUInfo* gpu_info) {
     glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY_ARB,
         reinterpret_cast<GLint*>(&gpu_info->gl_reset_notification_strategy));
   }
+
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+  if (gl::GetGLImplementation() == gl::kGLImplementationDesktopGL) {
+    gl::GLVisualPickerGLX* visual_picker = gl::GLVisualPickerGLX::GetInstance();
+    gpu_info->system_visual = visual_picker->system_visual().visualid;
+    gpu_info->rgba_visual = visual_picker->rgba_visual().visualid;
+  }
+#endif
 
   // TODO(kbr): remove once the destruction of a current context automatically
   // clears the current context.
@@ -199,10 +225,11 @@ void MergeGPUInfoGL(GPUInfo* basic_gpu_info,
   if (!context_gpu_info.driver_version.empty())
     basic_gpu_info->driver_version = context_gpu_info.driver_version;
 
-  basic_gpu_info->can_lose_context = context_gpu_info.can_lose_context;
   basic_gpu_info->sandboxed = context_gpu_info.sandboxed;
   basic_gpu_info->direct_rendering = context_gpu_info.direct_rendering;
   basic_gpu_info->in_process_gpu = context_gpu_info.in_process_gpu;
+  basic_gpu_info->passthrough_cmd_decoder =
+      context_gpu_info.passthrough_cmd_decoder;
   basic_gpu_info->context_info_state = context_gpu_info.context_info_state;
   basic_gpu_info->initialization_time = context_gpu_info.initialization_time;
   basic_gpu_info->video_decode_accelerator_capabilities =
@@ -211,21 +238,28 @@ void MergeGPUInfoGL(GPUInfo* basic_gpu_info,
       context_gpu_info.video_encode_accelerator_supported_profiles;
   basic_gpu_info->jpeg_decode_accelerator_supported =
       context_gpu_info.jpeg_decode_accelerator_supported;
+
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+  basic_gpu_info->system_visual = context_gpu_info.system_visual;
+  basic_gpu_info->rgba_visual = context_gpu_info.rgba_visual;
+#endif
 }
 
 void IdentifyActiveGPU(GPUInfo* gpu_info) {
   const std::string kNVidiaName = "nvidia";
+  const std::string kNouveauName = "nouveau";
   const std::string kIntelName = "intel";
   const std::string kAMDName = "amd";
   const std::string kATIName = "ati";
-  const std::string kVendorNames[] = {
-      kNVidiaName, kIntelName, kAMDName, kATIName};
+  const std::string kVendorNames[] = {kNVidiaName, kNouveauName, kIntelName,
+                                      kAMDName, kATIName};
 
   const uint32_t kNVidiaID = 0x10de;
   const uint32_t kIntelID = 0x8086;
   const uint32_t kAMDID = 0x1002;
   const uint32_t kATIID = 0x1002;
-  const uint32_t kVendorIDs[] = {kNVidiaID, kIntelID, kAMDID, kATIID};
+  const uint32_t kVendorIDs[] = {kNVidiaID, kNVidiaID, kIntelID, kAMDID,
+                                 kATIID};
 
   DCHECK(gpu_info);
   if (gpu_info->secondary_gpus.size() == 0)
@@ -271,4 +305,3 @@ void IdentifyActiveGPU(GPUInfo* gpu_info) {
 }
 
 }  // namespace gpu
-

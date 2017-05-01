@@ -39,33 +39,30 @@ class NavigatorUserMediaError;
 
 // A class that is able to be used like ExceptionState for carrying
 // information about an error up the stack, but it is up to the higher
-// level code whether it produces a DOMerror or a NavigatorUserMediaError.
+// level code whether it produces a DOMException or a NavigatorUserMediaError.
 class MediaErrorState {
-public:
-    MediaErrorState();
-    void throwTypeError(const String& message);
-    void throwDOMException(const ExceptionCode&, const String& message);
-    void throwConstraintError(const String& message, const String& constraint);
-    void reset();
+ public:
+  MediaErrorState();
+  void throwTypeError(const String& message);
+  void throwDOMException(ExceptionCode, const String& message);
+  void throwConstraintError(const String& message, const String& constraint);
+  void reset();
 
-    bool hadException();
-    bool canGenerateException();
-    void raiseException(ExceptionState&);
-    NavigatorUserMediaError* createError();
-private:
-    enum ErrorType {
-        NoError,
-        TypeError,
-        DOMError,
-        ConstraintError
-    };
-    ErrorType m_errorType;
-    String m_name;
-    ExceptionCode m_code;
-    String m_message;
-    String m_constraint;
+  bool hadException();
+  bool canGenerateException();
+  void raiseException(ExceptionState&);
+  String getErrorMessage();
+  NavigatorUserMediaError* createError();
+
+ private:
+  enum ErrorType { NoError, TypeError, DOMException, ConstraintError };
+  ErrorType m_errorType;
+  String m_name;
+  ExceptionCode m_code;
+  String m_message;
+  String m_constraint;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // MediaErrorState_h
+#endif  // MediaErrorState_h

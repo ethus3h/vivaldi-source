@@ -20,9 +20,11 @@ struct CHROME_VIEWS_EXPORT TabRendererData {
     NETWORK_STATE_NONE,     // no network activity.
     NETWORK_STATE_WAITING,  // waiting for a connection.
     NETWORK_STATE_LOADING,  // connected, transferring data.
+    NETWORK_STATE_ERROR,    // Encountered a network error.
   };
 
   TabRendererData();
+  TabRendererData(const TabRendererData& other);
   ~TabRendererData();
 
   // This interprets the crashed status to decide whether or not this
@@ -44,7 +46,7 @@ struct CHROME_VIEWS_EXPORT TabRendererData {
   bool pinned;
   bool blocked;
   bool app;
-  TabMediaState media_state;
+  TabAlertState alert_state;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_RENDERER_DATA_H_

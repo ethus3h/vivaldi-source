@@ -7,21 +7,24 @@
 #include <stdint.h>
 
 #include "base/logging.h"
-#include "base/mac/scoped_nsobject.h"
 #include "ios/chrome/common/app_group/app_group_constants.h"
 #include "ios/chrome/common/app_group/app_group_metrics.h"
+
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
 
 namespace app_group {
 
 namespace main_app {
 
-void ProcessPendingLogs(
-    const base::mac::ScopedBlock<ProceduralBlockWithData>& callback) {
+void ProcessPendingLogs(ProceduralBlockWithData callback) {
   NSFileManager* file_manager = [NSFileManager defaultManager];
   NSURL* store_url = [file_manager
       containerURLForSecurityApplicationGroupIdentifier:ApplicationGroup()];
-  NSURL* log_dir_url = [store_url
-      URLByAppendingPathComponent:app_group::kPendingLogFileDirectory];
+  NSURL* log_dir_url =
+      [store_url URLByAppendingPathComponent:app_group::kPendingLogFileDirectory
+                                 isDirectory:YES];
 
   NSArray* pending_logs =
       [file_manager contentsOfDirectoryAtPath:[log_dir_url path] error:nil];
@@ -29,10 +32,11 @@ void ProcessPendingLogs(
     return;
   for (NSString* pending_log : pending_logs) {
     if ([pending_log hasSuffix:app_group::kPendingLogFileSuffix]) {
-      NSURL* file_url = [log_dir_url URLByAppendingPathComponent:pending_log];
+      NSURL* file_url =
+          [log_dir_url URLByAppendingPathComponent:pending_log isDirectory:NO];
       if (callback) {
         NSData* log_content = [file_manager contentsAtPath:[file_url path]];
-        callback.get()(log_content);
+        callback(log_content);
       }
       [file_manager removeItemAtURL:file_url error:nil];
     }
@@ -43,8 +47,8 @@ void EnableMetrics(NSString* client_id,
                    NSString* brand_code,
                    int64_t install_date,
                    int64_t enable_metrics_date) {
-  base::scoped_nsobject<NSUserDefaults> shared_defaults(
-      [[NSUserDefaults alloc] initWithSuiteName:ApplicationGroup()]);
+  NSUserDefaults* shared_defaults =
+      [[NSUserDefaults alloc] initWithSuiteName:ApplicationGroup()];
   [shared_defaults setObject:client_id forKey:@(kChromeAppClientID)];
 
   [shared_defaults
@@ -58,8 +62,8 @@ void EnableMetrics(NSString* client_id,
 }
 
 void DisableMetrics() {
-  base::scoped_nsobject<NSUserDefaults> shared_defaults(
-      [[NSUserDefaults alloc] initWithSuiteName:ApplicationGroup()]);
+  NSUserDefaults* shared_defaults =
+      [[NSUserDefaults alloc] initWithSuiteName:ApplicationGroup()];
   [shared_defaults removeObjectForKey:@(kChromeAppClientID)];
 }
 

@@ -5,6 +5,9 @@
 #include "base/command_line.h"
 #include "base/debug/leak_annotations.h"
 #include "base/message_loop/message_loop.h"
+#include "base/optional.h"
+#include "base/power_monitor/power_monitor.h"
+#include "base/run_loop.h"
 #include "base/threading/platform_thread.h"
 #include "base/timer/hi_res_timer_manager.h"
 #include "build/build_config.h"
@@ -39,7 +42,22 @@ int UtilityMain(const MainFunctionParams& parameters) {
   ChildProcess utility_process;
   utility_process.set_main_thread(new UtilityThreadImpl());
 
-  base::HighResolutionTimerManager hi_res_timer_manager;
+  // Both utility process and service utility process would come
+  // here, but the later is launched without connection to service manager, so
+  // there has no base::PowerMonitor be created(See ChildThreadImpl::Init()).
+  // As base::PowerMonitor is necessary to base::HighResolutionTimerManager, for
+  // such case we just disable base::HighResolutionTimerManager for now.
+  // Note that disabling base::HighResolutionTimerManager means high resolution
+  // timer is always disabled no matter on battery or not, but it should have
+  // no any bad influence because currently service utility process is not using
+  // any high resolution timer.
+  // TODO(leonhsl): Once http://crbug.com/646833 got resolved, re-enable
+  // base::HighResolutionTimerManager here for future possible usage of high
+  // resolution timer in service utility process.
+  base::Optional<base::HighResolutionTimerManager> hi_res_timer_manager;
+  if (base::PowerMonitor::Get()) {
+    hi_res_timer_manager.emplace();
+  }
 
 #if defined(OS_WIN)
   bool no_sandbox = parameters.command_line.HasSwitch(switches::kNoSandbox);
@@ -48,12 +66,6 @@ int UtilityMain(const MainFunctionParams& parameters) {
         parameters.sandbox_info->target_services;
     if (!target_services)
       return false;
-#if defined(ADDRESS_SANITIZER)
-    // Bind and leak dbghelp.dll before the token is lowered, otherwise
-    // AddressSanitizer will crash when trying to symbolize a report.
-    if (!LoadLibraryA("dbghelp.dll"))
-      return false;
-#endif
     char buffer;
     // Ensure RtlGenRandom is warm before the token is lowered; otherwise,
     // base::RandBytes() will CHECK fail when v8 is initialized.
@@ -62,7 +74,7 @@ int UtilityMain(const MainFunctionParams& parameters) {
   }
 #endif
 
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
 #if defined(LEAK_SANITIZER)
   // Invoke LeakSanitizer before shutting down the utility thread, to avoid

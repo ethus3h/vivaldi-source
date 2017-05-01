@@ -8,12 +8,13 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
+#include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "media/formats/mpeg/adts_stream_parser.h"
 #include "media/formats/mpeg/mpeg1_audio_stream_parser.h"
@@ -21,7 +22,7 @@
 #include "media/media_features.h"
 
 #if defined(OS_ANDROID)
-#include "base/android/build_info.h"
+#include "media/base/android/media_codec_util.h"
 #endif
 
 #if defined(USE_PROPRIETARY_CODECS)
@@ -111,6 +112,12 @@ static StreamParser* BuildWebMParser(const std::vector<std::string>& codecs,
 }
 
 #if defined(USE_PROPRIETARY_CODECS)
+bool CheckIfMp4Vp9DemuxingEnabled(const std::string& codec_id,
+                                  const scoped_refptr<MediaLog>& media_log) {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableVp9InMp4);
+}
+
 // AAC Object Type IDs that Chrome supports.
 static const int kAACLCObjectType = 2;
 static const int kAACSBRObjectType = 5;
@@ -165,6 +172,9 @@ static const CodecInfo kHEVCHEV1CodecInfo = { "hev1.*", CodecInfo::VIDEO, NULL,
 static const CodecInfo kHEVCHVC1CodecInfo = { "hvc1.*", CodecInfo::VIDEO, NULL,
                                               CodecInfo::HISTOGRAM_HEVC };
 #endif
+static const CodecInfo kMPEG4VP09CodecInfo = {"vp09.*", CodecInfo::VIDEO,
+                                              &CheckIfMp4Vp9DemuxingEnabled,
+                                              CodecInfo::HISTOGRAM_VP9};
 static const CodecInfo kMPEG4AACCodecInfo = { "mp4a.40.*", CodecInfo::AUDIO,
                                               &ValidateMP4ACodecID,
                                               CodecInfo::HISTOGRAM_MPEG4AAC };
@@ -193,11 +203,12 @@ static const CodecInfo kEAC3CodecInfo3 = {"mp4a.A6", CodecInfo::AUDIO, NULL,
 #endif
 
 static const CodecInfo* kVideoMP4Codecs[] = {
-    &kH264AVC1CodecInfo, &kH264AVC3CodecInfo,
+    &kH264AVC1CodecInfo,  &kH264AVC3CodecInfo,
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
-    &kHEVCHEV1CodecInfo, &kHEVCHVC1CodecInfo,
+    &kHEVCHEV1CodecInfo,  &kHEVCHVC1CodecInfo,
 #endif
-    &kMPEG4AACCodecInfo, &kMPEG2AACLCCodecInfo, NULL};
+    &kMPEG4VP09CodecInfo,
+    &kMPEG4AACCodecInfo,  &kMPEG2AACLCCodecInfo, NULL};
 
 static const CodecInfo* kAudioMP4Codecs[] = {&kMPEG4AACCodecInfo,
                                              &kMPEG2AACLCCodecInfo,
@@ -345,14 +356,10 @@ static bool VerifyCodec(
       return true;
     case CodecInfo::VIDEO:
 #if defined(OS_ANDROID)
-      // VP9 is only supported on KitKat+ (API Level 19).
-      if (codec_info->tag == CodecInfo::HISTOGRAM_VP9 &&
-          base::android::BuildInfo::GetInstance()->sdk_int() < 19) {
-        return false;
-      }
-      // Opus is only supported on Lollipop+ (API Level 21).
-      if (codec_info->tag == CodecInfo::HISTOGRAM_OPUS &&
-          base::android::BuildInfo::GetInstance()->sdk_int() < 21) {
+      // TODO(wolenetz, dalecurtis): This should instead use MimeUtil() to avoid
+      // duplication of subtle Android behavior.  http://crbug.com/587303.
+      if (codec_info->tag == CodecInfo::HISTOGRAM_H264 &&
+          !media::HasPlatformDecoderSupport()) {
         return false;
       }
 #endif
@@ -461,24 +468,17 @@ bool StreamParserFactory::IsTypeSupported(
   return CheckTypeAndCodecs(type, codecs, new MediaLog(), NULL, NULL, NULL);
 }
 
-scoped_ptr<StreamParser> StreamParserFactory::Create(
+std::unique_ptr<StreamParser> StreamParserFactory::Create(
     const std::string& type,
     const std::vector<std::string>& codecs,
-    const scoped_refptr<MediaLog>& media_log,
-    bool* has_audio,
-    bool* has_video) {
-  scoped_ptr<StreamParser> stream_parser;
+    const scoped_refptr<MediaLog>& media_log) {
+  std::unique_ptr<StreamParser> stream_parser;
   ParserFactoryFunction factory_function;
   std::vector<CodecInfo::HistogramTag> audio_codecs;
   std::vector<CodecInfo::HistogramTag> video_codecs;
-  *has_audio = false;
-  *has_video = false;
 
   if (CheckTypeAndCodecs(type, codecs, media_log, &factory_function,
                          &audio_codecs, &video_codecs)) {
-    *has_audio = !audio_codecs.empty();
-    *has_video = !video_codecs.empty();
-
     // Log the number of codecs specified, as well as the details on each one.
     UMA_HISTOGRAM_COUNTS_100("Media.MSE.NumberOfTracks", codecs.size());
     for (size_t i = 0; i < audio_codecs.size(); ++i) {

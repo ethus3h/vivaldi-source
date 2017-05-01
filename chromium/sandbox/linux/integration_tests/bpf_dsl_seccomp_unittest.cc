@@ -27,7 +27,6 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/sys_info.h"
@@ -1878,15 +1877,23 @@ BPF_TEST_C(SandboxBPF, PthreadBitMask, PthreadPolicyBitMask) {
 
 #if defined(__aarch64__)
 #ifndef PTRACE_GETREGS
+#if defined(__GLIBC__)
+#define PTRACE_GETREGS static_cast<enum __ptrace_request>(12)
+#else
 #define PTRACE_GETREGS 12
-#endif
-#endif
+#endif  // defined(__GLIBC__)
+#endif  // !defined(PTRACE_GETREGS)
+#endif  // defined(__aarch64__)
 
 #if defined(__aarch64__)
 #ifndef PTRACE_SETREGS
+#if defined(__GLIBC__)
+#define PTRACE_SETREGS static_cast<enum __ptrace_request>(13)
+#else
 #define PTRACE_SETREGS 13
-#endif
-#endif
+#endif  // defined(__GLIBC__)
+#endif  // !defined(PTRACE_SETREGS)
+#endif  // defined(__aarch64__)
 
 // Changes the syscall to run for a child being sandboxed using seccomp-bpf with
 // PTRACE_O_TRACESECCOMP.  Should only be called when the child is stopped on
@@ -2136,7 +2143,8 @@ SANDBOX_TEST(SandboxBPF, Tsync) {
     return;
   }
 
-  base::WaitableEvent event(true, false);
+  base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED);
 
   // Create a thread on which to invoke the blocked syscall.
   pthread_t thread;

@@ -9,10 +9,6 @@
 #include "base/macros.h"
 #include "content/shell/browser/shell_url_request_context_getter.h"
 
-namespace base {
-class MessageLoop;
-}
-
 namespace content {
 class BrowserContext;
 }
@@ -26,31 +22,31 @@ namespace extensions {
 
 class InfoMap;
 
-class ShellURLRequestContextGetter :
-  public content::ShellURLRequestContextGetter {
+class ShellURLRequestContextGetter
+    : public content::ShellURLRequestContextGetter {
  public:
   ShellURLRequestContextGetter(
       content::BrowserContext* browser_context,
       bool ignore_certificate_errors,
       const base::FilePath& base_path,
-      base::MessageLoop* io_loop,
-      base::MessageLoop* file_loop,
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+      scoped_refptr<base::SingleThreadTaskRunner> file_task_runner,
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors,
       net::NetLog* net_log,
       InfoMap* extension_info_map);
 
   // content::ShellURLRequestContextGetter implementation.
-  scoped_ptr<net::NetworkDelegate> CreateNetworkDelegate() override;
+  std::unique_ptr<net::NetworkDelegate> CreateNetworkDelegate() override;
 
-protected:
- ~ShellURLRequestContextGetter() override;
+ protected:
+  ~ShellURLRequestContextGetter() override;
 
-private:
+ private:
   content::BrowserContext* browser_context_;
   InfoMap* extension_info_map_;
 
-private:
+ private:
   DISALLOW_COPY_AND_ASSIGN(ShellURLRequestContextGetter);
 };
 

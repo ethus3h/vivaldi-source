@@ -7,16 +7,16 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 
 #include "base/files/file_util.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/test_file_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
 
 namespace content {
 
@@ -47,7 +47,7 @@ class CallbacksJobFactory : public net::URLRequestJobFactory {
             request,
             network_delegate,
             path_,
-            const_cast<base::MessageLoop*>(&message_loop_)->task_runner());
+            base::ThreadTaskRunnerHandle::Get());
     observer_->OnJobCreated();
     return job;
   }
@@ -78,7 +78,6 @@ class CallbacksJobFactory : public net::URLRequestJobFactory {
   }
 
  private:
-  base::MessageLoop message_loop_;
   base::FilePath path_;
   JobObserver* observer_;
 };
@@ -121,6 +120,7 @@ class URLRequestContentJobTest : public testing::Test {
   // retrieved.
   void RunRequest(const Range* range);
 
+  base::MessageLoop message_loop_;
   JobObserverImpl observer_;
   net::TestURLRequestContext context_;
   net::TestDelegate delegate_;
@@ -149,7 +149,7 @@ void URLRequestContentJobTest::RunRequest(const Range* range) {
   CallbacksJobFactory factory(path, &observer_);
   context_.set_job_factory(&factory);
 
-  scoped_ptr<net::URLRequest> request(context_.CreateRequest(
+  std::unique_ptr<net::URLRequest> request(context_.CreateRequest(
       GURL(path.value()), net::DEFAULT_PRIORITY, &delegate_));
   int expected_length = file_size;
   if (range) {

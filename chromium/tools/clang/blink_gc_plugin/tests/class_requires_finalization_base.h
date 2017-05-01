@@ -11,7 +11,7 @@ namespace blink {
 
 class A : public GarbageCollected<A> {
 public:
-    virtual void trace(Visitor*) {}
+    virtual void Trace(Visitor*) {}
 };
 
 class B {
@@ -22,27 +22,13 @@ public:
 // Second base class needs finalization.
 class NeedsFinalizer : public A, public B {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 // Base does not need finalization.
 class DoesNotNeedFinalizer : public A {
 public:
-    void trace(Visitor*);
-};
-
-class GCedClassWithAScriptWrappableBase
-    : public A, public ScriptWrappable {
-public:
-    void trace(Visitor*);
-};
-
-class GCedClassWithAScriptWrappableAndAFinalizableBase
-    : public GCedClassWithAScriptWrappableBase
-    , public B
-    , public ScriptWrappable {
-public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 };
 
 }

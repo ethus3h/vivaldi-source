@@ -20,6 +20,10 @@
 #include "gpu/gpu_export.h"
 #include "ui/gfx/geometry/size.h"
 
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+typedef unsigned long VisualID;
+#endif
+
 namespace gpu {
 
 // Result for the various Collect*Info* functions below.
@@ -40,19 +44,25 @@ enum VideoCodecProfile {
   VIDEO_CODEC_PROFILE_UNKNOWN = -1,
   VIDEO_CODEC_PROFILE_MIN = VIDEO_CODEC_PROFILE_UNKNOWN,
   H264PROFILE_BASELINE = 0,
-  H264PROFILE_MAIN = 1,
-  H264PROFILE_EXTENDED = 2,
-  H264PROFILE_HIGH = 3,
-  H264PROFILE_HIGH10PROFILE = 4,
-  H264PROFILE_HIGH422PROFILE = 5,
-  H264PROFILE_HIGH444PREDICTIVEPROFILE = 6,
-  H264PROFILE_SCALABLEBASELINE = 7,
-  H264PROFILE_SCALABLEHIGH = 8,
-  H264PROFILE_STEREOHIGH = 9,
-  H264PROFILE_MULTIVIEWHIGH = 10,
-  VP8PROFILE_ANY = 11,
-  VP9PROFILE_ANY = 12,
-  VIDEO_CODEC_PROFILE_MAX = VP9PROFILE_ANY,
+  H264PROFILE_MAIN,
+  H264PROFILE_EXTENDED,
+  H264PROFILE_HIGH,
+  H264PROFILE_HIGH10PROFILE,
+  H264PROFILE_HIGH422PROFILE,
+  H264PROFILE_HIGH444PREDICTIVEPROFILE,
+  H264PROFILE_SCALABLEBASELINE,
+  H264PROFILE_SCALABLEHIGH,
+  H264PROFILE_STEREOHIGH,
+  H264PROFILE_MULTIVIEWHIGH,
+  VP8PROFILE_ANY,
+  VP9PROFILE_PROFILE0,
+  VP9PROFILE_PROFILE1,
+  VP9PROFILE_PROFILE2,
+  VP9PROFILE_PROFILE3,
+  HEVCPROFILE_MAIN,
+  HEVCPROFILE_MAIN10,
+  HEVCPROFILE_MAIN_STILL_PICTURE,
+  VIDEO_CODEC_PROFILE_MAX = HEVCPROFILE_MAIN_STILL_PICTURE,
 };
 
 // Specification of a decoding profile supported by a hardware decoder.
@@ -60,6 +70,7 @@ struct GPU_EXPORT VideoDecodeAcceleratorSupportedProfile {
   VideoCodecProfile profile;
   gfx::Size max_resolution;
   gfx::Size min_resolution;
+  bool encrypted_only;
 };
 
 using VideoDecodeAcceleratorSupportedProfiles =
@@ -67,6 +78,8 @@ using VideoDecodeAcceleratorSupportedProfiles =
 
 struct GPU_EXPORT VideoDecodeAcceleratorCapabilities {
   VideoDecodeAcceleratorCapabilities();
+  VideoDecodeAcceleratorCapabilities(
+      const VideoDecodeAcceleratorCapabilities& other);
   ~VideoDecodeAcceleratorCapabilities();
   VideoDecodeAcceleratorSupportedProfiles supported_profiles;
   uint32_t flags;
@@ -107,11 +120,8 @@ struct GPU_EXPORT GPUInfo {
   };
 
   GPUInfo();
+  GPUInfo(const GPUInfo& other);
   ~GPUInfo();
-
-  bool SupportsAccelerated2dCanvas() const {
-    return !can_lose_context && !software_rendering;
-  }
 
   // The amount of time taken to get from the process starting to the message
   // loop being pumped.
@@ -128,7 +138,7 @@ struct GPU_EXPORT GPUInfo {
 
   // Version of DisplayLink driver installed. Zero if not installed.
   // http://crbug.com/177611.
-  Version display_link_version;
+  base::Version display_link_version;
 
   // Primary GPU, for exmaple, the discrete GPU in a dual GPU machine.
   GPUDevice gpu;
@@ -199,10 +209,6 @@ struct GPU_EXPORT GPUInfo {
   // reset detection or notification not available.
   uint32_t gl_reset_notification_strategy;
 
-  // The device semantics, i.e. whether the Vista and Windows 7 specific
-  // semantics are available.
-  bool can_lose_context;
-
   bool software_rendering;
 
   // Whether the driver uses direct rendering. True on most platforms, false on
@@ -217,6 +223,9 @@ struct GPU_EXPORT GPUInfo {
 
   // True if the GPU is running in the browser process instead of its own.
   bool in_process_gpu;
+
+  // True if the GPU process is using the passthrough command decoder.
+  bool passthrough_cmd_decoder;
 
   // The state of whether the basic/context/DxDiagnostics info is collected and
   // if the collection fails or not.
@@ -233,6 +242,11 @@ struct GPU_EXPORT GPUInfo {
   VideoEncodeAcceleratorSupportedProfiles
       video_encode_accelerator_supported_profiles;
   bool jpeg_decode_accelerator_supported;
+
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+  VisualID system_visual;
+  VisualID rgba_visual;
+#endif
 
   // Note: when adding new members, please remember to update EnumerateFields
   // in gpu_info.cc.

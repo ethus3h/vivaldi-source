@@ -4,7 +4,7 @@
 
 #import "ios/web/web_state/ui/wk_back_forward_list_item_holder.h"
 
-#include "ios/web/public/navigation_item.h"
+#import "ios/web/public/navigation_item.h"
 
 namespace web {
 
@@ -16,7 +16,8 @@ const char kBackForwardListItemIdentifierKey[] =
     "BackForwardListItemIdentifierKey";
 }
 
-WKBackForwardListItemHolder::WKBackForwardListItemHolder() {}
+WKBackForwardListItemHolder::WKBackForwardListItemHolder()
+    : navigation_type_(WKNavigationTypeOther) {}
 
 WKBackForwardListItemHolder::~WKBackForwardListItemHolder() {}
 

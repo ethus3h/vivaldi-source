@@ -12,7 +12,6 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/ownership/ownership_export.h"
 #include "crypto/scoped_nss_types.h"
 
@@ -20,8 +19,6 @@ struct PK11SlotInfoStr;
 typedef struct PK11SlotInfoStr PK11SlotInfo;
 
 namespace ownership {
-
-class OwnerKeyUtilTest;
 
 // This class is a ref-counted wrapper around a plain public key.
 class OWNERSHIP_EXPORT PublicKey

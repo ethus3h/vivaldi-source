@@ -8,11 +8,11 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "chrome/browser/themes/custom_theme_supplier.h"
 #include "extensions/common/extension.h"
@@ -24,10 +24,6 @@ namespace base {
 class DictionaryValue;
 class FilePath;
 class RefCountedMemory;
-}
-
-namespace extensions {
-class Extensions;
 }
 
 namespace gfx {
@@ -165,11 +161,6 @@ class BrowserThemePack : public CustomThemeSupplier {
   // |images|.
   void CreateFrameImages(ImageCache* images) const;
 
-  // Creates button images tinted with |button_tint| and places them in
-  // processed_images.
-  void CreateTintedButtons(const color_utils::HSL& button_tint,
-                           ImageCache* processed_images) const;
-
   // Creates the semi-transparent tab background images, putting the results
   // in |images|. Must be called after GenerateFrameImages().
   void CreateTabBackgroundImages(ImageCache* images) const;
@@ -211,7 +202,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   void GenerateRawImageForAllSupportedScales(int prs_id);
 
   // Data pack, if we have one.
-  scoped_ptr<ui::DataPack> data_pack_;
+  std::unique_ptr<ui::DataPack> data_pack_;
 
   // All structs written to disk need to be packed; no alignment tricks here,
   // please.

@@ -6,12 +6,13 @@
 #define IOS_WEB_WEBUI_WEB_UI_IOS_IMPL_H_
 
 #include <map>
+#include <memory>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
-#include "ios/public/provider/web/web_ui_ios.h"
+#include "ios/web/public/webui/web_ui_ios.h"
 
 namespace web {
 class WebStateImpl;
@@ -29,7 +30,8 @@ class WebUIIOSImpl : public web::WebUIIOS,
   WebState* GetWebState() const override;
   WebUIIOSController* GetController() const override;
   void SetController(WebUIIOSController* controller) override;
-  void AddMessageHandler(WebUIIOSMessageHandler* handler) override;
+  void AddMessageHandler(
+      std::unique_ptr<WebUIIOSMessageHandler> handler) override;
   typedef base::Callback<void(const base::ListValue*)> MessageCallback;
   void RegisterMessageCallback(const std::string& message,
                                const MessageCallback& callback) override;
@@ -64,12 +66,12 @@ class WebUIIOSImpl : public web::WebUIIOS,
   MessageCallbackMap message_callbacks_;
 
   // The WebUIIOSMessageHandlers we own.
-  ScopedVector<WebUIIOSMessageHandler> handlers_;
+  std::vector<std::unique_ptr<WebUIIOSMessageHandler>> handlers_;
 
   // Non-owning pointer to the WebStateImpl this WebUIIOS is associated with.
   WebStateImpl* web_state_;
 
-  scoped_ptr<WebUIIOSController> controller_;
+  std::unique_ptr<WebUIIOSController> controller_;
 
   DISALLOW_COPY_AND_ASSIGN(WebUIIOSImpl);
 };

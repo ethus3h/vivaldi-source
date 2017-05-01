@@ -4,11 +4,11 @@
 
 #include "media/midi/midi_manager_alsa.h"
 
+#include <memory>
 #include <utility>
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace media {
 namespace midi {
 
 class MidiManagerAlsaTest : public ::testing::Test {
@@ -123,28 +123,31 @@ class MidiManagerAlsaTest : public ::testing::Test {
     return count;
   }
 
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_1_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_minimal_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_output_0_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_output_1_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_1_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_minimal_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_output_0_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_output_1_;
 
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_path_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_id_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_client_name_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_port_name_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_client_id_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_port_id_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_midi_device_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_path_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_id_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_client_name_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_port_name_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_client_id_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_port_id_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_alt_midi_device_;
 
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_1_no_card_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_output_0_no_card_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_1_no_card_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_output_0_no_card_;
 
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_alt_client_name_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_alt_port_name_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_alt_client_id_;
-  scoped_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_alt_port_id_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort>
+      port_input_0_no_card_alt_client_name_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort>
+      port_input_0_no_card_alt_port_name_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort>
+      port_input_0_no_card_alt_client_id_;
+  std::unique_ptr<MidiManagerAlsa::MidiPort> port_input_0_no_card_alt_port_id_;
 
   // State fields to avoid declaring in test fixtures below.
   MidiManagerAlsa::MidiPortState midi_port_state_0_;
@@ -702,4 +705,3 @@ TEST_F(MidiManagerAlsaTest, AlsaCards) {
 // TODO(agoode): Test old -> new state event generation, using mocks.
 
 }  // namespace midi
-}  // namespace media

@@ -10,9 +10,10 @@
 #include <string>
 
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/banners/app_banner_settings_helper.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_delegate.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -26,11 +27,12 @@
 #include "chrome/browser/ui/app_list/app_list_util.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/platform_locale_settings.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
@@ -44,7 +46,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/url_pattern.h"
-#include "grit/platform_locale_settings.h"
 #include "net/base/load_flags.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/url_request/url_request.h"
@@ -73,7 +74,8 @@
 #endif  // defined(OS_WIN)
 
 #if defined(USE_ASH)
-#include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
+#include "ash/common/shelf/shelf_delegate.h"  // nogncheck
+#include "ash/common/wm_shell.h"  // nogncheck
 #endif
 
 namespace {
@@ -93,7 +95,7 @@ class GeneratedIconImageSource : public gfx::CanvasImageSource {
  private:
   // gfx::CanvasImageSource overrides:
   void Draw(gfx::Canvas* canvas) override {
-    const unsigned char kLuminanceThreshold = 190;
+    const uint8_t kLumaThreshold = 190;
     const int icon_size = output_size_ * 3 / 4;
     const int icon_inset = output_size_ / 8;
     const size_t border_radius = output_size_ / 16;
@@ -117,12 +119,12 @@ class GeneratedIconImageSource : public gfx::CanvasImageSource {
     // The text rect's size needs to be odd to center the text correctly.
     gfx::Rect text_rect(icon_inset, icon_inset, icon_size + 1, icon_size + 1);
     // Draw the letter onto the rounded rect. The letter's color depends on the
-    // luminance of |color|.
-    unsigned char luminance = color_utils::GetLuminanceForColor(color_);
+    // luma of |color|.
+    const uint8_t luma = color_utils::GetLuma(color_);
     canvas->DrawStringRectWithFlags(
         base::string16(1, std::toupper(letter_)),
         gfx::FontList(gfx::Font(font_name, font_size)),
-        luminance > kLuminanceThreshold ? SK_ColorBLACK : SK_ColorWHITE,
+        (luma > kLumaThreshold) ? SK_ColorBLACK : SK_ColorWHITE,
         text_rect,
         gfx::Canvas::TEXT_ALIGN_CENTER);
   }
@@ -326,8 +328,8 @@ class BookmarkAppInstaller : public base::RefCounted<BookmarkAppInstaller>,
   ExtensionService* service_;
   WebApplicationInfo web_app_info_;
 
-  scoped_ptr<content::WebContents> web_contents_;
-  scoped_ptr<FaviconDownloader> favicon_downloader_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  std::unique_ptr<FaviconDownloader> favicon_downloader_;
   std::vector<GURL> urls_to_download_;
   std::vector<BookmarkAppHelper::BitmapAndSource> downloaded_bitmaps_;
 };
@@ -571,10 +573,11 @@ void BookmarkAppHelper::CreateFromAppBanner(
   DCHECK(manifest.start_url.is_valid());
 
   callback_ = callback;
-  OnDidGetManifest(manifest);
+  OnDidGetManifest(GURL(), manifest);
 }
 
-void BookmarkAppHelper::OnDidGetManifest(const content::Manifest& manifest) {
+void BookmarkAppHelper::OnDidGetManifest(const GURL& manifest_url,
+                                         const content::Manifest& manifest) {
   if (contents_->IsBeingDestroyed())
     return;
 
@@ -689,6 +692,13 @@ void BookmarkAppHelper::FinishInstallation(const Extension* extension) {
     return;
   }
 
+  // Record an app banner added to homescreen event to ensure banners are not
+  // shown for this app.
+  AppBannerSettingsHelper::RecordBannerEvent(
+      contents_, web_app_info_.app_url, web_app_info_.app_url.spec(),
+      AppBannerSettingsHelper::APP_BANNER_EVENT_DID_ADD_TO_HOMESCREEN,
+      base::Time::Now());
+
   Browser* browser = chrome::FindBrowserWithWebContents(contents_);
   if (!browser) {
     // The browser can be null in tests.
@@ -696,30 +706,31 @@ void BookmarkAppHelper::FinishInstallation(const Extension* extension) {
     return;
   }
 
+#if !defined(USE_ASH)
   // Pin the app to the relevant launcher depending on the OS.
   Profile* current_profile = profile_->GetOriginalProfile();
+#endif  // !defined(USE_ASH)
 
 // On Mac, shortcuts are automatically created for hosted apps when they are
 // installed, so there is no need to create them again.
 #if !defined(OS_MACOSX)
-  chrome::HostDesktopType desktop = browser->host_desktop_type();
-  if (desktop != chrome::HOST_DESKTOP_TYPE_ASH) {
-    web_app::ShortcutLocations creation_locations;
+#if !defined(USE_ASH)
+  web_app::ShortcutLocations creation_locations;
 #if defined(OS_LINUX) || defined(OS_WIN)
-    creation_locations.on_desktop = true;
+  creation_locations.on_desktop = true;
 #else
-    creation_locations.on_desktop = false;
+  creation_locations.on_desktop = false;
 #endif
-    creation_locations.applications_menu_location =
-        web_app::APP_MENU_LOCATION_SUBDIR_CHROMEAPPS;
-    creation_locations.in_quick_launch_bar = false;
-    web_app::CreateShortcuts(web_app::SHORTCUT_CREATION_BY_USER,
-                             creation_locations, current_profile, extension);
-#if defined(USE_ASH)
-  } else {
-    ChromeLauncherController::instance()->PinAppWithID(extension->id());
-#endif
-  }
+  creation_locations.applications_menu_location =
+      web_app::APP_MENU_LOCATION_SUBDIR_CHROMEAPPS;
+  creation_locations.in_quick_launch_bar = false;
+  web_app::CreateShortcuts(web_app::SHORTCUT_CREATION_BY_USER,
+                           creation_locations, current_profile, extension);
+#else
+  ash::ShelfDelegate* shelf_delegate = ash::WmShell::Get()->shelf_delegate();
+  DCHECK(shelf_delegate);
+  shelf_delegate->PinAppWithID(extension->id());
+#endif  // !defined(USE_ASH)
 #endif  // !defined(OS_MACOSX)
 
 #if defined(OS_MACOSX)

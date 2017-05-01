@@ -8,13 +8,12 @@
 #include <stdint.h>
 
 #include <list>
+#include <memory>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/non_thread_safe.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_status.h"
 #include "storage/browser/fileapi/file_system_url.h"
 
@@ -27,8 +26,7 @@ namespace sync_file_system {
 // This class must run only on IO thread.
 // Owned by LocalFileSyncContext.
 class SyncableFileOperationRunner
-    : public base::NonThreadSafe,
-      public base::SupportsWeakPtr<SyncableFileOperationRunner>,
+    : public base::SupportsWeakPtr<SyncableFileOperationRunner>,
       public LocalFileSyncStatus::Observer {
  public:
   // Represents an operation task (which usually wraps one FileSystemOperation).
@@ -49,7 +47,6 @@ class SyncableFileOperationRunner
     friend class SyncableFileOperationRunner;
     bool IsRunnable(LocalFileSyncStatus* status) const;
     void Start(LocalFileSyncStatus* status);
-    static void CancelAndDelete(Task* task);
 
     DISALLOW_COPY_AND_ASSIGN(Task);
   };
@@ -68,7 +65,7 @@ class SyncableFileOperationRunner
   // If there're ongoing sync tasks on the target_paths this method
   // just queues up the |task|.
   // Pending tasks are cancelled when this class is destructed.
-  void PostOperationTask(scoped_ptr<Task> task);
+  void PostOperationTask(std::unique_ptr<Task> task);
 
   // Runs a next runnable task (if there's any).
   void RunNextRunnableTask();
@@ -91,9 +88,9 @@ class SyncableFileOperationRunner
   bool ShouldStartMoreTasks() const;
 
   // Keeps track of the writing/syncing status. Not owned.
-  LocalFileSyncStatus* sync_status_;
+  LocalFileSyncStatus* const sync_status_;
 
-  std::list<Task*> pending_tasks_;
+  std::list<std::unique_ptr<Task>> pending_tasks_;
 
   const int64_t max_inflight_tasks_;
   int64_t num_inflight_tasks_;

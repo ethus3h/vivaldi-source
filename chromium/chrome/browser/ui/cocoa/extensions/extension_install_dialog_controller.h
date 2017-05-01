@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_UI_COCOA_EXTENSIONS_EXTENSION_INSTALL_DIALOG_CONTROLER_H_
-#define CHROME_BROWSER_UI_COCOA_EXTENSIONS_EXTENSION_INSTALL_DIALOG_CONTROLER_H_
+#ifndef CHROME_BROWSER_UI_COCOA_EXTENSIONS_EXTENSION_INSTALL_DIALOG_CONTROLLER_H_
+#define CHROME_BROWSER_UI_COCOA_EXTENSIONS_EXTENSION_INSTALL_DIALOG_CONTROLLER_H_
 
 #import <Cocoa/Cocoa.h>
 
@@ -12,11 +12,6 @@
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_mac.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_install_view_controller.h"
-
-namespace content {
-class PageNavigator;
-class WebContents;
-}
 
 namespace extensions {
 class ExperienceSamplingEvent;
@@ -33,7 +28,7 @@ class ExtensionInstallDialogController :
   ExtensionInstallDialogController(
       ExtensionInstallPromptShowParams* show_params,
       const ExtensionInstallPrompt::DoneCallback& done_callback,
-      scoped_ptr<ExtensionInstallPrompt::Prompt> prompt);
+      std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt);
   ~ExtensionInstallDialogController() override;
 
   // ExtensionInstallViewDelegate implementation.
@@ -57,8 +52,8 @@ class ExtensionInstallDialogController :
 
   ExtensionInstallPrompt::DoneCallback done_callback_;
   base::scoped_nsobject<ExtensionInstallViewController> view_controller_;
-  scoped_ptr<ConstrainedWindowMac> constrained_window_;
-  scoped_ptr<extensions::ExperienceSamplingEvent> sampling_event_;
+  std::unique_ptr<ConstrainedWindowMac> constrained_window_;
+  std::unique_ptr<extensions::ExperienceSamplingEvent> sampling_event_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionInstallDialogController);
 };

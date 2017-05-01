@@ -11,11 +11,8 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
-#include "chrome/grit/generated_resources.h"
 #include "extensions/browser/extension_registry.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/strings/grit/ui_strings.h"
 
 // NOTE(koz): Linux doesn't use the thick shadowed border, so we add padding
 // here.
@@ -57,6 +54,8 @@ void ExclusiveAccessBubble::OnUserInput() {
 
   // If the notification suppression timer has elapsed, re-show it.
   if (!suppress_notify_timeout_.IsRunning()) {
+    manager_->RecordBubbleReshownUMA(bubble_type_);
+
     ShowAndStartTimers();
     return;
   }
@@ -74,9 +73,9 @@ void ExclusiveAccessBubble::StartWatchingMouse() {
     hide_timeout_.Start(FROM_HERE,
                         base::TimeDelta::FromMilliseconds(kInitialDelayMs),
                         this, &ExclusiveAccessBubble::CheckMousePosition);
+
+    last_mouse_pos_ = GetCursorScreenPoint();
   }
-  gfx::Point cursor_pos = GetCursorScreenPoint();
-  last_mouse_pos_ = cursor_pos;
   mouse_position_checker_.Start(
       FROM_HERE, base::TimeDelta::FromMilliseconds(1000 / kPositionCheckHz),
       this, &ExclusiveAccessBubble::CheckMousePosition);
@@ -116,11 +115,12 @@ void ExclusiveAccessBubble::CheckMousePosition() {
   // With the "simplified" flag, we ignore all this and just show and hide based
   // on timers (not mouse position).
 
-  gfx::Point cursor_pos = GetCursorScreenPoint();
+  gfx::Point cursor_pos;
+  if (!ExclusiveAccessManager::IsSimplifiedFullscreenUIEnabled()) {
+    cursor_pos = GetCursorScreenPoint();
 
-  // Check to see whether the mouse is idle.
-  if (cursor_pos != last_mouse_pos_) {
-    if (!ExclusiveAccessManager::IsSimplifiedFullscreenUIEnabled()) {
+    // Check to see whether the mouse is idle.
+    if (cursor_pos != last_mouse_pos_) {
       // OnUserInput() will reset the idle timer in simplified mode. In classic
       // mode, we need to do this here.
       idle_timeout_.Stop();  // If the timer isn't running, this is a no-op.
@@ -128,10 +128,8 @@ void ExclusiveAccessBubble::CheckMousePosition() {
                           base::TimeDelta::FromMilliseconds(kIdleTimeMs), this,
                           &ExclusiveAccessBubble::CheckMousePosition);
     }
-
-    OnUserInput();
+    last_mouse_pos_ = cursor_pos;
   }
-  last_mouse_pos_ = cursor_pos;
 
   if (ExclusiveAccessManager::IsSimplifiedFullscreenUIEnabled() ||
       !IsWindowActive() || !WindowContainsPoint(cursor_pos) ||
@@ -156,14 +154,6 @@ void ExclusiveAccessBubble::ExitExclusiveAccess() {
   manager_->ExitExclusiveAccess();
 }
 
-void ExclusiveAccessBubble::Accept() {
-  manager_->OnAcceptExclusiveAccessPermission();
-}
-
-void ExclusiveAccessBubble::Cancel() {
-  manager_->OnDenyExclusiveAccessPermission();
-}
-
 base::string16 ExclusiveAccessBubble::GetCurrentMessageText() const {
   return exclusive_access_bubble::GetLabelTextForType(
       bubble_type_, url_,
@@ -180,11 +170,6 @@ base::string16 ExclusiveAccessBubble::GetCurrentAllowButtonText() const {
 
 base::string16 ExclusiveAccessBubble::GetInstructionText(
     const base::string16& accelerator) const {
-  if (!ExclusiveAccessManager::IsSimplifiedFullscreenUIEnabled()) {
-    return l10n_util::GetStringFUTF16(IDS_FULLSCREEN_PRESS_ESC_TO_EXIT_SENTENCE,
-                                      accelerator);
-  }
-
   return exclusive_access_bubble::GetInstructionTextForType(bubble_type_,
                                                             accelerator);
 }

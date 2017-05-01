@@ -16,10 +16,8 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -41,6 +39,8 @@
 #include "chrome/common/pref_names.h"
 #include "chromeos/system/statistics_provider.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/common/extension_urls.h"
 #include "net/base/load_flags.h"
@@ -169,7 +169,7 @@ class ServicesCustomizationExternalLoader
   Profile* profile() { return profile_; }
 
   // Used by the ServicesCustomizationDocument to update the current apps.
-  void SetCurrentApps(scoped_ptr<base::DictionaryValue> prefs) {
+  void SetCurrentApps(std::unique_ptr<base::DictionaryValue> prefs) {
     apps_.Swap(prefs.get());
     is_apps_set_ = true;
     StartLoading();
@@ -226,25 +226,29 @@ bool CustomizationDocument::LoadManifestFromString(
     const std::string& manifest) {
   int error_code = 0;
   std::string error;
-  scoped_ptr<base::Value> root = base::JSONReader::ReadAndReturnError(
+  std::unique_ptr<base::Value> root = base::JSONReader::ReadAndReturnError(
       manifest, base::JSON_ALLOW_TRAILING_COMMAS, &error_code, &error);
   if (error_code != base::JSONReader::JSON_NO_ERROR)
     LOG(ERROR) << error;
-  DCHECK(root.get() != NULL);
-  if (root.get() == NULL)
+  if (!root) {
+    NOTREACHED();
     return false;
-  DCHECK(root->GetType() == base::Value::TYPE_DICTIONARY);
-  if (root->GetType() == base::Value::TYPE_DICTIONARY) {
-    root_.reset(static_cast<base::DictionaryValue*>(root.release()));
-    std::string result;
-    if (root_->GetString(kVersionAttr, &result) &&
-        result == accepted_version_)
-      return true;
-
-    LOG(ERROR) << "Wrong customization manifest version";
-    root_.reset(NULL);
   }
-  return false;
+
+  root_ = base::DictionaryValue::From(std::move(root));
+  if (!root_) {
+    NOTREACHED();
+    return false;
+  }
+
+  std::string result;
+  if (!root_->GetString(kVersionAttr, &result) || result != accepted_version_) {
+    LOG(ERROR) << "Wrong customization manifest version";
+    root_.reset();
+    return false;
+  }
+
+  return true;
 }
 
 std::string CustomizationDocument::GetLocaleSpecificString(
@@ -599,14 +603,14 @@ void ServicesCustomizationDocument::OnManifestLoaded() {
   if (!WasOOBECustomizationApplied())
     ApplyOOBECustomization();
 
-  scoped_ptr<base::DictionaryValue> prefs =
+  std::unique_ptr<base::DictionaryValue> prefs =
       GetDefaultAppsInProviderFormat(*root_);
   for (ExternalLoaders::iterator it = external_loaders_.begin();
        it != external_loaders_.end(); ++it) {
     if (*it) {
       UpdateCachedManifest((*it)->profile());
       (*it)->SetCurrentApps(
-          scoped_ptr<base::DictionaryValue>(prefs->DeepCopy()));
+          std::unique_ptr<base::DictionaryValue>(prefs->DeepCopy()));
       SetOemFolderName((*it)->profile(), *root_);
     }
   }
@@ -668,10 +672,10 @@ bool ServicesCustomizationDocument::GetDefaultWallpaperUrl(
   return true;
 }
 
-scoped_ptr<base::DictionaryValue>
+std::unique_ptr<base::DictionaryValue>
 ServicesCustomizationDocument::GetDefaultApps() const {
   if (!IsReady())
-    return scoped_ptr<base::DictionaryValue>();
+    return std::unique_ptr<base::DictionaryValue>();
 
   return GetDefaultAppsInProviderFormat(*root_);
 }
@@ -684,16 +688,16 @@ std::string ServicesCustomizationDocument::GetOemAppsFolderName(
   return GetOemAppsFolderNameImpl(locale, *root_);
 }
 
-scoped_ptr<base::DictionaryValue>
+std::unique_ptr<base::DictionaryValue>
 ServicesCustomizationDocument::GetDefaultAppsInProviderFormat(
     const base::DictionaryValue& root) {
-  scoped_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
   const base::ListValue* apps_list = NULL;
   if (root.GetList(kDefaultAppsAttr, &apps_list)) {
     for (size_t i = 0; i < apps_list->GetSize(); ++i) {
       std::string app_id;
       const base::DictionaryValue* app_entry = nullptr;
-      scoped_ptr<base::DictionaryValue> entry;
+      std::unique_ptr<base::DictionaryValue> entry;
       if (apps_list->GetString(i, &app_id)) {
         entry.reset(new base::DictionaryValue());
       } else if (apps_list->GetDictionary(i, &app_entry)) {
@@ -798,7 +802,7 @@ void ServicesCustomizationDocument::ShutdownForTesting() {
 
 void ServicesCustomizationDocument::StartOEMWallpaperDownload(
     const GURL& wallpaper_url,
-    scoped_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
+    std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
   DCHECK(wallpaper_url.is_valid());
 
   const base::FilePath dir = GetCustomizedWallpaperCacheDir();
@@ -823,7 +827,7 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
     VLOG(1) << "CheckAndApplyWallpaper(): download has already started.";
     return;
   }
-  scoped_ptr<ServicesCustomizationDocument::ApplyingTask> applying(
+  std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying(
       new ServicesCustomizationDocument::ApplyingTask(this));
 
   GURL wallpaper_url;
@@ -852,7 +856,7 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
     return;
   }
 
-  scoped_ptr<bool> exists(new bool(false));
+  std::unique_ptr<bool> exists(new bool(false));
 
   base::Closure check_file_exists =
       base::Bind(&CheckWallpaperCacheExists,
@@ -869,8 +873,8 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
 }
 
 void ServicesCustomizationDocument::OnCheckedWallpaperCacheExists(
-    scoped_ptr<bool> exists,
-    scoped_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
+    std::unique_ptr<bool> exists,
+    std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(exists);
   DCHECK(applying);
@@ -880,7 +884,7 @@ void ServicesCustomizationDocument::OnCheckedWallpaperCacheExists(
 
 void ServicesCustomizationDocument::ApplyWallpaper(
     bool default_wallpaper_file_exists,
-    scoped_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
+    std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
   GURL wallpaper_url;
   const bool wallpaper_url_present = GetDefaultWallpaperUrl(&wallpaper_url);
 
@@ -925,7 +929,7 @@ void ServicesCustomizationDocument::ApplyWallpaper(
 }
 
 void ServicesCustomizationDocument::OnOEMWallpaperDownloaded(
-    scoped_ptr<ServicesCustomizationDocument::ApplyingTask> applying,
+    std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying,
     bool success,
     const GURL& wallpaper_url) {
   if (success) {

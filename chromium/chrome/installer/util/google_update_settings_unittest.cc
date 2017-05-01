@@ -8,9 +8,10 @@
 #include <shlwapi.h>  // For SHDeleteKey.
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/base_paths.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
@@ -23,6 +24,7 @@
 #include "chrome/installer/util/channel_info.h"
 #include "chrome/installer/util/fake_installation_state.h"
 #include "chrome/installer/util/google_update_constants.h"
+#include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/work_item_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -66,37 +68,6 @@ class GoogleUpdateSettingsTest : public testing::Test {
     ASSERT_EQ(ERROR_SUCCESS, update_key.WriteValue(L"ap", value));
   }
 
-  // Sets the "ap" field for a multi-install product (both the product and
-  // the binaries).
-  void SetMultiApField(SystemUserInstall is_system, const wchar_t* value) {
-    // Caller must specify a multi-install ap value.
-    ASSERT_NE(base::string16::npos, base::string16(value).find(L"-multi"));
-    HKEY root = is_system == SYSTEM_INSTALL ?
-        HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
-    RegKey update_key;
-
-    // Write the ap value for both the product and the binaries.
-    BrowserDistribution* const kDists[] = {
-      BrowserDistribution::GetDistribution(),
-      BrowserDistribution::GetSpecificDistribution(
-          BrowserDistribution::CHROME_BINARIES)
-    };
-    for (size_t i = 0; i < arraysize(kDists); ++i) {
-      base::string16 path = kDists[i]->GetStateKey();
-      ASSERT_EQ(ERROR_SUCCESS, update_key.Create(root, path.c_str(),
-                                                 KEY_WRITE));
-      ASSERT_EQ(ERROR_SUCCESS, update_key.WriteValue(L"ap", value));
-    }
-
-    // Make the product technically multi-install.
-    BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-    ASSERT_EQ(ERROR_SUCCESS,
-              update_key.Create(root, dist->GetStateKey().c_str(), KEY_WRITE));
-    ASSERT_EQ(ERROR_SUCCESS,
-              update_key.WriteValue(installer::kUninstallArgumentsField,
-                                    L"--multi-install"));
-  }
-
   // Tests setting the ap= value to various combinations of values with
   // suffixes, while asserting on the correct channel value.
   // Note that ap= value has to match "^2.0-d.*" or ".*x64-dev.*" and "^1.1-.*"
@@ -134,10 +105,8 @@ class GoogleUpdateSettingsTest : public testing::Test {
           const wchar_t* channel = expectation.channel;
 
           SetApField(install, ap.c_str());
-          base::string16 ret_channel;
-
-          EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(
-            is_system, &ret_channel));
+          const base::string16 ret_channel =
+              GoogleUpdateSettings::GetChromeChannel(is_system);
 
           // If prefixes are not supported for a channel, we expect the channel
           // to be "unknown" if a non-empty prefix is present in ap_value.
@@ -158,9 +127,7 @@ class GoogleUpdateSettingsTest : public testing::Test {
   // Test the writing and deleting functionality of the experiments label
   // helper.
   void TestExperimentsLabelHelper(SystemUserInstall install) {
-    BrowserDistribution* chrome =
-        BrowserDistribution::GetSpecificDistribution(
-            BrowserDistribution::CHROME_BROWSER);
+    BrowserDistribution* chrome = BrowserDistribution::GetDistribution();
     base::string16 value;
 #if defined(GOOGLE_CHROME_BUILD)
     EXPECT_TRUE(chrome->ShouldSetExperimentLabels());
@@ -331,13 +298,11 @@ class GoogleUpdateSettingsTest : public testing::Test {
 TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelAbsent) {
   // Per-system first.
   base::string16 channel;
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(true,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(true);
   EXPECT_STREQ(L"", channel.c_str());
 
   // Then per-user.
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(false);
   EXPECT_STREQ(L"", channel.c_str());
 }
 
@@ -345,13 +310,11 @@ TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelAbsent) {
 TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelEmptySystem) {
   SetApField(SYSTEM_INSTALL, L"");
   base::string16 channel;
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(true,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(true);
   EXPECT_STREQ(L"", channel.c_str());
 
   // Per-user lookups still succeed and return empty string.
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(false);
   EXPECT_STREQ(L"", channel.c_str());
 }
 
@@ -359,37 +322,12 @@ TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelEmptyUser) {
   SetApField(USER_INSTALL, L"");
   // Per-system lookups still succeed and return empty string.
   base::string16 channel;
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(true,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(true);
   EXPECT_STREQ(L"", channel.c_str());
 
   // Per-user lookup should succeed.
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
+  channel = GoogleUpdateSettings::GetChromeChannel(false);
   EXPECT_STREQ(L"", channel.c_str());
-}
-
-// Test that the channel is pulled from the binaries for multi-install products.
-TEST_F(GoogleUpdateSettingsTest, MultiInstallChannelFromBinaries) {
-  SetMultiApField(USER_INSTALL, L"2.0-dev-multi-chrome");
-  base::string16 channel;
-
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
-  EXPECT_STREQ(L"dev-m", channel.c_str());
-
-  // See if the same happens if the product's ap is cleared.
-  SetApField(USER_INSTALL, L"");
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
-  EXPECT_STREQ(L"dev-m", channel.c_str());
-
-  // Test the converse (binaries are stable, Chrome is other).
-  SetMultiApField(USER_INSTALL, L"-multi-chrome");
-  SetApField(USER_INSTALL, L"2.0-dev-multi-chrome");
-  EXPECT_TRUE(GoogleUpdateSettings::GetChromeChannelAndModifiers(false,
-                                                                 &channel));
-  EXPECT_STREQ(L"m", channel.c_str());
 }
 
 TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelVariousApValuesSystem) {
@@ -400,9 +338,9 @@ TEST_F(GoogleUpdateSettingsTest, CurrentChromeChannelVariousApValuesUser) {
   TestCurrentChromeChannelWithVariousApValues(USER_INSTALL);
 }
 
-// Run through all combinations of diff vs. full install, single vs. multi
-// install, success and failure results, and a fistful of initial "ap" values
-// checking that the expected final "ap" value is generated by
+// Run through all combinations of diff vs. full install, success and failure
+// results, and a fistful of initial "ap" values checking that the expected
+// final "ap" value is generated by
 // GoogleUpdateSettings::UpdateGoogleUpdateApKey.
 TEST_F(GoogleUpdateSettingsTest, UpdateGoogleUpdateApKey) {
   const installer::ArchiveType archive_types[] = {
@@ -499,7 +437,7 @@ TEST_F(GoogleUpdateSettingsTest, UpdateGoogleUpdateApKey) {
 }
 
 TEST_F(GoogleUpdateSettingsTest, UpdateInstallStatusTest) {
-  scoped_ptr<WorkItemList> work_item_list(WorkItem::CreateWorkItemList());
+  std::unique_ptr<WorkItemList> work_item_list(WorkItem::CreateWorkItemList());
   // Test incremental install failure
   ASSERT_TRUE(CreateApKey(work_item_list.get(), L""))
       << "Failed to create ap key.";
@@ -584,32 +522,20 @@ TEST_F(GoogleUpdateSettingsTest, UpdateInstallStatusTest) {
 TEST_F(GoogleUpdateSettingsTest, SetEULAConsent) {
   using installer::FakeInstallationState;
 
-  const bool multi_install = true;
   const bool system_level = true;
   FakeInstallationState machine_state;
 
   // Chrome is installed.
-  machine_state.AddChrome(system_level, multi_install,
-      new Version(chrome::kChromeVersion));
+  machine_state.AddChrome(system_level,
+                          new base::Version(chrome::kChromeVersion));
 
   RegKey key;
   DWORD value;
-  BrowserDistribution* binaries =
-      BrowserDistribution::GetSpecificDistribution(
-          BrowserDistribution::CHROME_BINARIES);
-  BrowserDistribution* chrome =
-      BrowserDistribution::GetSpecificDistribution(
-          BrowserDistribution::CHROME_BROWSER);
+  BrowserDistribution* chrome = BrowserDistribution::GetDistribution();
 
-  // eulaconsent is set on both the product and the binaries.
+  // eulaconsent is set on the product.
   EXPECT_TRUE(GoogleUpdateSettings::SetEULAConsent(machine_state, chrome,
                                                    true));
-  EXPECT_EQ(ERROR_SUCCESS,
-      key.Open(HKEY_LOCAL_MACHINE, binaries->GetStateMediumKey().c_str(),
-               KEY_QUERY_VALUE));
-  EXPECT_EQ(ERROR_SUCCESS,
-      key.ReadValueDW(google_update::kRegEULAAceptedField, &value));
-  EXPECT_EQ(1U, value);
   EXPECT_EQ(ERROR_SUCCESS,
       key.Open(HKEY_LOCAL_MACHINE, chrome->GetStateMediumKey().c_str(),
                KEY_QUERY_VALUE));
@@ -919,13 +845,8 @@ TEST_F(GoogleUpdateSettingsTest, PerAppUpdatesEnabledWithGlobalDisabled) {
   // Disable updates globally but enable them for Chrome (the app-specific
   // setting should take precedence).
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  BrowserDistribution* binaries = BrowserDistribution::GetSpecificDistribution(
-      BrowserDistribution::CHROME_BINARIES);
   EXPECT_TRUE(
       SetUpdatePolicyForAppGuid(dist->GetAppGuid(),
-                                GoogleUpdateSettings::AUTOMATIC_UPDATES));
-  EXPECT_TRUE(
-      SetUpdatePolicyForAppGuid(binaries->GetAppGuid(),
                                 GoogleUpdateSettings::AUTOMATIC_UPDATES));
   EXPECT_TRUE(SetGlobalUpdatePolicy(GoogleUpdateSettings::UPDATES_DISABLED));
 
@@ -936,8 +857,6 @@ TEST_F(GoogleUpdateSettingsTest, PerAppUpdatesEnabledWithGlobalDisabled) {
   EXPECT_TRUE(GoogleUpdateSettings::ReenableAutoupdates());
   EXPECT_EQ(GoogleUpdateSettings::AUTOMATIC_UPDATES,
             GetUpdatePolicyForAppGuid(dist->GetAppGuid()));
-  EXPECT_EQ(GoogleUpdateSettings::AUTOMATIC_UPDATES,
-            GetUpdatePolicyForAppGuid(binaries->GetAppGuid()));
   EXPECT_EQ(GoogleUpdateSettings::UPDATES_DISABLED, GetGlobalUpdatePolicy());
 }
 
@@ -989,6 +908,94 @@ TEST_F(GoogleUpdateSettingsTest, ExperimentsLabelHelperUser) {
 }
 
 #endif  // defined(GOOGLE_CHROME_BUILD)
+
+TEST_F(GoogleUpdateSettingsTest, GetDownloadPreference) {
+  RegKey policy_key;
+
+  if (policy_key.Open(HKEY_LOCAL_MACHINE, GoogleUpdateSettings::kPoliciesKey,
+                      KEY_SET_VALUE) == ERROR_SUCCESS) {
+    policy_key.DeleteValue(
+        GoogleUpdateSettings::kDownloadPreferencePolicyValue);
+  }
+  policy_key.Close();
+
+  // When no policy is present expect to return an empty string.
+  EXPECT_TRUE(GoogleUpdateSettings::GetDownloadPreference().empty());
+
+  // Expect "cacheable" when the correct policy is present.
+  EXPECT_EQ(ERROR_SUCCESS, policy_key.Create(HKEY_LOCAL_MACHINE,
+                                             GoogleUpdateSettings::kPoliciesKey,
+                                             KEY_SET_VALUE));
+  EXPECT_EQ(
+      ERROR_SUCCESS,
+      policy_key.WriteValue(
+          GoogleUpdateSettings::kDownloadPreferencePolicyValue, L"cacheable"));
+  EXPECT_STREQ(L"cacheable",
+               GoogleUpdateSettings::GetDownloadPreference().c_str());
+
+  EXPECT_EQ(ERROR_SUCCESS,
+            policy_key.WriteValue(
+                GoogleUpdateSettings::kDownloadPreferencePolicyValue,
+                base::string16(32, L'a').c_str()));
+  EXPECT_STREQ(base::string16(32, L'a').c_str(),
+               GoogleUpdateSettings::GetDownloadPreference().c_str());
+
+  // Expect an empty string when an unsupported policy is set.
+  // It contains spaces.
+  EXPECT_EQ(ERROR_SUCCESS,
+            policy_key.WriteValue(
+                GoogleUpdateSettings::kDownloadPreferencePolicyValue, L"a b"));
+  EXPECT_TRUE(GoogleUpdateSettings::GetDownloadPreference().empty());
+
+  // It contains non alpha-numeric characters.
+  EXPECT_EQ(ERROR_SUCCESS,
+            policy_key.WriteValue(
+                GoogleUpdateSettings::kDownloadPreferencePolicyValue, L"<a>"));
+  EXPECT_TRUE(GoogleUpdateSettings::GetDownloadPreference().empty());
+
+  // It is too long.
+  EXPECT_EQ(ERROR_SUCCESS,
+            policy_key.WriteValue(
+                GoogleUpdateSettings::kDownloadPreferencePolicyValue,
+                base::string16(33, L'a').c_str()));
+  EXPECT_TRUE(GoogleUpdateSettings::GetDownloadPreference().empty());
+}
+
+class SetProgressTest : public GoogleUpdateSettingsTest,
+                        public testing::WithParamInterface<bool> {
+ protected:
+  SetProgressTest()
+      : system_install_(GetParam()),
+        root_key_(system_install_ ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER) {}
+
+  const bool system_install_;
+  const HKEY root_key_;
+};
+
+TEST_P(SetProgressTest, SetProgress) {
+  base::string16 path(google_update::kRegPathClientState);
+  path += L"\\";
+  path += kTestProductGuid;
+
+  constexpr int kValues[] = {0, 25, 50, 99, 100};
+  for (int value : kValues) {
+    GoogleUpdateSettings::SetProgress(system_install_, path, value);
+    DWORD progress = 0;
+    base::win::RegKey key(root_key_, path.c_str(),
+                          KEY_QUERY_VALUE | KEY_WOW64_32KEY);
+    ASSERT_TRUE(key.Valid());
+    ASSERT_EQ(ERROR_SUCCESS,
+              key.ReadValueDW(google_update::kRegInstallerProgress, &progress));
+    EXPECT_EQ(static_cast<DWORD>(value), progress);
+  }
+}
+
+INSTANTIATE_TEST_CASE_P(SetProgressUserLevel,
+                        SetProgressTest,
+                        testing::Values(false));
+INSTANTIATE_TEST_CASE_P(SetProgressSystemLevel,
+                        SetProgressTest,
+                        testing::Values(true));
 
 // Test GoogleUpdateSettings::GetUninstallCommandLine at system- or user-level,
 // according to the param.
@@ -1097,9 +1104,9 @@ TEST_P(GetGoogleUpdateVersion, TestEmptyValue) {
 TEST_P(GetGoogleUpdateVersion, TestRealValue) {
   RegKey(root_key_, google_update::kRegPathGoogleUpdate, KEY_SET_VALUE)
       .WriteValue(google_update::kRegGoogleUpdateVersion, kDummyVersion);
-  Version expected(base::UTF16ToUTF8(kDummyVersion));
-  EXPECT_TRUE(expected.Equals(
-      GoogleUpdateSettings::GetGoogleUpdateVersion(system_install_)));
+  base::Version expected(base::UTF16ToUTF8(kDummyVersion));
+  EXPECT_EQ(expected,
+      GoogleUpdateSettings::GetGoogleUpdateVersion(system_install_));
   // Make sure that there's no value in the other level (user or system).
   EXPECT_FALSE(
       GoogleUpdateSettings::GetGoogleUpdateVersion(!system_install_)
@@ -1112,10 +1119,6 @@ INSTANTIATE_TEST_CASE_P(GetGoogleUpdateVersionAtLevel, GetGoogleUpdateVersion,
 // Test values for use by the CollectStatsConsent test fixture.
 class StatsState {
  public:
-  enum InstallType {
-    SINGLE_INSTALL,
-    MULTI_INSTALL,
-  };
   enum StateSetting {
     NO_SETTING,
     FALSE_SETTING,
@@ -1127,24 +1130,19 @@ class StatsState {
   static const SystemLevelState kSystemLevel;
 
   StatsState(const UserLevelState&,
-             InstallType install_type,
              StateSetting state_value)
       : system_level_(false),
-        multi_install_(install_type == MULTI_INSTALL),
         state_value_(state_value),
         state_medium_value_(NO_SETTING) {
   }
   StatsState(const SystemLevelState&,
-             InstallType install_type,
              StateSetting state_value,
              StateSetting state_medium_value)
       : system_level_(true),
-        multi_install_(install_type == MULTI_INSTALL),
         state_value_(state_value),
         state_medium_value_(state_medium_value) {
   }
   bool system_level() const { return system_level_; }
-  bool multi_install() const { return multi_install_; }
   HKEY root_key() const {
     return system_level_ ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
   }
@@ -1160,7 +1158,6 @@ class StatsState {
 
  private:
   bool system_level_;
-  bool multi_install_;
   StateSetting state_value_;
   StateSetting state_medium_value_;
 };
@@ -1175,81 +1172,45 @@ class CollectStatsConsent : public ::testing::TestWithParam<StatsState> {
   static void TearDownTestCase();
  protected:
   void SetUp() override;
-  static void MakeChromeMultiInstall(HKEY root_key);
   static void ApplySetting(StatsState::StateSetting setting,
                            HKEY root_key,
                            const base::string16& reg_key);
 
+  // TODO(grt): Get rid of these statics and SetUpTestCase.
   static base::string16* chrome_version_key_;
   static base::string16* chrome_state_key_;
   static base::string16* chrome_state_medium_key_;
-  static base::string16* binaries_state_key_;
-  static base::string16* binaries_state_medium_key_;
   registry_util::RegistryOverrideManager override_manager_;
 };
 
 base::string16* CollectStatsConsent::chrome_version_key_;
 base::string16* CollectStatsConsent::chrome_state_key_;
 base::string16* CollectStatsConsent::chrome_state_medium_key_;
-base::string16* CollectStatsConsent::binaries_state_key_;
-base::string16* CollectStatsConsent::binaries_state_medium_key_;
 
 void CollectStatsConsent::SetUpTestCase() {
-  BrowserDistribution* dist =
-      BrowserDistribution::GetSpecificDistribution(
-          BrowserDistribution::CHROME_BROWSER);
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   chrome_version_key_ = new base::string16(dist->GetVersionKey());
   chrome_state_key_ = new base::string16(dist->GetStateKey());
   chrome_state_medium_key_ = new base::string16(dist->GetStateMediumKey());
-
-  dist = BrowserDistribution::GetSpecificDistribution(
-      BrowserDistribution::CHROME_BINARIES);
-  binaries_state_key_ = new base::string16(dist->GetStateKey());
-  binaries_state_medium_key_ = new base::string16(dist->GetStateMediumKey());
 }
 
 void CollectStatsConsent::TearDownTestCase() {
   delete chrome_version_key_;
   delete chrome_state_key_;
   delete chrome_state_medium_key_;
-  delete binaries_state_key_;
-  delete binaries_state_medium_key_;
 }
 
 // Install the registry override and apply the settings to the registry.
 void CollectStatsConsent::SetUp() {
+  // Override both HKLM and HKCU as tests may touch either/both.
+  override_manager_.OverrideRegistry(HKEY_LOCAL_MACHINE);
+  override_manager_.OverrideRegistry(HKEY_CURRENT_USER);
+
   const StatsState& stats_state = GetParam();
   const HKEY root_key = stats_state.root_key();
-  base::string16 reg_temp_name(
-      stats_state.system_level() ? L"HKLM_" : L"HKCU_");
-  reg_temp_name += L"CollectStatsConsent";
-  override_manager_.OverrideRegistry(root_key);
-
-  if (stats_state.multi_install()) {
-    MakeChromeMultiInstall(root_key);
-    ApplySetting(stats_state.state_value(), root_key, *binaries_state_key_);
-    ApplySetting(stats_state.state_medium_value(), root_key,
-                 *binaries_state_medium_key_);
-  } else {
-    ApplySetting(stats_state.state_value(), root_key, *chrome_state_key_);
-    ApplySetting(stats_state.state_medium_value(), root_key,
-                 *chrome_state_medium_key_);
-  }
-}
-
-// Write values into the registry so that Chrome is considered to be installed
-// as multi-install.
-void CollectStatsConsent::MakeChromeMultiInstall(HKEY root_key) {
-  ASSERT_EQ(
-      ERROR_SUCCESS,
-      RegKey(root_key, chrome_version_key_->c_str(),
-             KEY_SET_VALUE).WriteValue(google_update::kRegVersionField,
-                                       L"1.2.3.4"));
-  ASSERT_EQ(
-      ERROR_SUCCESS,
-      RegKey(root_key, chrome_state_key_->c_str(),
-             KEY_SET_VALUE).WriteValue(installer::kUninstallArgumentsField,
-                                       L"--multi-install"));
+  ApplySetting(stats_state.state_value(), root_key, *chrome_state_key_);
+  ApplySetting(stats_state.state_medium_value(), root_key,
+               *chrome_state_medium_key_);
 }
 
 // Write the correct value to represent |setting| in the registry.
@@ -1280,18 +1241,23 @@ TEST_P(CollectStatsConsent, GetCollectStatsConsentAtLevel) {
 // Test that stats consent can be flipped to the opposite setting, that the new
 // setting takes affect, and that the correct registry location is modified.
 TEST_P(CollectStatsConsent, SetCollectStatsConsentAtLevel) {
+  // When testing revoking consent, verify that backup client info is cleared.
+  // To do so, first add some backup client info.
+  if (GetParam().is_consent_granted()) {
+    metrics::ClientInfo client_info;
+    client_info.client_id = "01234567-89ab-cdef-fedc-ba9876543210";
+    client_info.installation_date = 123;
+    client_info.reporting_enabled_date = 345;
+    GoogleUpdateSettings::StoreMetricsClientInfo(client_info);
+  }
+
   EXPECT_TRUE(GoogleUpdateSettings::SetCollectStatsConsentAtLevel(
                   GetParam().system_level(),
                   !GetParam().is_consent_granted()));
-  const base::string16* const reg_keys[] = {
-    chrome_state_key_,
-    chrome_state_medium_key_,
-    binaries_state_key_,
-    binaries_state_medium_key_,
-  };
-  int key_index = ((GetParam().system_level() ? 1 : 0) +
-                   (GetParam().multi_install() ? 2 : 0));
-  const base::string16& reg_key = *reg_keys[key_index];
+
+  const base::string16& reg_key = GetParam().system_level()
+                                      ? *chrome_state_medium_key_
+                                      : *chrome_state_key_;
   DWORD value = 0;
   EXPECT_EQ(
       ERROR_SUCCESS,
@@ -1306,70 +1272,45 @@ TEST_P(CollectStatsConsent, SetCollectStatsConsentAtLevel) {
     EXPECT_TRUE(GoogleUpdateSettings::GetCollectStatsConsentAtLevel(
                     GetParam().system_level()));
     EXPECT_EQ(1UL, value);
+    // Verify that backup client info has been cleared.
+    EXPECT_FALSE(GoogleUpdateSettings::LoadMetricsClientInfo());
   }
 }
 
 INSTANTIATE_TEST_CASE_P(
-    UserLevelSingleInstall,
+    UserLevel,
     CollectStatsConsent,
     ::testing::Values(
-        StatsState(StatsState::kUserLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::NO_SETTING),
-        StatsState(StatsState::kUserLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::FALSE_SETTING),
-        StatsState(StatsState::kUserLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::TRUE_SETTING)));
+        StatsState(StatsState::kUserLevel, StatsState::NO_SETTING),
+        StatsState(StatsState::kUserLevel, StatsState::FALSE_SETTING),
+        StatsState(StatsState::kUserLevel, StatsState::TRUE_SETTING)));
 INSTANTIATE_TEST_CASE_P(
-    UserLevelMultiInstall,
+    SystemLevel,
     CollectStatsConsent,
-    ::testing::Values(
-        StatsState(StatsState::kUserLevel, StatsState::MULTI_INSTALL,
-                   StatsState::NO_SETTING),
-        StatsState(StatsState::kUserLevel, StatsState::MULTI_INSTALL,
-                   StatsState::FALSE_SETTING),
-        StatsState(StatsState::kUserLevel, StatsState::MULTI_INSTALL,
-                   StatsState::TRUE_SETTING)));
-INSTANTIATE_TEST_CASE_P(
-    SystemLevelSingleInstall,
-    CollectStatsConsent,
-    ::testing::Values(
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::NO_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::NO_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::NO_SETTING, StatsState::TRUE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::TRUE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::SINGLE_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::TRUE_SETTING)));
-INSTANTIATE_TEST_CASE_P(
-    SystemLevelMultiInstall,
-    CollectStatsConsent,
-    ::testing::Values(
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::NO_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::NO_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::NO_SETTING, StatsState::TRUE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::FALSE_SETTING, StatsState::TRUE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::NO_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::FALSE_SETTING),
-        StatsState(StatsState::kSystemLevel, StatsState::MULTI_INSTALL,
-                   StatsState::TRUE_SETTING, StatsState::TRUE_SETTING)));
+    ::testing::Values(StatsState(StatsState::kSystemLevel,
+                                 StatsState::NO_SETTING,
+                                 StatsState::NO_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::NO_SETTING,
+                                 StatsState::FALSE_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::NO_SETTING,
+                                 StatsState::TRUE_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::FALSE_SETTING,
+                                 StatsState::NO_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::FALSE_SETTING,
+                                 StatsState::FALSE_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::FALSE_SETTING,
+                                 StatsState::TRUE_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::TRUE_SETTING,
+                                 StatsState::NO_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::TRUE_SETTING,
+                                 StatsState::FALSE_SETTING),
+                      StatsState(StatsState::kSystemLevel,
+                                 StatsState::TRUE_SETTING,
+                                 StatsState::TRUE_SETTING)));

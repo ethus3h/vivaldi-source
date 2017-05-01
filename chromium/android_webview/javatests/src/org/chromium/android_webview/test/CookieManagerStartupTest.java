@@ -5,8 +5,8 @@
 package org.chromium.android_webview.test;
 
 import android.content.Context;
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.MediumTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.android_webview.AwBrowserProcess;
 import org.chromium.android_webview.AwContents;
@@ -30,7 +30,11 @@ public class CookieManagerStartupTest extends AwTestBase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        ContextUtils.initApplicationContext(getActivity().getApplicationContext());
+        // CookieManager assumes that native is loaded, but webview browser should not be loaded for
+        // these tests as webview is not necessarily loaded when CookieManager is called.
+        Context appContext = getInstrumentation().getTargetContext().getApplicationContext();
+        ContextUtils.initApplicationContext(appContext);
+        AwBrowserProcess.loadLibrary();
     }
 
     @Override
@@ -43,11 +47,12 @@ public class CookieManagerStartupTest extends AwTestBase {
     }
 
     private void startChromiumWithClient(TestAwContentsClient contentsClient) throws Exception {
-        final Context context = getActivity();
+        // The activity must be launched in order for proper webview statics to be setup.
+        getActivity();
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                AwBrowserProcess.start(context);
+                AwBrowserProcess.start();
             }
         });
 

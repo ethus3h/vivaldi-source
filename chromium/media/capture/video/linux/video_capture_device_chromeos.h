@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_VIDEO_CAPTURE_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_
-#define MEDIA_VIDEO_CAPTURE_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_
+#ifndef MEDIA_CAPTURE_VIDEO_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_
+#define MEDIA_CAPTURE_VIDEO_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_
 
 #include "base/macros.h"
+#include "media/capture/video/linux/camera_config_chromeos.h"
 #include "media/capture/video/linux/video_capture_device_linux.h"
 
-namespace gfx {
+namespace display {
 class Display;
-}  // namespace gfx
+}  // namespace display
 
 namespace media {
 
@@ -21,17 +22,22 @@ class VideoCaptureDeviceChromeOS : public VideoCaptureDeviceLinux {
  public:
   explicit VideoCaptureDeviceChromeOS(
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-      const Name& device_name);
+      const VideoCaptureDeviceDescriptor& device_descriptor);
   ~VideoCaptureDeviceChromeOS() override;
+
+ protected:
+  void SetRotation(int rotation) override;
 
  private:
   class ScreenObserverDelegate;
 
-  void SetDisplayRotation(const gfx::Display& display);
+  void SetDisplayRotation(const display::Display& display);
   scoped_refptr<ScreenObserverDelegate> screen_observer_delegate_;
+  const VideoFacingMode lens_facing_;
+  const int camera_orientation_;
   DISALLOW_IMPLICIT_CONSTRUCTORS(VideoCaptureDeviceChromeOS);
 };
 
 }  // namespace media
 
-#endif  // MEDIA_VIDEO_CAPTURE_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_
+#endif  // MEDIA_CAPTURE_VIDEO_LINUX_VIDEO_CAPTURE_DEVICE_CHROMEOS_H_

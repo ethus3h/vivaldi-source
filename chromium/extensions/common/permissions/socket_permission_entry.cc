@@ -7,12 +7,12 @@
 #include <stdint.h>
 
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <tuple>
 #include <vector>
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -31,8 +31,8 @@ const uint16_t kWildcardPortNumber = 0;
 const uint16_t kInvalidPort = 65535;
 
 bool StartsOrEndsWithWhitespace(const std::string& str) {
-  return !str.empty() && (base::IsUnicodeWhitespace(str[0]) ||
-                          base::IsUnicodeWhitespace(str[str.length() - 1]));
+  return !str.empty() && (base::IsUnicodeWhitespace(str.front()) ||
+                          base::IsUnicodeWhitespace(str.back()));
 }
 
 }  // namespace

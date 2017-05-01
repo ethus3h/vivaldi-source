@@ -16,7 +16,7 @@
 #include "content/public/browser/web_contents.h"
 #include "ipc/ipc_message.h"
 #include "ui/accessibility/ax_enums.h"
-#include "ui/accessibility/ax_view_state.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/events/event.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/focus/focus_manager.h"
@@ -67,7 +67,8 @@ void WebView::SetWebContents(content::WebContents* replacement) {
     observing_render_process_host_->AddObserver(this);
   }
   // web_contents() now returns |replacement| from here onwards.
-  SetFocusable(!!web_contents());
+  SetFocusBehavior(web_contents() ? FocusBehavior::ALWAYS
+                                  : FocusBehavior::NEVER);
   if (wc_owner_.get() != replacement)
     wc_owner_.reset();
   if (embed_fullscreen_widget_mode_enabled_) {
@@ -112,11 +113,11 @@ const char* WebView::GetClassName() const {
   return kViewClassName;
 }
 
-scoped_ptr<content::WebContents> WebView::SwapWebContents(
-    scoped_ptr<content::WebContents> new_web_contents) {
+std::unique_ptr<content::WebContents> WebView::SwapWebContents(
+    std::unique_ptr<content::WebContents> new_web_contents) {
   if (wc_owner_)
     wc_owner_->SetDelegate(NULL);
-  scoped_ptr<content::WebContents> old_web_contents(std::move(wc_owner_));
+  std::unique_ptr<content::WebContents> old_web_contents(std::move(wc_owner_));
   wc_owner_ = std::move(new_web_contents);
   if (wc_owner_)
     wc_owner_->SetDelegate(this);
@@ -213,8 +214,8 @@ void WebView::AboutToRequestFocusFromTabTraversal(bool reverse) {
     web_contents()->FocusThroughTabTraversal(reverse);
 }
 
-void WebView::GetAccessibleState(ui::AXViewState* state) {
-  state->role = ui::AX_ROLE_WEB_VIEW;
+void WebView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
+  node_data->role = ui::AX_ROLE_WEB_VIEW;
 }
 
 gfx::NativeViewAccessible WebView::GetNativeViewAccessible() {
@@ -284,17 +285,18 @@ void WebView::WebContentsDestroyed() {
   NotifyAccessibilityWebContentsChanged();
 }
 
-void WebView::DidShowFullscreenWidget(int routing_id) {
+void WebView::DidShowFullscreenWidget() {
   if (embed_fullscreen_widget_mode_enabled_)
     ReattachForFullscreenChange(true);
 }
 
-void WebView::DidDestroyFullscreenWidget(int routing_id) {
+void WebView::DidDestroyFullscreenWidget() {
   if (embed_fullscreen_widget_mode_enabled_)
     ReattachForFullscreenChange(false);
 }
 
-void WebView::DidToggleFullscreenModeForTab(bool entered_fullscreen) {
+void WebView::DidToggleFullscreenModeForTab(bool entered_fullscreen,
+                                            bool will_cause_resize) {
   if (embed_fullscreen_widget_mode_enabled_)
     ReattachForFullscreenChange(entered_fullscreen);
 }
@@ -338,24 +340,12 @@ void WebView::AttachWebContents() {
   if (focus_manager && focus_manager->GetFocusedView() == this)
     OnFocus();
 
-#if defined(OS_WIN)
-  if (!is_embedding_fullscreen_widget_) {
-    web_contents()->SetParentNativeViewAccessible(
-        parent()->GetNativeViewAccessible());
-  }
-#endif
-
   OnWebContentsAttached();
 }
 
 void WebView::DetachWebContents() {
-  if (web_contents()) {
+  if (web_contents())
     holder_->Detach();
-#if defined(OS_WIN)
-    if (!is_embedding_fullscreen_widget_)
-      web_contents()->SetParentNativeViewAccessible(NULL);
-#endif
-  }
 }
 
 void WebView::ReattachForFullscreenChange(bool enter_fullscreen) {

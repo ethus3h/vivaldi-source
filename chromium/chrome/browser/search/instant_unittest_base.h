@@ -26,11 +26,6 @@ class InstantUnitTestBase : public BrowserWithTestWindowTest {
   void SetUp() override;
   void TearDown() override;
 
-#if !defined(OS_IOS) && !defined(OS_ANDROID)
-  // Query extraction is always enabled on Android and iOS.
-  void SetUpWithoutQueryExtraction();
-#endif
-
   // Adds and sets the default search provider using the base_url.
   // The base_url should have the http[s]:// prefix and a trailing / after the
   // TLD.
@@ -47,13 +42,11 @@ class InstantUnitTestBase : public BrowserWithTestWindowTest {
 
   InstantService* instant_service_;
   TemplateURLService* template_url_service_;
-  scoped_ptr<base::FieldTrialList> field_trial_list_;
+  std::unique_ptr<base::FieldTrialList> field_trial_list_;
 
  private:
   // BrowserWithTestWindowTest override:
   TestingProfile* CreateProfile() override;
-
-  void SetUpHelper();
 };
 
 #endif  // CHROME_BROWSER_SEARCH_INSTANT_UNITTEST_BASE_H_

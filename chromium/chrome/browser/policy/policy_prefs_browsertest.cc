@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -16,10 +17,9 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
@@ -42,9 +42,10 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema.h"
+#include "components/policy/policy_constants.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -85,7 +86,7 @@ class IndicatorTestCase {
   bool readonly() const { return readonly_; }
 
  private:
-  scoped_ptr<base::DictionaryValue> policy_;
+  std::unique_ptr<base::DictionaryValue> policy_;
   std::string value_;
   bool readonly_;
 
@@ -100,12 +101,14 @@ class PrefMapping {
               bool is_local_state,
               bool check_for_mandatory,
               bool check_for_recommended,
+              const std::string& indicator_test_url,
               const std::string& indicator_test_setup_js,
               const std::string& indicator_selector)
       : pref_(pref),
         is_local_state_(is_local_state),
         check_for_mandatory_(check_for_mandatory),
         check_for_recommended_(check_for_recommended),
+        indicator_test_url_(indicator_test_url),
         indicator_test_setup_js_(indicator_test_setup_js),
         indicator_selector_(indicator_selector) {}
   ~PrefMapping() {}
@@ -117,6 +120,8 @@ class PrefMapping {
   bool check_for_mandatory() const { return check_for_mandatory_; }
 
   bool check_for_recommended() const { return check_for_recommended_; }
+
+  const std::string& indicator_test_url() const { return indicator_test_url_; }
 
   const std::string& indicator_test_setup_js() const {
     return indicator_test_setup_js_;
@@ -138,6 +143,7 @@ class PrefMapping {
   const bool is_local_state_;
   const bool check_for_mandatory_;
   const bool check_for_recommended_;
+  const std::string indicator_test_url_;
   const std::string indicator_test_setup_js_;
   const std::string indicator_selector_;
   ScopedVector<IndicatorTestCase> indicator_test_cases_;
@@ -217,7 +223,7 @@ class PolicyTestCase {
   DISALLOW_COPY_AND_ASSIGN(PolicyTestCase);
 };
 
-// Parses all policy test cases and makes then available in a map.
+// Parses all policy test cases and makes them available in a map.
 class PolicyTestCases {
  public:
   typedef std::vector<PolicyTestCase*> PolicyTestCaseVector;
@@ -236,7 +242,7 @@ class PolicyTestCases {
     int error_code = -1;
     std::string error_string;
     base::DictionaryValue* dict = NULL;
-    scoped_ptr<base::Value> value = base::JSONReader::ReadAndReturnError(
+    std::unique_ptr<base::Value> value = base::JSONReader::ReadAndReturnError(
         json, base::JSON_PARSE_RFC, &error_code, &error_string);
     if (!value.get() || !value->GetAsDictionary(&dict)) {
       ADD_FAILURE() << "Error parsing policy_test_cases.json: " << error_string;
@@ -326,6 +332,8 @@ class PolicyTestCases {
         bool check_for_recommended = true;
         pref_mapping_dict->GetBoolean("check_for_recommended",
                                       &check_for_recommended);
+        std::string indicator_test_url;
+        pref_mapping_dict->GetString("indicator_test_url", &indicator_test_url);
         std::string indicator_test_setup_js;
         pref_mapping_dict->GetString("indicator_test_setup_js",
                                      &indicator_test_setup_js);
@@ -335,6 +343,7 @@ class PolicyTestCases {
                                                     is_local_state,
                                                     check_for_mandatory,
                                                     check_for_recommended,
+                                                    indicator_test_url,
                                                     indicator_test_setup_js,
                                                     indicator_selector);
         const base::ListValue* indicator_tests = NULL;
@@ -431,7 +440,7 @@ void VerifyControlledSettingIndicators(Browser* browser,
   // |selector| as JSON.
   ASSERT_TRUE(content::ExecuteScriptAndExtractString(contents, javascript.str(),
                                                      &json));
-  scoped_ptr<base::Value> value_ptr = base::JSONReader::Read(json);
+  std::unique_ptr<base::Value> value_ptr = base::JSONReader::Read(json);
   const base::ListValue* indicators = NULL;
   ASSERT_TRUE(value_ptr.get());
   ASSERT_TRUE(value_ptr->GetAsList(&indicators));
@@ -487,7 +496,7 @@ IN_PROC_BROWSER_TEST_F(PolicyPrefsTestCoverageTest, AllPoliciesHaveATestCase) {
   PolicyTestCases policy_test_cases;
   for (Schema::Iterator it = chrome_schema.GetPropertiesIterator();
        !it.IsAtEnd(); it.Advance()) {
-    EXPECT_TRUE(ContainsKey(policy_test_cases.map(), it.key()))
+    EXPECT_TRUE(base::ContainsKey(policy_test_cases.map(), it.key()))
         << "Missing policy test case for: " << it.key();
   }
 }
@@ -521,15 +530,11 @@ class PolicyPrefsTest : public InProcessBrowserTest {
       const PolicyDetails* policy_details = GetChromePolicyDetails(it.key());
       ASSERT_TRUE(policy_details);
       policy_map.Set(
-          it.key(),
-          level,
-          POLICY_SCOPE_USER,
-          POLICY_SOURCE_CLOUD,
-          it.value().DeepCopy(),
-          policy_details->max_external_data_size ?
-              new ExternalDataFetcher(base::WeakPtr<ExternalDataManager>(),
-                                      it.key()) :
-              NULL);
+          it.key(), level, POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+          it.value().CreateDeepCopy(),
+          base::WrapUnique(policy_details->max_external_data_size
+                               ? new ExternalDataFetcher(nullptr, it.key())
+                               : nullptr));
     }
     provider_.UpdateChromePolicy(policy_map);
     base::RunLoop().RunUntilIdle();
@@ -635,6 +640,10 @@ IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, CheckPolicyIndicators) {
                  pref_mappings.begin();
              pref_mapping != pref_mappings.end();
              ++pref_mapping) {
+          PrefService* prefs =
+              (*pref_mapping)->is_local_state() ? local_state : user_prefs;
+          if (prefs->FindPreference((*pref_mapping)->pref()))
+            prefs->ClearPref((*pref_mapping)->pref());
           if (!(*pref_mapping)->indicator_test_cases().empty()) {
             has_pref_indicator_tests = true;
             break;
@@ -690,6 +699,18 @@ IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, CheckPolicyIndicators) {
           ASSERT_TRUE(content::ExecuteScript(
               browser()->tab_strip_model()->GetActiveWebContents(),
               (*pref_mapping)->indicator_test_setup_js()));
+        }
+
+        // A non-empty indicator_test_url is expected to be used in very
+        // few cases, so it's currently implemented by navigating to the URL
+        // right before the test and navigating back afterwards.
+        // If you introduce many test cases with the same non-empty
+        // indicator_test_url, this would be inefficient. We could consider
+        // navigting to a specific indicator_test_url once for many test cases
+        // instead.
+        if (!(*pref_mapping)->indicator_test_url().empty()) {
+          ui_test_utils::NavigateToURL(
+              browser(), GURL((*pref_mapping)->indicator_test_url()));
         }
 
         std::string indicator_selector = (*pref_mapping)->indicator_selector();
@@ -755,6 +776,9 @@ IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, CheckPolicyIndicators) {
                                             (*indicator_test_case)->readonly());
           prefs->ClearPref((*pref_mapping)->pref().c_str());
         }
+
+        if (!(*pref_mapping)->indicator_test_url().empty())
+          ui_test_utils::NavigateToURL(browser(), GURL(kMainSettingsPage));
       }
     }
   }

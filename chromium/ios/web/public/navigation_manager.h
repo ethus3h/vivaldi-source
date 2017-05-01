@@ -7,7 +7,13 @@
 
 #include <stddef.h>
 
+#import "base/mac/scoped_nsobject.h"
 #include "ios/web/public/browser_url_rewriter.h"
+#include "ios/web/public/referrer.h"
+#include "ui/base/page_transition_types.h"
+
+@class NSDictionary;
+@class NSData;
 
 namespace web {
 
@@ -22,6 +28,40 @@ class WebState;
 // exactly one NavigationManager.
 class NavigationManager {
  public:
+  // Parameters for URL loading. Most parameters are optional, and can be left
+  // at the default values set by the constructor.
+  struct WebLoadParams {
+   public:
+    // The URL to load. Must be set.
+    GURL url;
+
+    // The referrer for the load. May be empty.
+    Referrer referrer;
+
+    // The transition type for the load. Defaults to PAGE_TRANSITION_LINK.
+    ui::PageTransition transition_type;
+
+    // True for renderer-initiated navigations. This is
+    // important for tracking whether to display pending URLs.
+    bool is_renderer_initiated;
+
+    // Any extra HTTP headers to add to the load.
+    base::scoped_nsobject<NSDictionary> extra_headers;
+
+    // Any post data to send with the load. When setting this, you should
+    // generally set a Content-Type header as well.
+    base::scoped_nsobject<NSData> post_data;
+
+    // Create a new WebLoadParams with the given URL and defaults for all other
+    // parameters.
+    explicit WebLoadParams(const GURL& url);
+    ~WebLoadParams();
+
+    // Allow copying WebLoadParams.
+    WebLoadParams(const WebLoadParams& other);
+    WebLoadParams& operator=(const WebLoadParams& other);
+  };
+
   virtual ~NavigationManager() {}
 
   // Gets the BrowserState associated with this NavigationManager. Can never
@@ -32,7 +72,7 @@ class NavigationManager {
   virtual WebState* GetWebState() const = 0;
 
   // Returns the NavigationItem that should be used when displaying info about
-  // the current entry to the user. It ignores certain pending entries, to
+  // the current item to the user. It ignores certain pending entries, to
   // prevent spoofing attacks using slow-loading navigations.
   virtual NavigationItem* GetVisibleItem() const = 0;
 
@@ -40,8 +80,8 @@ class NavigationManager {
   // are no committed entries.
   virtual NavigationItem* GetLastCommittedItem() const = 0;
 
-  // Returns the pending entry corresponding to the navigation that is
-  // currently in progress, or null if there is none.
+  // Returns the pending item corresponding to the navigation that is currently
+  // in progress, or null if there is none.
   virtual NavigationItem* GetPendingItem() const = 0;
 
   // Returns the transient item if any. This is an item which is removed and
@@ -58,6 +98,10 @@ class NavigationManager {
   // a no-op if NavigationManager::SetNeedsReload() becomes necessary to
   // match NavigationController::SetNeedsReload().
   virtual void LoadIfNecessary() = 0;
+
+  // Loads the URL with specified |params|.
+  virtual void LoadURLWithParams(
+      const NavigationManager::WebLoadParams& params) = 0;
 
   // Adds |rewriter| to a transient list of URL rewriters.  Transient URL
   // rewriters will be executed before the rewriters already added to the
@@ -92,13 +136,17 @@ class NavigationManager {
   // Navigation relative to the current item.
   virtual bool CanGoBack() const = 0;
   virtual bool CanGoForward() const = 0;
+  virtual bool CanGoToOffset(int offset) const = 0;
   virtual void GoBack() = 0;
   virtual void GoForward() = 0;
 
-  // Reloads the current entry. If |check_for_repost| is true and the current
-  // entry has POST data the user is prompted to see if they really want to
-  // reload the page. In nearly all cases pass in true.  If a transient entry
-  // is showing, initiates a new navigation to its URL.
+  // Navigates to the specified absolute index.
+  virtual void GoToIndex(int index) = 0;
+
+  // Reloads the current item. If |check_for_repost| is true and the current
+  // item has POST data the user is prompted to see if they really want to
+  // reload the page. In nearly all cases pass in true.  If a transient item is
+  // showing, initiates a new navigation to its URL.
   virtual void Reload(bool check_for_repost) = 0;
 };
 

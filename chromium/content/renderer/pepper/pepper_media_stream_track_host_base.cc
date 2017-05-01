@@ -47,12 +47,12 @@ bool PepperMediaStreamTrackHostBase::InitBuffers(int32_t number_of_buffers,
 
   // TODO(penghuang): |HostAllocateSharedMemoryBuffer| uses sync IPC. We should
   // avoid it.
-  base::CheckedNumeric<int32_t> size = number_of_buffers * buffer_size_aligned;
+  base::CheckedNumeric<uint32_t> size = number_of_buffers * buffer_size_aligned;
   if (!size.IsValid())
     return false;
 
   content::RenderThread* render_thread = content::RenderThread::Get();
-  scoped_ptr<base::SharedMemory> shm(
+  std::unique_ptr<base::SharedMemory> shm(
       render_thread->HostAllocateSharedMemoryBuffer(size.ValueOrDie()));
   if (!shm)
     return false;

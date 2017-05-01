@@ -6,7 +6,6 @@
 
 #include <stddef.h>
 
-#include "content/common/ssl_status_serialization.h"
 #include "content/public/common/context_menu_params.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/renderer/history_serialization.h"
@@ -43,7 +42,7 @@ ContextMenuParams ContextMenuParamsBuilder::Build(
   params.referrer_policy = data.referrerPolicy;
   params.suggested_filename = data.suggestedFilename;
   params.input_field_type = data.inputFieldType;
-  params.isVivaldiAddressfield = data.isVivaldiAddressfield;
+  params.vivaldi_input_type = data.vivaldiInputType.utf8();
 
   if (!data.imageResponse.isNull()) {
     GetContentClient()->renderer()->AddImageContextMenuProperties(
@@ -63,10 +62,6 @@ ContextMenuParams ContextMenuParamsBuilder::Build(
   }
 
   params.link_text = data.linkText;
-
-  // Deserialize the SSL info.
-  if (!data.securityInfo.isEmpty())
-    CHECK(DeserializeSecurityInfo(data.securityInfo, &params.security_info));
 
   return params;
 }

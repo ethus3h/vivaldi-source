@@ -5,6 +5,8 @@
 #include "device/serial/serial_device_enumerator_linux.h"
 
 #include <stdint.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
@@ -25,8 +27,9 @@ const char kProductNameKey[] = "ID_MODEL";
 }  // namespace
 
 // static
-scoped_ptr<SerialDeviceEnumerator> SerialDeviceEnumerator::Create() {
-  return scoped_ptr<SerialDeviceEnumerator>(new SerialDeviceEnumeratorLinux());
+std::unique_ptr<SerialDeviceEnumerator> SerialDeviceEnumerator::Create() {
+  return std::unique_ptr<SerialDeviceEnumerator>(
+      new SerialDeviceEnumeratorLinux());
 }
 
 SerialDeviceEnumeratorLinux::SerialDeviceEnumeratorLinux() {
@@ -35,8 +38,8 @@ SerialDeviceEnumeratorLinux::SerialDeviceEnumeratorLinux() {
 
 SerialDeviceEnumeratorLinux::~SerialDeviceEnumeratorLinux() {}
 
-mojo::Array<serial::DeviceInfoPtr> SerialDeviceEnumeratorLinux::GetDevices() {
-  mojo::Array<serial::DeviceInfoPtr> devices(0);
+std::vector<serial::DeviceInfoPtr> SerialDeviceEnumeratorLinux::GetDevices() {
+  std::vector<serial::DeviceInfoPtr> devices;
   ScopedUdevEnumeratePtr enumerate(udev_enumerate_new(udev_.get()));
   if (!enumerate) {
     LOG(ERROR) << "Serial device enumeration failed.";
@@ -84,7 +87,7 @@ mojo::Array<serial::DeviceInfoPtr> SerialDeviceEnumeratorLinux::GetDevices() {
         info->has_product_id = true;
       }
       if (product_name)
-        info->display_name = product_name;
+        info->display_name.emplace(product_name);
       devices.push_back(std::move(info));
     }
   }

@@ -7,12 +7,13 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/non_thread_safe.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
 #include "remoting/protocol/p2p_stream_socket.h"
 #include "third_party/webrtc/p2p/base/pseudotcp.h"
 
@@ -28,7 +29,7 @@ class P2PDatagramSocket;
 // held on the stack during callbacks.
 class PseudoTcpAdapter : public P2PStreamSocket, base::NonThreadSafe {
  public:
-  explicit PseudoTcpAdapter(scoped_ptr<P2PDatagramSocket> socket);
+  explicit PseudoTcpAdapter(std::unique_ptr<P2PDatagramSocket> socket);
   ~PseudoTcpAdapter() override;
 
   // P2PStreamSocket implementation.
@@ -72,7 +73,7 @@ class PseudoTcpAdapter : public P2PStreamSocket, base::NonThreadSafe {
 
   scoped_refptr<Core> core_;
 
-  net::BoundNetLog net_log_;
+  net::NetLogWithSource net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(PseudoTcpAdapter);
 };

@@ -35,6 +35,7 @@ class IPCDataSource: public media::DataSource,
   // Implementation of DataSource. These methods may be called on any single
   // thread. First usage of these methods attaches a thread checker.
   void Stop() override;
+  void Abort() override;
   void Read(int64_t position,
             int size,
             uint8_t* data,
@@ -50,6 +51,7 @@ class IPCDataSource: public media::DataSource,
  private:
   struct Request {
     Request();
+    Request(const Request& other);
     ~Request();
     uint8_t* destination;
     ReadCB callback;

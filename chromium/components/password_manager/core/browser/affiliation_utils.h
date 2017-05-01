@@ -60,10 +60,6 @@ namespace autofill {
 struct PasswordForm;
 }  // namespace autofill
 
-namespace base {
-class CommandLine;
-}  // namespace base
-
 namespace password_manager {
 
 // Encapsulates a facet URI in canonical form.
@@ -163,6 +159,7 @@ typedef std::vector<FacetURI> AffiliatedFacets;
 // authoritative source.
 struct AffiliatedFacetsWithUpdateTime {
   AffiliatedFacetsWithUpdateTime();
+  AffiliatedFacetsWithUpdateTime(const AffiliatedFacetsWithUpdateTime& other);
   ~AffiliatedFacetsWithUpdateTime();
 
   AffiliatedFacets facets;
@@ -179,26 +176,9 @@ bool AreEquivalenceClassesEqual(const AffiliatedFacets& a,
 // A shorter way to spell FacetURI::IsValidAndroidFacetURI().
 bool IsValidAndroidFacetURI(const std::string& uri);
 
-// Returns whether or not affiliation based matching is enabled. The feature is
-// enabled by default, but can be disabled either via command line flags or
-// field trials. The command line flag, if present, always takes precedence.
-bool IsAffiliationBasedMatchingEnabled(const base::CommandLine& command_line);
-
-// Returns whether or not propagating password changes to affiliated saved web
-// credentials is enabled. It is enabled by default, but can be disabled
-// separately via variation parameters while leaving the rest of the
-// affiliation-based matching enabled. If the main feature is forced
-// enabled/disabled via the command line, this sub-feature will be force
-// enabled/disabled correspondingly.
-bool IsPropagatingPasswordChangesToWebCredentialsEnabled(
-    const base::CommandLine& command_line);
-
 // Returns the origin URI in a format which can be presented to a user based of
-// |password_from| field values. For web URIs |languages| is using in order to
-// determine whether a URI is 'comprehensible' to a user who understands
-// languages listed.
-std::string GetHumanReadableOrigin(const autofill::PasswordForm& password_form,
-                                   const std::string& languages);
+// |password_from| field values.
+std::string GetHumanReadableOrigin(const autofill::PasswordForm& password_form);
 
 // Returns the Android origin URI for presenting to a user.
 std::string GetHumanReadableOriginForAndroidUri(const FacetURI facet_uri);
@@ -206,18 +186,12 @@ std::string GetHumanReadableOriginForAndroidUri(const FacetURI facet_uri);
 // For logging use only.
 std::ostream& operator<<(std::ostream& os, const FacetURI& facet_uri);
 
-}  // namespace password_manager
-
-// Provide a hash function so that hash_sets and maps can contain FacetURIs.
-namespace BASE_HASH_NAMESPACE {
-
-template <>
-struct hash<password_manager::FacetURI> {
-  size_t operator()(const password_manager::FacetURI& facet_uri) const {
-    return hash<std::string>()(facet_uri.potentially_invalid_spec());
+struct FacetURIHash {
+  size_t operator()(const FacetURI& facet_uri) const {
+    return std::hash<std::string>()(facet_uri.potentially_invalid_spec());
   }
 };
 
-}  // namespace BASE_HASH_NAMESPACE
+}  // namespace password_manager
 
 #endif  // COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_AFFILIATION_UTILS_H_

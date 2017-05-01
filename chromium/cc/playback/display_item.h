@@ -7,7 +7,8 @@
 
 #include <stddef.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "cc/base/cc_export.h"
 #include "cc/debug/traced_value.h"
 #include "third_party/skia/include/core/SkPicture.h"
@@ -19,23 +20,41 @@ namespace cc {
 
 namespace proto {
 class DisplayItem;
-}
+}  // namespace proto
 
 class CC_EXPORT DisplayItem {
  public:
+  enum Type {
+    CLIP,
+    END_CLIP,
+    CLIP_PATH,
+    END_CLIP_PATH,
+    COMPOSITING,
+    END_COMPOSITING,
+    DRAWING,
+    FILTER,
+    END_FILTER,
+    FLOAT_CLIP,
+    END_FLOAT_CLIP,
+    TRANSFORM,
+    END_TRANSFORM,
+  };
+
   virtual ~DisplayItem() {}
 
   virtual void ToProtobuf(proto::DisplayItem* proto) const = 0;
+  virtual sk_sp<const SkPicture> GetPicture() const;
   virtual void Raster(SkCanvas* canvas,
-                      const gfx::Rect& canvas_target_playback_rect,
                       SkPicture::AbortCallback* callback) const = 0;
   virtual void AsValueInto(const gfx::Rect& visual_rect,
                            base::trace_event::TracedValue* array) const = 0;
-  // For tracing.
-  virtual size_t ExternalMemoryUsage() const = 0;
+
+  Type type() const { return type_; }
 
  protected:
-  DisplayItem();
+  explicit DisplayItem(Type type) : type_(type) {}
+
+  const Type type_;
 };
 
 }  // namespace cc

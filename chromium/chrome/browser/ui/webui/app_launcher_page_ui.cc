@@ -6,29 +6,27 @@
 
 #include <string>
 
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/app_launcher_login_handler.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
 #include "chrome/browser/ui/webui/ntp/app_resource_cache_factory.h"
 #include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
-#include "chrome/browser/ui/webui/ntp/favicon_webui_handler.h"
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache.h"
+#include "chrome/browser/ui/webui/theme_handler.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/extension_system.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-
-#if defined(ENABLE_THEMES)
-#include "chrome/browser/ui/webui/theme_handler.h"
-#endif
 
 class ExtensionService;
 
@@ -46,20 +44,17 @@ AppLauncherPageUI::AppLauncherPageUI(content::WebUI* web_ui)
         extensions::ExtensionSystem::Get(GetProfile())->extension_service();
     // We should not be launched without an ExtensionService.
     DCHECK(service);
-    web_ui->AddMessageHandler(new AppLauncherHandler(service));
-    web_ui->AddMessageHandler(new CoreAppLauncherHandler());
-    web_ui->AddMessageHandler(new FaviconWebUIHandler());
-    web_ui->AddMessageHandler(new MetricsHandler());
+    web_ui->AddMessageHandler(base::MakeUnique<AppLauncherHandler>(service));
+    web_ui->AddMessageHandler(base::MakeUnique<CoreAppLauncherHandler>());
+    web_ui->AddMessageHandler(base::MakeUnique<MetricsHandler>());
   }
 
-#if defined(ENABLE_THEMES)
   // The theme handler can require some CPU, so do it after hooking up the most
   // visited handler. This allows the DB query for the new tab thumbs to happen
   // earlier.
-  web_ui->AddMessageHandler(new ThemeHandler());
-#endif
+  web_ui->AddMessageHandler(base::MakeUnique<ThemeHandler>());
 
-  scoped_ptr<HTMLSource> html_source(
+  std::unique_ptr<HTMLSource> html_source(
       new HTMLSource(GetProfile()->GetOriginalProfile()));
   content::URLDataSource::Add(GetProfile(), html_source.release());
 }
@@ -81,7 +76,7 @@ bool AppLauncherPageUI::OverrideHandleWebUIMessage(
     const base::ListValue& args) {
   if (message == "getApps" &&
       AppLauncherLoginHandler::ShouldShow(GetProfile())) {
-    web_ui()->AddMessageHandler(new AppLauncherLoginHandler());
+    web_ui()->AddMessageHandler(base::MakeUnique<AppLauncherLoginHandler>());
   }
   return false;
 }
@@ -104,16 +99,16 @@ std::string AppLauncherPageUI::HTMLSource::GetSource() const {
 
 void AppLauncherPageUI::HTMLSource::StartDataRequest(
     const std::string& path,
-    int render_process_id,
-    int render_frame_id,
+    const content::ResourceRequestInfo::WebContentsGetter& wc_getter,
     const content::URLDataSource::GotDataCallback& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   NTPResourceCache* resource = AppResourceCacheFactory::GetForProfile(profile_);
   resource->set_should_show_other_devices_menu(false);
 
+  content::WebContents* web_contents = wc_getter.Run();
   content::RenderProcessHost* render_host =
-      content::RenderProcessHost::FromID(render_process_id);
+      web_contents ? web_contents->GetRenderProcessHost() : nullptr;
   NTPResourceCache::WindowType win_type = NTPResourceCache::GetWindowType(
       profile_, render_host);
   scoped_refptr<base::RefCountedMemory> html_bytes(
@@ -131,8 +126,21 @@ bool AppLauncherPageUI::HTMLSource::ShouldReplaceExistingSource() const {
   return false;
 }
 
-bool AppLauncherPageUI::HTMLSource::ShouldAddContentSecurityPolicy() const {
-  return false;
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyScriptSrc()
+    const {
+  // 'unsafe-inline' is added to script-src.
+  return "script-src chrome://resources 'self' 'unsafe-eval' 'unsafe-inline';";
+}
+
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyStyleSrc()
+    const {
+  return "style-src 'self' chrome://resources chrome://theme 'unsafe-inline';";
+}
+
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyImgSrc()
+    const {
+  return "img-src chrome://extension-icon chrome://theme chrome://resources "
+      "data:;";
 }
 
 AppLauncherPageUI::HTMLSource::~HTMLSource() {}

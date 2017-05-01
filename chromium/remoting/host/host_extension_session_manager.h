@@ -5,23 +5,17 @@
 #ifndef REMOTING_HOST_HOST_EXTENSION_SESSION_MANAGER_H_
 #define REMOTING_HOST_HOST_EXTENSION_SESSION_MANAGER_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
-
-namespace webrtc {
-class DesktopCapturer;
-}
 
 namespace remoting {
 
-class ClientSessionControl;
+class ClientSessionDetails;
 class HostExtension;
 class HostExtensionSession;
-class VideoEncoder;
 
 namespace protocol {
 class ClientStub;
@@ -33,22 +27,15 @@ class ExtensionMessage;
 // set of capabilities negotiated between client and host.
 class HostExtensionSessionManager {
  public:
-  typedef std::vector<HostExtension*> HostExtensions;
+  using HostExtensions = std::vector<HostExtension*>;
 
   // Creates an extension manager for the specified |extensions|.
   HostExtensionSessionManager(const HostExtensions& extensions,
-                              ClientSessionControl* client_session_control);
+                              ClientSessionDetails* client_session_details);
   virtual ~HostExtensionSessionManager();
 
   // Returns the union of all capabilities supported by registered extensions.
   std::string GetCapabilities() const;
-
-  // Calls the corresponding hook functions for each extension, to allow them
-  // to wrap or replace video pipeline components. Only extensions which return
-  // true from ModifiesVideoPipeline() will be called.
-  // The order in which extensions are called is undefined.
-  void OnCreateVideoCapturer(scoped_ptr<webrtc::DesktopCapturer>* capturer);
-  void OnCreateVideoEncoder(scoped_ptr<VideoEncoder>* encoder);
 
   // Handles completion of authentication and capabilities negotiation, creating
   // the set of HostExtensionSessions to match the client's capabilities.
@@ -61,11 +48,12 @@ class HostExtensionSessionManager {
   bool OnExtensionMessage(const protocol::ExtensionMessage& message);
 
  private:
-  typedef ScopedVector<HostExtensionSession> HostExtensionSessions;
+  using HostExtensionSessions =
+      std::vector<std::unique_ptr<HostExtensionSession>>;
 
   // Passed to HostExtensionSessions to allow them to send messages,
   // disconnect the session, etc.
-  ClientSessionControl* client_session_control_;
+  ClientSessionDetails* client_session_details_;
   protocol::ClientStub* client_stub_;
 
   // The HostExtensions to instantiate for the session, if it reaches the

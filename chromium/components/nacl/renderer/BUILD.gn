@@ -6,7 +6,7 @@ import("//build/config/features.gni")
 
 assert(enable_nacl)
 
-source_set("renderer") {
+static_library("renderer") {
   sources = [
     "file_downloader.cc",
     "file_downloader.h",
@@ -27,7 +27,6 @@ source_set("renderer") {
     "pnacl_translation_resource_host.cc",
     "pnacl_translation_resource_host.h",
     "ppb_nacl_private_impl.cc",
-    "ppb_nacl_private_impl.h",
     "progress_event.cc",
     "progress_event.h",
     "trusted_plugin_channel.cc",
@@ -46,5 +45,6 @@ source_set("renderer") {
     "//ppapi/proxy:ipc",
     "//ppapi/shared_impl",
     "//third_party/WebKit/public:blink",
+    "//v8",
   ]
 }

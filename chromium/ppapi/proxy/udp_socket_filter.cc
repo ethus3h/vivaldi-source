@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/proxy/error_conversion.h"
 #include "ppapi/proxy/plugin_globals.h"
@@ -27,7 +28,7 @@ const size_t UDPSocketFilter::kPluginReceiveBufferSlots = 32u;
 namespace {
 
 int32_t SetRecvFromOutput(PP_Instance pp_instance,
-                          const scoped_ptr<std::string>& data,
+                          const std::unique_ptr<std::string>& data,
                           const PP_NetAddress_Private& addr,
                           char* output_buffer,
                           int32_t num_bytes,
@@ -68,16 +69,16 @@ void UDPSocketFilter::AddUDPResource(
     const base::Closure& slot_available_callback) {
   ProxyLock::AssertAcquired();
   base::AutoLock acquire(lock_);
-  DCHECK(!queues_.contains(resource));
-  queues_.add(resource, scoped_ptr<RecvQueue>(new RecvQueue(
-                            instance, private_api, slot_available_callback)));
+  DCHECK(queues_.find(resource) == queues_.end());
+  queues_[resource] = base::MakeUnique<RecvQueue>(instance, private_api,
+                                                  slot_available_callback);
 }
 
 void UDPSocketFilter::RemoveUDPResource(PP_Resource resource) {
   ProxyLock::AssertAcquired();
   base::AutoLock acquire(lock_);
-  DCHECK(queues_.contains(resource));
-  queues_.erase(resource);
+  auto erase_count = queues_.erase(resource);
+  DCHECK_GT(erase_count, 0u);
 }
 
 int32_t UDPSocketFilter::RequestData(
@@ -88,12 +89,12 @@ int32_t UDPSocketFilter::RequestData(
     const scoped_refptr<TrackedCallback>& callback) {
   ProxyLock::AssertAcquired();
   base::AutoLock acquire(lock_);
-  RecvQueue* queue_ptr = queues_.get(resource);
-  if (!queue_ptr) {
+  auto it = queues_.find(resource);
+  if (it == queues_.end()) {
     NOTREACHED();
     return PP_ERROR_FAILED;
   }
-  return queue_ptr->RequestData(num_bytes, buffer, addr, callback);
+  return it->second->RequestData(num_bytes, buffer, addr, callback);
 }
 
 bool UDPSocketFilter::OnResourceReplyReceived(
@@ -111,7 +112,8 @@ bool UDPSocketFilter::OnResourceReplyReceived(
 PP_NetAddress_Private UDPSocketFilter::GetLastAddrPrivate(
     PP_Resource resource) const {
   base::AutoLock acquire(lock_);
-  return queues_.get(resource)->GetLastAddrPrivate();
+  auto it = queues_.find(resource);
+  return it->second->GetLastAddrPrivate();
 }
 
 void UDPSocketFilter::OnPluginMsgPushRecvResult(
@@ -121,13 +123,13 @@ void UDPSocketFilter::OnPluginMsgPushRecvResult(
     const PP_NetAddress_Private& addr) {
   DCHECK(PluginGlobals::Get()->ipc_task_runner()->RunsTasksOnCurrentThread());
   base::AutoLock acquire(lock_);
-  RecvQueue* queue_ptr = queues_.get(params.pp_resource());
+  auto it = queues_.find(params.pp_resource());
   // The RecvQueue might be gone if there were messages in-flight for a
   // resource that has been destroyed.
-  if (queue_ptr) {
+  if (it != queues_.end()) {
     // TODO(yzshen): Support passing in a non-const string ref, so that we can
     // eliminate one copy when storing the data in the buffer.
-    queue_ptr->DataReceivedOnIOThread(result, data, addr);
+    it->second->DataReceivedOnIOThread(result, data, addr);
   }
 }
 
@@ -182,7 +184,7 @@ void UDPSocketFilter::RecvQueue::DataReceivedOnIOThread(
     //    (Since the callback will complete on another thread, it's possible
     //     that the resource will be deleted and abort the callback before it
     //     is actually run.)
-    scoped_ptr<std::string> data_to_pass(new std::string(data));
+    std::unique_ptr<std::string> data_to_pass(new std::string(data));
     recvfrom_callback_->set_completion_task(base::Bind(
         &SetRecvFromOutput, pp_instance_, base::Passed(std::move(data_to_pass)),
         addr, base::Unretained(read_buffer_), bytes_to_read_,
@@ -225,7 +227,7 @@ int32_t UDPSocketFilter::RecvQueue::RequestData(
       return PP_ERROR_MESSAGE_TOO_BIG;
 
     int32_t result = static_cast<int32_t>(front.data.size());
-    scoped_ptr<std::string> data_to_pass(new std::string);
+    std::unique_ptr<std::string> data_to_pass(new std::string);
     data_to_pass->swap(front.data);
     SetRecvFromOutput(pp_instance_, std::move(data_to_pass), front.addr,
                       buffer_out, num_bytes, addr_out, PP_OK);

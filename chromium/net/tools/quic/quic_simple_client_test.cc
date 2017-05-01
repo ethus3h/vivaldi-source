@@ -9,22 +9,18 @@
 #include "net/quic/test_tools/quic_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using net::test::CryptoTestUtils;
-
 namespace net {
-namespace tools {
 namespace test {
 
 TEST(QuicSimpleClientTest, Initialize) {
-  IPEndPoint server_address(IPEndPoint(net::test::Loopback4(), 80));
+  QuicSocketAddress server_address(QuicIpAddress::Loopback4(), 80);
   QuicServerId server_id("hostname", server_address.port(),
                          PRIVACY_MODE_DISABLED);
-  QuicVersionVector versions = QuicSupportedVersions();
+  QuicVersionVector versions = AllSupportedVersions();
   QuicSimpleClient client(server_address, server_id, versions,
                           CryptoTestUtils::ProofVerifierForTesting());
   EXPECT_TRUE(client.Initialize());
 }
 
 }  // namespace test
-}  // namespace tools
 }  // namespace net

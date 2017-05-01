@@ -45,7 +45,7 @@ class VivaldiMenuController : public ui::SimpleMenuModel::Delegate {
   };
 
   VivaldiMenuController(Delegate* delegate,
-      std::vector<linked_ptr<vivaldi::show_menu::MenuItem>>* menu_items);
+      std::vector<vivaldi::show_menu::MenuItem>* menu_items);
   ~VivaldiMenuController() override;
 
   void Show(content::WebContents* web_contents,
@@ -57,7 +57,7 @@ class VivaldiMenuController : public ui::SimpleMenuModel::Delegate {
   bool IsItemForCommandIdDynamic(int command_id) const override;
   base::string16 GetLabelForCommandId(int command_id) const override;
   bool GetAcceleratorForCommandId(int command_id,
-      ui::Accelerator* accelerator) override;
+      ui::Accelerator* accelerator) const override;
   bool GetIconForCommandId(int command_id, gfx::Image* icon) const override;
   void CommandIdHighlighted(int command_id) override;
   void ExecuteCommand(int command_id, int event_flags) override;
@@ -68,6 +68,7 @@ class VivaldiMenuController : public ui::SimpleMenuModel::Delegate {
   const vivaldi::show_menu::MenuItem* getItemByCommandId(int command_id) const;
   void PopulateModel(const vivaldi::show_menu::MenuItem* menuitem,
       ui::SimpleMenuModel* menu_model);
+  void SanitizeModel(ui::SimpleMenuModel* menu_model);
   bool HasDeveloperTools();
   bool IsDeveloperTools(int command_id) const;
   void HandleDeveloperToolsCommand(int command_id);
@@ -82,10 +83,10 @@ class VivaldiMenuController : public ui::SimpleMenuModel::Delegate {
 
   Delegate* delegate_;
   content::ContextMenuParams menu_params_;
-  std::vector<linked_ptr<vivaldi::show_menu::MenuItem>>*
+  std::vector<vivaldi::show_menu::MenuItem>*
       menu_items_;  // Not owned by us.
   ui::SimpleMenuModel menu_model_;
-  scoped_ptr<::vivaldi::VivaldiContextMenu> menu_;
+  std::unique_ptr<::vivaldi::VivaldiContextMenu> menu_;
   ScopedVector<ui::SimpleMenuModel> models_;
   content::WebContents* web_contents_;  // Not owned by us.
   Profile* profile_;
@@ -106,7 +107,7 @@ class CommandEventRouter {
 
     // Helper to actually dispatch an event to extension listeners.
     void DispatchEvent(const std::string& event_name,
-                       scoped_ptr<base::ListValue> event_args);
+                       std::unique_ptr<base::ListValue> event_args);
 private:
     content::BrowserContext* browser_context_;
     DISALLOW_COPY_AND_ASSIGN(CommandEventRouter);
@@ -143,7 +144,7 @@ public EventRouter::Observer {
     static const bool kServiceIsNULLWhileTesting = true;
 
     // Created lazily upon OnListenerAdded.
-    scoped_ptr<CommandEventRouter> command_event_router_;
+    std::unique_ptr<CommandEventRouter> command_event_router_;
 };
 
 class ShowMenuCreateFunction : public ChromeAsyncExtensionFunction,

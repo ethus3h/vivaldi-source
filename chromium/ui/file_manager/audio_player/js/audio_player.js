@@ -14,8 +14,7 @@ ContentMetadataProvider.WORKER_SCRIPT = '/js/metadata_worker.js';
  */
 function AudioPlayer(container) {
   this.container_ = container;
-  this.volumeManager_ = new VolumeManagerWrapper(
-      VolumeManagerWrapper.NonNativeVolumeStatus.ENABLED);
+  this.volumeManager_ = new VolumeManagerWrapper(AllowedPaths.ANY_PATH, false);
   this.metadataModel_ = MetadataModel.create(this.volumeManager_);
   this.selectedEntry_ = null;
   this.invalidTracks_ = {};
@@ -25,28 +24,53 @@ function AudioPlayer(container) {
 
   /**
    * Whether if the playlist is expanded or not. This value is changed by
-   * this.syncExpanded().
+   * this.syncPlaylistExpanded().
    * True: expanded, false: collapsed, null: unset.
    *
    * @type {?boolean}
    * @private
    */
-  this.isExpanded_ = null;  // Initial value is null. It'll be set in load().
+  // Initial value is null. It'll be set in load().
+  this.isPlaylistExpanded_ = null;
+
+  /**
+   * Whether if the trackinfo is expanded or not.
+   * True: expanded, false: collapsed, null: unset.
+   *
+   * @type {?boolean}
+   * @private
+   */
+  // Initial value is null. It'll be set in load().
+  this.isTrackInfoExpanded_ = null;
 
   this.player_ =
     /** @type {AudioPlayerElement} */ (document.querySelector('audio-player'));
   this.player_.tracks = [];
 
+  /**
+   * Queue to throttle concurrent reading of audio file metadata.
+   * Here we loads up to 25 songs concurrently to cover the number of songs in
+   * an album in most cases. This number should not be too large so that the
+   * number of open file descriptors will not hit the system limit.
+   * @private {AsyncUtil.ConcurrentQueue}
+   */
+  this.loadMetadataQueue_ = new AsyncUtil.ConcurrentQueue(25);
+
   // Restore the saved state from local storage, and update the local storage
   // if the states are changed.
   var STORAGE_PREFIX = 'audioplayer-';
-  var KEYS_TO_SAVE_STATES = ['shuffle', 'repeat', 'volume', 'expanded'];
+  var KEYS_TO_SAVE_STATES =
+      ['shuffle',
+       'repeat-mode',
+       'volume',
+       'playlist-expanded',
+       'track-info-expanded'];
   var storageKeys = KEYS_TO_SAVE_STATES.map(a => STORAGE_PREFIX + a);
   chrome.storage.local.get(storageKeys, function(results) {
     // Update the UI by loaded state.
     for (var storageKey in results) {
       var key = storageKey.substr(STORAGE_PREFIX.length);
-      this.player_[key] = results[storageKey];
+      this.player_[Polymer.CaseMap.dashToCamelCase(key)] = results[storageKey];
     }
     // Start listening to UI changes to write back the states to local storage.
     for (var i = 0; i < KEYS_TO_SAVE_STATES.length; i++) {
@@ -60,9 +84,14 @@ function AudioPlayer(container) {
     }
   }.bind(this));
 
-  // Update the window size when UI's 'expanded' state is changed.
-  this.player_.addEventListener('expanded-changed', function(event) {
-    this.onExpandedChanged_(event.detail.value);
+  // Update the window size when UI's 'playlist-expanded' state is changed.
+  this.player_.addEventListener('playlist-expanded-changed', function(event) {
+    this.onPlaylistExpandedChanged_(event.detail.value);
+  }.bind(this));
+
+  // Update the window size when UI's 'track-info-expanded' state is changed.
+  this.player_.addEventListener('track-info-expanded-changed', function(event) {
+    this.onTrackInfoExpandedChanged_(event.detail.value);
   }.bind(this));
 
   // Run asynchronously after an event of model change is delivered.
@@ -145,7 +174,8 @@ AudioPlayer.prototype.load = function(playlist) {
       JSON.parse(JSON.stringify(playlist)));  // cloning
   util.saveAppState();
 
-  this.isExpanded_ = this.player_.expanded;
+  this.isPlaylistExpanded_ = this.player_.playlistExpanded;
+  this.isTrackInfoExpanded_ = this.player_.trackInfoExpanded;
 
   // Resolving entries has to be done after the volume manager is initialized.
   this.volumeManager_.ensureInitialized(function() {
@@ -195,8 +225,12 @@ AudioPlayer.prototype.load = function(playlist) {
  * @private
  */
 AudioPlayer.prototype.loadMetadata_ = function(track) {
-  this.fetchMetadata_(
-      this.entries_[track], this.displayMetadata_.bind(this, track));
+  this.loadMetadataQueue_.run(function(callback) {
+    this.fetchMetadata_(this.entries_[track], function(metadata) {
+      this.displayMetadata_(track, metadata);
+      callback();
+    }.bind(this));
+  }.bind(this));
 };
 
 /**
@@ -275,7 +309,8 @@ AudioPlayer.prototype.select_ = function(newTrack) {
  */
 AudioPlayer.prototype.fetchMetadata_ = function(entry, callback) {
   this.metadataModel_.get(
-      [entry], ['mediaTitle', 'mediaArtist', 'present']).then(
+      [entry],
+      ['mediaTitle', 'mediaArtist', 'present', 'contentThumbnailUrl']).then(
       function(generation, metadata) {
         // Do nothing if another load happened since the metadata request.
         if (this.playlistGeneration_ == generation)
@@ -309,14 +344,15 @@ AudioPlayer.prototype.onError_ = function() {
  * @private
  */
 AudioPlayer.prototype.onResize_ = function(event) {
-  if (!this.isExpanded_ &&
-      window.innerHeight >= AudioPlayer.EXPANDED_MODE_MIN_HEIGHT) {
-    this.isExpanded_ = true;
-    this.player_.expanded = true;
-  } else if (this.isExpanded_ &&
-             window.innerHeight < AudioPlayer.EXPANDED_MODE_MIN_HEIGHT) {
-    this.isExpanded_ = false;
-    this.player_.expanded = false;
+  var trackListHeight =
+          (/** @type {{trackList:TrackListElement}} */ (this.player_.$))
+          .trackList.clientHeight;
+  if (trackListHeight > AudioPlayer.TOP_PADDING_HEIGHT) {
+    this.isPlaylistExpanded_ = true;
+    this.player_.playlistExpanded = true;
+  } else {
+    this.isPlaylistExpanded_ = false;
+    this.player_.playlistExpanded = false;
   }
 };
 
@@ -327,23 +363,44 @@ AudioPlayer.prototype.onResize_ = function(event) {
  * @private
  */
 AudioPlayer.prototype.onKeyDown_ = function(event) {
-  switch (util.getKeyModifiers(event) + event.keyIdentifier) {
-    case 'Ctrl-U+0057': // Ctrl+W => Close the player.
+  switch (util.getKeyModifiers(event) + event.key) {
+    case 'Ctrl-w': // Ctrl+W => Close the player.
       chrome.app.window.current().close();
       break;
 
     // Handle debug shortcut keys.
-    case 'Ctrl-Shift-U+0049': // Ctrl+Shift+I
+    case 'Ctrl-Shift-I': // Ctrl+Shift+I
       chrome.fileManagerPrivate.openInspector('normal');
       break;
-    case 'Ctrl-Shift-U+004A': // Ctrl+Shift+J
+    case 'Ctrl-Shift-J': // Ctrl+Shift+J
       chrome.fileManagerPrivate.openInspector('console');
       break;
-    case 'Ctrl-Shift-U+0043': // Ctrl+Shift+C
+    case 'Ctrl-Shift-C': // Ctrl+Shift+C
       chrome.fileManagerPrivate.openInspector('element');
       break;
-    case 'Ctrl-Shift-U+0042': // Ctrl+Shift+B
+    case 'Ctrl-Shift-B': // Ctrl+Shift+B
       chrome.fileManagerPrivate.openInspector('background');
+      break;
+
+    case ' ': // Space
+    case 'k':
+      this.player_.dispatchEvent(new Event('toggle-pause-event'));
+      break;
+    case 'ArrowUp':
+    case 'ArrowRight':
+      if (event.target.id !== 'volumeSlider')
+        this.player_.dispatchEvent(new Event('small-forward-skip-event'));
+      break;
+    case 'ArrowDown':
+    case 'ArrowLeft':
+      if (event.target.id !== 'volumeSlider')
+        this.player_.dispatchEvent(new Event('small-backword-skip-event'));
+      break;
+    case 'l':
+      this.player_.dispatchEvent(new Event('big-forward-skip-event'));
+      break;
+    case 'j':
+      this.player_.dispatchEvent(new Event('big-backword-skip-event'));
       break;
   }
 };
@@ -372,6 +429,20 @@ AudioPlayer.TOP_PADDING_HEIGHT = 4;
 AudioPlayer.TRACK_HEIGHT = 48;
 
 /**
+ * artwork panel height in pixels, when it's closed.
+ * @type {number}
+ * @const
+ */
+AudioPlayer.CLOSED_ARTWORK_HEIGHT = 48;
+
+/**
+ * artwork panel height in pixels, when it's opened.
+ * @type {number}
+ * @const
+ */
+AudioPlayer.EXPANDED_ARTWORK_HEIGHT = 320;
+
+/**
  * Controls bar height in pixels.
  * @type {number}
  * @const
@@ -391,28 +462,70 @@ AudioPlayer.DEFAULT_EXPANDED_ITEMS = 5;
  * @const
  */
 AudioPlayer.EXPANDED_MODE_MIN_HEIGHT = AudioPlayer.TOP_PADDING_HEIGHT +
-                                       AudioPlayer.TRACK_HEIGHT * 2 +
+                                       AudioPlayer.EXPANDED_ARTWORK_HEIGHT +
                                        AudioPlayer.CONTROLS_HEIGHT;
 
 /**
- * Invoked when the 'expanded' property in the model is changed.
+ * Minimum size of the window in the mode in pixels.
+ * @type {number}
+ * @const
+ */
+AudioPlayer.CLOSED_MODE_MIN_HEIGHT = AudioPlayer.TOP_PADDING_HEIGHT +
+                                     AudioPlayer.CLOSED_ARTWORK_HEIGHT +
+                                     AudioPlayer.CONTROLS_HEIGHT;
+
+/**
+ * Invoked when the 'playlist-expanded' property in the model is changed.
  * @param {boolean} newValue New value.
  * @private
  */
-AudioPlayer.prototype.onExpandedChanged_ = function(newValue) {
-  if (this.isExpanded_ !== null &&
-      this.isExpanded_ === newValue)
+AudioPlayer.prototype.onPlaylistExpandedChanged_ = function(newValue) {
+  if (this.isPlaylistExpanded_ !== null &&
+      this.isPlaylistExpanded_ === newValue)
     return;
 
-  if (this.isExpanded_ && !newValue)
+  if (this.isPlaylistExpanded_ && !newValue)
     this.lastExpandedInnerHeight_ = window.innerHeight;
 
-  if (this.isExpanded_ !== newValue) {
-    this.isExpanded_ = newValue;
-    this.syncHeight_();
+  if (this.isPlaylistExpanded_ !== newValue) {
+    this.isPlaylistExpanded_ = newValue;
+    this.syncHeightForPlaylist_();
 
     // Saves new state.
-    window.appState.expanded = newValue;
+    window.appState.playlistExpanded = newValue;
+    util.saveAppState();
+  }
+};
+
+/**
+ * Invoked when the 'track-info-expanded' property in the model is changed.
+ * @param {boolean} newValue New value.
+ * @private
+ */
+AudioPlayer.prototype.onTrackInfoExpandedChanged_ = function(newValue) {
+  if (this.isTrackInfoExpanded_ !== null &&
+      this.isTrackInfoExpanded_ === newValue)
+    return;
+
+  this.lastExpandedInnerHeight_ = window.innerHeight;
+
+  if (this.isTrackInfoExpanded_ !== newValue) {
+    this.isTrackInfoExpanded_ = newValue;
+    var state = chrome.app.window.current()
+    var newHeight = window.outerHeight;
+    if (newValue) {
+      state.innerBounds.minHeight = AudioPlayer.EXPANDED_MODE_MIN_HEIGHT;
+      newHeight += AudioPlayer.EXPANDED_MODE_MIN_HEIGHT -
+          AudioPlayer.CLOSED_MODE_MIN_HEIGHT;
+    } else {
+      state.innerBounds.minHeight = AudioPlayer.CLOSED_MODE_MIN_HEIGHT;
+      newHeight -= AudioPlayer.EXPANDED_MODE_MIN_HEIGHT -
+          AudioPlayer.CLOSED_MODE_MIN_HEIGHT;
+    }
+    window.resizeTo(window.outerWidth, newHeight);
+
+    // Saves new state.
+    window.appState.isTrackInfoExpanded_ = newValue;
     util.saveAppState();
   }
 };
@@ -420,28 +533,42 @@ AudioPlayer.prototype.onExpandedChanged_ = function(newValue) {
 /**
  * @private
  */
-AudioPlayer.prototype.syncHeight_ = function() {
+AudioPlayer.prototype.syncHeightForPlaylist_ = function() {
   var targetInnerHeight;
 
-  if (this.player_.expanded) {
-    // Expanded.
+  if (this.player_.playlistExpanded) {
+    // playllist expanded.
     if (!this.lastExpandedInnerHeight_ ||
         this.lastExpandedInnerHeight_ < AudioPlayer.EXPANDED_MODE_MIN_HEIGHT) {
       var expandedListHeight =
           Math.min(this.entries_.length, AudioPlayer.DEFAULT_EXPANDED_ITEMS) *
               AudioPlayer.TRACK_HEIGHT;
-      targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
-                          expandedListHeight +
-                          AudioPlayer.CONTROLS_HEIGHT;
+      if (this.player_.trackInfoExpanded) {
+        targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
+                            AudioPlayer.EXPANDED_ARTWORK_HEIGHT +
+                            expandedListHeight +
+                            AudioPlayer.CONTROLS_HEIGHT;
+      } else {
+        targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
+                            AudioPlayer.TRACK_HEIGHT +
+                            expandedListHeight +
+                            AudioPlayer.CONTROLS_HEIGHT;
+      }
       this.lastExpandedInnerHeight_ = targetInnerHeight;
     } else {
       targetInnerHeight = this.lastExpandedInnerHeight_;
     }
   } else {
-    // Not expanded.
-    targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
-                        AudioPlayer.TRACK_HEIGHT +
-                        AudioPlayer.CONTROLS_HEIGHT;
+    // playllist not expanded.
+    if (this.player_.trackInfoExpanded) {
+      targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
+                          AudioPlayer.EXPANDED_ARTWORK_HEIGHT +
+                          AudioPlayer.CONTROLS_HEIGHT;
+    } else {
+      targetInnerHeight = AudioPlayer.TOP_PADDING_HEIGHT +
+                          AudioPlayer.TRACK_HEIGHT +
+                          AudioPlayer.CONTROLS_HEIGHT;
+    }
   }
   window.resizeTo(window.outerWidth,
                   AudioPlayer.HEADER_HEIGHT + targetInnerHeight);
@@ -458,8 +585,7 @@ AudioPlayer.TrackInfo = function(entry) {
   this.title = this.getDefaultTitle();
   this.artist = this.getDefaultArtist();
 
-  // TODO(yoshiki): implement artwork.
-  this.artwork = null;
+  this.artworkUrl = "";
   this.active = false;
 };
 
@@ -493,9 +619,9 @@ AudioPlayer.TrackInfo.prototype.getDefaultArtist = function() {
 AudioPlayer.TrackInfo.prototype.setMetadata = function(
     metadata, error) {
   // TODO(yoshiki): Handle error in better way.
-  // TODO(yoshiki): implement artwork (metadata.thumbnail)
   this.title = metadata.mediaTitle || this.getDefaultTitle();
   this.artist = error || metadata.mediaArtist || this.getDefaultArtist();
+  this.artworkUrl = metadata.contentThumbnailUrl || "";
 };
 
 // Starts loading the audio player.

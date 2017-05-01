@@ -34,6 +34,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/browsing_data/core/browsing_data_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
@@ -188,11 +189,11 @@ class SdchResponseHandler {
     return value == dictionary_client_hash_;
   }
 
-  scoped_ptr<net::test_server::HttpResponse> HandleRequest(
+  std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request) {
     request_vector_.push_back(request);
 
-    scoped_ptr<net::test_server::BasicHttpResponse> response(
+    std::unique_ptr<net::test_server::BasicHttpResponse> response(
         new net::test_server::BasicHttpResponse);
     if (request.relative_url == kDataURLPath) {
       if (ShouldRespondWithSdchEncoding(request.headers)) {
@@ -408,8 +409,10 @@ class SdchBrowserTest : public InProcessBrowserTest,
     BrowsingDataRemover* remover =
         BrowsingDataRemoverFactory::GetForBrowserContext(browser()->profile());
     BrowsingDataRemoverCompletionObserver completion_observer(remover);
-    remover->Remove(BrowsingDataRemover::Period(BrowsingDataRemover::LAST_HOUR),
-                    remove_mask, BrowsingDataHelper::UNPROTECTED_WEB);
+    remover->RemoveAndReply(
+        browsing_data::CalculateBeginDeleteTime(browsing_data::LAST_HOUR),
+        browsing_data::CalculateEndDeleteTime(browsing_data::LAST_HOUR),
+        remove_mask, BrowsingDataHelper::UNPROTECTED_WEB, &completion_observer);
     completion_observer.BlockUntilCompletion();
   }
 
@@ -420,7 +423,7 @@ class SdchBrowserTest : public InProcessBrowserTest,
     content::BrowserThread::PostTaskAndReply(
         content::BrowserThread::IO, FROM_HERE,
         base::Bind(&SdchBrowserTest::NukeSdchDictionariesOnIOThread,
-                   url_request_context_getter_),
+                   base::RetainedRef(url_request_context_getter_)),
         run_loop.QuitClosure());
     run_loop.Run();
   }
@@ -435,11 +438,10 @@ class SdchBrowserTest : public InProcessBrowserTest,
       return false;
 
     second_profile_ = g_browser_process->profile_manager()->GetProfile(
-        second_profile_data_dir_.path());
+        second_profile_data_dir_.GetPath());
     if (!second_profile_) return false;
 
-    second_browser_ = new Browser(Browser::CreateParams(
-        second_profile_, browser()->host_desktop_type()));
+    second_browser_ = new Browser(Browser::CreateParams(second_profile_));
     if (!second_browser_) return false;
 
     chrome::AddSelectedTabWithURL(second_browser_,
@@ -450,11 +452,10 @@ class SdchBrowserTest : public InProcessBrowserTest,
     second_browser_->window()->Show();
 
     content::BrowserThread::PostTask(
-        content::BrowserThread::IO,
-        FROM_HERE,
+        content::BrowserThread::IO, FROM_HERE,
         base::Bind(&SdchBrowserTest::SubscribeToSdchNotifications,
                    base::Unretained(this),
-                   make_scoped_refptr(
+                   base::RetainedRef(
                        second_browser_->profile()->GetRequestContext())));
 
     return true;
@@ -467,11 +468,10 @@ class SdchBrowserTest : public InProcessBrowserTest,
       return false;
 
     content::BrowserThread::PostTask(
-        content::BrowserThread::IO,
-        FROM_HERE,
+        content::BrowserThread::IO, FROM_HERE,
         base::Bind(&SdchBrowserTest::SubscribeToSdchNotifications,
                    base::Unretained(this),
-                   make_scoped_refptr(
+                   base::RetainedRef(
                        incognito_browser_->profile()->GetRequestContext())));
 
     return true;
@@ -610,11 +610,10 @@ class SdchBrowserTest : public InProcessBrowserTest,
     url_request_context_getter_ = browser()->profile()->GetRequestContext();
 
     content::BrowserThread::PostTask(
-        content::BrowserThread::IO,
-        FROM_HERE,
+        content::BrowserThread::IO, FROM_HERE,
         base::Bind(&SdchBrowserTest::SubscribeToSdchNotifications,
                    base::Unretained(this),
-                   url_request_context_getter_));
+                   base::RetainedRef(url_request_context_getter_)));
   }
 
   void TearDownOnMainThread() override {
@@ -653,7 +652,7 @@ class SdchBrowserTest : public InProcessBrowserTest,
   SdchResponseHandler response_handler_;
   net::EmbeddedTestServer test_server_;
   scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
-  scoped_ptr<net::URLFetcher> fetcher_;
+  std::unique_ptr<net::URLFetcher> fetcher_;
   bool url_fetch_complete_;
   bool waiting_;
   base::ScopedTempDir second_profile_data_dir_;

@@ -13,7 +13,6 @@
 class InfoBarContainerDelegate : public infobars::InfoBarContainer::Delegate {
  public:
   static const int kDefaultBarTargetHeight;
-  static const int kDefaultBarTargetHeightMd;
   static const int kSeparatorLineHeight;
   static const int kDefaultArrowTargetHeight;
   static const int kMaximumArrowTargetHeight;

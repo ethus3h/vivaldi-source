@@ -5,8 +5,9 @@
 #ifndef UI_VIEWS_TEST_VIEWS_TEST_BASE_H_
 #define UI_VIEWS_TEST_VIEWS_TEST_BASE_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,6 +29,10 @@ class ViewsTestBase : public PlatformTest {
   ViewsTestBase();
   ~ViewsTestBase() override;
 
+  // Returns true if running aura-mus in a client configuration (not the window
+  // manager).
+  static bool IsMus();
+
   // testing::Test:
   void SetUp() override;
   void TearDown() override;
@@ -38,12 +43,17 @@ class ViewsTestBase : public PlatformTest {
   // cross-platform tests.
   Widget::InitParams CreateParams(Widget::InitParams::Type type);
 
+  bool HasCompositingManager() const;
+
+  // Simulate an OS-level destruction of the native window held by |widget|.
+  void SimulateNativeDestroy(Widget* widget);
+
  protected:
   TestViewsDelegate* views_delegate() const {
     return test_helper_->views_delegate();
   }
 
-  void set_views_delegate(scoped_ptr<TestViewsDelegate> views_delegate) {
+  void set_views_delegate(std::unique_ptr<TestViewsDelegate> views_delegate) {
     DCHECK(!setup_called_);
     views_delegate_for_setup_.swap(views_delegate);
   }
@@ -56,10 +66,11 @@ class ViewsTestBase : public PlatformTest {
 
  private:
   base::MessageLoopForUI message_loop_;
-  scoped_ptr<TestViewsDelegate> views_delegate_for_setup_;
-  scoped_ptr<ScopedViewsTestHelper> test_helper_;
+  std::unique_ptr<TestViewsDelegate> views_delegate_for_setup_;
+  std::unique_ptr<ScopedViewsTestHelper> test_helper_;
   bool setup_called_;
   bool teardown_called_;
+  bool has_compositing_manager_;
 
 #if defined(OS_WIN)
   ui::ScopedOleInitializer ole_initializer_;

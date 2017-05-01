@@ -39,13 +39,18 @@ void TopSites::RemoveObserver(TopSitesObserver* observer) {
 }
 
 void TopSites::NotifyTopSitesLoaded() {
-  FOR_EACH_OBSERVER(TopSitesObserver, observer_list_, TopSitesLoaded(this));
+  for (TopSitesObserver& observer : observer_list_)
+    observer.TopSitesLoaded(this);
 }
 
 void TopSites::NotifyTopSitesChanged(
     const TopSitesObserver::ChangeReason reason) {
-  FOR_EACH_OBSERVER(TopSitesObserver, observer_list_,
-                    TopSitesChanged(this, reason));
+  for (TopSitesObserver& observer : observer_list_)
+    observer.TopSitesChanged(this, reason);
+}
+
+bool TopSites::HasPageThumbnail(const GURL& url) {
+  return false;
 }
 
 }  // namespace history

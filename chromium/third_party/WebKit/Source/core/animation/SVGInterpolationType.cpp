@@ -11,30 +11,30 @@
 
 namespace blink {
 
-PassOwnPtr<InterpolationValue> SVGInterpolationType::maybeConvertNeutral(const UnderlyingValue&, ConversionCheckers&) const
-{
-    ASSERT_NOT_REACHED();
-    // This function must be overridden, unless maybeConvertSingle is overridden to no longer need it.
-    return nullptr;
+InterpolationValue SVGInterpolationType::maybeConvertSingle(
+    const PropertySpecificKeyframe& keyframe,
+    const InterpolationEnvironment& environment,
+    const InterpolationValue& underlying,
+    ConversionCheckers& conversionCheckers) const {
+  if (keyframe.isNeutral())
+    return maybeConvertNeutral(underlying, conversionCheckers);
+
+  SVGPropertyBase* svgValue = environment.svgBaseValue().cloneForAnimation(
+      toSVGPropertySpecificKeyframe(keyframe).value());
+  return maybeConvertSVGValue(*svgValue);
 }
 
-PassOwnPtr<InterpolationValue> SVGInterpolationType::maybeConvertSingle(const PropertySpecificKeyframe& keyframe, const InterpolationEnvironment& environment, const UnderlyingValue& underlyingValue, ConversionCheckers& conversionCheckers) const
-{
-    if (keyframe.isNeutral())
-        return maybeConvertNeutral(underlyingValue, conversionCheckers);
-
-    RefPtrWillBeRawPtr<SVGPropertyBase> svgValue = environment.svgBaseValue().cloneForAnimation(toSVGPropertySpecificKeyframe(keyframe).value());
-    return maybeConvertSVGValue(*svgValue);
+InterpolationValue SVGInterpolationType::maybeConvertUnderlyingValue(
+    const InterpolationEnvironment& environment) const {
+  return maybeConvertSVGValue(environment.svgBaseValue());
 }
 
-PassOwnPtr<InterpolationValue> SVGInterpolationType::maybeConvertUnderlyingValue(const InterpolationEnvironment& environment) const
-{
-    return maybeConvertSVGValue(environment.svgBaseValue());
+void SVGInterpolationType::apply(
+    const InterpolableValue& interpolableValue,
+    const NonInterpolableValue* nonInterpolableValue,
+    InterpolationEnvironment& environment) const {
+  environment.svgElement().setWebAnimatedAttribute(
+      attribute(), appliedSVGValue(interpolableValue, nonInterpolableValue));
 }
 
-void SVGInterpolationType::apply(const InterpolableValue& interpolableValue, const NonInterpolableValue* nonInterpolableValue, InterpolationEnvironment& environment) const
-{
-    environment.svgElement().setWebAnimatedAttribute(attribute(), appliedSVGValue(interpolableValue, nonInterpolableValue));
-}
-
-} // namespace blink
+}  // namespace blink

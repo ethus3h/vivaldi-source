@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync_file_system/sync_callbacks.h"
@@ -28,7 +30,7 @@ class SyncFileSystemBackend : public storage::FileSystemBackend {
   explicit SyncFileSystemBackend(Profile* profile);
   ~SyncFileSystemBackend() override;
 
-  static SyncFileSystemBackend* CreateForTesting();
+  static std::unique_ptr<SyncFileSystemBackend> CreateForTesting();
 
   // FileSystemBackend overrides.
   bool CanHandleType(storage::FileSystemType type) const override;
@@ -50,13 +52,13 @@ class SyncFileSystemBackend : public storage::FileSystemBackend {
   bool SupportsStreaming(const storage::FileSystemURL& url) const override;
   bool HasInplaceCopyImplementation(
       storage::FileSystemType type) const override;
-  scoped_ptr<storage::FileStreamReader> CreateFileStreamReader(
+  std::unique_ptr<storage::FileStreamReader> CreateFileStreamReader(
       const storage::FileSystemURL& url,
       int64_t offset,
       int64_t max_bytes_to_read,
       const base::Time& expected_modification_time,
       storage::FileSystemContext* context) const override;
-  scoped_ptr<storage::FileStreamWriter> CreateFileStreamWriter(
+  std::unique_ptr<storage::FileStreamWriter> CreateFileStreamWriter(
       const storage::FileSystemURL& url,
       int64_t offset,
       storage::FileSystemContext* context) const override;
@@ -72,7 +74,8 @@ class SyncFileSystemBackend : public storage::FileSystemBackend {
       const storage::FileSystemContext* context);
 
   LocalFileChangeTracker* change_tracker() { return change_tracker_.get(); }
-  void SetLocalFileChangeTracker(scoped_ptr<LocalFileChangeTracker> tracker);
+  void SetLocalFileChangeTracker(
+      std::unique_ptr<LocalFileChangeTracker> tracker);
 
   LocalFileSyncContext* sync_context() { return sync_context_.get(); }
   void set_sync_context(LocalFileSyncContext* sync_context);
@@ -97,11 +100,11 @@ class SyncFileSystemBackend : public storage::FileSystemBackend {
   // Not owned.
   storage::FileSystemContext* context_;
 
-  scoped_ptr<LocalFileChangeTracker> change_tracker_;
+  std::unique_ptr<LocalFileChangeTracker> change_tracker_;
   scoped_refptr<LocalFileSyncContext> sync_context_;
 
   // Should be accessed on the UI thread.
-  scoped_ptr<ProfileHolder> profile_holder_;
+  std::unique_ptr<ProfileHolder> profile_holder_;
 
   // A flag to skip the initialization sequence of SyncFileSystemService for
   // testing.

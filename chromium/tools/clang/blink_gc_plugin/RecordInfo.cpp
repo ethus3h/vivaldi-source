@@ -4,6 +4,7 @@
 
 #include "Config.h"
 #include "RecordInfo.h"
+#include "clang/Sema/Sema.h"
 
 using namespace clang;
 using std::string;
@@ -112,10 +113,10 @@ void RecordInfo::walkBases() {
   // have a "GC base name", so are to be included and considered.
   SmallVector<const CXXRecordDecl*, 8> queue;
 
-  const CXXRecordDecl *base_record = record();
+  const CXXRecordDecl* base_record = record();
   while (true) {
     for (const auto& it : base_record->bases()) {
-      const RecordType *type = it.getType()->getAs<RecordType>();
+      const RecordType* type = it.getType()->getAs<RecordType>();
       CXXRecordDecl* base;
       if (!type)
         base = GetDependentTemplatedDecl(*it.getType());
@@ -170,30 +171,22 @@ bool RecordInfo::IsGCAllocated() {
 }
 
 bool RecordInfo::IsEagerlyFinalized() {
-  if (is_eagerly_finalized_ == kNotComputed) {
-    is_eagerly_finalized_ = kFalse;
-    if (IsGCFinalized()) {
-      for (Decl* decl : record_->decls()) {
-        if (TypedefDecl* typedef_decl = dyn_cast<TypedefDecl>(decl)) {
-          if (typedef_decl->getNameAsString() == kIsEagerlyFinalizedName) {
-            is_eagerly_finalized_ = kTrue;
-            break;
-          }
-        }
-      }
+  if (is_eagerly_finalized_ != kNotComputed)
+    return is_eagerly_finalized_;
+
+  is_eagerly_finalized_ = kFalse;
+  if (!IsGCFinalized())
+    return is_eagerly_finalized_;
+
+  for (Decl* decl : record_->decls()) {
+    if (TypedefDecl* typedef_decl = dyn_cast<TypedefDecl>(decl)) {
+      if (typedef_decl->getNameAsString() != kIsEagerlyFinalizedName)
+        continue;
+      is_eagerly_finalized_ = kTrue;
+      break;
     }
   }
   return is_eagerly_finalized_;
-}
-
-bool RecordInfo::IsGCRefCounted() {
-  if (!IsGCDerived())
-    return false;
-  for (const auto& gc_base : gc_base_names_) {
-    if (Config::IsGCRefCountedBase(gc_base))
-      return true;
-  }
-  return false;
 }
 
 bool RecordInfo::HasDefinition() {
@@ -399,7 +392,7 @@ RecordInfo::Bases* RecordInfo::CollectBases() {
     TracingStatus status = info->InheritsTrace()
                                ? TracingStatus::Needed()
                                : TracingStatus::Unneeded();
-    bases->insert(std::make_pair(base, BasePoint(spec, info, status)));
+    bases->push_back(std::make_pair(base, BasePoint(spec, info, status)));
   }
   return bases;
 }
@@ -423,7 +416,13 @@ RecordInfo::Fields* RecordInfo::CollectFields() {
     // Ignore fields annotated with the GC_PLUGIN_IGNORE macro.
     if (Config::IsIgnoreAnnotated(field))
       continue;
-    if (Edge* edge = CreateEdge(field->getType().getTypePtrOrNull())) {
+    // Check if the unexpanded type should be recorded; needed
+    // to track iterator aliases only
+    const Type* unexpandedType = field->getType().getSplitUnqualifiedType().Ty;
+    Edge* edge = CreateEdgeFromOriginalType(unexpandedType);
+    if (!edge)
+      edge = CreateEdge(field->getType().getTypePtrOrNull());
+    if (edge) {
       fields_status = fields_status.LUB(edge->NeedsTracing(Edge::kRecursive));
       fields->insert(std::make_pair(field, FieldPoint(field, edge)));
     }
@@ -520,14 +519,6 @@ bool RecordInfo::NeedsFinalization() {
     if (!does_need_finalization_)
       return does_need_finalization_;
 
-    // Processing a class with a safely-ignorable destructor.
-    NamespaceDecl* ns =
-        dyn_cast<NamespaceDecl>(record_->getDeclContext());
-    if (ns && Config::HasIgnorableDestructor(ns->getName(), name_)) {
-      does_need_finalization_ = kFalse;
-      return does_need_finalization_;
-    }
-
     CXXDestructorDecl* dtor = record_->getDestructor();
     if (dtor && dtor->isUserProvided())
       return does_need_finalization_;
@@ -555,10 +546,7 @@ bool RecordInfo::NeedsFinalization() {
 // - it is allocated on the managed heap,
 // - it is derived from a class that needs tracing, or
 // - it contains fields that need tracing.
-// TODO: Defining NeedsTracing based on whether a class defines a trace method
-// (of the proper signature) over approximates too much. The use of transition
-// types causes some classes to have trace methods without them needing to be
-// traced.
+//
 TracingStatus RecordInfo::NeedsTracing(Edge::NeedsTracingOption option) {
   if (IsGCAllocated())
     return TracingStatus::Needed();
@@ -577,6 +565,46 @@ TracingStatus RecordInfo::NeedsTracing(Edge::NeedsTracingOption option) {
   return fields_need_tracing_;
 }
 
+static bool isInStdNamespace(clang::Sema& sema, NamespaceDecl* ns)
+{
+  while (ns) {
+    if (sema.getStdNamespace()->InEnclosingNamespaceSetOf(ns))
+      return true;
+    ns = dyn_cast<NamespaceDecl>(ns->getParent());
+  }
+  return false;
+}
+
+Edge* RecordInfo::CreateEdgeFromOriginalType(const Type* type) {
+  if (!type)
+    return nullptr;
+
+  // look for "typedef ... iterator;"
+  if (!isa<ElaboratedType>(type))
+    return nullptr;
+  const ElaboratedType* elaboratedType = cast<ElaboratedType>(type);
+  if (!isa<TypedefType>(elaboratedType->getNamedType()))
+    return nullptr;
+  const TypedefType* typedefType =
+      cast<TypedefType>(elaboratedType->getNamedType());
+  std::string typeName = typedefType->getDecl()->getNameAsString();
+  if (!Config::IsIterator(typeName))
+    return nullptr;
+  RecordInfo* info =
+      cache_->Lookup(elaboratedType->getQualifier()->getAsType());
+
+  bool on_heap = false;
+  bool is_unsafe = false;
+  // Silently handle unknown types; the on-heap collection types will
+  // have to be in scope for the declaration to compile, though.
+  if (info) {
+    is_unsafe = Config::IsGCCollectionWithUnsafeIterator(info->name());
+    // Don't mark iterator as being on the heap if it is not supported.
+    on_heap = !is_unsafe && Config::IsGCCollection(info->name());
+  }
+  return new Iterator(info, on_heap, is_unsafe);
+}
+
 Edge* RecordInfo::CreateEdge(const Type* type) {
   if (!type) {
     return 0;
@@ -584,7 +612,7 @@ Edge* RecordInfo::CreateEdge(const Type* type) {
 
   if (type->isPointerType() || type->isReferenceType()) {
     if (Edge* ptr = CreateEdge(type->getPointeeType().getTypePtrOrNull()))
-      return new RawPtr(ptr, false, type->isReferenceType());
+      return new RawPtr(ptr, type->isReferenceType());
     return 0;
   }
 
@@ -597,12 +625,6 @@ Edge* RecordInfo::CreateEdge(const Type* type) {
 
   TemplateArgs args;
 
-  if (Config::IsRawPtr(info->name()) && info->GetTemplateArgs(1, &args)) {
-    if (Edge* ptr = CreateEdge(args[0]))
-      return new RawPtr(ptr, true, false);
-    return 0;
-  }
-
   if (Config::IsRefPtr(info->name()) && info->GetTemplateArgs(1, &args)) {
     if (Edge* ptr = CreateEdge(args[0]))
       return new RefPtr(ptr);
@@ -612,6 +634,18 @@ Edge* RecordInfo::CreateEdge(const Type* type) {
   if (Config::IsOwnPtr(info->name()) && info->GetTemplateArgs(1, &args)) {
     if (Edge* ptr = CreateEdge(args[0]))
       return new OwnPtr(ptr);
+    return 0;
+  }
+
+  if (Config::IsUniquePtr(info->name()) && info->GetTemplateArgs(1, &args)) {
+    // Check that this is std::unique_ptr
+    NamespaceDecl* ns =
+        dyn_cast<NamespaceDecl>(info->record()->getDeclContext());
+    clang::Sema& sema = cache_->instance().getSema();
+    if (!isInStdNamespace(sema, ns))
+      return 0;
+    if (Edge* ptr = CreateEdge(args[0]))
+      return new UniquePtr(ptr);
     return 0;
   }
 
@@ -627,7 +661,8 @@ Edge* RecordInfo::CreateEdge(const Type* type) {
     return 0;
   }
 
-  if (Config::IsPersistent(info->name())) {
+  bool is_persistent = Config::IsPersistent(info->name());
+  if (is_persistent || Config::IsCrossThreadPersistent(info->name())) {
     // Persistent might refer to v8::Persistent, so check the name space.
     // TODO: Consider using a more canonical identification than names.
     NamespaceDecl* ns =
@@ -636,8 +671,12 @@ Edge* RecordInfo::CreateEdge(const Type* type) {
       return 0;
     if (!info->GetTemplateArgs(1, &args))
       return 0;
-    if (Edge* ptr = CreateEdge(args[0]))
-      return new Persistent(ptr);
+    if (Edge* ptr = CreateEdge(args[0])) {
+      if (is_persistent)
+        return new Persistent(ptr);
+      else
+        return new CrossThreadPersistent(ptr);
+    }
     return 0;
   }
 

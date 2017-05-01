@@ -43,6 +43,8 @@ class URLRequestFailedJob : public URLRequestJob {
   int ReadRawData(IOBuffer* buf, int buf_size) override;
   int GetResponseCode() const override;
   void GetResponseInfo(HttpResponseInfo* info) override;
+  void PopulateNetErrorDetails(NetErrorDetails* details) const override;
+  int64_t GetTotalReceivedBytes() const override;
 
   // Adds the testing URLs to the URLRequestFilter.
   static void AddUrlHandler();
@@ -78,6 +80,7 @@ class URLRequestFailedJob : public URLRequestJob {
   HttpResponseInfo response_info_;
   const FailurePhase phase_;
   const int net_error_;
+  int64_t total_received_bytes_;
 
   base::WeakPtrFactory<URLRequestFailedJob> weak_factory_;
 

@@ -15,7 +15,8 @@ class TabModelListTest : public ChromeRenderViewHostTestHarness {};
 
 class TestTabModel : public TabModel {
  public:
-  explicit TestTabModel(Profile* profile) : TabModel(profile), tab_count_(0) {}
+  explicit TestTabModel(Profile* profile)
+      : TabModel(profile, false), tab_count_(0) {}
 
   int GetTabCount() const override { return tab_count_; }
   int GetActiveIndex() const override { return 0; }
@@ -42,7 +43,7 @@ TEST_F(TabModelListTest, TestGetTabModelForWebContents) {
   TestTabModel tab_model(profile());
   TabModelList::AddTabModel(&tab_model);
 
-  scoped_ptr<content::WebContents> contents(CreateTestWebContents());
+  std::unique_ptr<content::WebContents> contents(CreateTestWebContents());
 
   // Should not crash when there are no tabs.
   EXPECT_EQ(NULL, TabModelList::GetTabModelForWebContents(contents.get()));

@@ -4,33 +4,50 @@
 
 #include "net/tools/quic/quic_simple_server_session.h"
 
-#include "base/logging.h"
-#include "base/stl_util.h"
-#include "net/quic/proto/cached_network_parameters.pb.h"
-#include "net/quic/quic_connection.h"
-#include "net/quic/quic_flags.h"
-#include "net/quic/quic_spdy_session.h"
-#include "net/quic/reliable_quic_stream.h"
+#include <utility>
+
+#include "net/quic/core/proto/cached_network_parameters.pb.h"
+#include "net/quic/core/quic_connection.h"
+#include "net/quic/core/quic_flags.h"
+#include "net/quic/core/quic_spdy_session.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_ptr_util.h"
 #include "net/tools/quic/quic_simple_server_stream.h"
 #include "url/gurl.h"
 
+using std::string;
+
 namespace net {
-namespace tools {
 
 QuicSimpleServerSession::QuicSimpleServerSession(
     const QuicConfig& config,
     QuicConnection* connection,
-    QuicServerSessionVisitor* visitor,
-    const QuicCryptoServerConfig* crypto_config)
-    : QuicServerSessionBase(config, connection, visitor, crypto_config),
-      highest_promised_stream_id_(0) {}
+    QuicSession::Visitor* visitor,
+    QuicCryptoServerStream::Helper* helper,
+    const QuicCryptoServerConfig* crypto_config,
+    QuicCompressedCertsCache* compressed_certs_cache,
+    QuicHttpResponseCache* response_cache)
+    : QuicServerSessionBase(config,
+                            connection,
+                            visitor,
+                            helper,
+                            crypto_config,
+                            compressed_certs_cache),
+      highest_promised_stream_id_(0),
+      response_cache_(response_cache) {}
 
-QuicSimpleServerSession::~QuicSimpleServerSession() {}
+QuicSimpleServerSession::~QuicSimpleServerSession() {
+  delete connection();
+}
 
 QuicCryptoServerStreamBase*
 QuicSimpleServerSession::CreateQuicCryptoServerStream(
-    const QuicCryptoServerConfig* crypto_config) {
-  return new QuicCryptoServerStream(crypto_config, this);
+    const QuicCryptoServerConfig* crypto_config,
+    QuicCompressedCertsCache* compressed_certs_cache) {
+  return new QuicCryptoServerStream(
+      crypto_config, compressed_certs_cache,
+      FLAGS_quic_reloadable_flag_enable_quic_stateless_reject_support, this,
+      stream_helper());
 }
 
 void QuicSimpleServerSession::StreamDraining(QuicStreamId id) {
@@ -42,9 +59,10 @@ void QuicSimpleServerSession::StreamDraining(QuicStreamId id) {
 
 void QuicSimpleServerSession::OnStreamFrame(const QuicStreamFrame& frame) {
   if (!IsIncomingStream(frame.stream_id)) {
-    LOG(WARNING) << "Client shouldn't send data on server push stream";
-    connection()->SendConnectionCloseWithDetails(
-        QUIC_INVALID_STREAM_ID, "Client sent data on server push stream");
+    QUIC_LOG(WARNING) << "Client shouldn't send data on server push stream";
+    connection()->CloseConnection(
+        QUIC_INVALID_STREAM_ID, "Client sent data on server push stream",
+        ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
     return;
   }
   QuicSpdySession::OnStreamFrame(frame);
@@ -52,16 +70,21 @@ void QuicSimpleServerSession::OnStreamFrame(const QuicStreamFrame& frame) {
 
 void QuicSimpleServerSession::PromisePushResources(
     const string& request_url,
-    const list<QuicInMemoryCache::ServerPushInfo>& resources,
+    const std::list<QuicHttpResponseCache::ServerPushInfo>& resources,
     QuicStreamId original_stream_id,
     const SpdyHeaderBlock& original_request_headers) {
-  for (QuicInMemoryCache::ServerPushInfo resource : resources) {
+  if (!server_push_enabled()) {
+    return;
+  }
+
+  for (QuicHttpResponseCache::ServerPushInfo resource : resources) {
     SpdyHeaderBlock headers = SynthesizePushRequestHeaders(
         request_url, resource, original_request_headers);
     highest_promised_stream_id_ += 2;
-    SendPushPromise(original_stream_id, highest_promised_stream_id_, headers);
+    SendPushPromise(original_stream_id, highest_promised_stream_id_,
+                    headers.Clone());
     promised_streams_.push_back(PromisedStreamInfo(
-        headers, highest_promised_stream_id_, resource.priority));
+        std::move(headers), highest_promised_stream_id_, resource.priority));
   }
 
   // Procese promised push request as many as possible.
@@ -74,7 +97,10 @@ QuicSpdyStream* QuicSimpleServerSession::CreateIncomingDynamicStream(
     return nullptr;
   }
 
-  return new QuicSimpleServerStream(id, this);
+  QuicSpdyStream* stream =
+      new QuicSimpleServerStream(id, this, response_cache_);
+  ActivateStream(QuicWrapUnique(stream));
+  return stream;
 }
 
 QuicSimpleServerStream* QuicSimpleServerSession::CreateOutgoingDynamicStream(
@@ -83,10 +109,10 @@ QuicSimpleServerStream* QuicSimpleServerSession::CreateOutgoingDynamicStream(
     return nullptr;
   }
 
-  QuicSimpleServerStream* stream =
-      new QuicSimpleServerStream(GetNextOutgoingStreamId(), this);
+  QuicSimpleServerStream* stream = new QuicSimpleServerStream(
+      GetNextOutgoingStreamId(), this, response_cache_);
   stream->SetPriority(priority);
-  ActivateStream(stream);
+  ActivateStream(QuicWrapUnique(stream));
   return stream;
 }
 
@@ -126,22 +152,22 @@ void QuicSimpleServerSession::HandleRstOnValidNonexistentStream(
 
 SpdyHeaderBlock QuicSimpleServerSession::SynthesizePushRequestHeaders(
     string request_url,
-    QuicInMemoryCache::ServerPushInfo resource,
+    QuicHttpResponseCache::ServerPushInfo resource,
     const SpdyHeaderBlock& original_request_headers) {
   GURL push_request_url = resource.request_url;
   string path = push_request_url.path();
 
-  SpdyHeaderBlock spdy_headers = original_request_headers;
+  SpdyHeaderBlock spdy_headers = original_request_headers.Clone();
   // :authority could be different from original request.
-  spdy_headers.ReplaceOrAppendHeader(":authority", push_request_url.host());
-  spdy_headers.ReplaceOrAppendHeader(":path", path);
+  spdy_headers[":authority"] = push_request_url.host();
+  spdy_headers[":path"] = path;
   // Push request always use GET.
-  spdy_headers.ReplaceOrAppendHeader(":method", "GET");
-  spdy_headers.ReplaceOrAppendHeader("referer", request_url);
-  spdy_headers.ReplaceOrAppendHeader(":scheme", push_request_url.scheme());
+  spdy_headers[":method"] = "GET";
+  spdy_headers["referer"] = request_url;
+  spdy_headers[":scheme"] = push_request_url.scheme();
   // It is not possible to push a response to a request that includes a request
   // body.
-  spdy_headers.ReplaceOrAppendHeader("content-length", "0");
+  spdy_headers["content-length"] = "0";
   // Remove "host" field as push request is a directly generated HTTP2 request
   // which should use ":authority" instead of "host".
   spdy_headers.erase("host");
@@ -150,16 +176,16 @@ SpdyHeaderBlock QuicSimpleServerSession::SynthesizePushRequestHeaders(
 
 void QuicSimpleServerSession::SendPushPromise(QuicStreamId original_stream_id,
                                               QuicStreamId promised_stream_id,
-                                              const SpdyHeaderBlock& headers) {
-  DVLOG(1) << "stream " << original_stream_id
-           << " send PUSH_PROMISE for promised stream " << promised_stream_id;
-  headers_stream()->WritePushPromise(original_stream_id, promised_stream_id,
-                                     headers, nullptr);
+                                              SpdyHeaderBlock headers) {
+  QUIC_DLOG(INFO) << "stream " << original_stream_id
+                  << " send PUSH_PROMISE for promised stream "
+                  << promised_stream_id;
+  WritePushPromise(original_stream_id, promised_stream_id, std::move(headers));
 }
 
 void QuicSimpleServerSession::HandlePromisedPushRequests() {
   while (!promised_streams_.empty() && ShouldCreateOutgoingDynamicStream()) {
-    const PromisedStreamInfo& promised_info = promised_streams_.front();
+    PromisedStreamInfo& promised_info = promised_streams_.front();
     DCHECK_EQ(next_outgoing_stream_id(), promised_info.stream_id);
 
     if (promised_info.is_cancelled) {
@@ -174,13 +200,13 @@ void QuicSimpleServerSession::HandlePromisedPushRequests() {
             CreateOutgoingDynamicStream(promised_info.priority));
     DCHECK(promised_stream != nullptr);
     DCHECK_EQ(promised_info.stream_id, promised_stream->id());
-    DVLOG(1) << "created server push stream " << promised_stream->id();
+    QUIC_DLOG(INFO) << "created server push stream " << promised_stream->id();
 
-    promised_stream->PushResponse(promised_info.request_headers);
+    SpdyHeaderBlock request_headers(std::move(promised_info.request_headers));
 
     promised_streams_.pop_front();
+    promised_stream->PushResponse(std::move(request_headers));
   }
 }
 
-}  // namespace tools
 }  // namespace net

@@ -15,16 +15,18 @@
 #include "components/infobars/core/infobar_delegate.h"
 #include "jni/InfoBar_jni.h"
 
+using base::android::JavaParamRef;
 
 // InfoBarAndroid -------------------------------------------------------------
 
-InfoBarAndroid::InfoBarAndroid(scoped_ptr<infobars::InfoBarDelegate> delegate)
+InfoBarAndroid::InfoBarAndroid(
+    std::unique_ptr<infobars::InfoBarDelegate> delegate)
     : infobars::InfoBar(std::move(delegate)) {}
 
 InfoBarAndroid::~InfoBarAndroid() {
   if (!java_info_bar_.is_null()) {
     JNIEnv* env = base::android::AttachCurrentThread();
-    Java_InfoBar_onNativeDestroyed(env, java_info_bar_.obj());
+    Java_InfoBar_onNativeDestroyed(env, java_info_bar_);
   }
 }
 
@@ -41,7 +43,7 @@ void InfoBarAndroid::SetJavaInfoBar(
   DCHECK(java_info_bar_.is_null());
   java_info_bar_.Reset(java_info_bar);
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_InfoBar_setNativeInfoBar(env, java_info_bar.obj(),
+  Java_InfoBar_setNativeInfoBar(env, java_info_bar,
                                 reinterpret_cast<intptr_t>(this));
 }
 
@@ -70,7 +72,7 @@ void InfoBarAndroid::OnCloseButtonClicked(JNIEnv* env,
 void InfoBarAndroid::CloseJavaInfoBar() {
   if (!java_info_bar_.is_null()) {
     JNIEnv* env = base::android::AttachCurrentThread();
-    Java_InfoBar_closeInfoBar(env, java_info_bar_.obj());
+    Java_InfoBar_closeInfoBar(env, java_info_bar_);
   }
 }
 

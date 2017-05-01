@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/location.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google_apis/gcm/base/mcs_util.h"
@@ -229,8 +229,6 @@ void ConnectionHandlerImpl::WaitForData(ProcessingState state) {
         max_bytes_needed = bytes_left;
       }
       break;
-    default:
-      NOTREACHED();
   }
   DCHECK_GE(max_bytes_needed, min_bytes_needed);
 
@@ -285,8 +283,6 @@ void ConnectionHandlerImpl::WaitForData(ProcessingState state) {
     case MCS_PROTO_BYTES:
       OnGotMessageBytes();
       break;
-    default:
-      NOTREACHED();
   }
 }
 
@@ -312,7 +308,7 @@ void ConnectionHandlerImpl::OnGotVersion() {
 void ConnectionHandlerImpl::OnGotMessageTag() {
   if (input_stream_->GetState() != SocketInputStream::READY) {
     LOG(ERROR) << "Failed to receive protobuf tag.";
-    read_callback_.Run(scoped_ptr<google::protobuf::MessageLite>());
+    read_callback_.Run(std::unique_ptr<google::protobuf::MessageLite>());
     return;
   }
 
@@ -336,7 +332,7 @@ void ConnectionHandlerImpl::OnGotMessageTag() {
 void ConnectionHandlerImpl::OnGotMessageSize() {
   if (input_stream_->GetState() != SocketInputStream::READY) {
     LOG(ERROR) << "Failed to receive message size.";
-    read_callback_.Run(scoped_ptr<google::protobuf::MessageLite>());
+    read_callback_.Run(std::unique_ptr<google::protobuf::MessageLite>());
     return;
   }
 
@@ -381,7 +377,7 @@ void ConnectionHandlerImpl::OnGotMessageSize() {
 
 void ConnectionHandlerImpl::OnGotMessageBytes() {
   read_timeout_timer_.Stop();
-  scoped_ptr<google::protobuf::MessageLite> protobuf(
+  std::unique_ptr<google::protobuf::MessageLite> protobuf(
       BuildProtobufFromTag(message_tag_));
   // Messages with no content are valid; just use the default protobuf for
   // that tag.

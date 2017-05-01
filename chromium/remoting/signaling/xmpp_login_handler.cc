@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "remoting/signaling/xmpp_stream_parser.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 // Undefine SendMessage and ERROR defined in Windows headers.
 #ifdef SendMessage
@@ -83,7 +83,7 @@ void XmppLoginHandler::OnDataReceived(const std::string& data) {
   stream_parser_->AppendData(data);
 }
 
-void XmppLoginHandler::OnStanza(scoped_ptr<buzz::XmlElement> stanza) {
+void XmppLoginHandler::OnStanza(std::unique_ptr<buzz::XmlElement> stanza) {
   switch (state_) {
     case State::WAIT_STREAM_HEADER: {
       if (stanza->Name() == kJabberFeaturesName &&

@@ -19,8 +19,6 @@
 
 namespace content {
 
-class WebContents;
-
 // A utility class for formatting platform-specific accessibility information,
 // for use in testing, debugging, and developer tools.
 // This is extended by a subclass for each platform where accessibility is
@@ -73,7 +71,7 @@ class CONTENT_EXPORT AccessibilityTreeFormatter {
   //     "children": [ ]
   //   } ]
   // }
-  scoped_ptr<base::DictionaryValue> BuildAccessibilityTree(
+  std::unique_ptr<base::DictionaryValue> BuildAccessibilityTree(
       BrowserAccessibility* root);
 
   // Dumps a BrowserAccessibility tree into a string.

@@ -10,13 +10,15 @@ import android.os.Build;
 import android.os.Bundle;
 import android.preference.Preference;
 import android.preference.Preference.OnPreferenceChangeListener;
+import android.preference.Preference.OnPreferenceClickListener;
 import android.preference.PreferenceFragment;
 
 import org.chromium.base.Log;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeApplication;
+import org.chromium.chrome.browser.physicalweb.ListUrlsActivity;
 import org.chromium.chrome.browser.physicalweb.PhysicalWeb;
 import org.chromium.chrome.browser.physicalweb.PhysicalWebUma;
+import org.chromium.chrome.browser.preferences.ButtonPreference;
 import org.chromium.chrome.browser.preferences.ChromeSwitchPreference;
 
 /**
@@ -25,6 +27,7 @@ import org.chromium.chrome.browser.preferences.ChromeSwitchPreference;
 public class PhysicalWebPreferenceFragment extends PreferenceFragment {
     private static final String TAG = "PhysicalWeb";
     private static final String PREF_PHYSICAL_WEB_SWITCH = "physical_web_switch";
+    private static final String PREF_PHYSICAL_WEB_LAUNCH = "physical_web_launch";
     private static final int REQUEST_ID = 0;
 
     @Override
@@ -33,6 +36,7 @@ public class PhysicalWebPreferenceFragment extends PreferenceFragment {
         addPreferencesFromResource(R.xml.physical_web_preferences);
         getActivity().setTitle(R.string.physical_web_pref_title);
         initPhysicalWebSwitch();
+        initLaunchButton();
     }
 
     private void ensureLocationPermission() {
@@ -56,12 +60,11 @@ public class PhysicalWebPreferenceFragment extends PreferenceFragment {
             case REQUEST_ID:
                 if (grantResults.length > 0
                         && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    PhysicalWebUma.onPrefsLocationGranted(getActivity());
+                    PhysicalWebUma.onPrefsLocationGranted();
                     Log.d(TAG, "Location permission granted");
-                    PhysicalWeb.startPhysicalWeb(
-                            (ChromeApplication) getActivity().getApplicationContext());
+                    PhysicalWeb.startPhysicalWeb();
                 } else {
-                    PhysicalWebUma.onPrefsLocationDenied(getActivity());
+                    PhysicalWebUma.onPrefsLocationDenied();
                     Log.d(TAG, "Location permission denied");
                 }
                 break;
@@ -73,21 +76,34 @@ public class PhysicalWebPreferenceFragment extends PreferenceFragment {
         ChromeSwitchPreference physicalWebSwitch =
                 (ChromeSwitchPreference) findPreference(PREF_PHYSICAL_WEB_SWITCH);
 
-        boolean isPhysicalWebEnabled =
-                PrivacyPreferencesManager.getInstance(getActivity()).isPhysicalWebEnabled();
-        physicalWebSwitch.setChecked(isPhysicalWebEnabled);
+        physicalWebSwitch.setChecked(
+                PrivacyPreferencesManager.getInstance().isPhysicalWebEnabled());
 
         physicalWebSwitch.setOnPreferenceChangeListener(new OnPreferenceChangeListener() {
             @Override
             public boolean onPreferenceChange(Preference preference, Object newValue) {
                 boolean enabled = (boolean) newValue;
                 if (enabled) {
-                    PhysicalWebUma.onPrefsFeatureEnabled(getActivity());
+                    PhysicalWebUma.onPrefsFeatureEnabled();
                     ensureLocationPermission();
                 } else {
-                    PhysicalWebUma.onPrefsFeatureDisabled(getActivity());
+                    PhysicalWebUma.onPrefsFeatureDisabled();
                 }
-                PrivacyPreferencesManager.getInstance(getActivity()).setPhysicalWebEnabled(enabled);
+                PrivacyPreferencesManager.getInstance().setPhysicalWebEnabled(enabled);
+                return true;
+            }
+        });
+    }
+
+    private void initLaunchButton() {
+        ButtonPreference physicalWebLaunch =
+                (ButtonPreference) findPreference(PREF_PHYSICAL_WEB_LAUNCH);
+
+        physicalWebLaunch.setOnPreferenceClickListener(new OnPreferenceClickListener() {
+            @Override
+            public boolean onPreferenceClick(Preference preference) {
+                PhysicalWebUma.onActivityReferral(ListUrlsActivity.PREFERENCE_REFERER);
+                PhysicalWeb.showUrlList();
                 return true;
             }
         });

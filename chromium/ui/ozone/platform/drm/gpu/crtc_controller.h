@@ -13,7 +13,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "ui/gfx/swap_result.h"
-#include "ui/ozone/ozone_export.h"
 #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
 #include "ui/ozone/platform/drm/gpu/hardware_display_plane_manager.h"
 #include "ui/ozone/platform/drm/gpu/overlay_plane.h"
@@ -28,8 +27,7 @@ class PageFlipRequest;
 // One CRTC can be paired up with one or more connectors. The simplest
 // configuration represents one CRTC driving one monitor, while pairing up a
 // CRTC with multiple connectors results in hardware mirroring.
-class OZONE_EXPORT CrtcController
-    : public base::SupportsWeakPtr<CrtcController> {
+class CrtcController : public base::SupportsWeakPtr<CrtcController> {
  public:
   CrtcController(const scoped_refptr<DrmDevice>& drm,
                  uint32_t crtc,
@@ -59,6 +57,16 @@ class OZONE_EXPORT CrtcController
   // Returns true if hardware plane with z_order equal to |z_order| can support
   // |fourcc_format| format.
   bool IsFormatSupported(uint32_t fourcc_format, uint32_t z_order) const;
+
+  // Returns a vector of format modifiers for the given fourcc format
+  // on this CRTCs primary plane. A format modifier describes the
+  // actual layout of the buffer, such as whether it's linear, tiled
+  // one way or another or maybe compressed. Except for generic
+  // modifiers such as DRM_FORMAT_MOD_NONE (linear), the modifier
+  // values are 64 bit values that we don't understand at this
+  // level. We pass the modifers to gbm_bo_create_with_modifiers() and
+  // gbm will pick a modifier as it allocates the bo.
+  std::vector<uint64_t> GetFormatModifiers(uint32_t fourcc_format);
 
   // Called if the page flip event wasn't scheduled (ie: page flip fails). This
   // will then signal the request such that the caller doesn't wait for the

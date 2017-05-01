@@ -4,14 +4,17 @@
 
 #include "base/bind.h"
 #include "base/guid.h"
+#include "base/location.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/card_unmask_prompt_view_tester.h"
 #include "chrome/browser/ui/autofill/create_card_unmask_prompt_view.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/card_unmask_delegate.h"
@@ -24,6 +27,10 @@
 namespace autofill {
 
 namespace {
+
+// Forms of the dialog that can be invoked.
+constexpr const char kExpiryExpired[] = "expired";
+constexpr const char kExpiryValid[] = "valid";
 
 class TestCardUnmaskDelegate : public CardUnmaskDelegate {
  public:
@@ -80,17 +87,29 @@ class TestCardUnmaskPromptController : public CardUnmaskPromptControllerImpl {
   DISALLOW_COPY_AND_ASSIGN(TestCardUnmaskPromptController);
 };
 
-class CardUnmaskPromptViewBrowserTest : public InProcessBrowserTest {
+class CardUnmaskPromptViewBrowserTest : public DialogBrowserTest {
  public:
-  CardUnmaskPromptViewBrowserTest() : InProcessBrowserTest() {}
+  CardUnmaskPromptViewBrowserTest() {}
 
   ~CardUnmaskPromptViewBrowserTest() override {}
 
+  // DialogBrowserTest:
   void SetUpOnMainThread() override {
     runner_ = new content::MessageLoopRunner;
     contents_ = browser()->tab_strip_model()->GetActiveWebContents();
     controller_.reset(new TestCardUnmaskPromptController(contents_, runner_));
     delegate_.reset(new TestCardUnmaskDelegate());
+  }
+
+  void ShowDialog(const std::string& name) override {
+    CardUnmaskPromptView* dialog =
+        CreateCardUnmaskPromptView(controller(), contents());
+    EXPECT_TRUE(name == kExpiryExpired || name == kExpiryValid);
+    CreditCard card = (name == kExpiryExpired)
+                          ? test::GetMaskedServerCard()
+                          : test::GetMaskedServerCardAmex();
+    controller()->ShowPrompt(dialog, card, AutofillClient::UNMASK_FOR_AUTOFILL,
+                             delegate()->GetWeakPtr());
   }
 
   void FreeDelegate() { delegate_.reset(); }
@@ -105,16 +124,22 @@ class CardUnmaskPromptViewBrowserTest : public InProcessBrowserTest {
 
  private:
   content::WebContents* contents_;
-  scoped_ptr<TestCardUnmaskPromptController> controller_;
-  scoped_ptr<TestCardUnmaskDelegate> delegate_;
+  std::unique_ptr<TestCardUnmaskPromptController> controller_;
+  std::unique_ptr<TestCardUnmaskDelegate> delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(CardUnmaskPromptViewBrowserTest);
 };
 
+IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest, InvokeDialog_expired) {
+  RunDialog();
+}
+
+IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest, InvokeDialog_valid) {
+  RunDialog();
+}
+
 IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest, DisplayUI) {
-  controller()->ShowPrompt(CreateCardUnmaskPromptView(controller(), contents()),
-                           test::GetMaskedServerCard(),
-                           delegate()->GetWeakPtr());
+  ShowDialog(kExpiryExpired);
 }
 
 // TODO(bondd): bring up on Mac.
@@ -123,9 +148,7 @@ IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest, DisplayUI) {
 // message is showing.
 IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest,
                        EarlyCloseAfterSuccess) {
-  controller()->ShowPrompt(CreateCardUnmaskPromptView(controller(), contents()),
-                           test::GetMaskedServerCard(),
-                           delegate()->GetWeakPtr());
+  ShowDialog(kExpiryExpired);
   controller()->OnUnmaskResponse(base::ASCIIToUTF16("123"),
                                  base::ASCIIToUTF16("10"),
                                  base::ASCIIToUTF16("19"), false);
@@ -135,7 +158,7 @@ IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest,
   // Simulate the user clicking [x] before the "Success!" message disappears.
   CardUnmaskPromptViewTester::For(controller()->view())->Close();
   // Wait a little while; there should be no crash.
-  base::MessageLoop::current()->task_runner()->PostDelayedTask(
+  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::Bind(&content::MessageLoopRunner::Quit,
                             base::Unretained(runner_.get())),
       2 * controller()->GetSuccessMessageDuration());
@@ -147,9 +170,7 @@ IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest,
 // https://crbug.com/484376
 IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest,
                        CloseTabWhileDialogShowing) {
-  controller()->ShowPrompt(CreateCardUnmaskPromptView(controller(), contents()),
-                           test::GetMaskedServerCard(),
-                           delegate()->GetWeakPtr());
+  ShowDialog(kExpiryExpired);
   // Simulate AutofillManager (the delegate in production code) being destroyed
   // before CardUnmaskPromptViewBridge::OnConstrainedWindowClosed() is called.
   FreeDelegate();

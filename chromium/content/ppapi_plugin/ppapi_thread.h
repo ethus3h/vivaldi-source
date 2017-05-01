@@ -8,14 +8,16 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/metrics/field_trial.h"
 #include "base/process/process.h"
 #include "base/scoped_native_library.h"
 #include "build/build_config.h"
+#include "components/variations/child_process_field_trial_syncer.h"
 #include "content/child/child_thread_impl.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "ppapi/c/pp_module.h"
@@ -34,6 +36,10 @@ class CommandLine;
 class FilePath;
 }
 
+namespace discardable_memory {
+class ClientDiscardableSharedMemoryManager;
+}
+
 namespace IPC {
 struct ChannelHandle;
 }
@@ -50,7 +56,8 @@ class PpapiBlinkPlatformImpl;
 
 class PpapiThread : public ChildThreadImpl,
                     public ppapi::proxy::PluginDispatcher::PluginDelegate,
-                    public ppapi::proxy::PluginProxyDelegate {
+                    public ppapi::proxy::PluginProxyDelegate,
+                    public base::FieldTrialList::Observer {
  public:
   PpapiThread(const base::CommandLine& command_line, bool is_broker);
   ~PpapiThread() override;
@@ -110,12 +117,18 @@ class PpapiThread : public ChildThreadImpl,
   void OnCrash();
   void OnHang();
 
-  // Sets up the channel to the given renderer. On success, returns true and
-  // fills the given ChannelHandle with the information from the new channel.
-  bool SetupRendererChannel(base::ProcessId renderer_pid,
-                            int renderer_child_id,
-                            bool incognito,
-                            IPC::ChannelHandle* handle);
+  // base::FieldTrialList::Observer:
+  void OnFieldTrialGroupFinalized(const std::string& trial_name,
+                                  const std::string& group_name) override;
+
+  // Sets up the channel to the given renderer. If |renderer_pid| is
+  // base::kNullProcessId, the channel is set up to the browser. On success,
+  // returns true and fills the given ChannelHandle with the information from
+  // the new channel.
+  bool SetupChannel(base::ProcessId renderer_pid,
+                    int renderer_child_id,
+                    bool incognito,
+                    IPC::ChannelHandle* handle);
 
   // Sets up the name of the plugin for logging using the given path.
   void SavePluginName(const base::FilePath& path);
@@ -163,12 +176,17 @@ class PpapiThread : public ChildThreadImpl,
   uint32_t next_plugin_dispatcher_id_;
 
   // The BlinkPlatformImpl implementation.
-  scoped_ptr<PpapiBlinkPlatformImpl> blink_platform_impl_;
+  std::unique_ptr<PpapiBlinkPlatformImpl> blink_platform_impl_;
 
 #if defined(OS_WIN)
   // Caches the handle to the peer process if this is a broker.
   base::win::ScopedHandle peer_handle_;
 #endif
+
+  variations::ChildProcessFieldTrialSyncer field_trial_syncer_;
+
+  std::unique_ptr<discardable_memory::ClientDiscardableSharedMemoryManager>
+      discardable_shared_memory_manager_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(PpapiThread);
 };

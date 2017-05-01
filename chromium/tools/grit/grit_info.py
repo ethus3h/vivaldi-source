@@ -124,8 +124,7 @@ def DoMain(argv):
   parser.add_option("--no-output-all-resource-defines", action="store_false",
                     dest="output_all_resource_defines", default=True,
                     help="Unused")
-  parser.add_option("-f", dest="ids_file",
-                    default="GRIT_DIR/../gritsettings/resource_ids")
+  parser.add_option("-f", dest="ids_file", default="")
   parser.add_option("-t", dest="target_platform", default=None)
   parser.add_option("--exclude-grit-source", action="store_true")
 
@@ -157,7 +156,7 @@ def DoMain(argv):
       inputs.extend(GritSourceFiles())
     inputs = [f.replace('\\', '/') for f in inputs]
 
-    if len(args) == 1:
+    if len(args) == 1 and not options.exclude_grit_source:
       # Include grd file as second input (works around gyp expecting it).
       inputs.insert(1, args[0])
     if options.whitelist_files:

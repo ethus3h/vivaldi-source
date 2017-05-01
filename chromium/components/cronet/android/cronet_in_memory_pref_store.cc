@@ -40,16 +40,17 @@ bool CronetInMemoryPrefStore::IsInitializationComplete() const {
 }
 
 void CronetInMemoryPrefStore::SetValue(const std::string& key,
-                                       scoped_ptr<base::Value> value,
+                                       std::unique_ptr<base::Value> value,
                                        uint32_t flags) {
   DCHECK(value);
   if (prefs_.SetValue(key, std::move(value)))
     ReportValueChanged(key, flags);
 }
 
-void CronetInMemoryPrefStore::SetValueSilently(const std::string& key,
-                                               scoped_ptr<base::Value> value,
-                                               uint32_t flags) {
+void CronetInMemoryPrefStore::SetValueSilently(
+    const std::string& key,
+    std::unique_ptr<base::Value> value,
+    uint32_t flags) {
   prefs_.SetValue(key, std::move(value));
 }
 
@@ -78,6 +79,7 @@ void CronetInMemoryPrefStore::ReadPrefsAsync(
 
 void CronetInMemoryPrefStore::ReportValueChanged(const std::string& key,
                                                  uint32_t flags) {
-  FOR_EACH_OBSERVER(Observer, observers_, OnPrefValueChanged(key));
+  for (Observer& observer : observers_)
+    observer.OnPrefValueChanged(key);
 }
 

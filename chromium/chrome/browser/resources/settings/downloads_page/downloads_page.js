@@ -14,9 +14,6 @@
  *      </settings-downloads-page>
  *      ... other pages ...
  *    </iron-animated-pages>
- *
- * @group Chrome Settings Elements
- * @element settings-downloads-page
  */
 Polymer({
   is: 'settings-downloads-page',
@@ -29,10 +26,35 @@ Polymer({
       type: Object,
       notify: true,
     },
+
+    /**
+     * Dictionary defining page visibility.
+     * @type {!DownloadsPageVisibility}
+     */
+    pageVisibility: Object,
   },
 
   /** @private */
   selectDownloadLocation_: function() {
     chrome.send('selectDownloadLocation');
   },
+
+// <if expr="chromeos">
+  /**
+   * @param {string} path
+   * @return {string} The download location string that is suitable to display
+   *     in the UI.
+   * @private
+   */
+  getDownloadLocation_: function(path) {
+    // Replace /special/drive-<hash>/root with "Google Drive" for remote files,
+    // /home/chronos/user/Downloads or /home/chronos/u-<hash>/Downloads with
+    // "Downloads" for local paths, and '/' with ' \u203a ' (angled quote sign)
+    // everywhere. It is used only for display purpose.
+    path = path.replace(/^\/special\/drive[^\/]*\/root/, 'Google Drive');
+    path = path.replace(/^\/home\/chronos\/(user|u-[^\/]*)\//, '');
+    path = path.replace(/\//g, ' \u203a ');
+    return path;
+  },
+// </if>
 });

@@ -8,7 +8,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/local_discovery/service_discovery_client_impl.h"
 #include "net/base/net_errors.h"
 #include "net/dns/dns_protocol.h"
@@ -216,12 +216,11 @@ class ServiceDiscoveryTest : public ::testing::Test {
 
  protected:
   void RunFor(base::TimeDelta time_period) {
-    base::CancelableCallback<void()> callback(base::Bind(
-        &ServiceDiscoveryTest::Stop, base::Unretained(this)));
+    base::RunLoop run_loop;
+    base::CancelableCallback<void()> callback(run_loop.QuitWhenIdleClosure());
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE, callback.callback(), time_period);
-
-    base::MessageLoop::current()->Run();
+    run_loop.Run();
     callback.Cancel();
   }
 
@@ -236,9 +235,9 @@ class ServiceDiscoveryTest : public ::testing::Test {
 TEST_F(ServiceDiscoveryTest, AddRemoveService) {
   StrictMock<MockServiceWatcherClient> delegate;
 
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
 
@@ -258,9 +257,9 @@ TEST_F(ServiceDiscoveryTest, AddRemoveService) {
 TEST_F(ServiceDiscoveryTest, DiscoverNewServices) {
   StrictMock<MockServiceWatcherClient> delegate;
 
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
 
@@ -278,9 +277,9 @@ TEST_F(ServiceDiscoveryTest, ReadCachedServices) {
 
   StrictMock<MockServiceWatcherClient> delegate;
 
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
 
@@ -288,7 +287,7 @@ TEST_F(ServiceDiscoveryTest, ReadCachedServices) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 
@@ -296,9 +295,9 @@ TEST_F(ServiceDiscoveryTest, ReadCachedServicesMultiple) {
   socket_factory_.SimulateReceive(kSamplePacketPTR2, sizeof(kSamplePacketPTR2));
 
   StrictMock<MockServiceWatcherClient> delegate;
-  scoped_ptr<ServiceWatcher> watcher =
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback());
+  std::unique_ptr<ServiceWatcher> watcher =
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback());
 
   watcher->Start();
 
@@ -310,15 +309,15 @@ TEST_F(ServiceDiscoveryTest, ReadCachedServicesMultiple) {
                                          "gdbye._privet._tcp.local"))
       .Times(Exactly(1));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 
 TEST_F(ServiceDiscoveryTest, OnServiceChanged) {
   StrictMock<MockServiceWatcherClient> delegate;
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
 
@@ -328,7 +327,7 @@ TEST_F(ServiceDiscoveryTest, OnServiceChanged) {
 
   socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_CALL(delegate, OnServiceUpdated(ServiceWatcher::UPDATE_CHANGED,
                                          "hello._privet._tcp.local"))
@@ -338,14 +337,14 @@ TEST_F(ServiceDiscoveryTest, OnServiceChanged) {
 
   socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(ServiceDiscoveryTest, SinglePacket) {
   StrictMock<MockServiceWatcherClient> delegate;
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
 
@@ -356,7 +355,7 @@ TEST_F(ServiceDiscoveryTest, SinglePacket) {
   socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
 
   // Reset the "already updated" flag.
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_CALL(delegate, OnServiceUpdated(ServiceWatcher::UPDATE_CHANGED,
                                          "hello._privet._tcp.local"))
@@ -366,14 +365,14 @@ TEST_F(ServiceDiscoveryTest, SinglePacket) {
 
   socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(ServiceDiscoveryTest, ActivelyRefreshServices) {
   StrictMock<MockServiceWatcherClient> delegate;
-  scoped_ptr<ServiceWatcher> watcher(
-      service_discovery_client_.CreateServiceWatcher(
-          "_privet._tcp.local", delegate.GetCallback()));
+  std::unique_ptr<ServiceWatcher> watcher(
+      service_discovery_client_.CreateServiceWatcher("_privet._tcp.local",
+                                                     delegate.GetCallback()));
 
   watcher->Start();
   watcher->SetActivelyRefreshServices(true);
@@ -390,7 +389,7 @@ TEST_F(ServiceDiscoveryTest, ActivelyRefreshServices) {
 
   socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
 
@@ -403,7 +402,7 @@ TEST_F(ServiceDiscoveryTest, ActivelyRefreshServices) {
 
   RunFor(base::TimeDelta::FromSeconds(2));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 }
 
 
@@ -412,10 +411,7 @@ class ServiceResolverTest : public ServiceDiscoveryTest {
   ServiceResolverTest() {
     metadata_expected_.push_back("hello");
     address_expected_ = net::HostPortPair("myhello.local", 8888);
-    ip_address_expected_.push_back(1);
-    ip_address_expected_.push_back(2);
-    ip_address_expected_.push_back(3);
-    ip_address_expected_.push_back(4);
+    EXPECT_TRUE(ip_address_expected_.AssignFromIPLiteral("1.2.3.4"));
   }
 
   ~ServiceResolverTest() {
@@ -440,14 +436,14 @@ class ServiceResolverTest : public ServiceDiscoveryTest {
                void(ServiceResolver::RequestStatus,
                     const std::string&,
                     const std::vector<std::string>&,
-                    const net::IPAddressNumber&));
+                    const net::IPAddress&));
 
  protected:
-  scoped_ptr<ServiceResolver> resolver_;
-  net::IPAddressNumber ip_address_;
+  std::unique_ptr<ServiceResolver> resolver_;
+  net::IPAddress ip_address_;
   net::HostPortPair address_expected_;
   std::vector<std::string> metadata_expected_;
-  net::IPAddressNumber ip_address_expected_;
+  net::IPAddress ip_address_expected_;
 };
 
 TEST_F(ServiceResolverTest, TxtAndSrvButNoA) {
@@ -457,13 +453,12 @@ TEST_F(ServiceResolverTest, TxtAndSrvButNoA) {
 
   socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
 
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
-  EXPECT_CALL(*this,
-              OnFinishedResolvingInternal(ServiceResolver::STATUS_SUCCESS,
-                                          address_expected_.ToString(),
-                                          metadata_expected_,
-                                          net::IPAddressNumber()));
+  EXPECT_CALL(
+      *this, OnFinishedResolvingInternal(ServiceResolver::STATUS_SUCCESS,
+                                         address_expected_.ToString(),
+                                         metadata_expected_, net::IPAddress()));
 
   socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
 }

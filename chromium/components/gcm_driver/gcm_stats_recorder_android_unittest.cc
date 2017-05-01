@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include "components/gcm_driver/crypto/gcm_encryption_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace gcm {
@@ -13,6 +14,7 @@ namespace gcm {
 namespace {
 
 const char kTestAppId[] = "test_app_id";
+const char kTestSenderId[] = "test_sender_id";
 
 class GCMStatsRecorderAndroidTest : public ::testing::Test,
                                     public GCMStatsRecorderAndroid::Delegate {
@@ -52,19 +54,26 @@ TEST_F(GCMStatsRecorderAndroidTest, RecordsAndCallsDelegate) {
   recorder.RecordUnregistrationResponse(kTestAppId, true /* success */);
   EXPECT_EQ(4u, activity_recorded_calls());
 
-  recorder.RecordDataMessageReceived(kTestAppId, 42 /* message_byte_size */);
+  recorder.RecordDataMessageReceived(kTestAppId, kTestSenderId,
+                                     42 /* message_byte_size */);
   EXPECT_EQ(5u, activity_recorded_calls());
+
+  recorder.RecordDecryptionFailure(
+      kTestAppId, GCMEncryptionProvider::DECRYPTION_RESULT_INVALID_PAYLOAD);
+  EXPECT_EQ(6u, activity_recorded_calls());
 
   RecordedActivities activities;
   recorder.CollectActivities(&activities);
 
   EXPECT_EQ(4u, activities.registration_activities.size());
   EXPECT_EQ(1u, activities.receiving_activities.size());
+  EXPECT_EQ(1u, activities.decryption_failure_activities.size());
 
   recorder.CollectActivities(&activities);
 
   EXPECT_EQ(8u, activities.registration_activities.size());
   EXPECT_EQ(2u, activities.receiving_activities.size());
+  EXPECT_EQ(2u, activities.decryption_failure_activities.size());
 
   recorder.Clear();
 
@@ -73,6 +82,7 @@ TEST_F(GCMStatsRecorderAndroidTest, RecordsAndCallsDelegate) {
 
   EXPECT_EQ(0u, empty_activities.registration_activities.size());
   EXPECT_EQ(0u, empty_activities.receiving_activities.size());
+  EXPECT_EQ(0u, empty_activities.decryption_failure_activities.size());
 }
 
 TEST_F(GCMStatsRecorderAndroidTest, NullDelegate) {

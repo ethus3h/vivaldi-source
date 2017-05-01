@@ -15,7 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/worker_pool.h"
+#include "base/task_scheduler/post_task.h"
 #include "ui/events/ozone/evdev/libgestures_glue/gesture_property_provider.h"
 
 namespace ui {
@@ -66,7 +66,7 @@ std::string DumpGesturePropertyValue(GesturesProp* property) {
 }
 
 // Compress dumped event logs in place.
-void CompressDumpedLog(scoped_ptr<std::vector<std::string>> log_paths) {
+void CompressDumpedLog(std::unique_ptr<std::vector<std::string>> log_paths) {
   for (size_t i = 0; i < log_paths->size(); ++i) {
     // Zip the file.
     base::CommandLine command = base::CommandLine(base::FilePath(kGzipCommand));
@@ -169,10 +169,11 @@ void DumpTouchDeviceStatus(GesturePropertyProvider* provider,
 
 // Dump touch event logs.
 void DumpTouchEventLog(
-    std::map<base::FilePath, EventConverterEvdev*>& converters,
+    const std::map<base::FilePath, std::unique_ptr<EventConverterEvdev>>&
+        converters,
     GesturePropertyProvider* provider,
     const base::FilePath& out_dir,
-    scoped_ptr<std::vector<base::FilePath>> log_paths,
+    std::unique_ptr<std::vector<base::FilePath>> log_paths,
     const GetTouchEventLogReply& reply) {
   // Get device ids.
   std::vector<int> ids;
@@ -182,7 +183,7 @@ void DumpTouchEventLog(
   std::string now = GetCurrentTimeForLogging();
 
   // Dump event logs for gesture devices.
-  scoped_ptr<std::vector<std::string>> log_paths_to_be_compressed(
+  std::unique_ptr<std::vector<std::string>> log_paths_to_be_compressed(
       new std::vector<std::string>);
   for (size_t i = 0; i < ids.size(); ++i) {
     // First, see if the device actually uses the gesture library by checking
@@ -219,8 +220,8 @@ void DumpTouchEventLog(
     log_paths->push_back(base::FilePath(evdev_log_filename));
   }
 
-  for (auto it = converters.begin(); it != converters.end(); ++it) {
-    EventConverterEvdev* converter = it->second;
+  for (const auto& converter_pair : converters) {
+    EventConverterEvdev* converter = converter_pair.second.get();
     if (converter->HasTouchscreen()) {
       converter->DumpTouchEventLog(kInputEventsLogFile);
       std::string touch_evdev_log_filename = GenerateEventLogName(
@@ -231,11 +232,15 @@ void DumpTouchEventLog(
     }
   }
 
-  // Compress touchpad/mouse logs on another thread and return.
-  base::WorkerPool::PostTaskAndReply(
-      FROM_HERE,
+  // Compress touchpad/mouse logs asynchronously
+  base::PostTaskWithTraitsAndReply(
+      FROM_HERE, base::TaskTraits()
+                     .WithShutdownBehavior(
+                         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN)
+                     .WithPriority(base::TaskPriority::BACKGROUND)
+                     .MayBlock(),
       base::Bind(&CompressDumpedLog, base::Passed(&log_paths_to_be_compressed)),
-      base::Bind(reply, base::Passed(&log_paths)), true /* task_is_slow */);
+      base::Bind(reply, base::Passed(&log_paths)));
 }
 
 }  // namespace ui

@@ -8,7 +8,7 @@
 #include "base/time/time.h"
 
 namespace gfx {
-class Point;
+class PointF;
 }
 
 namespace exo {
@@ -31,18 +31,24 @@ class TouchDelegate {
   // reference this ID. |location| is the initial location of touch point
   // relative to the origin of the surface.
   virtual void OnTouchDown(Surface* surface,
-                           base::TimeDelta time_stamp,
+                           base::TimeTicks time_stamp,
                            int id,
-                           const gfx::Point& location) = 0;
+                           const gfx::PointF& location) = 0;
 
   // Called when a touch point has disappeared. No further events will be sent
   // for this touch point.
-  virtual void OnTouchUp(base::TimeDelta time_stamp, int id) = 0;
+  virtual void OnTouchUp(base::TimeTicks time_stamp, int id) = 0;
 
   // Called when a touch point has changed coordinates.
-  virtual void OnTouchMotion(base::TimeDelta time_stamp,
+  virtual void OnTouchMotion(base::TimeTicks time_stamp,
                              int id,
-                             const gfx::Point& location) = 0;
+                             const gfx::PointF& location) = 0;
+
+  // Called when a touch point has changed its shape.
+  virtual void OnTouchShape(int id, float major, float minor) = 0;
+
+  // Called when the client should apply all updated touches.
+  virtual void OnTouchFrame() = 0;
 
   // Called when the touch session has been canceled. Touch cancellation
   // applies to all touch points currently active.

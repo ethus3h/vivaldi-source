@@ -5,15 +5,18 @@
 #ifndef CONTENT_BROWSER_FRAME_HOST_NAVIGATION_REQUEST_H_
 #define CONTENT_BROWSER_FRAME_HOST_NAVIGATION_REQUEST_H_
 
+#include <memory>
+
+#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/browser/frame_host/navigation_entry_impl.h"
 #include "content/browser/loader/navigation_url_loader_delegate.h"
 #include "content/common/content_export.h"
 #include "content/common/frame_message_enums.h"
 #include "content/common/navigation_params.h"
 #include "content/public/browser/navigation_throttle.h"
+#include "content/public/common/previews_state.h"
 
 namespace content {
 
@@ -22,10 +25,10 @@ class FrameTreeNode;
 class NavigationControllerImpl;
 class NavigationHandleImpl;
 class NavigationURLLoader;
-class NavigatorDelegate;
+class NavigationData;
 class ResourceRequestBody;
 class SiteInstanceImpl;
-struct NavigationRequestInfo;
+class StreamHandle;
 
 // PlzNavigate
 // A UI thread object that owns a navigation request until it commits. It
@@ -57,15 +60,27 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
     FAILED,
   };
 
+  // The SiteInstance currently associated with the navigation. Note that the
+  // final value will only be known when the response is received, or the
+  // navigation fails, as server redirects can modify the SiteInstance to use
+  // for the navigation.
+  enum class AssociatedSiteInstanceType {
+    NONE = 0,
+    CURRENT,
+    SPECULATIVE,
+  };
+
   // Creates a request for a browser-intiated navigation.
-  static scoped_ptr<NavigationRequest> CreateBrowserInitiated(
+  static std::unique_ptr<NavigationRequest> CreateBrowserInitiated(
       FrameTreeNode* frame_tree_node,
       const GURL& dest_url,
       const Referrer& dest_referrer,
       const FrameNavigationEntry& frame_entry,
       const NavigationEntryImpl& entry,
       FrameMsg_Navigate_Type::Value navigation_type,
+      PreviewsState previews_state,
       bool is_same_document_history_load,
+      bool is_history_navigation_in_new_child,
       const base::TimeTicks& navigation_start,
       NavigationControllerImpl* controller);
 
@@ -74,11 +89,10 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
   // should no longer be manipulated afterwards on the UI thread.
   // TODO(clamy): see if ResourceRequestBody could be un-refcounted to avoid
   // threading subtleties.
-  static scoped_ptr<NavigationRequest> CreateRendererInitiated(
+  static std::unique_ptr<NavigationRequest> CreateRendererInitiated(
       FrameTreeNode* frame_tree_node,
       const CommonNavigationParams& common_params,
       const BeginNavigationParams& begin_params,
-      scoped_refptr<ResourceRequestBody> body,
       int current_history_list_offset,
       int current_history_list_length);
 
@@ -99,6 +113,8 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
 
   NavigationState state() const { return state_; }
 
+  FrameTreeNode* frame_tree_node() const { return frame_tree_node_; }
+
   SiteInstanceImpl* source_site_instance() const {
     return source_site_instance_.get();
   }
@@ -107,9 +123,7 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
     return dest_site_instance_.get();
   }
 
-  NavigationEntryImpl::RestoreType restore_type() const {
-    return restore_type_;
-  };
+  RestoreType restore_type() const { return restore_type_; };
 
   bool is_view_source() const { return is_view_source_; };
 
@@ -117,9 +131,18 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
 
   bool browser_initiated() const { return browser_initiated_ ; }
 
+  bool may_transfer() const { return may_transfer_; }
+
   void SetWaitingForRendererResponse() {
     DCHECK(state_ == NOT_STARTED);
     state_ = WAITING_FOR_RENDERER_RESPONSE;
+  }
+
+  AssociatedSiteInstanceType associated_site_instance_type() const {
+    return associated_site_instance_type_;
+  }
+  void set_associated_site_instance_type(AssociatedSiteInstanceType type) {
+    associated_site_instance_type_ = type;
   }
 
   NavigationHandleImpl* navigation_handle() const {
@@ -128,7 +151,7 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
 
   // Creates a NavigationHandle. This should be called after any previous
   // NavigationRequest for the FrameTreeNode has been destroyed.
-  void CreateNavigationHandle();
+  void CreateNavigationHandle(int pending_nav_entry_id);
 
   // Transfers the ownership of the NavigationHandle to |render_frame_host|.
   // This should be called when the navigation is ready to commit, because the
@@ -138,13 +161,18 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
   void TransferNavigationHandleOwnership(
       RenderFrameHostImpl* render_frame_host);
 
+  void set_on_start_checks_complete_closure_for_testing(
+      const base::Closure& closure) {
+    on_start_checks_complete_closure_ = closure;
+  }
+
  private:
   NavigationRequest(FrameTreeNode* frame_tree_node,
                     const CommonNavigationParams& common_params,
                     const BeginNavigationParams& begin_params,
                     const RequestNavigationParams& request_params,
-                    scoped_refptr<ResourceRequestBody> body,
                     bool browser_initiated,
+                    bool may_transfer,
                     const FrameNavigationEntry* frame_navigation_entry,
                     const NavigationEntryImpl* navitation_entry);
 
@@ -153,7 +181,12 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
       const net::RedirectInfo& redirect_info,
       const scoped_refptr<ResourceResponse>& response) override;
   void OnResponseStarted(const scoped_refptr<ResourceResponse>& response,
-                         scoped_ptr<StreamHandle> body) override;
+                         std::unique_ptr<StreamHandle> body,
+                         const SSLStatus& ssl_status,
+                         std::unique_ptr<NavigationData> navigation_data,
+                         const GlobalRequestID& request_id,
+                         bool is_download,
+                         bool is_stream) override;
   void OnRequestFailed(bool has_stale_copy_in_cache, int net_error) override;
   void OnRequestStarted(base::TimeTicks timestamp) override;
 
@@ -161,9 +194,12 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
   // NavigationHandle.
   void OnStartChecksComplete(NavigationThrottle::ThrottleCheckResult result);
   void OnRedirectChecksComplete(NavigationThrottle::ThrottleCheckResult result);
+  void OnWillProcessResponseChecksComplete(
+      NavigationThrottle::ThrottleCheckResult result);
 
-  // Called when the navigation is about to be sent to the IO thread.
-  void InitializeServiceWorkerHandleIfNeeded();
+  // Have a RenderFrameHost commit the navigation. The NavigationRequest will
+  // be destroyed after this call.
+  void CommitNavigation();
 
   FrameTreeNode* frame_tree_node_;
 
@@ -183,23 +219,41 @@ class CONTENT_EXPORT NavigationRequest : public NavigationURLLoaderDelegate {
 
   NavigationState state_;
 
-
-  // The parameters to send to the IO thread. |loader_| takes ownership of
-  // |info_| after calling BeginNavigation.
-  scoped_ptr<NavigationRequestInfo> info_;
-
-  scoped_ptr<NavigationURLLoader> loader_;
+  std::unique_ptr<NavigationURLLoader> loader_;
 
   // These next items are used in browser-initiated navigations to store
   // information from the NavigationEntryImpl that is required after request
   // creation time.
   scoped_refptr<SiteInstanceImpl> source_site_instance_;
   scoped_refptr<SiteInstanceImpl> dest_site_instance_;
-  NavigationEntryImpl::RestoreType restore_type_;
+  RestoreType restore_type_;
   bool is_view_source_;
   int bindings_;
 
-  scoped_ptr<NavigationHandleImpl> navigation_handle_;
+  // Whether the navigation should be sent to a renderer a process. This is
+  // true, except for 204/205 responses and downloads.
+  bool response_should_be_rendered_;
+
+  // The type of SiteInstance associated with this navigation.
+  AssociatedSiteInstanceType associated_site_instance_type_;
+
+  // Whether the request may be transferred to a different process upon commit.
+  // True for browser-initiated navigations and renderer-inititated navigations
+  // started via the OpenURL path.
+  // Note: the RenderFrameHostManager may still decide to have the navigation
+  // commit in a different renderer process if it detects that a renderer
+  // transfer is needed. This is the case in particular when --site-per-process
+  // is enabled.
+  bool may_transfer_;
+
+  std::unique_ptr<NavigationHandleImpl> navigation_handle_;
+
+  // Holds the ResourceResponse and the StreamHandle for the navigation while
+  // the WillProcessResponse checks are performed by the NavigationHandle.
+  scoped_refptr<ResourceResponse> response_;
+  std::unique_ptr<StreamHandle> body_;
+
+  base::Closure on_start_checks_complete_closure_;
 
   DISALLOW_COPY_AND_ASSIGN(NavigationRequest);
 };

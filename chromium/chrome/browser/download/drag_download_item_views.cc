@@ -10,19 +10,18 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/download_item.h"
 #include "net/base/mime_util.h"
-#include "net/base/net_util.h"
+#include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drag_utils.h"
 #include "ui/base/dragdrop/file_info.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/screen.h"
 #include "ui/views/widget/widget.h"
-#include "ui/wm/public/drag_drop_client.h"
 #include "url/gurl.h"
 
 #if defined(OS_CHROMEOS)
@@ -62,7 +61,9 @@ void DragDownloadItem(const content::DownloadItem* download,
   if (!root_window || !aura::client::GetDragDropClient(root_window))
     return;
 
-  gfx::Point location = gfx::Screen::GetScreenFor(view)->GetCursorScreenPoint();
+  gfx::Point location = display::Screen::GetScreen()->GetCursorScreenPoint();
+  bool cancelled;
+
   // TODO(varunjain): Properly determine and send DRAG_EVENT_SOURCE below.
   aura::client::GetDragDropClient(root_window)->StartDragAndDrop(
       data,
@@ -70,5 +71,6 @@ void DragDownloadItem(const content::DownloadItem* download,
       view,
       location,
       ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK,
-      ui::DragDropTypes::DRAG_EVENT_SOURCE_MOUSE);
+      ui::DragDropTypes::DRAG_EVENT_SOURCE_MOUSE,
+      cancelled);
 }

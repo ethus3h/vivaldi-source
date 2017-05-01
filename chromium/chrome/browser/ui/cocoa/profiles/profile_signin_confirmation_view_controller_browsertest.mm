@@ -41,7 +41,8 @@ class ProfileSigninConfirmationViewControllerTest
                                       backing:NSBackingStoreBuffered
                                         defer:NO]);
     base::Closure close = base::Bind(
-        &ProfileSigninConfirmationViewControllerTest::OnClose, this);
+        &ProfileSigninConfirmationViewControllerTest::OnClose,
+        base::Unretained(this));
     controller_.reset([[ProfileSigninConfirmationViewController alloc]
                         initWithBrowser:browser()
                                username:username()
@@ -164,7 +165,7 @@ IN_PROC_BROWSER_TEST_F(ProfileSigninConfirmationViewControllerTest,
   // Explanation shouldn't mention creating a new profile.
   NSString* explanationWithoutCreateProfile = base::SysUTF16ToNSString(
       l10n_util::GetStringFUTF16(
-          IDS_ENTERPRISE_SIGNIN_EXPLANATION_WITHOUT_PROFILE_CREATION_NEW_STYLE,
+          IDS_ENTERPRISE_SIGNIN_EXPLANATION_WITHOUT_PROFILE_CREATION,
           base::UTF8ToUTF16(username()), learn_more()));
   EXPECT_NSEQ(explanationWithoutCreateProfile,
               [[[controller_ explanationField] textStorage] string]);
@@ -179,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(ProfileSigninConfirmationViewControllerTest,
                 containsObject:[controller_ createProfileButton]]);
   NSString* explanationWithCreateProfile = base::SysUTF16ToNSString(
       l10n_util::GetStringFUTF16(
-          IDS_ENTERPRISE_SIGNIN_EXPLANATION_WITH_PROFILE_CREATION_NEW_STYLE,
+          IDS_ENTERPRISE_SIGNIN_EXPLANATION_WITH_PROFILE_CREATION,
           base::UTF8ToUTF16(username()), learn_more()));
   EXPECT_NSEQ(explanationWithCreateProfile,
               [[[controller_ explanationField] textStorage] string]);

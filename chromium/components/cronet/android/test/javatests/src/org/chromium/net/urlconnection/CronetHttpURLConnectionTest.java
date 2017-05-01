@@ -5,15 +5,16 @@
 package org.chromium.net.urlconnection;
 
 import android.os.Build;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.base.annotations.SuppressFBWarnings;
 import org.chromium.base.test.util.Feature;
+import org.chromium.net.CronetEngine;
+import org.chromium.net.CronetException;
 import org.chromium.net.CronetTestBase;
 import org.chromium.net.CronetTestFramework;
 import org.chromium.net.MockUrlRequestJobFactory;
 import org.chromium.net.NativeTestServer;
-import org.chromium.net.UrlRequestException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
@@ -23,6 +24,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,6 +42,7 @@ import java.util.regex.Pattern;
  * See {@link CronetTestBase#runTest()} for details.
  */
 public class CronetHttpURLConnectionTest extends CronetTestBase {
+    private CronetEngine mCronetEngine;
 
     @Override
     protected void setUp() throws Exception {
@@ -49,7 +52,8 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
                 CronetTestFramework.LIBRARY_INIT_KEY,
                 CronetTestFramework.LibraryInitType.HTTP_URL_CONNECTION,
         };
-        startCronetTestFrameworkWithUrlAndCommandLineArgs(null, commandLineArgs);
+        mCronetEngine = startCronetTestFrameworkWithUrlAndCommandLineArgs(null,
+                commandLineArgs).mCronetEngine;
         assertTrue(NativeTestServer.startNativeTestServer(getContext()));
     }
 
@@ -91,6 +95,41 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
 
     @SmallTest
     @Feature({"Cronet"})
+    @OnlyRunCronetHttpURLConnection
+    public void testConnectTimeout() throws Exception {
+        URL url = new URL(NativeTestServer.getEchoMethodURL());
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        // This should not throw an exception.
+        connection.setConnectTimeout(1000);
+        assertEquals(200, connection.getResponseCode());
+        assertEquals("OK", connection.getResponseMessage());
+        assertEquals("GET", TestUtil.getResponseAsString(connection));
+        connection.disconnect();
+    }
+
+    @SmallTest
+    @Feature({"Cronet"})
+    @OnlyRunCronetHttpURLConnection
+    public void testReadTimeout() throws Exception {
+        // Add url interceptors.
+        MockUrlRequestJobFactory mockUrlRequestJobFactory =
+                new MockUrlRequestJobFactory(mCronetEngine);
+        URL url = new URL(MockUrlRequestJobFactory.getMockUrlForHangingRead());
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setReadTimeout(1000);
+        assertEquals(200, connection.getResponseCode());
+        InputStream in = connection.getInputStream();
+        try {
+            in.read();
+            fail();
+        } catch (SocketTimeoutException e) {
+            // Expected
+        }
+        mockUrlRequestJobFactory.shutdown();
+    }
+
+    @SmallTest
+    @Feature({"Cronet"})
     @CompareDefaultWithCronet
     // Regression test for crbug.com/571436.
     public void testDefaultToPostWhenDoOutput() throws Exception {
@@ -106,6 +145,56 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
     }
 
     /**
+     * Tests that calling {@link HttpURLConnection#connect} will also initialize
+     * {@code OutputStream} if necessary in the case where
+     * {@code setFixedLengthStreamingMode} is called.
+     * Regression test for crbug.com/582975.
+     */
+    @SmallTest
+    @Feature({"Cronet"})
+    @CompareDefaultWithCronet
+    public void testInitOutputStreamInConnect() throws Exception {
+        URL url = new URL(NativeTestServer.getEchoBodyURL());
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setDoOutput(true);
+        String dataString = "some very important data";
+        byte[] data = dataString.getBytes();
+        connection.setFixedLengthStreamingMode(data.length);
+        connection.connect();
+        OutputStream out = connection.getOutputStream();
+        out.write(data);
+        assertEquals(200, connection.getResponseCode());
+        assertEquals("OK", connection.getResponseMessage());
+        assertEquals(dataString, TestUtil.getResponseAsString(connection));
+        connection.disconnect();
+    }
+
+    /**
+     * Tests that calling {@link HttpURLConnection#connect} will also initialize
+     * {@code OutputStream} if necessary in the case where
+     * {@code setChunkedStreamingMode} is called.
+     * Regression test for crbug.com/582975.
+     */
+    @SmallTest
+    @Feature({"Cronet"})
+    @CompareDefaultWithCronet
+    public void testInitChunkedOutputStreamInConnect() throws Exception {
+        URL url = new URL(NativeTestServer.getEchoBodyURL());
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setDoOutput(true);
+        String dataString = "some very important chunked data";
+        byte[] data = dataString.getBytes();
+        connection.setChunkedStreamingMode(0);
+        connection.connect();
+        OutputStream out = connection.getOutputStream();
+        out.write(data);
+        assertEquals(200, connection.getResponseCode());
+        assertEquals("OK", connection.getResponseMessage());
+        assertEquals(dataString, TestUtil.getResponseAsString(connection));
+        connection.disconnect();
+    }
+
+    /**
      * Tests that using reflection to find {@code fixedContentLengthLong} works.
      */
     @SmallTest
@@ -117,7 +206,7 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
                 (HttpURLConnection) url.openConnection();
         connection.setDoOutput(true);
         connection.setRequestMethod("POST");
-        if (Build.VERSION.SDK_INT >= 19) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             String dataString = "some very important data";
             byte[] data = dataString.getBytes();
             Class<?> c = connection.getClass();
@@ -182,9 +271,9 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
             secondConnection.getResponseCode();
             fail();
         } catch (IOException e) {
-            assertTrue(e instanceof java.net.ConnectException
-                    || e instanceof UrlRequestException);
+            assertTrue(e instanceof java.net.ConnectException || e instanceof CronetException);
             assertTrue((e.getMessage().contains("ECONNREFUSED")
+                    || (e.getMessage().contains("Connection refused"))
                     || e.getMessage().contains("net::ERR_CONNECTION_REFUSED")));
         }
         checkExceptionsAreThrown(secondConnection);
@@ -207,9 +296,9 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
             urlConnection.getResponseCode();
             fail();
         } catch (IOException e) {
-            assertTrue(e instanceof java.net.ConnectException
-                    || e instanceof UrlRequestException);
+            assertTrue(e instanceof java.net.ConnectException || e instanceof CronetException);
             assertTrue((e.getMessage().contains("ECONNREFUSED")
+                    || (e.getMessage().contains("Connection refused"))
                     || e.getMessage().contains("net::ERR_CONNECTION_REFUSED")));
         }
         checkExceptionsAreThrown(urlConnection);
@@ -231,7 +320,7 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
             fail();
         } catch (java.net.UnknownHostException e) {
             // Expected.
-        } catch (UrlRequestException e) {
+        } catch (CronetException e) {
             // Expected.
         }
         checkExceptionsAreThrown(urlConnection);
@@ -621,7 +710,8 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
         String data = "MyBigFunkyData";
         int dataLength = data.length();
         int repeatCount = 100000;
-        MockUrlRequestJobFactory.setUp();
+        MockUrlRequestJobFactory mockUrlRequestJobFactory =
+                new MockUrlRequestJobFactory(mCronetEngine);
         URL url = new URL(MockUrlRequestJobFactory.getMockUrlForData(data, repeatCount));
         HttpURLConnection connection =
                 (HttpURLConnection) url.openConnection();
@@ -652,6 +742,7 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
         }
         assertEquals(200, connection.getResponseCode());
         assertEquals("OK", connection.getResponseMessage());
+        mockUrlRequestJobFactory.shutdown();
     }
 
     @SmallTest
@@ -760,20 +851,11 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
     @Feature({"Cronet"})
     @CompareDefaultWithCronet
     public void testServerHangsUp() throws Exception {
-        URL url = new URL(NativeTestServer.getEchoBodyURL());
+        URL url = new URL(NativeTestServer.getExabyteResponseURL());
         final HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        // Make the server echo a large request body, so it exceeds the internal
-        // read buffer.
-        connection.setDoOutput(true);
-        connection.setRequestMethod("POST");
-        byte[] largeData = TestUtil.getLargeData();
-        connection.setFixedLengthStreamingMode(largeData.length);
-        OutputStream out = connection.getOutputStream();
-        out.write(largeData);
-
         InputStream in = connection.getInputStream();
         // Read one byte and shut down the server.
-        assertTrue(in.read() != 1);
+        assertTrue(in.read() != -1);
         NativeTestServer.shutdownNativeTestServer();
         // Continue reading, and make sure the message loop will not block.
         try {
@@ -781,24 +863,32 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
             while (b != -1) {
                 b = in.read();
             }
-            // Server closes the connection before EOF can be received.
-            fail();
+            // On KitKat, the default implementation doesn't throw an error.
+            if (!testingSystemHttpURLConnection()) {
+                // Server closes the connection before EOF can be received.
+                fail();
+            }
         } catch (IOException e) {
             // Expected.
             // Cronet gives a net::ERR_CONTENT_LENGTH_MISMATCH while the
-            // default implementation gives a java.net.ProtocolException with
-            // "unexpected end of stream" message.
+            // default implementation sometimes gives a
+            // java.net.ProtocolException with "unexpected end of stream"
+            // message.
         }
 
         // Read once more, and make sure exception is thrown.
         try {
             in.read();
-            fail();
+            // On KitKat, the default implementation doesn't throw an error.
+            if (!testingSystemHttpURLConnection()) {
+                fail();
+            }
         } catch (IOException e) {
             // Expected.
             // Cronet gives a net::ERR_CONTENT_LENGTH_MISMATCH while the
-            // default implementation gives a java.net.ProtocolException with
-            // "unexpected end of stream" message.
+            // default implementation sometimes gives a
+            // java.net.ProtocolException with "unexpected end of stream"
+            // message.
         }
         // Spins up server to avoid crash when shutting it down in tearDown().
         assertTrue(NativeTestServer.startNativeTestServer(getContext()));
@@ -910,7 +1000,7 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
         assertEquals(302, connection.getResponseCode());
         assertEquals("Found", connection.getResponseMessage());
         // Behavior changed in Android Marshmallow to not update the URL.
-        if (testingSystemHttpURLConnection() && Build.VERSION.SDK_INT == Build.VERSION_CODES.M) {
+        if (testingSystemHttpURLConnection() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             // Redirected port is randomized, verify everything but port.
             assertEquals(url.getProtocol(), connection.getURL().getProtocol());
             assertEquals(url.getHost(), connection.getURL().getHost());
@@ -1025,6 +1115,25 @@ public class CronetHttpURLConnectionTest extends CronetTestBase {
         assertEquals(null, connection.getHeaderField(5));
         assertEquals(null, connection.getHeaderFieldKey(6));
         assertEquals(null, connection.getHeaderField(6));
+        connection.disconnect();
+    }
+
+    @SmallTest
+    @Feature({"Cronet"})
+    @OnlyRunCronetHttpURLConnection
+    // Test that Cronet strips content-encoding header.
+    public void testStripContentEncoding() throws Exception {
+        URL url = new URL(NativeTestServer.getFileURL("/gzipped.html"));
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        assertEquals("foo", connection.getHeaderFieldKey(0));
+        assertEquals("bar", connection.getHeaderField(0));
+        assertEquals(null, connection.getHeaderField("content-encoding"));
+        Map<String, List<String>> responseHeaders = connection.getHeaderFields();
+        assertEquals(1, responseHeaders.size());
+        assertEquals(200, connection.getResponseCode());
+        assertEquals("OK", connection.getResponseMessage());
+        // Make sure Cronet decodes the gzipped content.
+        assertEquals("Hello, World!", TestUtil.getResponseAsString(connection));
         connection.disconnect();
     }
 

@@ -1,5 +1,4 @@
 # Device Motion / Orientation API related
-per-file DeviceSensorsTest.java=mvanouwerkerk@chromium.org
 per-file DeviceSensorsTest.java=timvolodine@chromium.org
 
 # Geolocation API related
@@ -19,9 +18,6 @@ per-file BindingManagerImplTest.java=mariakhomenko@chromium.org
 per-file ChildProcessLauncherTest.java=jaekyun@chromium.org
 per-file ChildProcessLauncherTest.java=mariakhomenko@chromium.org
 
-# Mojo related
-per-file ServiceRegistryTest.java=ppi@chromium.org
-
 # Java Bridge
-per-file JavaBridge*=mnaganov@chromium.org
+per-file JavaBridge*=michaelbai@chromium.org
 per-file JavaBridge*=torne@chromium.org

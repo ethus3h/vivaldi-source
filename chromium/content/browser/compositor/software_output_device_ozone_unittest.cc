@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/message_loop/message_loop.h"
-#include "base/thread_task_runner_handle.h"
 #include "content/browser/compositor/software_output_device_ozone.h"
+
+#include <memory>
+
+#include "base/macros.h"
+#include "base/message_loop/message_loop.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/compositor/compositor.h"
@@ -63,14 +65,14 @@ class SoftwareOutputDeviceOzoneTest : public testing::Test {
   void TearDown() override;
 
  protected:
-  scoped_ptr<content::SoftwareOutputDeviceOzone> output_device_;
+  std::unique_ptr<content::SoftwareOutputDeviceOzone> output_device_;
   bool enable_pixel_output_;
 
  private:
-  scoped_ptr<ui::Compositor> compositor_;
-  scoped_ptr<base::MessageLoop> message_loop_;
+  std::unique_ptr<ui::Compositor> compositor_;
+  std::unique_ptr<base::MessageLoop> message_loop_;
   TestPlatformWindowDelegate window_delegate_;
-  scoped_ptr<ui::PlatformWindow> window_;
+  std::unique_ptr<ui::PlatformWindow> window_;
 
   DISALLOW_COPY_AND_ASSIGN(SoftwareOutputDeviceOzoneTest);
 };
@@ -84,14 +86,17 @@ SoftwareOutputDeviceOzoneTest::~SoftwareOutputDeviceOzoneTest() {
 }
 
 void SoftwareOutputDeviceOzoneTest::SetUp() {
-  ui::ContextFactory* context_factory =
-      ui::InitializeContextFactoryForTests(enable_pixel_output_);
+  ui::ContextFactory* context_factory = nullptr;
+  ui::ContextFactoryPrivate* context_factory_private = nullptr;
+  ui::InitializeContextFactoryForTests(enable_pixel_output_, &context_factory,
+                                       &context_factory_private);
 
   const gfx::Size size(500, 400);
   window_ = ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
       &window_delegate_, gfx::Rect(size));
-  compositor_.reset(
-      new ui::Compositor(context_factory, base::ThreadTaskRunnerHandle::Get()));
+  compositor_.reset(new ui::Compositor(cc::FrameSinkId(1, 1), context_factory,
+                                       nullptr,
+                                       base::ThreadTaskRunnerHandle::Get()));
   compositor_->SetAcceleratedWidget(window_delegate_.GetAcceleratedWidget());
   compositor_->SetScaleAndSize(1.0f, size);
 

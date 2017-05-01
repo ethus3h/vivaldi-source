@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/formats/mp4/box_reader.h"
+
 #include <stdint.h>
 #include <string.h>
 
+#include <memory>
+
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "media/base/mock_media_log.h"
 #include "media/formats/mp4/box_definitions.h"
-#include "media/formats/mp4/box_reader.h"
 #include "media/formats/mp4/rcheck.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -88,17 +90,62 @@ class BoxReaderTest : public testing::Test {
     return std::vector<uint8_t>(kSkipBox, kSkipBox + sizeof(kSkipBox));
   }
 
-  void TestTopLevelBox(const uint8_t* data, int size, uint32_t fourCC) {
-    std::vector<uint8_t> buf(data, data + size);
+  void TestTopLevelBox(const uint8_t* data, size_t data_size, uint32_t fourCC) {
+    std::vector<uint8_t> buf(data, data + data_size);
 
     bool err;
-    scoped_ptr<BoxReader> reader(
+    std::unique_ptr<BoxReader> reader(
         BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
 
     EXPECT_FALSE(err);
     EXPECT_TRUE(reader);
     EXPECT_EQ(fourCC, reader->type());
-    EXPECT_EQ(reader->size(), static_cast<uint64_t>(size));
+    EXPECT_EQ(reader->box_size(), data_size);
+  }
+
+  template <typename ChildType>
+  void TestParsing32bitOverflow(const uint8_t* buffer,
+                                size_t size,
+                                const std::string& overflow_error) {
+    // Wrap whatever we're passed in a dummy EMSG so we can satisfy requirements
+    // for ReadTopLevelBox and to kick off parsing.
+    std::vector<uint8_t> buffer_wrapper = {
+        0x00, 0x00, 0x00, 0x00,  // dummy size
+        'e',  'm',  's',  'g',   // fourcc
+    };
+    buffer_wrapper.insert(buffer_wrapper.end(), buffer, buffer + size);
+
+    // Basic check of the nested buffer size. If box_size > buffer size the test
+    // will exit early (waiting for more bytes to be appended).
+    ASSERT_TRUE(base::IsValueInRangeForNumericType<uint8_t>(size));
+    ASSERT_LE(buffer[3], size);
+
+    // Update the size (keep it simple).
+    ASSERT_TRUE(
+        base::IsValueInRangeForNumericType<uint8_t>(buffer_wrapper.size()));
+    buffer_wrapper[3] = buffer_wrapper.size();
+
+    bool err;
+    std::unique_ptr<BoxReader> reader(BoxReader::ReadTopLevelBox(
+        &buffer_wrapper[0], buffer_wrapper.size(), media_log_, &err));
+    EXPECT_FALSE(err);
+    EXPECT_TRUE(reader);
+    EXPECT_EQ(FOURCC_EMSG, reader->type());
+
+// Overflow is only triggered/caught on 32-bit systems. 64-bit systems will
+// instead fail parsing because tests are written such that |buffer| never
+// contains enough bytes for parsing to succeed.
+#if defined(ARCH_CPU_32_BITS)
+    const int kOverflowLogCount = 1;
+#else
+    const int kOverflowLogCount = 0;
+#endif
+
+    if (!overflow_error.empty())
+      EXPECT_MEDIA_LOG(HasSubstr(overflow_error)).Times(kOverflowLogCount);
+
+    std::vector<ChildType> children;
+    EXPECT_FALSE(reader->ReadAllChildrenAndCheckFourCC(&children));
   }
 
   scoped_refptr<StrictMock<MockMediaLog>> media_log_;
@@ -107,7 +154,7 @@ class BoxReaderTest : public testing::Test {
 TEST_F(BoxReaderTest, ExpectedOperationTest) {
   std::vector<uint8_t> buf = GetBuf();
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
   EXPECT_FALSE(err);
   EXPECT_TRUE(reader.get());
@@ -127,7 +174,7 @@ TEST_F(BoxReaderTest, ExpectedOperationTest) {
   EXPECT_EQ(0xfacecafe, box.kids[1].val);
 
   // Accounting for the extra byte outside of the box above
-  EXPECT_EQ(buf.size(), static_cast<uint64_t>(reader->size() + 1));
+  EXPECT_EQ(buf.size(), static_cast<uint64_t>(reader->box_size() + 1));
 }
 
 TEST_F(BoxReaderTest, OuterTooShortTest) {
@@ -135,7 +182,7 @@ TEST_F(BoxReaderTest, OuterTooShortTest) {
   bool err;
 
   // Create a soft failure by truncating the outer box.
-  scoped_ptr<BoxReader> r(
+  std::unique_ptr<BoxReader> r(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size() - 2, media_log_, &err));
 
   EXPECT_FALSE(err);
@@ -148,7 +195,7 @@ TEST_F(BoxReaderTest, InnerTooLongTest) {
 
   // Make an inner box too big for its outer box.
   buf[25] = 1;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
 
   SkipBox box;
@@ -160,11 +207,14 @@ TEST_F(BoxReaderTest, WrongFourCCTest) {
   bool err;
 
   // Set an unrecognized top-level FourCC.
-  buf[5] = 1;
+  buf[4] = 0x44;
+  buf[5] = 0x41;
+  buf[6] = 0x4c;
+  buf[7] = 0x45;
 
-  EXPECT_MEDIA_LOG(HasSubstr("Unrecognized top-level box type s\\u0001ip"));
+  EXPECT_MEDIA_LOG(HasSubstr("Unrecognized top-level box type DALE"));
 
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
   EXPECT_FALSE(reader.get());
   EXPECT_TRUE(err);
@@ -173,7 +223,7 @@ TEST_F(BoxReaderTest, WrongFourCCTest) {
 TEST_F(BoxReaderTest, ScanChildrenTest) {
   std::vector<uint8_t> buf = GetBuf();
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
 
   EXPECT_TRUE(reader->SkipBytes(16) && reader->ScanChildren());
@@ -197,7 +247,7 @@ TEST_F(BoxReaderTest, ReadAllChildrenTest) {
   // Modify buffer to exclude its last 'free' box
   buf[3] = 0x38;
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(&buf[0], buf.size(), media_log_, &err));
 
   std::vector<PsshBox> kids;
@@ -255,7 +305,7 @@ TEST_F(BoxReaderTest, NestedBoxWithHugeSize) {
       0x00, 0x01, 0x00, 0x03, 0x00, 0x03, 0x00, 0x04, 0x05, 0x06, 0x07, 0x08};
 
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(kData, sizeof(kData), media_log_, &err));
 
   EXPECT_FALSE(err);
@@ -271,18 +321,16 @@ TEST_F(BoxReaderTest, ScanChildrenWithInvalidChild) {
   // The sample specifies a large number of EditListEntry's, but only 1 is
   // actually included in the box. This test verifies that the code checks
   // properly that the buffer contains the specified number of EditListEntry's
-  // (does not cause an int32_t overflow when checking that the bytes are
-  // available, and does not read past the end of the buffer).
   static const uint8_t kData[] = {
       0x00, 0x00, 0x00, 0x2c, 'e',  'm',  's',  'g',  // outer box
       0x00, 0x00, 0x00, 0x24, 'e',  'l',  's',  't',  // nested box
       0x01, 0x00, 0x00, 0x00,                         // version = 1, flags = 0
-      0xff, 0xff, 0xff, 0xff,  // count = max, but only 1 actually included
+      0x00, 0x00, 0x00, 0x0a,  // count = 10, but only 1 actually included
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(kData, sizeof(kData), media_log_, &err));
 
   EXPECT_FALSE(err);
@@ -296,34 +344,120 @@ TEST_F(BoxReaderTest, ScanChildrenWithInvalidChild) {
   EXPECT_FALSE(reader->ReadChild(&child));
 }
 
-TEST_F(BoxReaderTest, ReadAllChildrenWithInvalidChild) {
-  // This data is not a valid 'emsg' box. It is just used as a top-level box
-  // as ReadTopLevelBox() has a restricted set of boxes it allows.
-  // The nested 'trun' box is used as it includes a count of the number
-  // of samples. The data specifies a large number of samples, but only 1
-  // is actually included in the box. Verifying that the large count does not
-  // cause an int32_t overflow which would allow parsing of TrackFragmentRun
-  // to read past the end of the buffer.
+TEST_F(BoxReaderTest, ReadAllChildrenWithChildLargerThanParent) {
   static const uint8_t kData[] = {
-      0x00, 0x00, 0x00, 0x28, 'e',  'm',  's',  'g',  // outer box
-      0x00, 0x00, 0x00, 0x20, 't',  'r',  'u',  'n',  // nested box
-      0x00, 0x00, 0x0f, 0x00,  // version = 0, flags = samples present
-      0xff, 0xff, 0xff, 0xff,  // count = max, but only 1 actually included
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+      0x00, 0x00, 0x00, 0x10, 's', 'k', 'i', 'p',  // outer box
+      0x00, 0x00, 0x00, 0x10, 'p', 's', 's', 'h',  // nested box
+  };
 
   bool err;
-  scoped_ptr<BoxReader> reader(
+  std::unique_ptr<BoxReader> reader(
       BoxReader::ReadTopLevelBox(kData, sizeof(kData), media_log_, &err));
 
   EXPECT_FALSE(err);
   EXPECT_TRUE(reader);
-  EXPECT_EQ(FOURCC_EMSG, reader->type());
+  EXPECT_EQ(FOURCC_SKIP, reader->type());
 
-  // Reading the child should fail since the number of samples specified
-  // doesn't match what is in the box.
-  std::vector<TrackFragmentRun> children;
-  EXPECT_FALSE(reader->ReadAllChildrenAndCheckFourCC(&children));
+  std::vector<PsshBox> tmp;
+  EXPECT_FALSE(reader->ReadAllChildren(&tmp));
+}
+
+TEST_F(BoxReaderTest, TrunSampleCount32bitOverflow) {
+  // This 'trun' box specifies an unusually high sample count, though only one
+  // sample is  included in the bytes below. The values for "sample_count" and
+  // "flags" are chosen such that the needed number of bytes will overflow 32
+  // bits to yield a very small number (4), potentially passing the
+  // internal check for HasBytes(). http://crbug.com/679640
+  static const uint8_t kData[] = {
+      0x00, 0x00, 0x00, 0x18, 't', 'r', 'u', 'n',  // header
+      0x00, 0x00,                                  // version = 0
+      0x03, 0x00,  // flags = 2 fields present (sample duration and sample size)
+      0x80, 0x00, 0x00, 0x02,  // sample count = 2147483650
+      0x00, 0x00, 0x00, 0x00,  // only one sample present
+      0x00, 0x00, 0x00, 0x00};
+
+  // Verify we catch the overflow to avoid OOB reads/writes.
+  TestParsing32bitOverflow<TrackFragmentRun>(
+      kData, sizeof(kData),
+      "Extreme TRUN sample count exceeds implementation limit.");
+}
+
+TEST_F(BoxReaderTest, SaioCount32bitOverflow) {
+  // This 'saio' box specifies an unusually high number of offset counts, though
+  // only one offset is included in the bytes below. The values for "count" and
+  // "version" are chosen such that the needed number of bytes will overflow 32
+  // bits to yield a very small number (4), potentially passing the internal
+  // check for HasBytes(). http://crbug.com/679641
+  static const uint8_t kData[] = {
+      0x00, 0x00, 0x00, 0x14, 's', 'a', 'i', 'o',  // header
+      0x00, 0x00,              // version = 0 (4 bytes per offset entry)
+      0x00, 0x00,              // flags = 0
+      0x40, 0x00, 0x00, 0x01,  // offsets count = 1073741825
+      0x00, 0x00, 0x00, 0x00,  // single offset entry
+  };
+
+  // Verify we catch the overflow to avoid OOB reads/writes.
+  TestParsing32bitOverflow<SampleAuxiliaryInformationOffset>(
+      kData, sizeof(kData), "Extreme SAIO count exceeds implementation limit.");
+}
+
+TEST_F(BoxReaderTest, ElstCount32bitOverflow) {
+  // This 'elst' box specifies an unusually high number of edit counts, though
+  // only one edit is included in the bytes below. The values for "count" and
+  // "version" are chosen such that the needed number of bytes will overflow 32
+  // bits to yield a very small number (12), potentially passing the internal
+  // check for HasBytes(). http://crbug.com/679645
+  static const uint8_t kData[] = {
+      0x00, 0x00, 0x00, 0x1c, 'e', 'l', 's', 't',  // header
+      0x00, 0x00,              // version = 0 (12 bytes per edit entry)
+      0x00, 0x00,              // flags = 0
+      0x80, 0x00, 0x00, 0x01,  // edits count = 2147483649
+      0x00, 0x00, 0x00, 0x00,  // single edit entry
+      0x00, 0x00, 0x00, 0x00,  // ...
+      0x00, 0x00, 0x00, 0x00,
+  };
+
+  // Verify we catch the overflow to avoid OOB reads/writes.
+  TestParsing32bitOverflow<EditList>(
+      kData, sizeof(kData), "Extreme ELST count exceeds implementation limit.");
+}
+
+TEST_F(BoxReaderTest, SbgpCount32bitOverflow) {
+  // This 'sbgp' box specifies an unusually high count of entries, though only
+  // one partial entry is included in the bytes below. The value for "count" is
+  // chosen such that we could overflow attempting to allocate the vector for
+  // parsed entries. http://crbug.com/679646
+  static const uint8_t kData[] = {
+      0x00, 0x00, 0x00, 0x1c, 's', 'b', 'g', 'p',  // header
+      0x00, 0x00, 0x00, 0x00,                      // version = 0, flags = 0
+      's',  'e',  'i',  'g',                       // required grouping "type"
+      0xff, 0xff, 0xff, 0xff,                      // count = 4294967295
+      0x00, 0x00, 0x00, 0x00,                      // partial entry
+      0x00, 0x00, 0x00, 0x00,
+  };
+
+  // Verify we catch the overflow to avoid OOB reads/writes.
+  TestParsing32bitOverflow<SampleToGroup>(
+      kData, sizeof(kData), "Extreme SBGP count exceeds implementation limit.");
+}
+
+TEST_F(BoxReaderTest, SgpdCount32bitOverflow) {
+  // This 'sgpd' box specifies an unusually high count of entries, though only
+  // one partial entry is included in the bytes below. The value for "count" is
+  // chosen such that we could overflow attempting to allocate the vector for
+  // parsed entries. http://crbug.com/679647
+  static const uint8_t kData[] = {
+      0x00, 0x00, 0x00, 0x1c, 's', 'g', 'p', 'd',  // header
+      0x00, 0x00, 0x00, 0x00,                      // version = 0, flags = 0
+      's',  'e',  'i',  'g',                       // required grouping "type"
+      0xff, 0xff, 0xff, 0xff,                      // count = 4294967295
+      0x00, 0x00, 0x00, 0x00,                      // partial entry
+      0x00, 0x00, 0x00, 0x00,
+  };
+
+  // Verify we catch the overflow to avoid OOB reads/writes.
+  TestParsing32bitOverflow<SampleGroupDescription>(
+      kData, sizeof(kData), "Extreme SGPD count exceeds implementation limit.");
 }
 
 }  // namespace mp4

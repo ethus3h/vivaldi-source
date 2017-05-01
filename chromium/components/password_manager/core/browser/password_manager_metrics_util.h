@@ -9,8 +9,6 @@
 
 #include <string>
 
-class PrefService;
-
 namespace password_manager {
 
 namespace metrics_util {
@@ -29,9 +27,9 @@ enum UIDisplayDisposition {
   AUTOMATIC_WITH_PASSWORD_PENDING = 0,
   MANUAL_WITH_PASSWORD_PENDING,
   MANUAL_MANAGE_PASSWORDS,
-  MANUAL_BLACKLISTED,  // obsolete.
+  MANUAL_BLACKLISTED_OBSOLETE,  // obsolete.
   AUTOMATIC_GENERATED_PASSWORD_CONFIRMATION,
-  AUTOMATIC_CREDENTIAL_REQUEST,
+  AUTOMATIC_CREDENTIAL_REQUEST_OBSOLETE,  // obsolete
   AUTOMATIC_SIGNIN_TOAST,
   MANUAL_WITH_PASSWORD_PENDING_UPDATE,
   AUTOMATIC_WITH_PASSWORD_PENDING_UPDATE,
@@ -48,18 +46,13 @@ enum UIDismissalReason {
   CLICKED_NEVER,
   CLICKED_MANAGE,
   CLICKED_DONE,
-  CLICKED_UNBLACKLIST,
+  CLICKED_UNBLACKLIST_OBSOLETE,  // obsolete.
   CLICKED_OK,
-  CLICKED_CREDENTIAL,
+  CLICKED_CREDENTIAL_OBSOLETE,  // obsolete.
   AUTO_SIGNIN_TOAST_TIMEOUT,
-  AUTO_SIGNIN_TOAST_CLICKED,
+  AUTO_SIGNIN_TOAST_CLICKED_OBSOLETE,  // obsolete.
   CLICKED_BRAND_NAME,
   NUM_UI_RESPONSES,
-
-  // If we add the omnibox icon _without_ intending to display the bubble,
-  // we actually call Close() after creating the bubble view. We don't want
-  // that to count in the metrics, so we need this placeholder value.
-  NOT_DISPLAYED
 };
 
 enum FormDeserializationStatus {
@@ -123,47 +116,74 @@ enum MultiAccountUpdateBubbleUserAction {
   MULTI_ACCOUNT_UPDATE_BUBBLE_USER_ACTION_COUNT
 };
 
-// We monitor the performance of the save password heuristic for a handful of
-// domains. For privacy reasons we are not reporting UMA signals by domain, but
-// by a domain group. A domain group can contain multiple domains, and a domain
-// can be contained in multiple groups.
-// For more information see http://goo.gl/vUuFd5.
+enum AutoSigninPromoUserAction {
+  AUTO_SIGNIN_NO_ACTION,
+  AUTO_SIGNIN_TURN_OFF,
+  AUTO_SIGNIN_OK_GOT_IT,
+  AUTO_SIGNIN_PROMO_ACTION_COUNT
+};
 
-// The number of groups in which each monitored website appears.
-// It is a half of the total number of groups.
-const size_t kGroupsPerDomain = 10u;
+enum AccountChooserUserAction {
+  ACCOUNT_CHOOSER_DISMISSED,
+  ACCOUNT_CHOOSER_CREDENTIAL_CHOSEN,
+  ACCOUNT_CHOOSER_SIGN_IN,
+  ACCOUNT_CHOOSER_ACTION_COUNT
+};
 
-// Check whether the |url_host| is monitored or not. If yes, we return
-// the id of the group which contains the domain name otherwise
-// returns 0. |pref_service| needs to be the profile preference service.
-size_t MonitoredDomainGroupId(const std::string& url_host,
-                              PrefService* pref_service);
+enum SyncSignInUserAction {
+  CHROME_SIGNIN_DISMISSED,
+  CHROME_SIGNIN_OK,
+  CHROME_SIGNIN_CANCEL,
+  CHROME_SIGNIN_ACTION_COUNT
+};
 
-// A version of the UMA_HISTOGRAM_ENUMERATION macro that allows the |name|
-// to vary over the program's runtime.
-void LogUMAHistogramEnumeration(const std::string& name,
-                                int sample,
-                                int boundary_value);
+enum AccountChooserUsabilityMetric {
+  ACCOUNT_CHOOSER_LOOKS_OK,
+  ACCOUNT_CHOOSER_EMPTY_USERNAME,
+  ACCOUNT_CHOOSER_DUPLICATES,
+  ACCOUNT_CHOOSER_EMPTY_USERNAME_AND_DUPLICATES,
+  ACCOUNT_CHOOSER_USABILITY_COUNT,
+};
+
+enum CredentialManagerGetResult {
+  // The promise is rejected.
+  CREDENTIAL_MANAGER_GET_REJECTED,
+  // Auto sign-in is not allowed in the current context.
+  CREDENTIAL_MANAGER_GET_NONE_ZERO_CLICK_OFF,
+  // No matching credentials found.
+  CREDENTIAL_MANAGER_GET_NONE_EMPTY_STORE,
+  // User mediation required due to > 1 matching credentials.
+  CREDENTIAL_MANAGER_GET_NONE_MANY_CREDENTIALS,
+  // User mediation required due to the signed out state.
+  CREDENTIAL_MANAGER_GET_NONE_SIGNED_OUT,
+  // User mediation required due to pending first run experience dialog.
+  CREDENTIAL_MANAGER_GET_NONE_FIRST_RUN,
+  // Return empty credential for whatever reason.
+  CREDENTIAL_MANAGER_GET_NONE,
+  // Return a credential from the account chooser.
+  CREDENTIAL_MANAGER_GET_ACCOUNT_CHOOSER,
+  // User is auto signed in.
+  CREDENTIAL_MANAGER_GET_AUTOSIGNIN,
+  CREDENTIAL_MANAGER_GET_COUNT
+};
+
+enum CredentialManagerGetMediation {
+  CREDENTIAL_MANAGER_GET_MEDIATED,
+  CREDENTIAL_MANAGER_GET_UNMEDIATED
+};
+
+enum PasswordReusePasswordFieldDetected {
+  NO_PASSWORD_FIELD,
+  HAS_PASSWORD_FIELD,
+  PASSWORD_REUSE_PASSWORD_FIELD_DETECTED_COUNT
+};
 
 // A version of the UMA_HISTOGRAM_BOOLEAN macro that allows the |name|
 // to vary over the program's runtime.
 void LogUMAHistogramBoolean(const std::string& name, bool sample);
 
-// Returns a string which contains group_|group_id|. If the
-// |group_id| corresponds to an unmonitored domain returns an empty string.
-std::string GroupIdToString(size_t group_id);
-
 // Log the |reason| a user dismissed the password manager UI.
 void LogUIDismissalReason(UIDismissalReason reason);
-
-// Given a ResponseType, log the appropriate UIResponse. We'll use this
-// mapping to migrate from "PasswordManager.InfoBarResponse" to
-// "PasswordManager.UIDismissalReason" so we can accurately evaluate the
-// impact of the bubble UI.
-//
-// TODO(mkwst): Drop this (and the infobar metric itself) once the new metric
-// has rolled out to stable.
-void LogUIDismissalReason(ResponseType type);
 
 // Log the appropriate display disposition.
 void LogUIDisplayDisposition(UIDisplayDisposition disposition);
@@ -191,6 +211,44 @@ void LogUpdatePasswordSubmissionEvent(UpdatePasswordSubmissionEvent event);
 // accounts.
 void LogMultiAccountUpdateBubbleUserAction(
     MultiAccountUpdateBubbleUserAction action);
+
+// Log a user action on showing the autosignin first run experience.
+void LogAutoSigninPromoUserAction(AutoSigninPromoUserAction action);
+
+// Log a user action on showing the account chooser for one or many accounts.
+void LogAccountChooserUserActionOneAccount(AccountChooserUserAction action);
+void LogAccountChooserUserActionManyAccounts(AccountChooserUserAction action);
+
+// Log a user action on showing the Chrome sign in promo.
+void LogSyncSigninPromoUserAction(SyncSignInUserAction action);
+
+// Logs whether a password was rejected due to same origin but different scheme.
+void LogShouldBlockPasswordForSameOriginButDifferentScheme(bool should_block);
+
+// Logs number of passwords migrated from HTTP to HTTPS.
+void LogCountHttpMigratedPasswords(int count);
+
+// Log if the account chooser has empty username or duplicate usernames.
+void LogAccountChooserUsability(AccountChooserUsabilityMetric usability);
+
+// Log the result of navigator.credentials.get. |status| specifies the
+// "unmediated" parameter of the API method.
+void LogCredentialManagerGetResult(CredentialManagerGetResult result,
+                                   CredentialManagerGetMediation status);
+
+// Log the password reuse.
+void LogPasswordReuse(int password_length,
+                      int saved_passwords,
+                      int number_matches,
+                      bool password_field_detected);
+
+// Log when the user selects the "Login not secure" warning in the password
+// autofill dropdown to show more information about the warning.
+void LogShowedHttpNotSecureExplanation();
+
+// Log that the Form-Not-Secure warning was shown. Should be called at most once
+// per main-frame navigation.
+void LogShowedFormNotSecureWarningOnCurrentNavigation();
 
 }  // namespace metrics_util
 

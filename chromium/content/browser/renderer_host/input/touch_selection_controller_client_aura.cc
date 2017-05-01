@@ -156,8 +156,11 @@ void TouchSelectionControllerClientAura::OnScrollCompleted() {
 
 bool TouchSelectionControllerClientAura::HandleContextMenu(
     const ContextMenuParams& params) {
-  if (params.source_type == ui::MENU_SOURCE_TOUCH && params.is_editable &&
-      params.selection_text.empty() && IsQuickMenuAvailable()) {
+  if (params.source_type == ui::MENU_SOURCE_LONG_PRESS &&
+      rwhva_->selection_controller()->insertion_active_or_requested() &&
+      IsQuickMenuAvailable()) {
+    DCHECK(params.is_editable);
+    DCHECK(params.selection_text.empty());
     quick_menu_requested_ = true;
     UpdateQuickMenu();
     return true;
@@ -303,9 +306,9 @@ void TouchSelectionControllerClientAura::OnSelectionEvent(
   };
 }
 
-scoped_ptr<ui::TouchHandleDrawable>
+std::unique_ptr<ui::TouchHandleDrawable>
 TouchSelectionControllerClientAura::CreateDrawable() {
-  return scoped_ptr<ui::TouchHandleDrawable>(
+  return std::unique_ptr<ui::TouchHandleDrawable>(
       new ui::TouchHandleDrawableAura(rwhva_->GetNativeView()));
 }
 

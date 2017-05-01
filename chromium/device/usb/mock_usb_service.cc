@@ -7,38 +7,30 @@
 #include <string>
 #include <vector>
 
+#include "base/threading/thread_task_runner_handle.h"
 #include "device/usb/usb_device.h"
 
 namespace device {
 
-MockUsbService::MockUsbService() {
-}
+MockUsbService::MockUsbService()
+    : UsbService(base::ThreadTaskRunnerHandle::IsSet()
+                     ? base::ThreadTaskRunnerHandle::Get()
+                     : nullptr,
+                 nullptr) {}
 
 MockUsbService::~MockUsbService() {
+  // Shutdown() must be called before the base class destructor.
+  Shutdown();
 }
 
 void MockUsbService::AddDevice(scoped_refptr<UsbDevice> device) {
-  devices_[device->guid()] = device;
+  devices()[device->guid()] = device;
   NotifyDeviceAdded(device);
 }
 
 void MockUsbService::RemoveDevice(scoped_refptr<UsbDevice> device) {
-  devices_.erase(device->guid());
+  devices().erase(device->guid());
   UsbService::NotifyDeviceRemoved(device);
-}
-
-scoped_refptr<UsbDevice> MockUsbService::GetDevice(const std::string& guid) {
-  auto it = devices_.find(guid);
-  if (it != devices_.end())
-    return it->second;
-  return nullptr;
-}
-
-void MockUsbService::GetDevices(const GetDevicesCallback& callback) {
-  std::vector<scoped_refptr<UsbDevice>> devices;
-  for (const auto& map_entry : devices_)
-    devices.push_back(map_entry.second);
-  callback.Run(devices);
 }
 
 }  // namespace device

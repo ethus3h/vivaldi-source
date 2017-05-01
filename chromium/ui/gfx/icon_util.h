@@ -8,11 +8,11 @@
 #include <windows.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/win/scoped_gdi_object.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
@@ -103,7 +103,7 @@ class GFX_EXPORT IconUtil {
   // loaded .dll or .exe |module|. Supports loading smaller icon sizes as well
   // as the Vista+ 256x256 PNG icon size. If the icon could not be loaded or
   // found, returns a NULL scoped_ptr.
-  static scoped_ptr<gfx::ImageFamily> CreateImageFamilyFromIconResource(
+  static std::unique_ptr<gfx::ImageFamily> CreateImageFamilyFromIconResource(
       HMODULE module,
       int resource_id);
 
@@ -140,6 +140,10 @@ class GFX_EXPORT IconUtil {
                                                     const gfx::Point& hotspot,
                                                     const void* dib_bits,
                                                     size_t dib_size);
+
+  // Given a valid HICON handle representing an icon, this function retrieves
+  // the hot spot of the icon.
+  static gfx::Point GetHotSpotFromHICON(HICON icon);
 
  private:
   // The icon format is published in the MSDN but there is no definition of

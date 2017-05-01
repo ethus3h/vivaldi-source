@@ -15,16 +15,14 @@ class PpapiPermissions;
 }
 
 namespace content {
-class PepperInstanceStateAccessor;
 class RendererPpapiHostImpl;
-class RenderViewImpl;
 
 class ContentRendererPepperHostFactory : public ppapi::host::HostFactory {
  public:
   explicit ContentRendererPepperHostFactory(RendererPpapiHostImpl* host);
   ~ContentRendererPepperHostFactory() override;
 
-  scoped_ptr<ppapi::host::ResourceHost> CreateResourceHost(
+  std::unique_ptr<ppapi::host::ResourceHost> CreateResourceHost(
       ppapi::host::PpapiHost* host,
       PP_Resource resource,
       PP_Instance instance,

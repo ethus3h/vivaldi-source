@@ -4,6 +4,8 @@
 
 #include "chrome/browser/media/router/test_helper.h"
 
+#include "chrome/browser/media/router/media_source.h"
+
 namespace media_router {
 
 MockIssuesObserver::MockIssuesObserver(MediaRouter* router)
@@ -11,9 +13,9 @@ MockIssuesObserver::MockIssuesObserver(MediaRouter* router)
 MockIssuesObserver::~MockIssuesObserver() {}
 
 MockMediaSinksObserver::MockMediaSinksObserver(MediaRouter* router,
-                                               const MediaSource& source)
-    : MediaSinksObserver(router, source) {
-}
+                                               const MediaSource& source,
+                                               const GURL& origin)
+    : MediaSinksObserver(router, source, origin) {}
 MockMediaSinksObserver::~MockMediaSinksObserver() {
 }
 
@@ -22,11 +24,6 @@ MockMediaRoutesObserver::MockMediaRoutesObserver(MediaRouter* router,
     : MediaRoutesObserver(router, source_id) {
 }
 MockMediaRoutesObserver::~MockMediaRoutesObserver() {
-}
-
-MockEventPageTracker::MockEventPageTracker() {
-}
-MockEventPageTracker::~MockEventPageTracker() {
 }
 
 MockPresentationConnectionStateChangedCallback::

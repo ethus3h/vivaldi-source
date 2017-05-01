@@ -6,8 +6,10 @@
 
 #include <algorithm>
 
-#include "base/metrics/histogram.h"
+#include "base/format_macros.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -61,9 +63,9 @@ AudioInputSyncWriter::AudioInputSyncWriter(void* shared_memory,
     CHECK_EQ(0U, reinterpret_cast<uintptr_t>(ptr) &
         (AudioBus::kChannelAlignment - 1));
     AudioInputBuffer* buffer = reinterpret_cast<AudioInputBuffer*>(ptr);
-    scoped_ptr<AudioBus> audio_bus =
+    std::unique_ptr<AudioBus> audio_bus =
         AudioBus::WrapMemory(params, buffer->audio);
-    audio_buses_.push_back(audio_bus.release());
+    audio_buses_.push_back(std::move(audio_bus));
     ptr += shared_memory_segment_size_;
   }
 }
@@ -108,13 +110,8 @@ AudioInputSyncWriter::~AudioInputSyncWriter() {
                             AUDIO_CAPTURER_AUDIO_GLITCHES_MAX + 1);
 
   std::string log_string = base::StringPrintf(
-#if defined(COMPILER_MSVC)
-      "AISW: number of detected audio glitches: %Iu out of %Iu",
-#else
-      "AISW: number of detected audio glitches: %zu out of %zu",
-#endif
-      write_error_count_,
-      write_count_);
+      "AISW: number of detected audio glitches: %" PRIuS " out of %" PRIuS,
+      write_error_count_, write_count_);
   MediaStreamManager::SendMessageToNativeLog(log_string);
   DVLOG(1) << log_string;
 }
@@ -123,6 +120,7 @@ void AudioInputSyncWriter::Write(const AudioBus* data,
                                  double volume,
                                  bool key_pressed,
                                  uint32_t hardware_delay_bytes) {
+  TRACE_EVENT0("audio", "AudioInputSyncWriter::Write");
   ++write_count_;
   CheckTimeSinceLastWrite();
 
@@ -132,7 +130,8 @@ void AudioInputSyncWriter::Write(const AudioBus* data,
   // writing. We verify that each buffer index is in sequence.
   size_t number_of_indices_available = socket_->Peek() / sizeof(uint32_t);
   if (number_of_indices_available > 0) {
-    scoped_ptr<uint32_t[]> indices(new uint32_t[number_of_indices_available]);
+    std::unique_ptr<uint32_t[]> indices(
+        new uint32_t[number_of_indices_available]);
     size_t bytes_received = socket_->Receive(
         &indices[0],
         number_of_indices_available * sizeof(indices[0]));
@@ -174,6 +173,8 @@ void AudioInputSyncWriter::Write(const AudioBus* data,
   if (write_error) {
     ++write_error_count_;
     ++trailing_write_error_count_;
+    TRACE_EVENT_INSTANT0("audio", "AudioInputSyncWriter write error",
+                         TRACE_EVENT_SCOPE_THREAD);
   } else {
     trailing_write_error_count_ = 0;
   }
@@ -232,9 +233,20 @@ bool AudioInputSyncWriter::PushDataToFifo(const AudioBus* data,
                                           bool key_pressed,
                                           uint32_t hardware_delay_bytes) {
   if (overflow_buses_.size() == kMaxOverflowBusesSize) {
-    const std::string error_message = "AISW: No room in fifo.";
-    LOG(ERROR) << error_message;
-    AddToNativeLog(error_message);
+    // We use |write_error_count_| for capping number of log messages.
+    // |write_error_count_| also includes socket Send() errors, but those should
+    // be rare.
+    if (write_error_count_ <= 50) {
+      const std::string error_message = "AISW: No room in fifo.";
+      LOG(WARNING) << error_message;
+      AddToNativeLog(error_message);
+      if (write_error_count_ == 50) {
+        const std::string error_message =
+            "AISW: Log cap reached, suppressing further fifo overflow logs.";
+        LOG(WARNING) << error_message;
+        AddToNativeLog(error_message);
+      }
+    }
     return false;
   }
 
@@ -249,10 +261,10 @@ bool AudioInputSyncWriter::PushDataToFifo(const AudioBus* data,
   overflow_params_.push_back(params);
 
   // Push audio data to fifo.
-  scoped_ptr<AudioBus> audio_bus =
+  std::unique_ptr<AudioBus> audio_bus =
       AudioBus::Create(data->channels(), data->frames());
   data->CopyTo(audio_bus.get());
-  overflow_buses_.push_back(audio_bus.release());
+  overflow_buses_.push_back(std::move(audio_bus));
 
   DCHECK_LE(overflow_buses_.size(), static_cast<size_t>(kMaxOverflowBusesSize));
   DCHECK_EQ(overflow_params_.size(), overflow_buses_.size());
@@ -320,8 +332,11 @@ bool AudioInputSyncWriter::SignalDataWrittenAndUpdateCounters() {
   if (socket_->Send(&current_segment_id_, sizeof(current_segment_id_)) !=
       sizeof(current_segment_id_)) {
     const std::string error_message = "AISW: No room in socket buffer.";
-    LOG(ERROR) << error_message;
+    LOG(WARNING) << error_message;
     AddToNativeLog(error_message);
+    TRACE_EVENT_INSTANT0("audio",
+                         "AudioInputSyncWriter: No room in socket buffer",
+                         TRACE_EVENT_SCOPE_THREAD);
     return false;
   }
 

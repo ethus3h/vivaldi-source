@@ -12,30 +12,19 @@
 #include "base/memory/shared_memory.h"
 #include "base/sync_socket.h"
 #include "content/common/content_export.h"
-#include "content/common/media/media_param_traits.h"
 #include "ipc/ipc_message_macros.h"
 #include "media/audio/audio_input_ipc.h"
 #include "media/audio/audio_output_ipc.h"
-#include "media/audio/audio_parameters.h"
+#include "media/base/ipc/media_param_traits.h"
+#include "media/gpu/ipc/common/media_param_traits.h"
 #include "url/origin.h"
 
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT CONTENT_EXPORT
 #define IPC_MESSAGE_START AudioMsgStart
 
-IPC_ENUM_TRAITS_MAX_VALUE(media::AudioInputIPCDelegateState,
-                          media::AUDIO_INPUT_IPC_DELEGATE_STATE_LAST)
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::AudioOutputIPCDelegateState,
-                          media::AUDIO_OUTPUT_IPC_DELEGATE_STATE_LAST)
-
 IPC_ENUM_TRAITS_MAX_VALUE(media::OutputDeviceStatus,
-                          media::OUTPUT_DEVICE_STATUS_LAST)
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::AudioParameters::Format,
-                          media::AudioParameters::AUDIO_FORMAT_LAST)
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::ChannelLayout, media::CHANNEL_LAYOUT_MAX)
+                          media::OUTPUT_DEVICE_STATUS_MAX)
 
 IPC_STRUCT_BEGIN(AudioInputHostMsg_CreateStream_Config)
   IPC_STRUCT_MEMBER(media::AudioParameters, params)
@@ -48,10 +37,11 @@ IPC_STRUCT_END()
 // Tell the renderer process that an audio output device has been authorized
 // for a given stream. The renderer is given the output parameters for the
 // authorized device.
-IPC_MESSAGE_CONTROL3(AudioMsg_NotifyDeviceAuthorized,
+IPC_MESSAGE_CONTROL4(AudioMsg_NotifyDeviceAuthorized,
                      int /* stream id */,
                      media::OutputDeviceStatus /* device_status */,
-                     media::AudioParameters /* output parameters */)
+                     media::AudioParameters /* output parameters */,
+                     std::string /* matched_device_id */)
 
 // Tell the renderer process that an audio stream has been created.
 // The renderer process is given a shared memory handle for the audio data
@@ -77,19 +67,11 @@ IPC_MESSAGE_CONTROL5(
     uint32_t /* segment count */)
 
 // Notification message sent from AudioRendererHost to renderer for state
-// update after the renderer has requested a Create/Start/Close.
-IPC_MESSAGE_CONTROL2(AudioMsg_NotifyStreamStateChanged,
-                     int /* stream id */,
-                     media::AudioOutputIPCDelegateState /* new state */)
+// update on error.
+IPC_MESSAGE_CONTROL1(AudioMsg_NotifyStreamError, int /* stream id */)
 
 // Notification message sent from browser to renderer for state update.
-IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamStateChanged,
-                     int /* stream id */,
-                     media::AudioInputIPCDelegateState /* new state */)
-
-IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamVolume,
-                     int /* stream id */,
-                     double /* volume */)
+IPC_MESSAGE_CONTROL1(AudioInputMsg_NotifyStreamError, int /* stream id */)
 
 // Messages sent from the renderer to the browser.
 

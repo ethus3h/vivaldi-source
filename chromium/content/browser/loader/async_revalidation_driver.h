@@ -5,36 +5,32 @@
 #ifndef CONTENT_BROWSER_LOADER_ASYNC_REVALIDATION_DRIVER_H_
 #define CONTENT_BROWSER_LOADER_ASYNC_REVALIDATION_DRIVER_H_
 
+#include <memory>
 #include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/resource_controller.h"
 #include "content/public/browser/resource_throttle.h"
 #include "net/base/io_buffer.h"
 #include "net/url_request/url_request.h"
-
-namespace net {
-class HttpCache;
-}
 
 namespace content {
 
 // This class is responsible for driving the URLRequest for an async
 // revalidation. It is passed an instance of ResourceThrottle created by
 // content::ResourceScheduler to perform throttling on the request.
-class CONTENT_EXPORT AsyncRevalidationDriver : public net::URLRequest::Delegate,
-                                               public ResourceController {
+class CONTENT_EXPORT AsyncRevalidationDriver
+    : public net::URLRequest::Delegate,
+      public ResourceThrottle::Delegate {
  public:
   // |completion_callback| is guaranteed to be called on completion,
   // regardless of success or failure.
-  AsyncRevalidationDriver(scoped_ptr<net::URLRequest> request,
-                          scoped_ptr<ResourceThrottle> throttle,
+  AsyncRevalidationDriver(std::unique_ptr<net::URLRequest> request,
+                          std::unique_ptr<ResourceThrottle> throttle,
                           const base::Closure& completion_callback);
   ~AsyncRevalidationDriver() override;
 
@@ -61,11 +57,10 @@ class CONTENT_EXPORT AsyncRevalidationDriver : public net::URLRequest::Delegate,
                           bool* defer) override;
   void OnAuthRequired(net::URLRequest* request,
                       net::AuthChallengeInfo* info) override;
-  void OnBeforeNetworkStart(net::URLRequest* request, bool* defer) override;
   void OnResponseStarted(net::URLRequest* request) override;
   void OnReadCompleted(net::URLRequest* request, int bytes_read) override;
 
-  // ResourceController implementation:
+  // ResourceThrottle::Delegate implementation:
   void Resume() override;
 
   // For simplicity, this class assumes that ResourceScheduler never cancels
@@ -89,8 +84,8 @@ class CONTENT_EXPORT AsyncRevalidationDriver : public net::URLRequest::Delegate,
   scoped_refptr<net::IOBuffer> read_buffer_;
   base::OneShotTimer timer_;
 
-  scoped_ptr<net::URLRequest> request_;
-  scoped_ptr<ResourceThrottle> throttle_;
+  std::unique_ptr<net::URLRequest> request_;
+  std::unique_ptr<ResourceThrottle> throttle_;
 
   base::Closure completion_callback_;
 

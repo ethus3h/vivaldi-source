@@ -40,11 +40,14 @@ public class SelectPopupDialog implements SelectPopup {
         mContentViewCore = contentViewCore;
 
         final ListView listView = new ListView(windowContext);
+        // setCacheColorHint(0) is required to prevent a black background in WebView on Lollipop:
+        // crbug.com/653026
         listView.setCacheColorHint(0);
+
         AlertDialog.Builder b = new AlertDialog.Builder(windowContext)
                 .setView(listView)
-                .setCancelable(true)
-                .setInverseBackgroundForced(true);
+                .setCancelable(true);
+        setInverseBackgroundForced(b);
 
         if (multiple) {
             b.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
@@ -95,6 +98,14 @@ public class SelectPopupDialog implements SelectPopup {
         });
     }
 
+    @SuppressWarnings("deprecation")
+    private static void setInverseBackgroundForced(AlertDialog.Builder builder) {
+        // This is needed for pre-Holo themes (e.g. android:Theme.Black), which can be used in
+        // WebView. See http://crbug.com/596626. This can be removed if/when this class starts
+        // using android.support.v7.app.AlertDialog.
+        builder.setInverseBackgroundForced(true);
+    }
+
     private int getSelectDialogLayout(boolean isMultiChoice) {
         int resourceId;
         TypedArray styledAttributes = mListBoxPopup.getContext().obtainStyledAttributes(
@@ -137,8 +148,13 @@ public class SelectPopupDialog implements SelectPopup {
     }
 
     @Override
-    public void hide() {
-        mListBoxPopup.cancel();
-        notifySelection(null);
+    public void hide(boolean sendsCancelMessage) {
+        if (sendsCancelMessage) {
+            mListBoxPopup.cancel();
+            notifySelection(null);
+        } else {
+            mSelectionNotified = true;
+            mListBoxPopup.cancel();
+        }
     }
 }

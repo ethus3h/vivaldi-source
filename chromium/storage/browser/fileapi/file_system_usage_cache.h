@@ -8,11 +8,11 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequenced_task_runner.h"
 #include "storage/browser/storage_browser_export.h"
@@ -63,8 +63,6 @@ class STORAGE_EXPORT FileSystemUsageCache {
   static const int kUsageFileHeaderSize;
 
  private:
-  typedef std::map<base::FilePath, base::File*> CacheFiles;
-
   // Read the size, validity and the "dirty" entry described in the .usage file.
   // Returns less than zero if no .usage file is available.
   bool Read(const base::FilePath& usage_file_path,
@@ -92,8 +90,8 @@ class STORAGE_EXPORT FileSystemUsageCache {
 
   bool CalledOnValidThread();
 
-  scoped_ptr<TimedTaskHelper> timer_;
-  CacheFiles cache_files_;
+  std::unique_ptr<TimedTaskHelper> timer_;
+  std::map<base::FilePath, std::unique_ptr<base::File>> cache_files_;
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 

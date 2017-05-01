@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/base/sdch_manager.h"
+
 #include <limits.h>
 
+#include <memory>
 #include <string>
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/simple_test_clock.h"
-#include "net/base/sdch_manager.h"
+#include "base/trace_event/memory_allocator_dump.h"
+#include "base/trace_event/process_memory_dump.h"
+#include "base/trace_event/trace_event_argument.h"
 #include "net/base/sdch_observer.h"
-#include "net/log/net_log.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -116,7 +120,7 @@ class SdchManagerTest : public testing::Test {
   }
 
  private:
-  scoped_ptr<SdchManager> sdch_manager_;
+  std::unique_ptr<SdchManager> sdch_manager_;
 };
 
 static std::string NewSdchDictionary(const std::string& domain) {
@@ -266,9 +270,9 @@ TEST_F(SdchManagerTest, CanUseHTTPSDictionaryOverHTTPSIfEnabled) {
   std::string server_hash;
   sdch_manager()->GenerateHash(dictionary_text, &client_hash, &server_hash);
   SdchProblemCode problem_code;
-  scoped_ptr<SdchManager::DictionarySet> dict_set(
-      sdch_manager()->GetDictionarySetByHash(
-          target_url, server_hash, &problem_code));
+  std::unique_ptr<SdchManager::DictionarySet> dict_set(
+      sdch_manager()->GetDictionarySetByHash(target_url, server_hash,
+                                             &problem_code));
   EXPECT_EQ(SDCH_OK, problem_code);
   EXPECT_TRUE(dict_set.get());
   EXPECT_TRUE(dict_set->GetDictionaryText(server_hash));
@@ -290,9 +294,9 @@ TEST_F(SdchManagerTest, CanNotUseHTTPDictionaryOverHTTPS) {
   std::string server_hash;
   sdch_manager()->GenerateHash(dictionary_text, &client_hash, &server_hash);
   SdchProblemCode problem_code;
-  scoped_ptr<SdchManager::DictionarySet> dict_set(
-      sdch_manager()->GetDictionarySetByHash(
-          target_url, server_hash, &problem_code));
+  std::unique_ptr<SdchManager::DictionarySet> dict_set(
+      sdch_manager()->GetDictionarySetByHash(target_url, server_hash,
+                                             &problem_code));
   EXPECT_FALSE(dict_set.get());
   EXPECT_EQ(SDCH_DICTIONARY_FOUND_HAS_WRONG_SCHEME, problem_code);
 }
@@ -313,9 +317,9 @@ TEST_F(SdchManagerTest, CanNotUseHTTPSDictionaryOverHTTP) {
   std::string server_hash;
   sdch_manager()->GenerateHash(dictionary_text, &client_hash, &server_hash);
   SdchProblemCode problem_code;
-  scoped_ptr<SdchManager::DictionarySet> dict_set(
-      sdch_manager()->GetDictionarySetByHash(
-          target_url, server_hash, &problem_code));
+  std::unique_ptr<SdchManager::DictionarySet> dict_set(
+      sdch_manager()->GetDictionarySetByHash(target_url, server_hash,
+                                             &problem_code));
   EXPECT_FALSE(dict_set.get());
   EXPECT_EQ(SDCH_DICTIONARY_FOUND_HAS_WRONG_SCHEME, problem_code);
 }
@@ -465,7 +469,7 @@ TEST_F(SdchManagerTest, CanUseMultipleManagers) {
   // can't get them from the other.
   EXPECT_TRUE(AddSdchDictionary(dictionary_text_1,
                                 GURL("http://" + dictionary_domain_1)));
-  scoped_ptr<SdchManager::DictionarySet> dict_set;
+  std::unique_ptr<SdchManager::DictionarySet> dict_set;
 
   SdchProblemCode problem_code;
   dict_set = sdch_manager()->GetDictionarySetByHash(
@@ -510,7 +514,7 @@ TEST_F(SdchManagerTest, ClearDictionaryData) {
   EXPECT_TRUE(AddSdchDictionary(dictionary_text,
                                 GURL("http://" + dictionary_domain)));
 
-  scoped_ptr<SdchManager::DictionarySet> dict_set;
+  std::unique_ptr<SdchManager::DictionarySet> dict_set;
 
   SdchProblemCode problem_code;
   dict_set = sdch_manager()->GetDictionarySetByHash(
@@ -556,6 +560,10 @@ TEST_F(SdchManagerTest, GetDictionaryNotification) {
 TEST_F(SdchManagerTest, ExpirationCheckedProperly) {
   // Create an SDCH dictionary with an expiration time in the past.
   std::string dictionary_domain("x.y.z.google.com");
+  // TODO(eroman): "max-age: -1" is invalid -- it is not a valid production of
+  // delta-seconds (1*DIGIT). This test works because currently an invalid
+  // max-age results in the dictionary being considered expired on loading
+  // (crbug.com/602691)
   std::string dictionary_text(base::StringPrintf("Domain: %s\nMax-age: -1\n\n",
                                                  dictionary_domain.c_str()));
   dictionary_text.append(
@@ -568,7 +576,7 @@ TEST_F(SdchManagerTest, ExpirationCheckedProperly) {
 
   // It should be visible if looked up by hash whether expired or not.
   SdchProblemCode problem_code;
-  scoped_ptr<SdchManager::DictionarySet> hash_set(
+  std::unique_ptr<SdchManager::DictionarySet> hash_set(
       sdch_manager()->GetDictionarySetByHash(target_gurl, server_hash,
                                              &problem_code));
   ASSERT_TRUE(hash_set);
@@ -628,6 +636,60 @@ TEST_F(SdchManagerTest, AddRemoveNotifications) {
   EXPECT_EQ(SDCH_OK, sdch_manager()->RemoveSdchDictionary(server_hash));
   EXPECT_EQ(1, observer.dictionary_removed_notifications());
   EXPECT_EQ(server_hash, observer.last_server_hash());
+
+  sdch_manager()->RemoveObserver(&observer);
+}
+
+TEST_F(SdchManagerTest, DumpMemoryStats) {
+  MockSdchObserver observer;
+  sdch_manager()->AddObserver(&observer);
+
+  std::string dictionary_domain("x.y.z.google.com");
+  GURL target_gurl("http://" + dictionary_domain);
+  std::string dictionary_text(NewSdchDictionary(dictionary_domain));
+  std::string client_hash;
+  std::string server_hash;
+  SdchManager::GenerateHash(dictionary_text, &client_hash, &server_hash);
+  EXPECT_TRUE(AddSdchDictionary(dictionary_text, target_gurl));
+  EXPECT_EQ(1, observer.dictionary_added_notifications());
+  EXPECT_EQ(target_gurl, observer.last_dictionary_url());
+  EXPECT_EQ(server_hash, observer.last_server_hash());
+
+  base::trace_event::MemoryDumpArgs dump_args = {
+      base::trace_event::MemoryDumpLevelOfDetail::DETAILED};
+  std::unique_ptr<base::trace_event::ProcessMemoryDump> pmd(
+      new base::trace_event::ProcessMemoryDump(nullptr, dump_args));
+
+  base::trace_event::MemoryAllocatorDump* parent =
+      pmd->CreateAllocatorDump("parent");
+  sdch_manager()->DumpMemoryStats(pmd.get(), parent->absolute_name());
+
+  const base::trace_event::MemoryAllocatorDump* sub_dump =
+      pmd->GetAllocatorDump("parent/sdch_manager");
+  ASSERT_NE(nullptr, sub_dump);
+  const base::trace_event::MemoryAllocatorDump* dump = pmd->GetAllocatorDump(
+      base::StringPrintf("net/sdch_manager_%p", sdch_manager()));
+  std::unique_ptr<base::Value> raw_attrs =
+      dump->attributes_for_testing()->ToBaseValue();
+  base::DictionaryValue* attrs;
+  ASSERT_TRUE(raw_attrs->GetAsDictionary(&attrs));
+  base::DictionaryValue* size_attrs;
+  ASSERT_TRUE(attrs->GetDictionary(
+      base::trace_event::MemoryAllocatorDump::kNameSize, &size_attrs));
+  size_t offset = dictionary_text.find("\n\n") + 2;
+  std::string size;
+  ASSERT_TRUE(size_attrs->GetString("value", &size));
+  int actual_size;
+  ASSERT_TRUE(base::HexStringToInt(size, &actual_size));
+  EXPECT_EQ(dictionary_text.size() - offset, static_cast<size_t>(actual_size));
+
+  base::DictionaryValue* count_attrs;
+  ASSERT_TRUE(attrs->GetDictionary(
+      base::trace_event::MemoryAllocatorDump::kNameObjectCount, &count_attrs));
+  std::string count;
+  ASSERT_TRUE(count_attrs->GetString("value", &count));
+  // One dictionary.
+  EXPECT_EQ("1", count);
 
   sdch_manager()->RemoveObserver(&observer);
 }

@@ -37,15 +37,9 @@ class GCMMessageCryptographer {
   // unique content encryption key for a given message.
   static const size_t kSaltSize;
 
-  // Label of the encryption group used to calculate the shared secret.
-  enum class Label {
-    P256
-  };
-
-  // Creates a new cryptographer with |label|, identifying the group used for
-  // the key agreement, and the public keys of both the recipient and sender.
-  GCMMessageCryptographer(Label label,
-                          const base::StringPiece& recipient_public_key,
+  // Creates a new cryptographer, identifying the group used for the key
+  // agreement, and the public keys of both the recipient and sender.
+  GCMMessageCryptographer(const base::StringPiece& recipient_public_key,
                           const base::StringPiece& sender_public_key,
                           const std::string& auth_secret);
 
@@ -75,7 +69,7 @@ class GCMMessageCryptographer {
   FRIEND_TEST_ALL_PREFIXES(GCMMessageCryptographerTest, AuthSecretAffectsIKM);
   FRIEND_TEST_ALL_PREFIXES(GCMMessageCryptographerTest, InvalidRecordPadding);
   FRIEND_TEST_ALL_PREFIXES(GCMMessageCryptographerTest, NonceGeneration);
-  FRIEND_TEST_ALL_PREFIXES(GCMMessageCryptographerTest, ReferenceTest);
+  friend class GCMMessageCryptographerReferenceTest;
 
   // Size, in bytes, of the authentication tag included in the messages.
   static const size_t kAuthenticationTagBytes;
@@ -83,7 +77,7 @@ class GCMMessageCryptographer {
   enum Mode { ENCRYPT, DECRYPT };
 
   // Private implementation of the encryption and decryption routines, provided
-  // by either NSS or BoringSSL depending on the platform.
+  // by BoringSSL.
   bool EncryptDecryptRecordInternal(Mode mode,
                                     const base::StringPiece& input,
                                     const base::StringPiece& key,

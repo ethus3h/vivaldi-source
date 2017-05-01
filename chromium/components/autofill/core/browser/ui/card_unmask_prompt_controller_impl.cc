@@ -7,15 +7,17 @@
 #include <stddef.h>
 
 #include "base/bind.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/autofill_experiments.h"
 #include "components/autofill/core/browser/autofill_metrics.h"
 #include "components/autofill/core/browser/ui/card_unmask_prompt_view.h"
+#include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/autofill_pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "grit/components_scaled_resources.h"
 #include "grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -42,6 +44,7 @@ CardUnmaskPromptControllerImpl::~CardUnmaskPromptControllerImpl() {
 void CardUnmaskPromptControllerImpl::ShowPrompt(
     CardUnmaskPromptView* card_unmask_view,
     const CreditCard& card,
+    AutofillClient::UnmaskCardReason reason,
     base::WeakPtr<CardUnmaskDelegate> delegate) {
   if (card_unmask_view_)
     card_unmask_view_->ControllerGone();
@@ -51,6 +54,7 @@ void CardUnmaskPromptControllerImpl::ShowPrompt(
   pending_response_ = CardUnmaskDelegate::UnmaskResponse();
   card_unmask_view_ = card_unmask_view;
   card_ = card;
+  reason_ = reason;
   delegate_ = delegate;
   card_unmask_view_->Show();
   unmasking_result_ = AutofillClient::NONE;
@@ -80,7 +84,7 @@ void CardUnmaskPromptControllerImpl::OnVerificationResult(
 
     case AutofillClient::TRY_AGAIN_FAILURE: {
       error_message = l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_CARD_UNMASK_PROMPT_ERROR_TRY_AGAIN);
+          IDS_AUTOFILL_CARD_UNMASK_PROMPT_ERROR_TRY_AGAIN_CVC);
       break;
     }
 
@@ -213,30 +217,37 @@ void CardUnmaskPromptControllerImpl::NewCardLinkClicked() {
 
 base::string16 CardUnmaskPromptControllerImpl::GetWindowTitle() const {
 #if defined(OS_IOS)
-  // The iOS UI has less room for the title and places a "Verify" button right
-  // next to it so the full title ("Verify your" + type and last four) is
-  // unnecessary.
-  return card_.TypeAndLastFourDigits();
+  // The iOS UI has less room for the title so it shows a shorter string.
+  return l10n_util::GetStringUTF16(IDS_AUTOFILL_CARD_UNMASK_PROMPT_TITLE);
 #else
-  int ids = ShouldRequestExpirationDate()
-      ? IDS_AUTOFILL_CARD_UNMASK_PROMPT_UPDATE_TITLE
-      : IDS_AUTOFILL_CARD_UNMASK_PROMPT_TITLE;
-  return l10n_util::GetStringFUTF16(ids, card_.TypeAndLastFourDigits());
+  return l10n_util::GetStringFUTF16(
+      ShouldRequestExpirationDate()
+          ? IDS_AUTOFILL_CARD_UNMASK_PROMPT_EXPIRED_TITLE
+          : IDS_AUTOFILL_CARD_UNMASK_PROMPT_TITLE,
+      card_.TypeAndLastFourDigits());
 #endif
 }
 
 base::string16 CardUnmaskPromptControllerImpl::GetInstructionsMessage() const {
-  if (ShouldRequestExpirationDate()) {
-    return l10n_util::GetStringUTF16(
-        card_.type() == kAmericanExpressCard
-            ? IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS_EXPIRED_AMEX
-            : IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS_EXPIRED);
+#if defined(OS_IOS)
+  int ids;
+  if (reason_ == AutofillClient::UNMASK_FOR_AUTOFILL &&
+      ShouldRequestExpirationDate()) {
+    ids = IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS_EXPIRED;
+  } else {
+    ids = IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS;
   }
-
+  // The iOS UI shows the card details in the instructions text since they
+  // don't fit in the title.
+  return l10n_util::GetStringFUTF16(ids, card_.TypeAndLastFourDigits());
+#else
   return l10n_util::GetStringUTF16(
-      card_.type() == kAmericanExpressCard
-          ? IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS_AMEX
-          : IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS);
+      IDS_AUTOFILL_CARD_UNMASK_PROMPT_INSTRUCTIONS);
+#endif
+}
+
+base::string16 CardUnmaskPromptControllerImpl::GetOkButtonLabel() const {
+  return l10n_util::GetStringUTF16(IDS_AUTOFILL_CARD_UNMASK_CONFIRM_BUTTON);
 }
 
 int CardUnmaskPromptControllerImpl::GetCvcImageRid() const {
@@ -245,13 +256,17 @@ int CardUnmaskPromptControllerImpl::GetCvcImageRid() const {
 }
 
 bool CardUnmaskPromptControllerImpl::ShouldRequestExpirationDate() const {
-  return card_.GetServerStatus() == CreditCard::EXPIRED ||
+  return card_.ShouldUpdateExpiration(base::Time::Now()) ||
          new_card_link_clicked_;
 }
 
 bool CardUnmaskPromptControllerImpl::CanStoreLocally() const {
   // Never offer to save for incognito.
   if (is_off_the_record_)
+    return false;
+  if (reason_ == AutofillClient::UNMASK_FOR_PAYMENT_REQUEST)
+    return false;
+  if (card_.record_type() == CreditCard::LOCAL_CARD)
     return false;
   return OfferStoreUnmaskedCards();
 }
@@ -265,10 +280,7 @@ bool CardUnmaskPromptControllerImpl::InputCvcIsValid(
     const base::string16& input_text) const {
   base::string16 trimmed_text;
   base::TrimWhitespace(input_text, base::TRIM_ALL, &trimmed_text);
-  size_t input_size = card_.type() == kAmericanExpressCard ? 4 : 3;
-  return trimmed_text.size() == input_size &&
-         base::ContainsOnlyChars(trimmed_text,
-                                 base::ASCIIToUTF16("0123456789"));
+  return IsValidCreditCardSecurityCode(trimmed_text, card_.type());
 }
 
 bool CardUnmaskPromptControllerImpl::InputExpirationIsValid(
@@ -285,28 +297,23 @@ bool CardUnmaskPromptControllerImpl::InputExpirationIsValid(
     return false;
   }
 
-  if (month_value < 1 || month_value > 12)
-    return false;
-
-  base::Time::Exploded now;
-  base::Time::Now().LocalExplode(&now);
-
   // Convert 2 digit year to 4 digit year.
-  if (year_value < 100)
+  if (year_value < 100) {
+    base::Time::Exploded now;
+    base::Time::Now().LocalExplode(&now);
     year_value += (now.year / 100) * 100;
+  }
 
-  if (year_value < now.year)
-    return false;
-
-  if (year_value > now.year)
-    return true;
-
-  return month_value >= now.month;
+  return IsValidCreditCardExpirationDate(year_value, month_value,
+                                         base::Time::Now());
 }
 
 base::TimeDelta CardUnmaskPromptControllerImpl::GetSuccessMessageDuration()
     const {
-  return base::TimeDelta::FromMilliseconds(500);
+  return base::TimeDelta::FromMilliseconds(
+      card_.record_type() == CreditCard::LOCAL_CARD ||
+              reason_ == AutofillClient::UNMASK_FOR_PAYMENT_REQUEST
+          ? 0 : 500);
 }
 
 }  // namespace autofill

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_
-#define EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_
+#ifndef EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_H_
+#define EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_H_
 
 #include <stdint.h>
 
@@ -24,21 +24,22 @@ class TestAppWindowContents : public AppWindowContents {
   ~TestAppWindowContents() override;
 
   // apps:AppWindowContents:
-  void Initialize(content::BrowserContext* context, const GURL& url) override;
+  void Initialize(content::BrowserContext* context,
+                  content::RenderFrameHost* creator_frame,
+                  const GURL& url) override;
   void LoadContents(int32_t creator_process_id) override;
   void NativeWindowChanged(NativeAppWindow* native_app_window) override;
   void NativeWindowClosed() override;
-  void DispatchWindowShownForTests() const override;
   void OnWindowReady() override;
   content::WebContents* GetWebContents() const override;
   WindowController* GetWindowController() const override;
 
  private:
-  scoped_ptr<content::WebContents> web_contents_;
+  std::unique_ptr<content::WebContents> web_contents_;
 
   DISALLOW_COPY_AND_ASSIGN(TestAppWindowContents);
 };
 
 }  // namespace extensions
 
-#endif  // EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_
+#endif  // EXTENSIONS_BROWSER_APP_WINDOW_TEST_APP_WINDOW_CONTENTS_H_

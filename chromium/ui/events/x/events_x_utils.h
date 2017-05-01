@@ -7,25 +7,27 @@
 
 #include <stdint.h>
 
+#include <memory>
+
+#include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/x/events_x_export.h"
 #include "ui/gfx/geometry/point.h"
-
-typedef union _XEvent XEvent;
+#include "ui/gfx/x/x11_types.h"
 
 namespace ui {
 
-// Get the EventType from a XEvent.
+// Gets the EventType from a XEvent.
 EVENTS_X_EXPORT EventType EventTypeFromXEvent(const XEvent& xev);
 
-// Get the EventFlags from a XEvent.
+// Gets the EventFlags from a XEvent.
 EVENTS_X_EXPORT int EventFlagsFromXEvent(const XEvent& xev);
 
-// Get the timestamp from a XEvent.
-EVENTS_X_EXPORT base::TimeDelta EventTimeFromXEvent(const XEvent& xev);
+// Gets the timestamp from a XEvent.
+EVENTS_X_EXPORT base::TimeTicks EventTimeFromXEvent(const XEvent& xev);
 
-// Get the location from a XEvent.  The coordinate system of the resultant
+// Gets the location from a XEvent.  The coordinate system of the resultant
 // |Point| has the origin at top-left of the "root window".  The nature of
 // this "root window" and how it maps to platform-specific drawing surfaces is
 // defined in ui/aura/root_window.* and ui/aura/window_tree_host*.
@@ -80,7 +82,8 @@ EVENTS_X_EXPORT bool GetFlingDataFromXEvent(const XEvent& xev,
                                             float* vy_ordinal,
                                             bool* is_cancel);
 
-EVENTS_X_EXPORT void ResetTimestampRolloverCountersForTesting();
+EVENTS_X_EXPORT void ResetTimestampRolloverCountersForTesting(
+    std::unique_ptr<base::TickClock> tick_clock = nullptr);
 
 }  // namespace ui
 

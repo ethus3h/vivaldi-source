@@ -46,15 +46,6 @@ function GalleryItem(
   this.contentImage = null;
 
   /**
-   * We reuse previously generated screen-scale images so that going back to a
-   * recently loaded image looks instant even if the image is not in the content
-   * cache any more. Screen-scale images are small (~1Mpix) so we can afford to
-   * cache more of them.
-   * @type {HTMLCanvasElement}
-   */
-  this.screenImage = null;
-
-  /**
    * Last accessed date to be used for selecting items whose cache are evicted.
    * @type {number}
    * @private
@@ -448,4 +439,28 @@ GalleryItem.prototype.rename = function(displayName) {
   }.bind(this)).then(function(entry) {
     this.entry_ = entry;
   }.bind(this));
+};
+
+/**
+ * The threshold size of an image in pixels, which we always use thumbnail
+ * image for slide-in animation above this. This is a hack to avoid an UI
+ * unresponsiveness when switching between images.
+ * @type {number}
+ * @const
+ */
+GalleryItem.HEAVY_RENDERING_THRESHOLD_PIXELS = 4000 * 3000;
+
+/**
+ * Whether the image requires long rendering time.
+ *
+ * @return {boolean}
+ */
+GalleryItem.prototype.requireLongRenderingTime = function() {
+  // Check for undefined values.
+  if (!this.metadataItem_ ||
+      !this.metadataItem_.imageHeight || !this.metadataItem_.imageWidth)
+    return false;
+  var numPixels = this.metadataItem_.imageHeight *
+      this.metadataItem_.imageWidth;
+  return numPixels > GalleryItem.HEAVY_RENDERING_THRESHOLD_PIXELS;
 };

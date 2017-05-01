@@ -85,6 +85,7 @@ article, aside, footer, header, hgroup, main, nav, section {
 
 marquee {
     display: inline-block;
+    width: -webkit-fill-available;
 }
 
 address {
@@ -290,7 +291,8 @@ td, th {
 }
 
 th {
-    font-weight: bold
+    font-weight: bold;
+    text-align: -internal-center
 }
 
 caption {
@@ -390,11 +392,11 @@ button {
 }
 
 /* Form controls don't go vertical. */
-input, textarea, keygen, select, button, meter, progress {
+input, textarea, select, button, meter, progress {
     -webkit-writing-mode: horizontal-tb !important;
 }
 
-input, textarea, keygen, select, button {
+input, textarea, select, button {
     margin: 0__qem;
     font: -webkit-small-control;
     text-rendering: auto; /* FIXME: Remove when tabs work with optimizeLegibility. */
@@ -435,10 +437,6 @@ input::-webkit-textfield-decoration-container {
     content: none !important;
 }
 
-input[type="search" i]::-webkit-textfield-decoration-container {
-    direction: ltr;
-}
-
 input::-webkit-clear-button {
     -webkit-appearance: searchfield-cancel-button;
     display: inline-block;
@@ -469,24 +467,6 @@ input[type="search" i]:enabled:read-write:-webkit-any(:focus,:hover)::-webkit-se
     pointer-events: auto;
 }
 
-input[type="search" i]::-webkit-search-decoration {
-    -webkit-appearance: searchfield-decoration;
-    display: block;
-    flex: none;
-    -webkit-user-modify: read-only !important;
-    -webkit-align-self: flex-start;
-    margin: auto 0;
-}
-
-input[type="search" i]::-webkit-search-results-decoration {
-    -webkit-appearance: searchfield-results-decoration;
-    display: block;
-    flex: none;
-    -webkit-user-modify: read-only !important;
-    -webkit-align-self: flex-start;
-    margin: auto 0;
-}
-
 input::-webkit-inner-spin-button {
     -webkit-appearance: inner-spin-button;
     display: inline-block;
@@ -504,12 +484,8 @@ input:enabled:read-write:-webkit-any(:focus,:hover)::-webkit-inner-spin-button {
     pointer-events: auto;
 }
 
-keygen, select {
+select {
     border-radius: 5px;
-}
-
-keygen::-webkit-keygen-select {
-    margin: 0px;
 }
 
 textarea {
@@ -528,11 +504,12 @@ textarea {
 
 ::-webkit-input-placeholder {
     -webkit-text-security: none;
-    color: darkGray;
+    color: #757575;
     pointer-events: none !important;
 }
 
 input::-webkit-input-placeholder {
+    line-height: initial;
     white-space: pre;
     word-wrap: normal;
     overflow: hidden;
@@ -629,7 +606,7 @@ input[type="range" i]::-webkit-slider-thumb, input[type="range" i]::-webkit-medi
 
 input[type="button" i]:disabled, input[type="submit" i]:disabled, input[type="reset" i]:disabled,
 input[type="file" i]:disabled::-webkit-file-upload-button, button:disabled,
-select:disabled, keygen:disabled, optgroup:disabled, option:disabled,
+select:disabled, optgroup:disabled, option:disabled,
 select[disabled]>option {
     color: GrayText
 }
@@ -708,8 +685,8 @@ input[type="color" i][list] {
 }
 
 input[type="color" i][list]::-webkit-color-swatch-wrapper {
-    padding-left: 8px;
-    padding-right: 24px;
+    -webkit-padding-start: 8px;
+    -webkit-padding-end: 24px;
 }
 
 input[type="color" i][list]::-webkit-color-swatch {
@@ -843,14 +820,24 @@ meter {
     height: 1em;
     width: 5em;
     vertical-align: -0.2em;
+    -webkit-user-modify: read-only !important;
 }
 
 meter::-webkit-meter-inner-element {
     -webkit-appearance: inherit;
     box-sizing: inherit;
+    display: none;
     -webkit-user-modify: read-only !important;
     height: 100%;
     width: 100%;
+}
+
+meter::-webkit-meter-inner-element:-internal-shadow-host-has-appearance {
+    display: block;
+}
+
+meter::-internal-fallback:-internal-shadow-host-has-appearance {
+    display: none;
 }
 
 meter::-webkit-meter-bar {
@@ -894,7 +881,6 @@ progress {
 }
 
 progress::-webkit-progress-inner-element {
-    -webkit-appearance: inherit;
     box-sizing: inherit;
     -webkit-user-modify: read-only;
     height: 100%;
@@ -975,20 +961,20 @@ nobr {
 
 /* states */
 
-:focus { 
+:focus {
     outline: auto 5px -webkit-focus-ring-color
 }
 
 /* Read-only text fields do not show a focus ring but do still receive focus */
-html:focus, body:focus, input[readonly]:focus { 
+html:focus, body:focus, input[readonly]:focus {
     outline: none
 }
 
 embed:focus, iframe:focus, object:focus {
     outline: none
 }
-  
-input:focus, textarea:focus, keygen:focus, select:focus {
+
+input:focus, textarea:focus, select:focus {
     outline-offset: -2px
 }
 
@@ -1003,7 +989,7 @@ input[type="submit" i]:focus,
 input[type="file" i]:focus::-webkit-file-upload-button {
     outline-offset: 0
 }
-    
+
 a:-webkit-any-link {
     color: -webkit-link;
     text-decoration: underline;
@@ -1110,6 +1096,10 @@ dialog::backdrop {
     background: rgba(0,0,0,0.1)
 }
 
+slot {
+    display: contents;
+}
+
 /* page */
 
 @page {
@@ -1120,5 +1110,9 @@ dialog::backdrop {
     border-width: 0px;
 }
 
-/* noscript is handled internally, as it depends on settings. */
+/* Allows thead sections to print at the top of each page. */
+@media print {
+    thead { break-inside:avoid; }
+}
 
+/* noscript is handled internally, as it depends on settings. */

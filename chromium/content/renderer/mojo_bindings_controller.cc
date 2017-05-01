@@ -21,26 +21,27 @@ namespace {
 const char kMojoContextStateKey[] = "MojoContextState";
 
 struct MojoContextStateData : public base::SupportsUserData::Data {
-  scoped_ptr<MojoContextState> state;
+  std::unique_ptr<MojoContextState> state;
 };
 
 }  // namespace
 
-MojoBindingsController::MojoBindingsController(RenderFrame* render_frame)
+MojoBindingsController::MojoBindingsController(RenderFrame* render_frame,
+                                               MojoBindingsType bindings_type)
     : RenderFrameObserver(render_frame),
-      RenderFrameObserverTracker<MojoBindingsController>(render_frame) {}
+      RenderFrameObserverTracker<MojoBindingsController>(render_frame),
+      bindings_type_(bindings_type) {}
 
 MojoBindingsController::~MojoBindingsController() {
 }
 
 void MojoBindingsController::CreateContextState() {
   v8::HandleScope handle_scope(blink::mainThreadIsolate());
-  blink::WebLocalFrame* frame =
-      render_frame()->GetWebFrame()->toWebLocalFrame();
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
   v8::Local<v8::Context> context = frame->mainWorldScriptContext();
   gin::PerContextData* context_data = gin::PerContextData::From(context);
   MojoContextStateData* data = new MojoContextStateData;
-  data->state.reset(new MojoContextState(frame, context));
+  data->state.reset(new MojoContextState(frame, context, bindings_type_));
   context_data->SetUserData(kMojoContextStateKey, data);
 }
 
@@ -70,15 +71,15 @@ void MojoBindingsController::WillReleaseScriptContext(
   DestroyContextState(context);
 }
 
-void MojoBindingsController::DidFinishDocumentLoad() {
+void MojoBindingsController::RunScriptsAtDocumentStart() {
+  CreateContextState();
+}
+
+void MojoBindingsController::RunScriptsAtDocumentReady() {
   v8::HandleScope handle_scope(blink::mainThreadIsolate());
   MojoContextState* state = GetContextState();
   if (state)
     state->Run();
-}
-
-void MojoBindingsController::DidCreateDocumentElement() {
-  CreateContextState();
 }
 
 void MojoBindingsController::DidClearWindowObject() {
@@ -95,6 +96,10 @@ void MojoBindingsController::DidClearWindowObject() {
 
   v8::HandleScope handle_scope(blink::mainThreadIsolate());
   DestroyContextState(render_frame()->GetWebFrame()->mainWorldScriptContext());
+}
+
+void MojoBindingsController::OnDestruct() {
+  delete this;
 }
 
 }  // namespace content

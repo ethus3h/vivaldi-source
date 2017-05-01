@@ -4,13 +4,14 @@
 
 package org.chromium.android_webview.test;
 
+import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
+
 import android.app.Instrumentation;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.util.AndroidRuntimeException;
 import android.util.Log;
-
-import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
 import org.chromium.android_webview.AwBrowserContext;
 import org.chromium.android_webview.AwBrowserProcess;
@@ -22,25 +23,27 @@ import org.chromium.android_webview.test.util.GraphicsTestUtils;
 import org.chromium.android_webview.test.util.JSUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityInstrumentationTestCase;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.InMemorySharedPreferences;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.parameter.Parameter;
 import org.chromium.base.test.util.parameter.ParameterizedTest;
-import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnPageFinishedHelper;
-import org.chromium.content.common.ContentSwitches;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.net.test.util.TestWebServer;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A base class for android_webview tests. WebView only runs on KitKat and later,
@@ -63,14 +66,14 @@ import java.util.concurrent.TimeUnit;
                                 arguments = {
                                     @Parameter.Argument(
                                         name = CommandLineFlags.Parameter.ADD_ARG,
-                                        stringArray = {AwSwitches.WEBVIEW_SANDBOXED_RENDERER,
-                                                ContentSwitches.IPC_SYNC_COMPOSITING})
+                                        stringArray = {AwSwitches.WEBVIEW_SANDBOXED_RENDERER})
             })})})
 public class AwTestBase
         extends BaseActivityInstrumentationTestCase<AwTestRunnerActivity> {
     public static final long WAIT_TIMEOUT_MS = scaleTimeout(15000);
     public static final int CHECK_INTERVAL = 100;
     private static final String TAG = "AwTestBase";
+    private static final Pattern MAYBE_QUOTED_STRING = Pattern.compile("^(\"?)(.*)\\1$");
 
     // The browser context needs to be a process-wide singleton.
     private AwBrowserContext mBrowserContext;
@@ -81,8 +84,9 @@ public class AwTestBase
 
     @Override
     protected void setUp() throws Exception {
-        mBrowserContext = new AwBrowserContext(
-                new InMemorySharedPreferences(), getInstrumentation().getTargetContext());
+        if (needsAwBrowserContextCreated()) {
+            createAwBrowserContext();
+        }
 
         super.setUp();
         if (needsBrowserProcessStarted()) {
@@ -90,18 +94,44 @@ public class AwTestBase
         }
     }
 
-    protected void startBrowserProcess() throws Exception {
-        final Context context = getActivity();
+    protected void createAwBrowserContext() {
+        if (mBrowserContext != null) {
+            throw new AndroidRuntimeException("There should only be one browser context.");
+        }
+        getActivity(); // The Activity must be launched in order to load native code
+        final InMemorySharedPreferences prefs = new InMemorySharedPreferences();
+        final Context appContext = getInstrumentation().getTargetContext().getApplicationContext();
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                AwBrowserProcess.start(context);
+                mBrowserContext = new AwBrowserContext(prefs, appContext);
             }
         });
     }
 
-    /* Override this to return false if the test doesn't want the browser startup sequence to
+    protected void startBrowserProcess() throws Exception {
+        // The Activity must be launched in order for proper webview statics to be setup.
+        getActivity();
+        getInstrumentation().runOnMainSync(new Runnable() {
+            @Override
+            public void run() {
+                AwBrowserProcess.start();
+            }
+        });
+    }
+
+    /**
+     * Override this to return false if the test doesn't want to create an AwBrowserContext
+     * automatically.
+     */
+    protected boolean needsAwBrowserContextCreated() {
+        return true;
+    }
+
+    /**
+     * Override this to return false if the test doesn't want the browser startup sequence to
      * be run automatically.
+     * @return Whether the instrumentation test requires the browser process to already be started.
      */
     protected boolean needsBrowserProcessStarted() {
         return true;
@@ -341,7 +371,7 @@ public class AwTestBase
     // as visual state callback only indicates that *something* has appeared in WebView.
     public void waitForPixelColorAtCenterOfView(final AwContents awContents,
             final AwTestContainerView testContainerView, final int expectedColor) throws Exception {
-        pollOnUiThread(new Callable<Boolean>() {
+        pollUiThread(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 Bitmap bitmap = GraphicsTestUtils.drawAwContents(awContents, 2, 2,
@@ -366,7 +396,10 @@ public class AwTestBase
             return false;
         }
 
-        return method.isAnnotationPresent(clazz);
+        // Cast to AnnotatedElement to work around a compilation failure.
+        // Method.isAnnotationPresent() was removed in Java 8 (which is used by the Android N SDK),
+        // so compilation with Java 7 fails. See crbug.com/608792.
+        return ((AnnotatedElement) method).isAnnotationPresent(clazz);
     }
 
     /**
@@ -381,7 +414,9 @@ public class AwTestBase
             return new AwTestContainerView(activity, allowHardwareAcceleration);
         }
         public AwSettings createAwSettings(Context context, boolean supportsLegacyQuirks) {
-            return new AwSettings(context, false, supportsLegacyQuirks);
+            return new AwSettings(context, false /* isAccessFromFileURLsGrantedByDefault */,
+                    supportsLegacyQuirks, false /* allowEmptyDocumentPersistence */,
+                    true /* allowGeolocationOnInsecureOrigins */);
         }
     }
 
@@ -423,11 +458,10 @@ public class AwTestBase
 
         AwSettings awSettings = testDependencyFactory.createAwSettings(getActivity(),
                 supportsLegacyQuirks);
-        testContainerView.initialize(new AwContents(
-                mBrowserContext, testContainerView, testContainerView.getContext(),
-                testContainerView.getInternalAccessDelegate(),
-                testContainerView.getNativeGLDelegate(), awContentsClient,
-                awSettings, testDependencyFactory));
+        testContainerView.initialize(new AwContents(mBrowserContext, testContainerView,
+                testContainerView.getContext(), testContainerView.getInternalAccessDelegate(),
+                testContainerView.getNativeDrawGLFunctorFactory(), awContentsClient, awSettings,
+                testDependencyFactory));
         return testContainerView;
     }
 
@@ -480,6 +514,17 @@ public class AwTestBase
     }
 
     /**
+     * Verify double quotes in both sides of the raw string. Strip the double quotes and
+     * returns rest of the string.
+     */
+    protected String maybeStripDoubleQuotes(String raw) {
+        assertNotNull(raw);
+        Matcher m = MAYBE_QUOTED_STRING.matcher(raw);
+        assertTrue(m.matches());
+        return m.group(2);
+    }
+
+    /**
      * Executes the given snippet of JavaScript code within the given ContentView. Returns the
      * result of its execution in JSON format.
      */
@@ -491,11 +536,12 @@ public class AwTestBase
     }
 
     /**
-     * Wrapper around CriteriaHelper.pollForCriteria. This uses AwTestBase-specifc timeouts and
-     * treats timeouts and exceptions as test failures automatically.
+     * Wrapper around CriteriaHelper.pollInstrumentationThread. This uses AwTestBase-specifc
+     * timeouts and treats timeouts and exceptions as test failures automatically.
      */
-    public static void poll(final Callable<Boolean> callable) throws Exception {
-        CriteriaHelper.pollForCriteria(new Criteria() {
+    public static void pollInstrumentationThread(final Callable<Boolean> callable)
+            throws Exception {
+        CriteriaHelper.pollInstrumentationThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 try {
@@ -511,8 +557,8 @@ public class AwTestBase
     /**
      * Wrapper around {@link AwTestBase#poll()} but runs the callable on the UI thread.
      */
-    public void pollOnUiThread(final Callable<Boolean> callable) throws Exception {
-        poll(new Callable<Boolean>() {
+    public void pollUiThread(final Callable<Boolean> callable) throws Exception {
+        pollInstrumentationThread(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 return runTestOnUiThreadAndGetResult(callable);
@@ -652,8 +698,15 @@ public class AwTestBase
         });
 
         OnPageFinishedHelper onPageFinishedHelper = popupContentsClient.getOnPageFinishedHelper();
-        int callCount = onPageFinishedHelper.getCallCount();
-        onPageFinishedHelper.waitForCallback(callCount, 1, WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        int finishCallCount = onPageFinishedHelper.getCallCount();
+        TestAwContentsClient.OnReceivedTitleHelper onReceivedTitleHelper =
+                popupContentsClient.getOnReceivedTitleHelper();
+        int titleCallCount = onReceivedTitleHelper.getCallCount();
+
+        onPageFinishedHelper.waitForCallback(finishCallCount, 1, WAIT_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS);
+        onReceivedTitleHelper.waitForCallback(titleCallCount, 1, WAIT_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS);
 
         return new PopupInfo(popupContentsClient, popupContainerView, popupContents);
     }

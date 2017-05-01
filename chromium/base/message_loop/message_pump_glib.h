@@ -5,9 +5,10 @@
 #ifndef BASE_MESSAGE_LOOP_MESSAGE_PUMP_GLIB_H_
 #define BASE_MESSAGE_LOOP_MESSAGE_PUMP_GLIB_H_
 
+#include <memory>
+
 #include "base/base_export.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_pump.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -68,8 +69,8 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump {
   // Dispatch() will be called.
   int wakeup_pipe_read_;
   int wakeup_pipe_write_;
-  // Use a scoped_ptr to avoid needing the definition of GPollFD in the header.
-  scoped_ptr<GPollFD> wakeup_gpollfd_;
+  // Use a unique_ptr to avoid needing the definition of GPollFD in the header.
+  std::unique_ptr<GPollFD> wakeup_gpollfd_;
 
   DISALLOW_COPY_AND_ASSIGN(MessagePumpGlib);
 };

@@ -5,10 +5,13 @@
 #ifndef COMPONENTS_EXO_BUFFER_H_
 #define COMPONENTS_EXO_BUFFER_H_
 
+#include <memory>
+
 #include "base/callback.h"
+#include "base/cancelable_callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "cc/resources/transferable_resource.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace base {
@@ -17,28 +20,25 @@ class TracedValue;
 }
 }
 
-namespace cc {
-class SingleReleaseCallback;
-class TextureMailbox;
-}
-
 namespace gfx {
 class GpuMemoryBuffer;
 }
 
-namespace gpu {
-struct SyncToken;
-}
-
 namespace exo {
+
+class CompositorFrameSinkHolder;
 
 // This class provides the content for a Surface. The mechanism by which a
 // client provides and updates the contents is the responsibility of the client
 // and not defined as part of this class.
 class Buffer : public base::SupportsWeakPtr<Buffer> {
  public:
-  Buffer(scoped_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer,
-         unsigned texture_target);
+  explicit Buffer(std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer);
+  Buffer(std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer,
+         unsigned texture_target,
+         unsigned query_type,
+         bool use_zero_copy,
+         bool is_overlay_candidate);
   ~Buffer();
 
   // Set the callback to run when the buffer is no longer used by the
@@ -48,52 +48,87 @@ class Buffer : public base::SupportsWeakPtr<Buffer> {
     release_callback_ = release_callback;
   }
 
-  // This function can be used to acquire a texture mailbox that is bound to
-  // the buffer. Returns a release callback on success. The release callback
-  // must be called before a new texture mailbox can be acquired.
-  scoped_ptr<cc::SingleReleaseCallback> ProduceTextureMailbox(
-      cc::TextureMailbox* mailbox);
+  // This function can be used to acquire a texture mailbox for the contents of
+  // buffer. Returns a release callback on success. The release callback should
+  // be called before a new texture mailbox can be acquired unless
+  // |non_client_usage| is true.
+  bool ProduceTransferableResource(
+      CompositorFrameSinkHolder* compositor_frame_sink_holder,
+      cc::ResourceId resource_id,
+      bool secure_output_only,
+      bool client_usage,
+      cc::TransferableResource* resource);
+
+  // This should be called when the buffer is attached to a Surface.
+  void OnAttach();
+
+  // This should be called when the buffer is detached from a surface.
+  void OnDetach();
 
   // Returns the size of the buffer.
   gfx::Size GetSize() const;
 
   // Returns a trace value representing the state of the buffer.
-  scoped_refptr<base::trace_event::TracedValue> AsTracedValue() const;
+  std::unique_ptr<base::trace_event::TracedValue> AsTracedValue() const;
 
  private:
   class Texture;
 
-  // Decrements the use count of buffer and notifies the client that buffer
-  // as been released if it reached 0.
+  // This should be called when buffer is released and will notify the
+  // client that buffer has been released.
   void Release();
+
+  // This is used by ProduceTextureMailbox() to produce a release callback
+  // that releases a texture so it can be destroyed or reused.
+  void ReleaseTexture(std::unique_ptr<Texture> texture);
 
   // This is used by ProduceTextureMailbox() to produce a release callback
   // that releases the buffer contents referenced by a texture before the
   // texture is destroyed or reused.
-  // Note: This is a static function as it needs to run even if the buffer
-  // has been destroyed.
-  static void ReleaseTexture(base::WeakPtr<Buffer> buffer,
-                             scoped_ptr<Texture> texture,
-                             const gpu::SyncToken& sync_token,
-                             bool is_lost);
+  void ReleaseContentsTexture(std::unique_ptr<Texture> texture,
+                              const base::Closure& callback);
+
+  // Notifies the client that buffer has been released if no longer attached
+  // to a surface.
+  void ReleaseContents();
 
   // The GPU memory buffer that contains the contents of this buffer.
-  scoped_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer_;
+  std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer_;
 
   // Texture target that must be used when creating a texture for buffer.
   const unsigned texture_target_;
 
-  // This is incremented when a texture mailbox is produced and decremented
-  // when a texture mailbox is released. It is used to determine when we should
-  // notify the client that buffer has been released.
-  unsigned use_count_;
+  // Query type that must be used when releasing buffer from a texture.
+  const unsigned query_type_;
 
-  // The last released texture instance. ProduceTextureMailbox() will use this
+  // True if zero copy is used when producing a texture mailbox for buffer.
+  const bool use_zero_copy_;
+
+  // True if this buffer is an overlay candidate.
+  const bool is_overlay_candidate_;
+
+  // This keeps track of how many Surfaces the buffer is attached to.
+  unsigned attach_count_ = 0;
+
+  // The last used texture. ProduceTransferableResource() will use this
   // instead of creating a new texture when possible.
-  scoped_ptr<Texture> last_texture_;
+  std::unique_ptr<Texture> texture_;
+
+  // The last used contents texture. ProduceTransferableResource() will use this
+  // instead of creating a new texture when possible.
+  std::unique_ptr<Texture> contents_texture_;
 
   // The client release callback.
   base::Closure release_callback_;
+
+  // CompositorFrameSinkHolder instance that needs to be kept alive to receive
+  // a release callback when the last produced transferable resource is no
+  // longer in use.
+  scoped_refptr<CompositorFrameSinkHolder> compositor_frame_sink_holder_;
+
+  // Cancelable release contents callback. This is set when a release callback
+  // is pending.
+  base::CancelableClosure release_contents_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(Buffer);
 };

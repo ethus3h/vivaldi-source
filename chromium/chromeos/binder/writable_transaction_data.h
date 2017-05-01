@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "base/files/scoped_file.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string16.h"
@@ -45,7 +46,7 @@ class CHROMEOS_EXPORT WritableTransactionData : public TransactionData {
   Status GetStatus() const override;
   const void* GetData() const override;
   size_t GetDataSize() const override;
-  const uintptr_t* GetObjectOffsets() const override;
+  const binder_uintptr_t* GetObjectOffsets() const override;
   size_t GetNumObjectOffsets() const override;
 
   // Expands the capacity of the internal buffer.
@@ -97,14 +98,17 @@ class CHROMEOS_EXPORT WritableTransactionData : public TransactionData {
 
   // Appends an object.
   void WriteObject(scoped_refptr<Object> object);
-  // TODO(hashimoto): Support more types (i.e. strings, FDs, objects).
+
+  // Appends a file descriptor.
+  void WriteFileDescriptor(base::ScopedFD fd);
 
  private:
   uint32_t code_ = 0;
   bool is_one_way_ = false;
   std::vector<char> data_;
-  std::vector<uintptr_t> object_offsets_;
+  std::vector<binder_uintptr_t> object_offsets_;
   std::vector<scoped_refptr<Object>> objects_;
+  std::vector<base::ScopedFD> files_;
 
   DISALLOW_COPY_AND_ASSIGN(WritableTransactionData);
 };

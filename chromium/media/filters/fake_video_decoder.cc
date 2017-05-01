@@ -21,10 +21,12 @@ FakeVideoDecoder::FakeVideoDecoder(int decoding_delay,
       total_bytes_decoded_(0),
       fail_to_initialize_(false),
       weak_factory_(this) {
+  DVLOG(1) << __func__;
   DCHECK_GE(decoding_delay, 0);
 }
 
 FakeVideoDecoder::~FakeVideoDecoder() {
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
 
   if (state_ == STATE_UNINITIALIZED)
@@ -40,15 +42,20 @@ FakeVideoDecoder::~FakeVideoDecoder() {
   decoded_frames_.clear();
 }
 
+void FakeVideoDecoder::EnableEncryptedConfigSupport() {
+  supports_encrypted_config_ = true;
+}
+
 std::string FakeVideoDecoder::GetDisplayName() const {
   return "FakeVideoDecoder";
 }
 
 void FakeVideoDecoder::Initialize(const VideoDecoderConfig& config,
                                   bool low_delay,
-                                  const SetCdmReadyCB& set_cdm_ready_cb,
+                                  CdmContext* cdm_context,
                                   const InitCB& init_cb,
                                   const OutputCB& output_cb) {
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(config.IsValidConfig());
   DCHECK(held_decode_callbacks_.empty())
@@ -65,6 +72,11 @@ void FakeVideoDecoder::Initialize(const VideoDecoderConfig& config,
   if (!decoded_frames_.empty()) {
     DVLOG(1) << "Decoded frames dropped during reinitialization.";
     decoded_frames_.clear();
+  }
+
+  if (config.is_encrypted() && (!supports_encrypted_config_ || !cdm_context)) {
+    DVLOG(1) << "Encrypted config not supported.";
+    fail_to_initialize_ = true;
   }
 
   if (fail_to_initialize_) {
@@ -93,7 +105,7 @@ void FakeVideoDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
                                           BindToCurrentLoop(decode_cb));
 
   if (state_ == STATE_ERROR) {
-    wrapped_decode_cb.Run(kDecodeError);
+    wrapped_decode_cb.Run(DecodeStatus::DECODE_ERROR);
     return;
   }
 
@@ -180,7 +192,7 @@ void FakeVideoDecoder::SimulateError() {
 
   state_ = STATE_ERROR;
   while (!held_decode_callbacks_.empty()) {
-    held_decode_callbacks_.front().Run(kDecodeError);
+    held_decode_callbacks_.front().Run(DecodeStatus::DECODE_ERROR);
     held_decode_callbacks_.pop_front();
   }
   decoded_frames_.clear();
@@ -196,10 +208,10 @@ int FakeVideoDecoder::GetMaxDecodeRequests() const {
 
 void FakeVideoDecoder::OnFrameDecoded(int buffer_size,
                                       const DecodeCB& decode_cb,
-                                      Status status) {
+                                      DecodeStatus status) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (status == kOk) {
+  if (status == DecodeStatus::OK) {
     total_bytes_decoded_ += buffer_size;
     bytes_decoded_cb_.Run(buffer_size);
   }
@@ -222,7 +234,7 @@ void FakeVideoDecoder::RunDecodeCallback(const DecodeCB& decode_cb) {
 
   if (!reset_cb_.IsNull()) {
     DCHECK(decoded_frames_.empty());
-    decode_cb.Run(kAborted);
+    decode_cb.Run(DecodeStatus::ABORTED);
     return;
   }
 
@@ -247,7 +259,7 @@ void FakeVideoDecoder::RunDecodeCallback(const DecodeCB& decode_cb) {
     }
   }
 
-  decode_cb.Run(kOk);
+  decode_cb.Run(DecodeStatus::OK);
 }
 
 void FakeVideoDecoder::DoReset() {

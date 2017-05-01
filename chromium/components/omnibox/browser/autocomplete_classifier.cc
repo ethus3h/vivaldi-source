@@ -17,8 +17,11 @@
 
 // static
 const int AutocompleteClassifier::kDefaultOmniboxProviders =
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
-    // Custom search engines cannot be used on mobile..
+#if defined(OS_ANDROID) || defined(OS_IOS)
+    // The Physical Web currently is only implemented on mobile devices.
+    AutocompleteProvider::TYPE_PHYSICAL_WEB |
+#else
+    // Custom search engines cannot be used on mobile.
     AutocompleteProvider::TYPE_KEYWORD |
 #endif
 #if !defined(OS_IOS)
@@ -36,8 +39,8 @@ const int AutocompleteClassifier::kDefaultOmniboxProviders =
     AutocompleteProvider::TYPE_SEARCH;
 
 AutocompleteClassifier::AutocompleteClassifier(
-    scoped_ptr<AutocompleteController> controller,
-    scoped_ptr<AutocompleteSchemeClassifier> scheme_classifier)
+    std::unique_ptr<AutocompleteController> controller,
+    std::unique_ptr<AutocompleteSchemeClassifier> scheme_classifier)
     : controller_(std::move(controller)),
       scheme_classifier_(std::move(scheme_classifier)),
       inside_classify_(false) {}
@@ -45,6 +48,10 @@ AutocompleteClassifier::AutocompleteClassifier(
 AutocompleteClassifier::~AutocompleteClassifier() {
   // We should only reach here after Shutdown() has been called.
   DCHECK(!controller_.get());
+}
+
+void AutocompleteClassifier::Shutdown() {
+  controller_.reset();
 }
 
 void AutocompleteClassifier::Classify(
@@ -72,8 +79,4 @@ void AutocompleteClassifier::Classify(
   *match = *result.default_match();
   if (alternate_nav_url)
     *alternate_nav_url = result.alternate_nav_url();
-}
-
-void AutocompleteClassifier::Shutdown() {
-  controller_.reset();
 }

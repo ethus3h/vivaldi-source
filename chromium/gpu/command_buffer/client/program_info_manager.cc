@@ -21,7 +21,7 @@ static T LocalGetAs(const std::vector<int8_t>& data,
   return static_cast<T>(static_cast<const void*>(p));
 }
 
-}  // namespace anonymous
+}  // namespace
 
 namespace gpu {
 namespace gles2 {
@@ -42,9 +42,12 @@ ProgramInfoManager::Program::UniformInfo::UniformInfo(
     : size(_size),
       type(_type),
       name(_name) {
-  is_array = (!name.empty() && name[name.size() - 1] == ']');
+  is_array = (!name.empty() && name.back() == ']');
   DCHECK(!(size > 1 && !is_array));
 }
+
+ProgramInfoManager::Program::UniformInfo::UniformInfo(
+    const UniformInfo& other) = default;
 
 ProgramInfoManager::Program::UniformInfo::~UniformInfo() {
 }
@@ -66,6 +69,9 @@ ProgramInfoManager::Program::UniformBlock::UniformBlock()
       referenced_by_vertex_shader(false),
       referenced_by_fragment_shader(false) {
 }
+
+ProgramInfoManager::Program::UniformBlock::UniformBlock(
+    const UniformBlock& other) = default;
 
 ProgramInfoManager::Program::UniformBlock::~UniformBlock() {
 }
@@ -92,6 +98,8 @@ ProgramInfoManager::Program::Program()
       transform_feedback_buffer_mode_(0),
       cached_es3_uniformsiv_(false) {
 }
+
+ProgramInfoManager::Program::Program(const Program& other) = default;
 
 ProgramInfoManager::Program::~Program() {
 }

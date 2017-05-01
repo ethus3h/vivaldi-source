@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_NOTIFICATION_SERVICE_SESSIONS_ROUTER_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_NOTIFICATION_SERVICE_SESSIONS_ROUTER_H_
 
+#include <memory>
 #include <set>
 
 #include "base/callback_list.h"
@@ -22,10 +23,8 @@ class WebContents;
 }
 
 namespace sync_sessions {
-class SyncSessionsClient;
-}
 
-namespace browser_sync {
+class SyncSessionsClient;
 
 // A SessionsSyncManager::LocalEventRouter that drives session sync via
 // the NotificationService.
@@ -35,7 +34,7 @@ class NotificationServiceSessionsRouter
  public:
   NotificationServiceSessionsRouter(
       Profile* profile,
-      sync_sessions::SyncSessionsClient* sessions_client_,
+      SyncSessionsClient* sessions_client_,
       const syncer::SyncableService::StartSyncFlare& flare);
   ~NotificationServiceSessionsRouter() override;
 
@@ -68,11 +67,11 @@ class NotificationServiceSessionsRouter
   LocalSessionEventHandler* handler_;
   content::NotificationRegistrar registrar_;
   Profile* const profile_;
-  sync_sessions::SyncSessionsClient* const sessions_client_;
+  SyncSessionsClient* const sessions_client_;
   syncer::SyncableService::StartSyncFlare flare_;
 
-  scoped_ptr<base::CallbackList<void(const std::set<GURL>&,
-                                     const GURL&)>::Subscription>
+  std::unique_ptr<base::CallbackList<void(const std::set<GURL>&,
+                                          const GURL&)>::Subscription>
       favicon_changed_subscription_;
 
   base::WeakPtrFactory<NotificationServiceSessionsRouter> weak_ptr_factory_;
@@ -80,6 +79,6 @@ class NotificationServiceSessionsRouter
   DISALLOW_COPY_AND_ASSIGN(NotificationServiceSessionsRouter);
 };
 
-}  // namespace browser_sync
+}  // namespace sync_sessions
 
 #endif  // CHROME_BROWSER_SYNC_SESSIONS_NOTIFICATION_SERVICE_SESSIONS_ROUTER_H_

@@ -11,14 +11,18 @@
 #include "base/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/task_runner_util.h"
 #include "remoting/base/util.h"
+#include "remoting/client/client_context.h"
 #include "remoting/codec/video_decoder.h"
 #include "remoting/codec/video_decoder_verbatim.h"
 #include "remoting/codec/video_decoder_vpx.h"
 #include "remoting/proto/video.pb.h"
 #include "remoting/protocol/frame_consumer.h"
+#include "remoting/protocol/frame_stats.h"
+#include "remoting/protocol/performance_tracker.h"
 #include "remoting/protocol/session_config.h"
 #include "third_party/libyuv/include/libyuv/convert_argb.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
@@ -30,39 +34,10 @@ namespace remoting {
 
 namespace {
 
-// This class wraps a VideoDecoder and byte-swaps the pixels for compatibility
-// with the android.graphics.Bitmap class.
-// TODO(lambroslambrou): Refactor so that the VideoDecoder produces data
-// in the right byte-order, instead of swapping it here.
-class RgbToBgrVideoDecoderFilter : public VideoDecoder {
- public:
-  RgbToBgrVideoDecoderFilter(scoped_ptr<VideoDecoder> parent)
-      : parent_(std::move(parent)) {}
-
-  bool DecodePacket(const VideoPacket& packet,
-                    webrtc::DesktopFrame* frame) override {
-    if (!parent_->DecodePacket(packet, frame))
-      return false;
-    for (webrtc::DesktopRegion::Iterator i(frame->updated_region());
-         !i.IsAtEnd(); i.Advance()) {
-      webrtc::DesktopRect rect = i.rect();
-      uint8_t* pixels = frame->data() + (rect.top() * frame->stride()) +
-                        (rect.left() * webrtc::DesktopFrame::kBytesPerPixel);
-      libyuv::ABGRToARGB(pixels, frame->stride(), pixels, frame->stride(),
-                         rect.width(), rect.height());
-    }
-
-    return true;
-  }
-
- private:
-  scoped_ptr<VideoDecoder> parent_;
-};
-
-scoped_ptr<webrtc::DesktopFrame> DoDecodeFrame(
+std::unique_ptr<webrtc::DesktopFrame> DoDecodeFrame(
     VideoDecoder* decoder,
-    scoped_ptr<VideoPacket> packet,
-    scoped_ptr<webrtc::DesktopFrame> frame) {
+    std::unique_ptr<VideoPacket> packet,
+    std::unique_ptr<webrtc::DesktopFrame> frame) {
   if (!decoder->DecodePacket(*packet, frame.get()))
     frame.reset();
   return frame;
@@ -70,18 +45,29 @@ scoped_ptr<webrtc::DesktopFrame> DoDecodeFrame(
 
 }  // namespace
 
+SoftwareVideoRenderer::SoftwareVideoRenderer(protocol::FrameConsumer* consumer)
+    : consumer_(consumer), weak_factory_(this) {
+  thread_checker_.DetachFromThread();
+}
+
 SoftwareVideoRenderer::SoftwareVideoRenderer(
-    scoped_refptr<base::SingleThreadTaskRunner> decode_task_runner,
-    protocol::FrameConsumer* consumer,
-    protocol::PerformanceTracker* perf_tracker)
-    : decode_task_runner_(decode_task_runner),
-      consumer_(consumer),
-      perf_tracker_(perf_tracker),
-      weak_factory_(this) {}
+    std::unique_ptr<protocol::FrameConsumer> consumer)
+    : SoftwareVideoRenderer(consumer.get()) {
+  owned_consumer_ = std::move(consumer);
+}
 
 SoftwareVideoRenderer::~SoftwareVideoRenderer() {
   if (decoder_)
     decode_task_runner_->DeleteSoon(FROM_HERE, decoder_.release());
+}
+
+bool SoftwareVideoRenderer::Initialize(
+    const ClientContext& client_context,
+    protocol::FrameStatsConsumer* stats_consumer) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  decode_task_runner_ = client_context.decode_task_runner();
+  stats_consumer_ = stats_consumer;
+  return true;
 }
 
 void SoftwareVideoRenderer::OnSessionConfig(
@@ -100,10 +86,10 @@ void SoftwareVideoRenderer::OnSessionConfig(
     NOTREACHED() << "Invalid Encoding found: " << codec;
   }
 
-  if (consumer_->GetPixelFormat() == protocol::FrameConsumer::FORMAT_RGBA) {
-    decoder_ =
-        make_scoped_ptr(new RgbToBgrVideoDecoderFilter(std::move(decoder_)));
-  }
+  decoder_->SetPixelFormat(
+      (consumer_->GetPixelFormat() == protocol::FrameConsumer::FORMAT_BGRA)
+          ? VideoDecoder::PixelFormat::BGRA
+          : VideoDecoder::PixelFormat::RGBA);
 }
 
 protocol::VideoStub* SoftwareVideoRenderer::GetVideoStub() {
@@ -115,18 +101,28 @@ protocol::FrameConsumer* SoftwareVideoRenderer::GetFrameConsumer() {
   return consumer_;
 }
 
-void SoftwareVideoRenderer::ProcessVideoPacket(scoped_ptr<VideoPacket> packet,
-                                               const base::Closure& done) {
+protocol::FrameStatsConsumer* SoftwareVideoRenderer::GetFrameStatsConsumer() {
+  return stats_consumer_;
+}
+
+void SoftwareVideoRenderer::ProcessVideoPacket(
+    std::unique_ptr<VideoPacket> packet,
+    const base::Closure& done) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   base::ScopedClosureRunner done_runner(done);
 
-  if (perf_tracker_)
-    perf_tracker_->RecordVideoPacketStats(*packet);
+  std::unique_ptr<protocol::FrameStats> frame_stats(new protocol::FrameStats());
+  frame_stats->host_stats =
+      protocol::HostFrameStats::GetForVideoPacket(*packet);
+  frame_stats->client_stats.time_received = base::TimeTicks::Now();
 
-  // If the video packet is empty then drop it. Empty packets are used to
-  // maintain activity on the network.
+  // If the video packet is empty then there is nothing to decode. Empty packets
+  // are used to maintain activity on the network. Stats for such packets still
+  // need to be reported.
   if (!packet->has_data() || packet->data().size() == 0) {
+    if (stats_consumer_)
+      stats_consumer_->OnVideoFrameStats(*frame_stats);
     return;
   }
 
@@ -149,45 +145,46 @@ void SoftwareVideoRenderer::ProcessVideoPacket(scoped_ptr<VideoPacket> packet,
     return;
   }
 
-  scoped_ptr<webrtc::DesktopFrame> frame =
+  std::unique_ptr<webrtc::DesktopFrame> frame =
       consumer_->AllocateFrame(source_size_);
   frame->set_dpi(source_dpi_);
 
-  int32_t frame_id = packet->frame_id();
   base::PostTaskAndReplyWithResult(
       decode_task_runner_.get(), FROM_HERE,
       base::Bind(&DoDecodeFrame, decoder_.get(), base::Passed(&packet),
                  base::Passed(&frame)),
       base::Bind(&SoftwareVideoRenderer::RenderFrame,
-                 weak_factory_.GetWeakPtr(), frame_id, done_runner.Release()));
+                 weak_factory_.GetWeakPtr(), base::Passed(&frame_stats),
+                 done_runner.Release()));
 }
 
 void SoftwareVideoRenderer::RenderFrame(
-    int32_t frame_id,
+    std::unique_ptr<protocol::FrameStats> stats,
     const base::Closure& done,
-    scoped_ptr<webrtc::DesktopFrame> frame) {
+    std::unique_ptr<webrtc::DesktopFrame> frame) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (perf_tracker_)
-    perf_tracker_->OnFrameDecoded(frame_id);
-
+  stats->client_stats.time_decoded = base::TimeTicks::Now();
   if (!frame) {
     if (!done.is_null())
       done.Run();
     return;
   }
 
-  consumer_->DrawFrame(std::move(frame),
-                       base::Bind(&SoftwareVideoRenderer::OnFrameRendered,
-                                  weak_factory_.GetWeakPtr(), frame_id, done));
+  consumer_->DrawFrame(
+      std::move(frame),
+      base::Bind(&SoftwareVideoRenderer::OnFrameRendered,
+                 weak_factory_.GetWeakPtr(), base::Passed(&stats), done));
 }
 
-void SoftwareVideoRenderer::OnFrameRendered(int32_t frame_id,
-                                            const base::Closure& done) {
+void SoftwareVideoRenderer::OnFrameRendered(
+    std::unique_ptr<protocol::FrameStats> stats,
+    const base::Closure& done) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (perf_tracker_)
-    perf_tracker_->OnFramePainted(frame_id);
+  stats->client_stats.time_rendered = base::TimeTicks::Now();
+  if (stats_consumer_)
+    stats_consumer_->OnVideoFrameStats(*stats);
 
   if (!done.is_null())
     done.Run();

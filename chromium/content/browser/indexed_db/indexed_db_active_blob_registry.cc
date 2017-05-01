@@ -26,7 +26,7 @@ void IndexedDBActiveBlobRegistry::AddBlobRef(int64_t database_id,
   DCHECK(backing_store_->task_runner()->RunsTasksOnCurrentThread());
   DCHECK(KeyPrefix::IsValidDatabaseId(database_id));
   DCHECK(DatabaseMetaDataKey::IsValidBlobKey(blob_key));
-  DCHECK(!ContainsKey(deleted_dbs_, database_id));
+  DCHECK(!base::ContainsKey(deleted_dbs_, database_id));
   bool need_ref = use_tracker_.empty();
   SingleDBMap& single_db_map = use_tracker_[database_id];
   SingleDBMap::iterator iter = single_db_map.find(blob_key);
@@ -34,7 +34,7 @@ void IndexedDBActiveBlobRegistry::AddBlobRef(int64_t database_id,
     single_db_map[blob_key] = false;
     if (need_ref) {
       backing_store_->factory()->ReportOutstandingBlobs(
-          backing_store_->origin_url(), true);
+          backing_store_->origin(), true);
     }
   } else {
     DCHECK(!need_ref);
@@ -48,7 +48,7 @@ void IndexedDBActiveBlobRegistry::ReleaseBlobRef(int64_t database_id,
   DCHECK(backing_store_->task_runner()->RunsTasksOnCurrentThread());
   DCHECK(KeyPrefix::IsValidDatabaseId(database_id));
   DCHECK(DatabaseMetaDataKey::IsValidBlobKey(blob_key));
-  AllDBsMap::iterator db_pair = use_tracker_.find(database_id);
+  const auto& db_pair = use_tracker_.find(database_id);
   if (db_pair == use_tracker_.end()) {
     NOTREACHED();
     return;
@@ -60,7 +60,7 @@ void IndexedDBActiveBlobRegistry::ReleaseBlobRef(int64_t database_id,
     return;
   }
   bool delete_in_backend = false;
-  DeletedDBSet::iterator db_to_delete = deleted_dbs_.find(database_id);
+  const auto& db_to_delete = deleted_dbs_.find(database_id);
   bool db_marked_for_deletion = db_to_delete != deleted_dbs_.end();
   // Don't bother deleting the file if we're going to delete its whole
   // database directory soon.
@@ -77,8 +77,8 @@ void IndexedDBActiveBlobRegistry::ReleaseBlobRef(int64_t database_id,
   if (delete_in_backend)
     backing_store_->ReportBlobUnused(database_id, blob_key);
   if (use_tracker_.empty()) {
-    backing_store_->factory()->ReportOutstandingBlobs(
-        backing_store_->origin_url(), false);
+    backing_store_->factory()->ReportOutstandingBlobs(backing_store_->origin(),
+                                                      false);
   }
 }
 
@@ -87,7 +87,7 @@ bool IndexedDBActiveBlobRegistry::MarkDeletedCheckIfUsed(int64_t database_id,
   DCHECK(backing_store_);
   DCHECK(backing_store_->task_runner()->RunsTasksOnCurrentThread());
   DCHECK(KeyPrefix::IsValidDatabaseId(database_id));
-  AllDBsMap::iterator db_pair = use_tracker_.find(database_id);
+  const auto& db_pair = use_tracker_.find(database_id);
   if (db_pair == use_tracker_.end())
     return false;
 

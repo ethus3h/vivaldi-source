@@ -4,6 +4,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/base64.h"
@@ -26,6 +28,7 @@
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -33,9 +36,11 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_utils.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/value_builder.h"
@@ -62,22 +67,23 @@ class MessageSender : public content::NotificationObserver {
   }
 
  private:
-  static scoped_ptr<base::ListValue> BuildEventArguments(
+  static std::unique_ptr<base::ListValue> BuildEventArguments(
       const bool last_message,
       const std::string& data) {
-    base::DictionaryValue* event = new base::DictionaryValue();
+    std::unique_ptr<base::DictionaryValue> event(new base::DictionaryValue());
     event->SetBoolean("lastMessage", last_message);
     event->SetString("data", data);
-    scoped_ptr<base::ListValue> arguments(new base::ListValue());
-    arguments->Append(event);
+    std::unique_ptr<base::ListValue> arguments(new base::ListValue());
+    arguments->Append(std::move(event));
     return arguments;
   }
 
-  static scoped_ptr<Event> BuildEvent(scoped_ptr<base::ListValue> event_args,
-                                      Profile* profile,
-                                      GURL event_url) {
-    scoped_ptr<Event> event(new Event(events::TEST_ON_MESSAGE, "test.onMessage",
-                                      std::move(event_args)));
+  static std::unique_ptr<Event> BuildEvent(
+      std::unique_ptr<base::ListValue> event_args,
+      Profile* profile,
+      GURL event_url) {
+    std::unique_ptr<Event> event(new Event(
+        events::TEST_ON_MESSAGE, "test.onMessage", std::move(event_args)));
     event->restrict_to_browser_context = profile;
     event->event_url = event_url;
     return event;
@@ -115,14 +121,21 @@ class MessageSender : public content::NotificationObserver {
 };
 
 // Tests that message passing between extensions and content scripts works.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Messaging) {
+#if defined(MEMORY_SANITIZER) || defined(OS_MACOSX)
+// https://crbug.com/582185 - flakily times out on Linux/CrOS MSAN
+// https://crbug.com/681705 - flakily times out on mac_chromium_rel_ng
+#define MAYBE_Messaging DISABLED_Messaging
+#else
+#define MAYBE_Messaging Messaging
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_Messaging) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("messaging/connect")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MessagingCrash) {
   ASSERT_TRUE(StartEmbeddedTestServer());
-  ExtensionTestMessageListener ready_to_crash("ready_to_crash", true);
+  ExtensionTestMessageListener ready_to_crash("ready_to_crash", false);
   ASSERT_TRUE(LoadExtension(
           test_data_dir_.AppendASCII("messaging/connect_crash")));
   ui_test_utils::NavigateToURL(
@@ -177,18 +190,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MessagingInterstitial) {
   ASSERT_TRUE(RunExtensionSubtest("messaging/interstitial_component",
                                   https_server.base_url().spec(),
                                   kFlagLoadAsComponent)) << message_;
-}
-
-// Tests connecting from a panel to its extension.
-class PanelMessagingTest : public ExtensionApiTest {
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionApiTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kEnablePanels);
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(PanelMessagingTest, MessagingPanel) {
-  ASSERT_TRUE(RunExtensionTest("messaging/connect_panel")) << message_;
 }
 
 // XXX(kalman): All web messaging tests disabled on windows due to extreme
@@ -338,6 +339,10 @@ class ExternallyConnectableMessagingTest : public ExtensionApiTest {
     return GetURLForPath("www.chromium.org", "/chromium.org.html");
   }
 
+  GURL popup_opener_url() {
+    return GetURLForPath("www.chromium.org", "/popup_opener.html");
+  }
+
   GURL google_com_url() {
     return GetURLForPath("www.google.com", "/google.com.html");
   }
@@ -463,7 +468,7 @@ class ExternallyConnectableMessagingTest : public ExtensionApiTest {
     } else {
       dir->WriteFile(FILE_PATH_LITERAL("background.js"), "");
     }
-    return LoadExtension(dir->unpacked_path());
+    return LoadExtension(dir->UnpackedPath());
   }
 
   const char* common_manifest() {
@@ -516,10 +521,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest, NotInstalled) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-          .SetManifest(std::move(DictionaryBuilder()
-                                     .Set("name", "Fake extension")
-                                     .Set("version", "1")
-                                     .Set("manifest_version", 2)))
+          .SetManifest(DictionaryBuilder()
+                           .Set("name", "Fake extension")
+                           .Set("version", "1")
+                           .Set("manifest_version", 2)
+                           .Build())
           .Build();
 
   ui_test_utils::NavigateToURL(browser(), chromium_org_url());
@@ -1008,19 +1014,57 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
   EXPECT_FALSE(AreAnyNonWebApisDefinedForIFrame());
 }
 
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest, FromPopup) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kDisablePopupBlocking);
+
+  InitializeTestServer();
+  scoped_refptr<const Extension> extension = LoadChromiumConnectableExtension();
+
+  // This will let us wait for the chromium.org.html page to load in a popup.
+  ui_test_utils::UrlLoadObserver url_observer(
+      chromium_org_url(), content::NotificationService::AllSources());
+
+  // The page at popup_opener_url() should open chromium_org_url() as a popup.
+  ui_test_utils::NavigateToURL(browser(), popup_opener_url());
+  url_observer.Wait();
+
+  // Find the WebContents that committed the chromium_org_url().
+  // TODO(devlin) - it would be nice if UrlLoadObserver handled this for
+  // us, which it could pretty easily do.
+  content::WebContents* popup_contents = nullptr;
+  for (int i = 0; i < browser()->tab_strip_model()->count(); i++) {
+    content::WebContents* contents =
+        browser()->tab_strip_model()->GetWebContentsAt(i);
+    if (contents->GetLastCommittedURL() == chromium_org_url()) {
+      popup_contents = contents;
+      break;
+    }
+  }
+  ASSERT_NE(nullptr, popup_contents) << "Could not find WebContents for popup";
+
+  // Make sure the popup can connect and send messages to the extension.
+  content::RenderFrameHost* popup_frame = popup_contents->GetMainFrame();
+
+  EXPECT_EQ(OK, CanConnectAndSendMessagesToFrame(popup_frame, extension.get(),
+                                                 nullptr));
+  EXPECT_FALSE(AreAnyNonWebApisDefinedForFrame(popup_frame));
+}
+
 // Tests externally_connectable between a web page and an extension with a
 // TLS channel ID created for the origin.
 class ExternallyConnectableMessagingWithTlsChannelIdTest :
   public ExternallyConnectableMessagingTest {
  public:
   ExternallyConnectableMessagingWithTlsChannelIdTest()
-      : tls_channel_id_created_(false, false) {
-  }
+      : tls_channel_id_created_(
+            base::WaitableEvent::ResetPolicy::AUTOMATIC,
+            base::WaitableEvent::InitialState::NOT_SIGNALED) {}
 
   std::string CreateTlsChannelId() {
     scoped_refptr<net::URLRequestContextGetter> request_context_getter(
         profile()->GetRequestContext());
-    scoped_ptr<crypto::ECPrivateKey> channel_id_key;
+    std::unique_ptr<crypto::ECPrivateKey> channel_id_key;
     net::ChannelIDService::Request request;
     content::BrowserThread::PostTask(
         content::BrowserThread::IO, FROM_HERE,
@@ -1044,7 +1088,7 @@ class ExternallyConnectableMessagingWithTlsChannelIdTest :
 
  private:
   void CreateDomainBoundCertOnIOThread(
-      scoped_ptr<crypto::ECPrivateKey>* channel_id_key,
+      std::unique_ptr<crypto::ECPrivateKey>* channel_id_key,
       net::ChannelIDService::Request* request,
       scoped_refptr<net::URLRequestContextGetter> request_context_getter) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
@@ -1168,13 +1212,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MessagingUserGesture) {
       "    function(msg, sender, reply) {\n"
       "      reply({result:chrome.test.isProcessingUserGesture()});\n"
       "    });");
-  const Extension* receiver = LoadExtension(receiver_dir.unpacked_path());
+  const Extension* receiver = LoadExtension(receiver_dir.UnpackedPath());
   ASSERT_TRUE(receiver);
 
   TestExtensionDir sender_dir;
   sender_dir.WriteManifest(kManifest);
   sender_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
-  const Extension* sender = LoadExtension(sender_dir.unpacked_path());
+  const Extension* sender = LoadExtension(sender_dir.UnpackedPath());
   ASSERT_TRUE(sender);
 
   EXPECT_EQ("false",
@@ -1232,10 +1276,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
       ExtensionBuilder()
           // A bit scary that this works...
           .SetID("invalid")
-          .SetManifest(std::move(DictionaryBuilder()
-                                     .Set("name", "Fake extension")
-                                     .Set("version", "1")
-                                     .Set("manifest_version", 2)))
+          .SetManifest(DictionaryBuilder()
+                           .Set("name", "Fake extension")
+                           .Set("version", "1")
+                           .Set("manifest_version", 2)
+                           .Build())
           .Build();
 
   ui_test_utils::NavigateToURL(browser(), chromium_org_url());
@@ -1244,6 +1289,44 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 }
 
 #endif  // !defined(OS_WIN) - http://crbug.com/350517.
+
+// Tests that messages sent in the unload handler of a window arrive.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MessagingOnUnload) {
+  host_resolver()->AddRule("*", "127.0.0.1");
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  const Extension* extension =
+      LoadExtension(test_data_dir_.AppendASCII("messaging/on_unload"));
+  ExtensionTestMessageListener listener("listening", false);
+  ASSERT_TRUE(extension);
+  ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("example.com", "/empty.html"));
+  EXPECT_TRUE(listener.WaitUntilSatisfied());
+  ExtensionHost* background_host =
+      ProcessManager::Get(profile())->GetBackgroundHostForExtension(
+          extension->id());
+  ASSERT_TRUE(background_host);
+  content::WebContents* background_contents = background_host->host_contents();
+  ASSERT_TRUE(background_contents);
+  int message_count = -1;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      background_contents,
+      "window.domAutomationController.send(window.messageCount);",
+      &message_count));
+  // There shouldn't be any messages yet.
+  EXPECT_EQ(0, message_count);
+
+  content::WebContentsDestroyedWatcher destroyed_watcher(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  chrome::CloseTab(browser());
+  destroyed_watcher.Wait();
+  base::RunLoop().RunUntilIdle();
+  // The extension should have sent a message from its unload handler.
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      background_contents,
+      "window.domAutomationController.send(window.messageCount);",
+      &message_count));
+  EXPECT_EQ(1, message_count);
+}
 
 }  // namespace
 

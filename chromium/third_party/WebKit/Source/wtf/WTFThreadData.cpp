@@ -26,6 +26,8 @@
 
 #include "wtf/WTFThreadData.h"
 
+#include "wtf/StackUtil.h"
+#include "wtf/text/AtomicStringTable.h"
 #include "wtf/text/TextCodecICU.h"
 
 namespace WTF {
@@ -33,16 +35,24 @@ namespace WTF {
 ThreadSpecific<WTFThreadData>* WTFThreadData::staticData;
 
 WTFThreadData::WTFThreadData()
-    : m_atomicStringTable(0)
-    , m_atomicStringTableDestructor(0)
-    , m_cachedConverterICU(adoptPtr(new ICUConverterWrapper))
-{
-}
+    : m_atomicStringTable(new AtomicStringTable),
+      m_cachedConverterICU(new ICUConverterWrapper),
+      m_threadId(internal::currentThreadSyscall()) {}
 
-WTFThreadData::~WTFThreadData()
-{
-    if (m_atomicStringTableDestructor)
-        m_atomicStringTableDestructor(m_atomicStringTable);
-}
+WTFThreadData::~WTFThreadData() {}
 
-} // namespace WTF
+#if OS(WIN) && COMPILER(MSVC)
+size_t WTFThreadData::threadStackSize() {
+  // Needed to bootstrap WTFThreadData on Windows, because this value is needed
+  // before the main thread data is fully initialized.
+  if (!WTFThreadData::staticData->isSet())
+    return internal::threadStackSize();
+
+  WTFThreadData& data = wtfThreadData();
+  if (!data.m_threadStackSize)
+    data.m_threadStackSize = internal::threadStackSize();
+  return data.m_threadStackSize;
+}
+#endif
+
+}  // namespace WTF

@@ -5,7 +5,8 @@
 #ifndef MediaRecorder_h
 #define MediaRecorder_h
 
-#include "core/dom/ActiveDOMObject.h"
+#include "bindings/core/v8/ActiveScriptWrappable.h"
+#include "core/dom/SuspendableObject.h"
 #include "core/events/EventTarget.h"
 #include "modules/EventTargetModules.h"
 #include "modules/ModulesExport.h"
@@ -14,6 +15,7 @@
 #include "platform/AsyncMethodRunner.h"
 #include "public/platform/WebMediaRecorderHandler.h"
 #include "public/platform/WebMediaRecorderHandlerClient.h"
+#include <memory>
 
 namespace blink {
 
@@ -22,87 +24,98 @@ class BlobData;
 class ExceptionState;
 
 class MODULES_EXPORT MediaRecorder final
-    : public RefCountedGarbageCollectedEventTargetWithInlineData<MediaRecorder>
-    , public WebMediaRecorderHandlerClient
-    , public ActiveDOMObject {
-    REFCOUNTED_GARBAGE_COLLECTED_EVENT_TARGET(MediaRecorder);
-    WILL_BE_USING_GARBAGE_COLLECTED_MIXIN(MediaRecorder);
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    enum class State {
-        Inactive = 0,
-        Recording,
-        Paused
-    };
+    : public EventTargetWithInlineData,
+      public WebMediaRecorderHandlerClient,
+      public ActiveScriptWrappable<MediaRecorder>,
+      public SuspendableObject {
+  USING_GARBAGE_COLLECTED_MIXIN(MediaRecorder);
+  DEFINE_WRAPPERTYPEINFO();
 
-    static MediaRecorder* create(ExecutionContext*, MediaStream*, ExceptionState&);
-    static MediaRecorder* create(ExecutionContext*, MediaStream*, const MediaRecorderOptions&, ExceptionState&);
+ public:
+  enum class State { Inactive = 0, Recording, Paused };
 
-    virtual ~MediaRecorder() {}
+  static MediaRecorder* create(ExecutionContext*,
+                               MediaStream*,
+                               ExceptionState&);
+  static MediaRecorder* create(ExecutionContext*,
+                               MediaStream*,
+                               const MediaRecorderOptions&,
+                               ExceptionState&);
 
-    MediaStream* stream() const { return m_stream.get(); }
-    const String& mimeType() const { return m_mimeType; }
-    String state() const;
-    bool ignoreMutedMedia() const { return m_ignoreMutedMedia; }
-    void setIgnoreMutedMedia(bool ignoreMutedMedia) { m_ignoreMutedMedia = ignoreMutedMedia; }
+  virtual ~MediaRecorder() {}
 
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(start);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(stop);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(dataavailable);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(pause);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(resume);
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(error);
+  MediaStream* stream() const { return m_stream.get(); }
+  const String& mimeType() const { return m_mimeType; }
+  String state() const;
+  unsigned long videoBitsPerSecond() const { return m_videoBitsPerSecond; }
+  unsigned long audioBitsPerSecond() const { return m_audioBitsPerSecond; }
 
-    void start(ExceptionState&);
-    void start(int timeSlice, ExceptionState&);
-    void stop(ExceptionState&);
-    void pause(ExceptionState&);
-    void resume(ExceptionState&);
-    void requestData(ExceptionState&);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(start);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(stop);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(dataavailable);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(pause);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(resume);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(error);
 
-    static bool isTypeSupported(const String& type);
+  void start(ExceptionState&);
+  void start(int timeSlice, ExceptionState&);
+  void stop(ExceptionState&);
+  void pause(ExceptionState&);
+  void resume(ExceptionState&);
+  void requestData(ExceptionState&);
 
-    // EventTarget
-    const AtomicString& interfaceName() const override;
-    ExecutionContext* executionContext() const override;
+  static bool isTypeSupported(const String& type);
 
-    // ActiveDOMObject
-    void suspend() override;
-    void resume() override;
-    void stop() override;
-    bool hasPendingActivity() const override { return !m_stopped; }
+  // EventTarget
+  const AtomicString& interfaceName() const override;
+  ExecutionContext* getExecutionContext() const override;
 
-    // WebMediaRecorderHandlerClient
-    void writeData(const char* data, size_t length, bool lastInSlice) override;
-    void onError(const WebString& message) override;
+  // SuspendableObject
+  void suspend() override;
+  void resume() override;
+  void contextDestroyed(ExecutionContext*) override;
 
-    DECLARE_VIRTUAL_TRACE();
+  // ScriptWrappable
+  bool hasPendingActivity() const final { return !m_stopped; }
 
-private:
-    MediaRecorder(ExecutionContext*, MediaStream*, const MediaRecorderOptions&, ExceptionState&);
+  // WebMediaRecorderHandlerClient
+  void writeData(const char* data,
+                 size_t length,
+                 bool lastInSlice,
+                 double timecode) override;
+  void onError(const WebString& message) override;
 
-    void createBlobEvent(Blob*);
+  DECLARE_VIRTUAL_TRACE();
 
-    void stopRecording();
-    void scheduleDispatchEvent(PassRefPtrWillBeRawPtr<Event>);
-    void dispatchScheduledEvent();
+ private:
+  MediaRecorder(ExecutionContext*,
+                MediaStream*,
+                const MediaRecorderOptions&,
+                ExceptionState&);
 
-    Member<MediaStream> m_stream;
-    size_t m_streamAmountOfTracks;
-    String m_mimeType;
-    bool m_stopped;
-    bool m_ignoreMutedMedia;
+  void createBlobEvent(Blob*, double);
 
-    State m_state;
+  void stopRecording();
+  void scheduleDispatchEvent(Event*);
+  void dispatchScheduledEvent();
 
-    OwnPtr<BlobData> m_blobData;
+  Member<MediaStream> m_stream;
+  size_t m_streamAmountOfTracks;
+  String m_mimeType;
+  bool m_stopped;
+  int m_audioBitsPerSecond;
+  int m_videoBitsPerSecond;
 
-    OwnPtr<WebMediaRecorderHandler> m_recorderHandler;
+  State m_state;
 
-    Member<AsyncMethodRunner<MediaRecorder>> m_dispatchScheduledEventRunner;
-    WillBeHeapVector<RefPtrWillBeMember<Event>> m_scheduledEvents;
+  std::unique_ptr<BlobData> m_blobData;
+
+  std::unique_ptr<WebMediaRecorderHandler> m_recorderHandler;
+
+  Member<AsyncMethodRunner<MediaRecorder>> m_dispatchScheduledEventRunner;
+  HeapVector<Member<Event>> m_scheduledEvents;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // MediaRecorder_h
+#endif  // MediaRecorder_h

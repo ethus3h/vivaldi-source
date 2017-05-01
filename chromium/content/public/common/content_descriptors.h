@@ -12,11 +12,18 @@
 // base::GlobalDescriptors object (see base/posix/global_descriptors.h)
 enum {
   kCrashDumpSignal = kIPCDescriptorMax,
-  kSandboxIPCChannel,  // http://code.google.com/p/chromium/LinuxSandboxIPC
+  kSandboxIPCChannel,  // https://chromium.googlesource.com/chromium/src/+/master/docs/linux_sandbox_ipc.md
+  kMojoIPCChannel,
+  kFieldTrialDescriptor,
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
   kV8NativesDataDescriptor,
+#if defined(OS_ANDROID)
+  kV8SnapshotDataDescriptor32,
+  kV8SnapshotDataDescriptor64,
+#else
   kV8SnapshotDataDescriptor,
+#endif
 #endif
 
 #if defined(OS_ANDROID)

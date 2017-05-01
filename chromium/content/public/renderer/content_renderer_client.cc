@@ -6,7 +6,8 @@
 
 #include "content/public/renderer/media_stream_renderer_factory.h"
 #include "media/base/renderer_factory.h"
-#include "third_party/WebKit/public/platform/modules/app_banner/WebAppBannerClient.h"
+#include "ui/gfx/icc_profile.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -98,16 +99,20 @@ bool ContentRendererClient::AllowPopup() {
   return false;
 }
 
-#ifdef OS_ANDROID
+#if defined(OS_ANDROID)
 bool ContentRendererClient::HandleNavigation(
     RenderFrame* render_frame,
     bool is_content_initiated,
-    int opener_id,
+    bool render_view_was_created_by_renderer,
     blink::WebFrame* frame,
     const blink::WebURLRequest& request,
     blink::WebNavigationType type,
     blink::WebNavigationPolicy default_policy,
     bool is_redirect) {
+  return false;
+}
+
+bool ContentRendererClient::ShouldUseMediaPlayerForURL(const GURL& url) {
   return false;
 }
 #endif
@@ -121,12 +126,16 @@ bool ContentRendererClient::ShouldFork(blink::WebLocalFrame* frame,
   return false;
 }
 
-bool ContentRendererClient::WillSendRequest(
-    blink::WebFrame* frame,
-    ui::PageTransition transition_type,
-    const GURL& url,
-    const GURL& first_party_for_cookies,
-    GURL* new_url) {
+bool ContentRendererClient::WillSendRequest(blink::WebLocalFrame* frame,
+                                            ui::PageTransition transition_type,
+                                            const blink::WebURL& url,
+                                            GURL* new_url) {
+  return false;
+}
+
+bool ContentRendererClient::IsPrefetchOnly(
+    RenderFrame* render_frame,
+    const blink::WebURLRequest& request) {
   return false;
 }
 
@@ -150,11 +159,6 @@ bool ContentRendererClient::ShouldOverridePageVisibilityState(
   return false;
 }
 
-const void* ContentRendererClient::CreatePPAPIInterface(
-    const std::string& interface_name) {
-  return nullptr;
-}
-
 bool ContentRendererClient::IsExternalPepperPlugin(
     const std::string& module_name) {
   return false;
@@ -164,20 +168,16 @@ bool ContentRendererClient::AllowPepperMediaStreamAPI(const GURL& url) {
   return false;
 }
 
-void ContentRendererClient::AddKeySystems(
-    std::vector<media::KeySystemInfo>* key_systems) {
-}
+void ContentRendererClient::AddSupportedKeySystems(
+    std::vector<std::unique_ptr<media::KeySystemProperties>>* key_systems) {}
 
-scoped_ptr<media::RendererFactory>
-ContentRendererClient::CreateMediaRendererFactory(
-    RenderFrame* render_frame,
-    media::GpuVideoAcceleratorFactories* gpu_factories,
-    const scoped_refptr<media::MediaLog>& media_log) {
+std::unique_ptr<MediaStreamRendererFactory>
+ContentRendererClient::CreateMediaStreamRendererFactory() {
   return nullptr;
 }
 
-scoped_ptr<MediaStreamRendererFactory>
-ContentRendererClient::CreateMediaStreamRendererFactory() {
+std::unique_ptr<gfx::ICCProfile>
+ContentRendererClient::GetImageDecodeColorProfile() {
   return nullptr;
 }
 
@@ -216,13 +216,12 @@ BrowserPluginDelegate* ContentRendererClient::CreateBrowserPluginDelegate(
   return nullptr;
 }
 
-scoped_ptr<blink::WebAppBannerClient>
-ContentRendererClient::CreateAppBannerClient(RenderFrame* render_frame) {
-  return nullptr;
-}
-
 bool ContentRendererClient::ShouldEnforceWebRTCRoutingPreferences() {
   return true;
+}
+
+GURL ContentRendererClient::OverrideFlashEmbedWithHTML(const GURL& url) {
+  return GURL();
 }
 
 }  // namespace content

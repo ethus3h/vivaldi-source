@@ -5,56 +5,49 @@
 #ifndef REMOTING_PROTOCOL_WEBRTC_DATA_STREAM_ADAPTER_H_
 #define REMOTING_PROTOCOL_WEBRTC_DATA_STREAM_ADAPTER_H_
 
+#include <memory>
 #include <string>
 
+#include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/weak_ptr.h"
-#include "remoting/protocol/stream_channel_factory.h"
-#include "third_party/libjingle/source/talk/app/webrtc/peerconnectioninterface.h"
+#include "remoting/protocol/message_pipe.h"
+#include "third_party/webrtc/api/peerconnectioninterface.h"
 #include "third_party/webrtc/base/refcount.h"
-
-namespace rtc {
-class PeerConnectionInterface;
-}  // namespace rtc
 
 namespace remoting {
 namespace protocol {
 
-// WebrtcDataStreamAdapter is a StreamChannelFactory that creates channels that
-// send and receive data over PeerConnection data channels.
-class WebrtcDataStreamAdapter : public StreamChannelFactory {
+// WebrtcDataStreamAdapter implements MessagePipe for WebRTC data channels.
+class WebrtcDataStreamAdapter : public MessagePipe,
+                                public webrtc::DataChannelObserver {
  public:
-  explicit WebrtcDataStreamAdapter(bool outgoing);
+  explicit WebrtcDataStreamAdapter(
+      rtc::scoped_refptr<webrtc::DataChannelInterface> channel);
   ~WebrtcDataStreamAdapter() override;
 
-  // Initializes the adapter for |peer_connection|. If |outgoing| is set to true
-  // all channels will be created as outgoing. Otherwise CreateChannel() will
-  // wait for the other end to create connection.
-  void Initialize(
-      rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection);
+  std::string name() { return channel_->label(); }
 
-  // Called by WebrtcTransport.
-  void OnIncomingDataChannel(webrtc::DataChannelInterface* data_channel);
-
-  // StreamChannelFactory interface.
-  void CreateChannel(const std::string& name,
-                     const ChannelCreatedCallback& callback) override;
-  void CancelChannelCreation(const std::string& name) override;
+  // MessagePipe interface.
+  void Start(EventHandler* event_handler) override;
+  void Send(google::protobuf::MessageLite* message,
+            const base::Closure& done) override;
 
  private:
-  class Channel;
+  enum class State { CONNECTING, OPEN, CLOSED };
 
-  void OnChannelConnected(const ChannelCreatedCallback& connected_callback,
-                          Channel* channel,
-                          bool connected);
+  // webrtc::DataChannelObserver interface.
+  void OnStateChange() override;
+  void OnMessage(const webrtc::DataBuffer& buffer) override;
 
-  const bool outgoing_;
+  void OnConnected();
 
-  rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
+  void OnClosed();
 
-  std::map<std::string, Channel*> pending_channels_;
+  rtc::scoped_refptr<webrtc::DataChannelInterface> channel_;
 
-  base::WeakPtrFactory<WebrtcDataStreamAdapter> weak_factory_;
+  EventHandler* event_handler_ = nullptr;
+
+  State state_ = State::CONNECTING;
 
   DISALLOW_COPY_AND_ASSIGN(WebrtcDataStreamAdapter);
 };

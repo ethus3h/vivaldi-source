@@ -4,43 +4,97 @@
 
 #include "chrome/browser/permissions/permission_context_base.h"
 
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/bind.h"
-#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
+#include "base/run_loop.h"
+#include "base/test/histogram_tester.h"
 #include "base/test/mock_entropy_provider.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/permissions/permission_decision_auto_blocker.h"
 #include "chrome/browser/permissions/permission_queue_controller.h"
 #include "chrome/browser/permissions/permission_request_id.h"
 #include "chrome/browser/permissions/permission_util.h"
-#include "chrome/browser/ui/website_settings/permission_bubble_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/safe_browsing_db/database_manager.h"
+#include "components/safe_browsing_db/test_database_manager.h"
 #include "components/variations/variations_associated_data.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/permission_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
-#include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_ANDROID)
-#include "chrome/browser/permissions/permission_queue_controller.h"
-#else
-#include "chrome/browser/ui/website_settings/permission_bubble_manager.h"
+#if !defined(OS_ANDROID)
+#include "chrome/browser/permissions/permission_request_manager.h"
 #endif
 
-const char* kPermissionsKillSwitchFieldStudy =
+const char* const kPermissionsKillSwitchFieldStudy =
     PermissionContextBase::kPermissionsKillSwitchFieldStudy;
-const char* kPermissionsKillSwitchBlockedValue =
+const char* const kPermissionsKillSwitchBlockedValue =
     PermissionContextBase::kPermissionsKillSwitchBlockedValue;
 const char kPermissionsKillSwitchTestGroup[] = "TestGroup";
+const char* const kPromptGroupName = kPermissionsKillSwitchTestGroup;
+const char kPromptTrialName[] = "PermissionPromptsUX";
+
+class MockSafeBrowsingDatabaseManager
+    : public safe_browsing::TestSafeBrowsingDatabaseManager {
+ public:
+  explicit MockSafeBrowsingDatabaseManager(bool perform_callback)
+      : perform_callback_(perform_callback) {}
+
+  bool CheckApiBlacklistUrl(
+      const GURL& url,
+      safe_browsing::SafeBrowsingDatabaseManager::Client* client) override {
+    if (perform_callback_) {
+      safe_browsing::ThreatMetadata metadata;
+      const auto& blacklisted_permissions = permissions_blacklist_.find(url);
+      if (blacklisted_permissions != permissions_blacklist_.end())
+        metadata.api_permissions = blacklisted_permissions->second;
+      client->OnCheckApiBlacklistUrlResult(url, metadata);
+    }
+    // Returns false if scheme is HTTP/HTTPS and able to be checked.
+    return false;
+  }
+
+  bool CancelApiCheck(Client* client) override {
+    DCHECK(!perform_callback_);
+    // Returns true when client check could be stopped.
+    return true;
+  }
+
+  void BlacklistUrlPermissions(const GURL& url,
+                               const std::set<std::string> permissions) {
+    permissions_blacklist_[url] = permissions;
+  }
+
+ protected:
+  ~MockSafeBrowsingDatabaseManager() override {}
+
+ private:
+  bool perform_callback_;
+  std::map<GURL, std::set<std::string>> permissions_blacklist_;
+
+  DISALLOW_COPY_AND_ASSIGN(MockSafeBrowsingDatabaseManager);
+};
 
 class TestPermissionContext : public PermissionContextBase {
  public:
@@ -48,11 +102,7 @@ class TestPermissionContext : public PermissionContextBase {
                         const content::PermissionType permission_type,
                         const ContentSettingsType content_settings_type)
       : PermissionContextBase(profile, permission_type, content_settings_type),
-        permission_set_(false),
-        permission_granted_(false),
-        tab_context_updated_(false),
-        field_trial_list_(
-            new base::FieldTrialList(new base::MockEntropyProvider)) {}
+        tab_context_updated_(false) {}
 
   ~TestPermissionContext() override {}
 
@@ -62,37 +112,65 @@ class TestPermissionContext : public PermissionContextBase {
   }
 #endif
 
-  bool permission_granted() {
-    return permission_granted_;
-  }
+  const std::vector<ContentSetting>& decisions() const { return decisions_; }
 
-  bool permission_set() {
-    return permission_set_;
-  }
+  bool tab_context_updated() const { return tab_context_updated_; }
 
-  bool tab_context_updated() {
-    return tab_context_updated_;
-  }
-
+  // Once a decision for the requested permission has been made, run the
+  // callback.
   void TrackPermissionDecision(ContentSetting content_setting) {
-    permission_set_ = true;
-    permission_granted_ = content_setting == CONTENT_SETTING_ALLOW;
-  }
-
-  void ResetFieldTrialList() {
-    // Destroy the existing FieldTrialList before creating a new one to avoid
-    // a DCHECK.
-    field_trial_list_.reset();
-    field_trial_list_.reset(new base::FieldTrialList(
-        new base::MockEntropyProvider));
-    variations::testing::ClearAllVariationParams();
+    decisions_.push_back(content_setting);
+    // Null check required here as the quit_closure_ can also be run and reset
+    // first from within DecidePermission.
+    if (quit_closure_) {
+      quit_closure_.Run();
+      quit_closure_.Reset();
+    }
   }
 
   ContentSetting GetContentSettingFromMap(const GURL& url_a,
                                           const GURL& url_b) {
-    return HostContentSettingsMapFactory::GetForProfile(profile())
-        ->GetContentSetting(url_a.GetOrigin(), url_b.GetOrigin(),
-                            content_settings_type(), std::string());
+    auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+    return map->GetContentSetting(url_a.GetOrigin(), url_b.GetOrigin(),
+                                  content_settings_type(), std::string());
+  }
+
+  void RequestPermission(content::WebContents* web_contents,
+                         const PermissionRequestID& id,
+                         const GURL& requesting_frame,
+                         bool user_gesture,
+                         const BrowserPermissionCallback& callback) override {
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    PermissionContextBase::RequestPermission(web_contents, id, requesting_frame,
+                                             true /* user_gesture */, callback);
+    run_loop.Run();
+  }
+
+  void DecidePermission(content::WebContents* web_contents,
+                        const PermissionRequestID& id,
+                        const GURL& requesting_origin,
+                        const GURL& embedding_origin,
+                        bool user_gesture,
+                        const BrowserPermissionCallback& callback) override {
+    PermissionContextBase::DecidePermission(web_contents, id, requesting_origin,
+                                            embedding_origin, user_gesture,
+                                            callback);
+    if (respond_permission_) {
+      respond_permission_.Run();
+      respond_permission_.Reset();
+    } else {
+      // Stop the run loop from spinning indefinitely if no response callback
+      // has been set, as is the case with TestParallelRequests.
+      quit_closure_.Run();
+      quit_closure_.Reset();
+    }
+  }
+
+  // Permission request will need to be responded to, so pass a callback to be
+  // run once the request has completed and the decision has been made.
+  void SetRespondPermissionCallback(base::Closure callback) {
+    respond_permission_ = callback;
   }
 
  protected:
@@ -107,82 +185,313 @@ class TestPermissionContext : public PermissionContextBase {
   }
 
  private:
-   bool permission_set_;
-   bool permission_granted_;
-   bool tab_context_updated_;
-   scoped_ptr<base::FieldTrialList> field_trial_list_;
+  std::vector<ContentSetting> decisions_;
+  bool tab_context_updated_;
+  base::Closure quit_closure_;
+  // Callback for responding to a permission once the request has been completed
+  // (valid URL, kill switch disabled, not blacklisted)
+  base::Closure respond_permission_;
+  DISALLOW_COPY_AND_ASSIGN(TestPermissionContext);
+};
+
+class TestKillSwitchPermissionContext : public TestPermissionContext {
+ public:
+  TestKillSwitchPermissionContext(
+      Profile* profile,
+      const content::PermissionType permission_type,
+      const ContentSettingsType content_settings_type)
+      : TestPermissionContext(profile, permission_type, content_settings_type),
+        field_trial_list_(base::MakeUnique<base::FieldTrialList>(
+            base::MakeUnique<base::MockEntropyProvider>())) {}
+
+  void ResetFieldTrialList() {
+    // Destroy the existing FieldTrialList before creating a new one to avoid
+    // a DCHECK.
+    field_trial_list_.reset();
+    field_trial_list_ = base::MakeUnique<base::FieldTrialList>(
+        base::MakeUnique<base::MockEntropyProvider>());
+    variations::testing::ClearAllVariationParams();
+  }
+
+ private:
+  std::unique_ptr<base::FieldTrialList> field_trial_list_;
+
+  DISALLOW_COPY_AND_ASSIGN(TestKillSwitchPermissionContext);
 };
 
 class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
  protected:
   PermissionContextBaseTests() {}
+  ~PermissionContextBaseTests() override {}
 
   // Accept or dismiss the permission bubble or infobar.
   void RespondToPermission(TestPermissionContext* context,
                            const PermissionRequestID& id,
                            const GURL& url,
-                           bool accept) {
+                           bool persist,
+                           ContentSetting response) {
+    DCHECK(response == CONTENT_SETTING_ALLOW ||
+           response == CONTENT_SETTING_BLOCK ||
+           response == CONTENT_SETTING_ASK);
 #if defined(OS_ANDROID)
-    context->GetInfoBarController()->OnPermissionSet(id, url, url, accept,
-                                                     accept);
+    PermissionAction decision = DISMISSED;
+    if (response == CONTENT_SETTING_ALLOW)
+      decision = GRANTED;
+    else if (response == CONTENT_SETTING_BLOCK)
+      decision = DENIED;
+    context->GetInfoBarController()->OnPermissionSet(
+        id, url, url, false /* user_gesture */, persist, decision);
 #else
-    PermissionBubbleManager* manager =
-        PermissionBubbleManager::FromWebContents(web_contents());
-    if (accept)
-      manager->Accept();
-    else
-      manager->Closing();
+    PermissionRequestManager* manager =
+        PermissionRequestManager::FromWebContents(web_contents());
+    manager->TogglePersist(persist);
+    switch (response) {
+      case CONTENT_SETTING_ALLOW:
+        manager->Accept();
+        break;
+      case CONTENT_SETTING_BLOCK:
+        manager->Deny();
+        break;
+      case CONTENT_SETTING_ASK:
+        manager->Closing();
+        break;
+      default:
+        NOTREACHED();
+    }
 #endif
   }
 
-  void TestAskAndGrant_TestContent() {
-    TestPermissionContext permission_context(
-        profile(), content::PermissionType::NOTIFICATIONS,
-        CONTENT_SETTINGS_TYPE_NOTIFICATIONS);
-    GURL url("http://www.google.com");
-    content::WebContentsTester::For(web_contents())->NavigateAndCommit(url);
+  void TestAskAndDecide_TestContent(content::PermissionType permission,
+                                    ContentSettingsType content_settings_type,
+                                    ContentSetting decision,
+                                    bool persist) {
+    TestPermissionContext permission_context(profile(), permission,
+                                             content_settings_type);
+    GURL url("https://www.google.com");
+    NavigateAndCommit(url);
+    base::HistogramTester histograms;
 
     const PermissionRequestID id(
         web_contents()->GetRenderProcessHost()->GetID(),
         web_contents()->GetMainFrame()->GetRoutingID(),
         -1);
+    permission_context.SetRespondPermissionCallback(
+        base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                   base::Unretained(this), &permission_context, id, url,
+                   persist, decision));
     permission_context.RequestPermission(
         web_contents(),
-        id, url, true,
+        id, url, true /* user_gesture */,
         base::Bind(&TestPermissionContext::TrackPermissionDecision,
                    base::Unretained(&permission_context)));
-
-    RespondToPermission(&permission_context, id, url, true);
-    EXPECT_TRUE(permission_context.permission_set());
-    EXPECT_TRUE(permission_context.permission_granted());
+    ASSERT_EQ(1u, permission_context.decisions().size());
+    EXPECT_EQ(decision, permission_context.decisions()[0]);
     EXPECT_TRUE(permission_context.tab_context_updated());
-    EXPECT_EQ(CONTENT_SETTING_ALLOW,
-              permission_context.GetContentSettingFromMap(url, url));
+
+    std::string decision_string;
+    if (decision == CONTENT_SETTING_ALLOW)
+      decision_string = "Accepted";
+    else if (decision == CONTENT_SETTING_BLOCK)
+      decision_string = "Denied";
+    else if (decision == CONTENT_SETTING_ASK)
+      decision_string = "Dismissed";
+
+    if (decision_string.size()) {
+      histograms.ExpectUniqueSample(
+          "Permissions.Prompt." + decision_string + ".PriorDismissCount." +
+              PermissionUtil::GetPermissionString(permission),
+          0, 1);
+      histograms.ExpectUniqueSample(
+          "Permissions.Prompt." + decision_string + ".PriorIgnoreCount." +
+              PermissionUtil::GetPermissionString(permission),
+          0, 1);
+    }
+
+    if (persist) {
+      EXPECT_EQ(decision,
+                permission_context.GetContentSettingFromMap(url, url));
+    } else {
+      EXPECT_EQ(CONTENT_SETTING_ASK,
+                permission_context.GetContentSettingFromMap(url, url));
+    }
   }
 
-  void TestAskAndDismiss_TestContent() {
+  void DismissMultipleTimesAndExpectBlock(
+      const GURL& url,
+      content::PermissionType permission_type,
+      ContentSettingsType content_settings_type,
+      uint32_t iterations) {
+    base::HistogramTester histograms;
+
+    // Dismiss |iterations| times. The final dismiss should change the decision
+    // from dismiss to block, and hence change the persisted content setting.
+    for (uint32_t i = 0; i < iterations; ++i) {
+      ContentSetting expected =
+          (i < 2) ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK;
+      TestPermissionContext permission_context(
+          profile(), permission_type, content_settings_type);
+      const PermissionRequestID id(
+          web_contents()->GetRenderProcessHost()->GetID(),
+          web_contents()->GetMainFrame()->GetRoutingID(), i);
+
+      permission_context.SetRespondPermissionCallback(
+          base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                     base::Unretained(this), &permission_context, id, url,
+                     false, CONTENT_SETTING_ASK));
+
+      permission_context.RequestPermission(
+          web_contents(), id, url, true /* user_gesture */,
+          base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                    base::Unretained(&permission_context)));
+      histograms.ExpectTotalCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount." +
+              PermissionUtil::GetPermissionString(permission_type),
+          i + 1);
+      histograms.ExpectBucketCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount." +
+              PermissionUtil::GetPermissionString(permission_type),
+          i, 1);
+      ASSERT_EQ(1u, permission_context.decisions().size());
+      EXPECT_EQ(expected, permission_context.decisions()[0]);
+      EXPECT_TRUE(permission_context.tab_context_updated());
+      EXPECT_EQ(expected, permission_context.GetPermissionStatus(url, url));
+    }
+
+    TestPermissionContext permission_context(profile(), permission_type,
+                                             content_settings_type);
+
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              permission_context.GetPermissionStatus(url, url));
+  }
+
+  void TestBlockOnSeveralDismissals_TestContent() {
+    GURL url("https://www.google.com");
+    NavigateAndCommit(url);
+    base::HistogramTester histograms;
+
+    // First, ensure that > 3 dismissals behaves correctly.
+    for (uint32_t i = 0; i < 4; ++i) {
+      TestPermissionContext permission_context(
+          profile(), content::PermissionType::GEOLOCATION,
+          CONTENT_SETTINGS_TYPE_GEOLOCATION);
+
+      const PermissionRequestID id(
+          web_contents()->GetRenderProcessHost()->GetID(),
+          web_contents()->GetMainFrame()->GetRoutingID(), i);
+
+      permission_context.SetRespondPermissionCallback(
+          base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                     base::Unretained(this), &permission_context, id, url,
+                     false, CONTENT_SETTING_ASK));
+      permission_context.RequestPermission(
+          web_contents(), id, url, true /* user_gesture */,
+          base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                    base::Unretained(&permission_context)));
+      histograms.ExpectTotalCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount.Geolocation",
+          i + 1);
+      histograms.ExpectBucketCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount.Geolocation", i, 1);
+      ASSERT_EQ(1u, permission_context.decisions().size());
+      EXPECT_EQ(CONTENT_SETTING_ASK, permission_context.decisions()[0]);
+      EXPECT_TRUE(permission_context.tab_context_updated());
+      EXPECT_EQ(CONTENT_SETTING_ASK,
+                permission_context.GetContentSettingFromMap(url, url));
+    }
+
+    // Flush the dismissal counts. Enable the block on too many dismissals
+    // feature, which is disabled by default.
+    auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+    map->ClearSettingsForOneType(
+        CONTENT_SETTINGS_TYPE_PROMPT_NO_DECISION_COUNT);
+
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(features::kBlockPromptsIfDismissedOften);
+
+    EXPECT_TRUE(
+        base::FeatureList::IsEnabled(features::kBlockPromptsIfDismissedOften));
+
+    // Sanity check independence per permission type by checking two of them.
+    DismissMultipleTimesAndExpectBlock(url,
+                                       content::PermissionType::GEOLOCATION,
+                                       CONTENT_SETTINGS_TYPE_GEOLOCATION, 3);
+    DismissMultipleTimesAndExpectBlock(url,
+                                       content::PermissionType::NOTIFICATIONS,
+                                       CONTENT_SETTINGS_TYPE_NOTIFICATIONS, 3);
+  }
+
+  void TestVariationBlockOnSeveralDismissals_TestContent() {
+    GURL url("https://www.google.com");
+    NavigateAndCommit(url);
+    base::HistogramTester histograms;
+
+    // Set up the custom parameter and custom value.
+    base::FieldTrialList field_trials(nullptr);
+    base::FieldTrial* trial = base::FieldTrialList::CreateFieldTrial(
+        kPromptTrialName, kPromptGroupName);
+    std::map<std::string, std::string> params;
+    params[PermissionDecisionAutoBlocker::kPromptDismissCountKey] = "5";
+    ASSERT_TRUE(variations::AssociateVariationParams(
+        kPromptTrialName, kPromptGroupName, params));
+
+    std::unique_ptr<base::FeatureList> feature_list =
+        base::MakeUnique<base::FeatureList>();
+    feature_list->RegisterFieldTrialOverride(
+        features::kBlockPromptsIfDismissedOften.name,
+        base::FeatureList::OVERRIDE_ENABLE_FEATURE, trial);
+
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatureList(std::move(feature_list));
+
+    EXPECT_EQ(base::FeatureList::GetFieldTrial(
+                  features::kBlockPromptsIfDismissedOften),
+              trial);
+
+    {
+      std::map<std::string, std::string> actual_params;
+      EXPECT_TRUE(variations::GetVariationParamsByFeature(
+          features::kBlockPromptsIfDismissedOften, &actual_params));
+      EXPECT_EQ(params, actual_params);
+    }
+
+    for (uint32_t i = 0; i < 5; ++i) {
+      TestPermissionContext permission_context(
+          profile(), content::PermissionType::MIDI_SYSEX,
+          CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
+
+      ContentSetting expected =
+          (i < 4) ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK;
+      const PermissionRequestID id(
+          web_contents()->GetRenderProcessHost()->GetID(),
+          web_contents()->GetMainFrame()->GetRoutingID(), i);
+      permission_context.SetRespondPermissionCallback(
+          base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                     base::Unretained(this), &permission_context, id, url,
+                     false, CONTENT_SETTING_ASK));
+      permission_context.RequestPermission(
+          web_contents(), id, url, true /* user_gesture */,
+          base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                     base::Unretained(&permission_context)));
+
+      EXPECT_EQ(1u, permission_context.decisions().size());
+      ASSERT_EQ(expected, permission_context.decisions()[0]);
+      EXPECT_TRUE(permission_context.tab_context_updated());
+      EXPECT_EQ(expected, permission_context.GetPermissionStatus(url, url));
+
+      histograms.ExpectTotalCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount.MidiSysEx", i + 1);
+      histograms.ExpectBucketCount(
+          "Permissions.Prompt.Dismissed.PriorDismissCount.MidiSysEx", i, 1);
+    }
+
+    // Ensure that we finish in the block state.
     TestPermissionContext permission_context(
         profile(), content::PermissionType::MIDI_SYSEX,
         CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
-    GURL url("http://www.google.es");
-    content::WebContentsTester::For(web_contents())->NavigateAndCommit(url);
 
-    const PermissionRequestID id(
-        web_contents()->GetRenderProcessHost()->GetID(),
-        web_contents()->GetMainFrame()->GetRoutingID(),
-        -1);
-    permission_context.RequestPermission(
-        web_contents(),
-        id, url, true,
-        base::Bind(&TestPermissionContext::TrackPermissionDecision,
-                   base::Unretained(&permission_context)));
-
-    RespondToPermission(&permission_context, id, url, false);
-    EXPECT_TRUE(permission_context.permission_set());
-    EXPECT_FALSE(permission_context.permission_granted());
-    EXPECT_TRUE(permission_context.tab_context_updated());
-    EXPECT_EQ(CONTENT_SETTING_ASK,
-              permission_context.GetContentSettingFromMap(url, url));
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              permission_context.GetPermissionStatus(url, url));
+    variations::testing::ClearAllVariationParams();
   }
 
   void TestRequestPermissionInvalidUrl(
@@ -192,7 +501,7 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
                                              content_settings_type);
     GURL url;
     ASSERT_FALSE(url.is_valid());
-    content::WebContentsTester::For(web_contents())->NavigateAndCommit(url);
+    NavigateAndCommit(url);
 
     const PermissionRequestID id(
         web_contents()->GetRenderProcessHost()->GetID(),
@@ -200,12 +509,12 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
         -1);
     permission_context.RequestPermission(
         web_contents(),
-        id, url, true,
+        id, url, true /* user_gesture */,
         base::Bind(&TestPermissionContext::TrackPermissionDecision,
                    base::Unretained(&permission_context)));
 
-    EXPECT_TRUE(permission_context.permission_set());
-    EXPECT_FALSE(permission_context.permission_granted());
+    ASSERT_EQ(1u, permission_context.decisions().size());
+    EXPECT_EQ(CONTENT_SETTING_BLOCK, permission_context.decisions()[0]);
     EXPECT_TRUE(permission_context.tab_context_updated());
     EXPECT_EQ(CONTENT_SETTING_ASK,
               permission_context.GetContentSettingFromMap(url, url));
@@ -217,21 +526,25 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
     TestPermissionContext permission_context(profile(), permission_type,
                                              content_settings_type);
     GURL url("https://www.google.com");
-    content::WebContentsTester::For(web_contents())->NavigateAndCommit(url);
+    NavigateAndCommit(url);
 
     const PermissionRequestID id(
         web_contents()->GetRenderProcessHost()->GetID(),
         web_contents()->GetMainFrame()->GetRoutingID(),
         -1);
+    permission_context.SetRespondPermissionCallback(
+        base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                   base::Unretained(this), &permission_context, id, url, true,
+                   CONTENT_SETTING_ALLOW));
+
     permission_context.RequestPermission(
         web_contents(),
-        id, url, true,
+        id, url, true /* user_gesture */,
         base::Bind(&TestPermissionContext::TrackPermissionDecision,
                    base::Unretained(&permission_context)));
 
-    RespondToPermission(&permission_context, id, url, true);
-    EXPECT_TRUE(permission_context.permission_set());
-    EXPECT_TRUE(permission_context.permission_granted());
+    ASSERT_EQ(1u, permission_context.decisions().size());
+    EXPECT_EQ(CONTENT_SETTING_ALLOW, permission_context.decisions()[0]);
     EXPECT_TRUE(permission_context.tab_context_updated());
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               permission_context.GetContentSettingFromMap(url, url));
@@ -249,8 +562,8 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
   void TestGlobalPermissionsKillSwitch(
       content::PermissionType permission_type,
       ContentSettingsType content_settings_type) {
-    TestPermissionContext permission_context(profile(), permission_type,
-                                             content_settings_type);
+    TestKillSwitchPermissionContext permission_context(
+        profile(), permission_type, content_settings_type);
     permission_context.ResetFieldTrialList();
 
     EXPECT_FALSE(permission_context.IsPermissionKillSwitchOn());
@@ -265,6 +578,82 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
     EXPECT_TRUE(permission_context.IsPermissionKillSwitchOn());
   }
 
+  // Don't call this more than once in the same test, as it persists data to
+  // HostContentSettingsMap.
+  void TestParallelRequests(ContentSetting response) {
+    TestPermissionContext permission_context(
+        profile(), content::PermissionType::NOTIFICATIONS,
+        CONTENT_SETTINGS_TYPE_NOTIFICATIONS);
+    GURL url("http://www.google.com");
+    NavigateAndCommit(url);
+
+    const PermissionRequestID id0(
+        web_contents()->GetRenderProcessHost()->GetID(),
+        web_contents()->GetMainFrame()->GetRoutingID(), 0);
+    const PermissionRequestID id1(
+        web_contents()->GetRenderProcessHost()->GetID(),
+        web_contents()->GetMainFrame()->GetRoutingID(), 1);
+
+    bool persist = (response == CONTENT_SETTING_ALLOW ||
+                    response == CONTENT_SETTING_BLOCK);
+
+    // Request a permission without setting the callback to DecidePermission.
+    permission_context.RequestPermission(
+        web_contents(), id0, url, true /* user_gesture */,
+        base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                   base::Unretained(&permission_context)));
+
+    EXPECT_EQ(0u, permission_context.decisions().size());
+
+    // Set the callback, and make a second permission request.
+    permission_context.SetRespondPermissionCallback(
+        base::Bind(&PermissionContextBaseTests::RespondToPermission,
+                   base::Unretained(this), &permission_context, id0, url,
+                   persist, response));
+    permission_context.RequestPermission(
+        web_contents(), id1, url, true /* user_gesture */,
+        base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                   base::Unretained(&permission_context)));
+
+    ASSERT_EQ(2u, permission_context.decisions().size());
+    EXPECT_EQ(response, permission_context.decisions()[0]);
+    EXPECT_EQ(response, permission_context.decisions()[1]);
+    EXPECT_TRUE(permission_context.tab_context_updated());
+
+    EXPECT_EQ(response, permission_context.GetContentSettingFromMap(url, url));
+  }
+
+  void TestPermissionsBlacklisting(
+      content::PermissionType permission_type,
+      ContentSettingsType content_settings_type,
+      scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> db_manager,
+      const GURL& url,
+      int timeout,
+      ContentSetting response) {
+    NavigateAndCommit(url);
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(features::kPermissionsBlacklist);
+    TestPermissionContext permission_context(profile(), permission_type,
+                                             content_settings_type);
+    permission_context.SetSafeBrowsingDatabaseManagerAndTimeoutForTest(
+        db_manager, timeout);
+    const PermissionRequestID id(
+        web_contents()->GetRenderProcessHost()->GetID(),
+        web_contents()->GetMainFrame()->GetRoutingID(), -1);
+    // The response callback needs to be set here to test a response being made
+    // in the case of a site not being blacklisted or a safe browsing timeout.
+    permission_context.SetRespondPermissionCallback(base::Bind(
+        &PermissionContextBaseTests::RespondToPermission,
+        base::Unretained(this), &permission_context, id, url, false, response));
+    permission_context.RequestPermission(
+        web_contents(), id, url, true /* user_gesture */,
+        base::Bind(&TestPermissionContext::TrackPermissionDecision,
+                   base::Unretained(&permission_context)));
+
+    ASSERT_EQ(1u, permission_context.decisions().size());
+    EXPECT_EQ(response, permission_context.decisions()[0]);
+  }
+
  private:
   // ChromeRenderViewHostTestHarness:
   void SetUp() override {
@@ -272,7 +661,7 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
 #if defined(OS_ANDROID)
     InfoBarService::CreateForWebContents(web_contents());
 #else
-    PermissionBubbleManager::CreateForWebContents(web_contents());
+    PermissionRequestManager::CreateForWebContents(web_contents());
 #endif
   }
 
@@ -281,14 +670,53 @@ class PermissionContextBaseTests : public ChromeRenderViewHostTestHarness {
 
 // Simulates clicking Accept. The permission should be granted and
 // saved for future use.
-TEST_F(PermissionContextBaseTests, TestAskAndGrant) {
-  TestAskAndGrant_TestContent();
+TEST_F(PermissionContextBaseTests, TestAskAndGrantPersist) {
+  TestAskAndDecide_TestContent(content::PermissionType::NOTIFICATIONS,
+                               CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
+                               CONTENT_SETTING_ALLOW, true);
+}
+
+// Simulates clicking Accept. The permission should be granted, but not
+// persisted.
+TEST_F(PermissionContextBaseTests, TestAskAndGrantNoPersist) {
+  TestAskAndDecide_TestContent(content::PermissionType::NOTIFICATIONS,
+                               CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
+                               CONTENT_SETTING_ALLOW, false);
+}
+
+// Simulates clicking Block. The permission should be denied and
+// saved for future use.
+TEST_F(PermissionContextBaseTests, TestAskAndBlockPersist) {
+  TestAskAndDecide_TestContent(content::PermissionType::GEOLOCATION,
+                               CONTENT_SETTINGS_TYPE_GEOLOCATION,
+                               CONTENT_SETTING_BLOCK, true);
+}
+
+// Simulates clicking Block. The permission should be denied, but not persisted.
+TEST_F(PermissionContextBaseTests, TestAskAndBlockNoPersist) {
+  TestAskAndDecide_TestContent(content::PermissionType::GEOLOCATION,
+                               CONTENT_SETTINGS_TYPE_GEOLOCATION,
+                               CONTENT_SETTING_BLOCK, false);
 }
 
 // Simulates clicking Dismiss (X) in the infobar/bubble.
 // The permission should be denied but not saved for future use.
 TEST_F(PermissionContextBaseTests, TestAskAndDismiss) {
-  TestAskAndDismiss_TestContent();
+  TestAskAndDecide_TestContent(content::PermissionType::MIDI_SYSEX,
+                               CONTENT_SETTINGS_TYPE_MIDI_SYSEX,
+                               CONTENT_SETTING_ASK, false);
+}
+
+// Simulates clicking Dismiss (X) in the infobar/bubble with the block on too
+// many dismissals feature active. The permission should be blocked after
+// several dismissals.
+TEST_F(PermissionContextBaseTests, TestDismissUntilBlocked) {
+  TestBlockOnSeveralDismissals_TestContent();
+}
+
+// Test setting a custom number of dismissals before block via variations.
+TEST_F(PermissionContextBaseTests, TestDismissVariations) {
+  TestVariationBlockOnSeveralDismissals_TestContent();
 }
 
 // Simulates non-valid requesting URL.
@@ -301,7 +729,7 @@ TEST_F(PermissionContextBaseTests, TestNonValidRequestingUrl) {
   TestRequestPermissionInvalidUrl(content::PermissionType::MIDI_SYSEX,
                                   CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
   TestRequestPermissionInvalidUrl(content::PermissionType::PUSH_MESSAGING,
-                                  CONTENT_SETTINGS_TYPE_PUSH_MESSAGING);
+                                  CONTENT_SETTINGS_TYPE_NOTIFICATIONS);
 #if defined(OS_ANDROID) || defined(OS_CHROMEOS)
   TestRequestPermissionInvalidUrl(
       content::PermissionType::PROTECTED_MEDIA_IDENTIFIER,
@@ -324,29 +752,24 @@ TEST_F(PermissionContextBaseTests, TestGrantAndRevokeWithInfobars) {
   // TODO(timvolodine): currently no test for
   // CONTENT_SETTINGS_TYPE_NOTIFICATIONS because notification permissions work
   // differently with infobars as compared to bubbles (crbug.com/453784).
-  // TODO(timvolodine): currently no test for
-  // CONTENT_SETTINGS_TYPE_PUSH_MESSAGING because infobars do not implement push
-  // messaging permissions (crbug.com/453788).
 }
 #endif
 
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
+#if !defined(OS_ANDROID)
 // Simulates granting and revoking of permissions using permission bubbles.
 // This test shouldn't run on mobile because mobile platforms use infobars.
 TEST_F(PermissionContextBaseTests, TestGrantAndRevokeWithBubbles) {
   TestGrantAndRevoke_TestContent(content::PermissionType::GEOLOCATION,
                                  CONTENT_SETTINGS_TYPE_GEOLOCATION,
                                  CONTENT_SETTING_ASK);
-#if defined(ENABLE_NOTIFICATIONS)
   TestGrantAndRevoke_TestContent(content::PermissionType::NOTIFICATIONS,
                                  CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
                                  CONTENT_SETTING_ASK);
-#endif
   TestGrantAndRevoke_TestContent(content::PermissionType::MIDI_SYSEX,
                                  CONTENT_SETTINGS_TYPE_MIDI_SYSEX,
                                  CONTENT_SETTING_ASK);
   TestGrantAndRevoke_TestContent(content::PermissionType::PUSH_MESSAGING,
-                                 CONTENT_SETTINGS_TYPE_PUSH_MESSAGING,
+                                 CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
                                  CONTENT_SETTING_ASK);
 }
 #endif
@@ -360,7 +783,7 @@ TEST_F(PermissionContextBaseTests, TestGlobalKillSwitch) {
   TestGlobalPermissionsKillSwitch(content::PermissionType::MIDI_SYSEX,
                                   CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
   TestGlobalPermissionsKillSwitch(content::PermissionType::PUSH_MESSAGING,
-                                  CONTENT_SETTINGS_TYPE_PUSH_MESSAGING);
+                                  CONTENT_SETTINGS_TYPE_NOTIFICATIONS);
   TestGlobalPermissionsKillSwitch(content::PermissionType::DURABLE_STORAGE,
                                   CONTENT_SETTINGS_TYPE_DURABLE_STORAGE);
 #if defined(OS_ANDROID) || defined(OS_CHROMEOS)
@@ -372,4 +795,65 @@ TEST_F(PermissionContextBaseTests, TestGlobalKillSwitch) {
                                   CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC);
   TestGlobalPermissionsKillSwitch(content::PermissionType::VIDEO_CAPTURE,
                                   CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA);
+}
+
+TEST_F(PermissionContextBaseTests, TestParallelRequestsAllowed) {
+  TestParallelRequests(CONTENT_SETTING_ALLOW);
+}
+
+TEST_F(PermissionContextBaseTests, TestParallelRequestsBlocked) {
+  TestParallelRequests(CONTENT_SETTING_BLOCK);
+}
+
+TEST_F(PermissionContextBaseTests, TestParallelRequestsDismissed) {
+  TestParallelRequests(CONTENT_SETTING_ASK);
+}
+
+// Tests a blacklisted (URL, permission) pair has had its permission request
+// blocked.
+TEST_F(PermissionContextBaseTests, TestPermissionsBlacklistingBlocked) {
+  scoped_refptr<MockSafeBrowsingDatabaseManager> db_manager =
+      new MockSafeBrowsingDatabaseManager(true /* perform_callback */);
+  const GURL url("https://www.example.com");
+  std::set<std::string> blacklisted_permissions{
+      PermissionUtil::GetPermissionString(
+          content::PermissionType::GEOLOCATION)};
+  db_manager->BlacklistUrlPermissions(url, blacklisted_permissions);
+  TestPermissionsBlacklisting(content::PermissionType::GEOLOCATION,
+                              CONTENT_SETTINGS_TYPE_GEOLOCATION, db_manager,
+                              url, 2000 /* timeout */, CONTENT_SETTING_BLOCK);
+}
+
+// Tests that a URL with a blacklisted permission is permitted to request a
+// non-blacklisted permission.
+TEST_F(PermissionContextBaseTests, TestPermissionsBlacklistingAllowed) {
+  scoped_refptr<MockSafeBrowsingDatabaseManager> db_manager =
+      new MockSafeBrowsingDatabaseManager(true /* perform_callback */);
+  const GURL url("https://www.example.com");
+  std::set<std::string> blacklisted_permissions{
+      PermissionUtil::GetPermissionString(
+          content::PermissionType::GEOLOCATION)};
+  db_manager->BlacklistUrlPermissions(url, blacklisted_permissions);
+  TestPermissionsBlacklisting(
+      content::PermissionType::GEOLOCATION, CONTENT_SETTINGS_TYPE_GEOLOCATION,
+      db_manager, url, 2000 /* timeout in ms */, CONTENT_SETTING_BLOCK);
+  TestPermissionsBlacklisting(content::PermissionType::NOTIFICATIONS,
+                              CONTENT_SETTINGS_TYPE_NOTIFICATIONS, db_manager,
+                              url, 2000 /* timeout in ms */,
+                              CONTENT_SETTING_ALLOW);
+}
+
+// Tests that a URL with a blacklisted permisison is permitted to request that
+// permission if Safe Browsing has timed out.
+TEST_F(PermissionContextBaseTests, TestSafeBrowsingTimeout) {
+  scoped_refptr<MockSafeBrowsingDatabaseManager> db_manager =
+      new MockSafeBrowsingDatabaseManager(false /* perform_callback */);
+  const GURL url("https://www.example.com");
+  std::set<std::string> blacklisted_permissions{
+      PermissionUtil::GetPermissionString(
+          content::PermissionType::GEOLOCATION)};
+  db_manager->BlacklistUrlPermissions(url, blacklisted_permissions);
+  TestPermissionsBlacklisting(content::PermissionType::GEOLOCATION,
+                              CONTENT_SETTINGS_TYPE_GEOLOCATION, db_manager,
+                              url, 0 /* timeout in ms */, CONTENT_SETTING_ASK);
 }

@@ -7,10 +7,10 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/command_line.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/strings/string16.h"
 #include "base/test/test_io_thread.h"
@@ -19,25 +19,27 @@
 #include "content/public/common/main_function_params.h"
 #include "content/public/common/page_state.h"
 #include "content/public/test/mock_render_thread.h"
+#include "mojo/edk/embedder/scoped_ipc_support.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/public/platform/Platform.h"
 #include "third_party/WebKit/public/web/WebFrame.h"
 #include "third_party/WebKit/public/web/WebLeakDetector.h"
-#include "third_party/mojo/src/mojo/edk/test/scoped_ipc_support.h"
 
-struct ViewMsg_Resize_Params;
+namespace base {
+class FieldTrialList;
+}
 
 namespace blink {
+namespace scheduler {
+class RendererScheduler;
+}
 class WebInputElement;
+class WebMouseEvent;
 class WebWidget;
 }
 
 namespace gfx {
 class Rect;
-}
-
-namespace scheduler {
-class RendererScheduler;
 }
 
 namespace content {
@@ -50,6 +52,7 @@ class PageState;
 class RendererMainPlatformDelegate;
 class RendererBlinkPlatformImplTestOverrideImpl;
 class RenderView;
+struct ResizeParams;
 
 class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
  public:
@@ -63,8 +66,9 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
     void Shutdown();
 
    private:
-    scoped_ptr<scheduler::RendererScheduler> renderer_scheduler_;
-    scoped_ptr<RendererBlinkPlatformImplTestOverrideImpl> blink_platform_impl_;
+    std::unique_ptr<blink::scheduler::RendererScheduler> renderer_scheduler_;
+    std::unique_ptr<RendererBlinkPlatformImplTestOverrideImpl>
+        blink_platform_impl_;
   };
 
   RenderViewTest();
@@ -104,8 +108,8 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
 
   // Navigates the main frame back or forward in session history and commits.
   // The caller must capture a PageState for the target page.
-  void GoBack(const PageState& state);
-  void GoForward(const PageState& state);
+  void GoBack(const GURL& url, const PageState& state);
+  void GoForward(const GURL& url, const PageState& state);
 
   // Sends one native key event over IPC.
   void SendNativeKeyEvent(const NativeWebKeyboardEvent& key_event);
@@ -149,9 +153,7 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
   uint32_t GetNavigationIPCType();
 
   // Resize the view.
-  void Resize(gfx::Size new_size,
-              gfx::Rect resizer_rect,
-              bool is_fullscreen);
+  void Resize(gfx::Size new_size, bool is_fullscreen);
 
   // Simulates typing the |ascii_character| into this render view. Also accepts
   // ui::VKEY_BACK for backspace. Will flush the message loop if
@@ -168,8 +170,8 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
   // These are all methods from RenderViewImpl that we expose to testing code.
   bool OnMessageReceived(const IPC::Message& msg);
   void DidNavigateWithinPage(blink::WebLocalFrame* frame,
-                             bool is_new_navigation);
-  void SendContentStateImmediately();
+                             bool is_new_navigation,
+                             bool content_initiated);
   blink::WebWidget* GetWebWidget();
 
   // Allows a subclass to override the various content client implementations.
@@ -178,7 +180,7 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
   virtual ContentRendererClient* CreateContentRendererClient();
 
   // Allows a subclass to customize the initial size of the RenderView.
-  virtual scoped_ptr<ViewMsg_Resize_Params> InitialSizeParams();
+  virtual std::unique_ptr<ResizeParams> InitialSizeParams();
 
   // testing::Test
   void SetUp() override;
@@ -189,32 +191,33 @@ class RenderViewTest : public testing::Test, blink::WebLeakDetectorClient {
   void onLeakDetectionComplete(const Result& result) override;
 
   base::MessageLoop msg_loop_;
-  scoped_ptr<FakeCompositorDependencies> compositor_deps_;
-  scoped_ptr<MockRenderProcess> mock_process_;
+  std::unique_ptr<FakeCompositorDependencies> compositor_deps_;
+  std::unique_ptr<MockRenderProcess> mock_process_;
   // We use a naked pointer because we don't want to expose RenderViewImpl in
   // the embedder's namespace.
   RenderView* view_;
   RendererBlinkPlatformImplTestOverride blink_platform_impl_;
-  scoped_ptr<ContentClient> content_client_;
-  scoped_ptr<ContentBrowserClient> content_browser_client_;
-  scoped_ptr<ContentRendererClient> content_renderer_client_;
-  scoped_ptr<MockRenderThread> render_thread_;
+  std::unique_ptr<ContentClient> content_client_;
+  std::unique_ptr<ContentBrowserClient> content_browser_client_;
+  std::unique_ptr<ContentRendererClient> content_renderer_client_;
+  std::unique_ptr<MockRenderThread> render_thread_;
 
   // Used to setup the process so renderers can run.
-  scoped_ptr<RendererMainPlatformDelegate> platform_;
-  scoped_ptr<MainFunctionParams> params_;
-  scoped_ptr<base::CommandLine> command_line_;
+  std::unique_ptr<RendererMainPlatformDelegate> platform_;
+  std::unique_ptr<MainFunctionParams> params_;
+  std::unique_ptr<base::CommandLine> command_line_;
+  std::unique_ptr<base::FieldTrialList> field_trial_list_;
 
   // For Mojo.
-  scoped_ptr<base::TestIOThread> test_io_thread_;
-  scoped_ptr<mojo::test::ScopedIPCSupport> ipc_support_;
+  std::unique_ptr<base::TestIOThread> test_io_thread_;
+  std::unique_ptr<mojo::edk::ScopedIPCSupport> ipc_support_;
 
 #if defined(OS_MACOSX)
-  scoped_ptr<base::mac::ScopedNSAutoreleasePool> autorelease_pool_;
+  std::unique_ptr<base::mac::ScopedNSAutoreleasePool> autorelease_pool_;
 #endif
 
  private:
-  void GoToOffset(int offset, const PageState& state);
+  void GoToOffset(int offset, const GURL& url, const PageState& state);
 };
 
 }  // namespace content

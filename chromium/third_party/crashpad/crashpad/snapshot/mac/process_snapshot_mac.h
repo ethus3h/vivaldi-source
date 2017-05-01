@@ -20,11 +20,11 @@
 #include <unistd.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "client/crashpad_info.h"
 #include "snapshot/crashpad_info_client_options.h"
 #include "snapshot/exception_snapshot.h"
@@ -38,6 +38,7 @@
 #include "snapshot/process_snapshot.h"
 #include "snapshot/system_snapshot.h"
 #include "snapshot/thread_snapshot.h"
+#include "snapshot/unloaded_module_snapshot.h"
 #include "util/mach/mach_extensions.h"
 #include "util/misc/initialization_state_dcheck.h"
 #include "util/misc/uuid.h"
@@ -45,8 +46,8 @@
 
 namespace crashpad {
 
-//! \brief A ProcessSnapshot of a running (or crashed) process running on a Mac
-//!     OS X system.
+//! \brief A ProcessSnapshot of a running (or crashed) process running on a
+//!     macOS system.
 class ProcessSnapshotMac final : public ProcessSnapshot {
  public:
   ProcessSnapshotMac();
@@ -82,21 +83,21 @@ class ProcessSnapshotMac final : public ProcessSnapshot {
 
   //! \brief Sets the value to be returned by ReportID().
   //!
-  //! On Mac OS X, the crash report ID is under the control of the snapshot
+  //! On macOS, the crash report ID is under the control of the snapshot
   //! producer, which may call this method to set the report ID. If this is not
   //! done, ReportID() will return an identifier consisting entirely of zeroes.
   void SetReportID(const UUID& report_id) { report_id_ = report_id; }
 
   //! \brief Sets the value to be returned by ClientID().
   //!
-  //! On Mac OS X, the client ID is under the control of the snapshot producer,
+  //! On macOS, the client ID is under the control of the snapshot producer,
   //! which may call this method to set the client ID. If this is not done,
   //! ClientID() will return an identifier consisting entirely of zeroes.
   void SetClientID(const UUID& client_id) { client_id_ = client_id; }
 
   //! \brief Sets the value to be returned by AnnotationsSimpleMap().
   //!
-  //! On Mac OS X, all process annotations are under the control of the snapshot
+  //! On macOS, all process annotations are under the control of the snapshot
   //! producer, which may call this method to establish these annotations.
   //! Contrast this with module annotations, which are under the control of the
   //! process being snapshotted.
@@ -126,6 +127,7 @@ class ProcessSnapshotMac final : public ProcessSnapshot {
   const SystemSnapshot* System() const override;
   std::vector<const ThreadSnapshot*> Threads() const override;
   std::vector<const ModuleSnapshot*> Modules() const override;
+  std::vector<UnloadedModuleSnapshot> UnloadedModules() const override;
   const ExceptionSnapshot* Exception() const override;
   std::vector<const MemoryMapRegionSnapshot*> MemoryMap() const override;
   std::vector<HandleSnapshot> Handles() const override;
@@ -141,7 +143,7 @@ class ProcessSnapshotMac final : public ProcessSnapshot {
   internal::SystemSnapshotMac system_;
   PointerVector<internal::ThreadSnapshotMac> threads_;
   PointerVector<internal::ModuleSnapshotMac> modules_;
-  scoped_ptr<internal::ExceptionSnapshotMac> exception_;
+  std::unique_ptr<internal::ExceptionSnapshotMac> exception_;
   ProcessReader process_reader_;
   UUID report_id_;
   UUID client_id_;

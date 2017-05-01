@@ -6,18 +6,25 @@
 
 #include <stddef.h>
 
+#include <list>
+#include <memory>
+#include <string>
+
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/time/time.h"
 #include "jingle/glue/utils.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
-#include "net/udp/udp_server_socket.h"
+#include "net/log/net_log_source.h"
+#include "net/socket/udp_server_socket.h"
 #include "remoting/protocol/socket_util.h"
 #include "third_party/webrtc/base/asyncpacketsocket.h"
 #include "third_party/webrtc/base/nethelpers.h"
+#include "third_party/webrtc/base/socket.h"
+#include "third_party/webrtc/media/base/rtputils.h"
 
 namespace remoting {
 namespace protocol {
@@ -63,11 +70,13 @@ class UdpPacketSocket : public rtc::AsyncPacketSocket {
   struct PendingPacket {
     PendingPacket(const void* buffer,
                   int buffer_size,
-                  const net::IPEndPoint& address);
+                  const net::IPEndPoint& address,
+                  const rtc::PacketOptions& options);
 
     scoped_refptr<net::IOBufferWithSize> data;
     net::IPEndPoint address;
     bool retried;
+    rtc::PacketOptions options;
   };
 
   void OnBindCompleted(int error);
@@ -79,7 +88,7 @@ class UdpPacketSocket : public rtc::AsyncPacketSocket {
   void OnReadCompleted(int result);
   void HandleReadResult(int result);
 
-  scoped_ptr<net::UDPServerSocket> socket_;
+  std::unique_ptr<net::UDPServerSocket> socket_;
 
   State state_;
   int error_;
@@ -97,13 +106,14 @@ class UdpPacketSocket : public rtc::AsyncPacketSocket {
   DISALLOW_COPY_AND_ASSIGN(UdpPacketSocket);
 };
 
-UdpPacketSocket::PendingPacket::PendingPacket(
-    const void* buffer,
-    int buffer_size,
-    const net::IPEndPoint& address)
+UdpPacketSocket::PendingPacket::PendingPacket(const void* buffer,
+                                              int buffer_size,
+                                              const net::IPEndPoint& address,
+                                              const rtc::PacketOptions& options)
     : data(new net::IOBufferWithSize(buffer_size)),
       address(address),
-      retried(false) {
+      retried(false),
+      options(options) {
   memcpy(data->data(), buffer, buffer_size);
 }
 
@@ -128,7 +138,7 @@ bool UdpPacketSocket::Init(const rtc::SocketAddress& local_address,
   }
 
   for (uint32_t port = min_port; port <= max_port; ++port) {
-    socket_.reset(new net::UDPServerSocket(nullptr, net::NetLog::Source()));
+    socket_.reset(new net::UDPServerSocket(nullptr, net::NetLogSource()));
     int result = socket_->Listen(
         net::IPEndPoint(local_endpoint.address(), static_cast<uint16_t>(port)));
     if (result == net::OK) {
@@ -194,7 +204,8 @@ int UdpPacketSocket::SendTo(const void* data, size_t data_size,
     return EWOULDBLOCK;
   }
 
-  send_queue_.push_back(PendingPacket(data, data_size, endpoint));
+  PendingPacket packet(data, data_size, endpoint, options);
+  send_queue_.push_back(packet);
   send_queue_size_ += data_size;
 
   DoSend();
@@ -273,6 +284,10 @@ void UdpPacketSocket::DoSend() {
     return;
 
   PendingPacket& packet = send_queue_.front();
+  cricket::ApplyPacketOptions(
+      reinterpret_cast<uint8_t*>(packet.data->data()), packet.data->size(),
+      packet.options.packet_time_params,
+      (base::TimeTicks::Now() - base::TimeTicks()).InMicroseconds());
   int result = socket_->SendTo(
       packet.data.get(),
       packet.data->size(),
@@ -313,6 +328,10 @@ void UdpPacketSocket::OnSendCompleted(int result) {
   // Don't need to worry about partial sends because this is a datagram
   // socket.
   send_queue_size_ -= send_queue_.front().data->size();
+  SignalSentPacket(this, rtc::SentPacket(send_queue_.front().options.packet_id,
+                                         (base::TimeTicks::Now() -
+                                          base::TimeTicks::UnixEpoch())
+                                             .InMilliseconds()));
   send_queue_.pop_front();
   DoSend();
 }
@@ -368,7 +387,7 @@ rtc::AsyncPacketSocket* ChromiumPacketSocketFactory::CreateUdpSocket(
     const rtc::SocketAddress& local_address,
     uint16_t min_port,
     uint16_t max_port) {
-  scoped_ptr<UdpPacketSocket> result(new UdpPacketSocket());
+  std::unique_ptr<UdpPacketSocket> result(new UdpPacketSocket());
   if (!result->Init(local_address, min_port, max_port))
     return nullptr;
   return result.release();
@@ -379,7 +398,8 @@ rtc::AsyncPacketSocket* ChromiumPacketSocketFactory::CreateServerTcpSocket(
     uint16_t min_port,
     uint16_t max_port,
     int opts) {
-  // We don't use TCP sockets for remoting connections.
+  // TCP sockets are not supported.
+  // TODO(sergeyu): Implement TCP support crbug.com/600032 .
   NOTIMPLEMENTED();
   return nullptr;
 }
@@ -391,8 +411,9 @@ ChromiumPacketSocketFactory::CreateClientTcpSocket(
       const rtc::ProxyInfo& proxy_info,
       const std::string& user_agent,
       int opts) {
-  // We don't use TCP sockets for remoting connections.
-  NOTREACHED();
+  // TCP sockets are not supported.
+  // TODO(sergeyu): Implement TCP support crbug.com/600032 .
+  NOTIMPLEMENTED();
   return nullptr;
 }
 

@@ -9,8 +9,8 @@
 #include "remoting/base/constants.h"
 #include "remoting/signaling/iq_sender.h"
 #include "remoting/signaling/signal_strategy.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
-#include "third_party/webrtc/libjingle/xmpp/constants.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmpp/constants.h"
 
 using buzz::QName;
 using buzz::XmlElement;
@@ -59,7 +59,7 @@ void LogToServer::SendPendingEntries() {
     return;
   }
   // Make one stanza containing all the pending entries.
-  scoped_ptr<XmlElement> stanza(ServerLogEntry::MakeStanza());
+  std::unique_ptr<XmlElement> stanza(ServerLogEntry::MakeStanza());
   while (!pending_entries_.empty()) {
     ServerLogEntry& entry = pending_entries_.front();
     stanza->AddElement(entry.ToStanza().release());

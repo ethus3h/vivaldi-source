@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/signin/core/account_id/account_id.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager_base.h"
@@ -64,7 +63,7 @@ class USER_MANAGER_EXPORT FakeUserManager : public UserManagerBase {
   const user_manager::UserList& GetLRULoggedInUsers() const override;
   user_manager::UserList GetUnlockUsers() const override;
   const AccountId& GetOwnerAccountId() const override;
-  void SessionStarted() override {}
+  void OnSessionStarted() override {}
   void RemoveUser(const AccountId& account_id,
                   user_manager::RemoveUserDelegate* delegate) override {}
   void RemoveUserFromList(const AccountId& account_id) override;
@@ -72,8 +71,6 @@ class USER_MANAGER_EXPORT FakeUserManager : public UserManagerBase {
   const user_manager::User* FindUser(
       const AccountId& account_id) const override;
   user_manager::User* FindUserAndModify(const AccountId& account_id) override;
-  const user_manager::User* GetLoggedInUser() const override;
-  user_manager::User* GetLoggedInUser() override;
   const user_manager::User* GetPrimaryUser() const override;
   void SaveUserOAuthStatus(
       const AccountId& account_id,
@@ -94,8 +91,8 @@ class USER_MANAGER_EXPORT FakeUserManager : public UserManagerBase {
   bool IsLoggedInAsGuest() const override;
   bool IsLoggedInAsSupervisedUser() const override;
   bool IsLoggedInAsKioskApp() const override;
+  bool IsLoggedInAsArcKioskApp() const override;
   bool IsLoggedInAsStub() const override;
-  bool IsSessionStarted() const override;
   bool IsUserNonCryptohomeDataEphemeral(
       const AccountId& account_id) const override;
   void AddObserver(Observer* obs) override {}
@@ -127,16 +124,17 @@ class USER_MANAGER_EXPORT FakeUserManager : public UserManagerBase {
       const AccountId& account_id,
       user_manager::User::OAuthTokenStatus status) const override {}
   bool IsEnterpriseManaged() const override;
-  void LoadPublicAccounts(std::set<AccountId>* public_sessions_set) override {}
+  void LoadDeviceLocalAccounts(
+      std::set<AccountId>* device_local_accounts_set) override {}
   void PerformPreUserListLoadingActions() override {}
   void PerformPostUserListLoadingActions() override {}
   void PerformPostUserLoggedInActions(bool browser_restart) override {}
   bool IsDemoApp(const AccountId& account_id) const override;
-  bool IsKioskApp(const AccountId& account_id) const override;
-  bool IsPublicAccountMarkedForRemoval(
+  bool IsDeviceLocalAccountMarkedForRemoval(
       const AccountId& account_id) const override;
   void DemoAccountLoggedIn() override {}
-  void KioskAppLoggedIn(const AccountId& kiosk_app_account_id) override {}
+  void KioskAppLoggedIn(user_manager::User* user) override {}
+  void ArcKioskAppLoggedIn(user_manager::User* user) override {}
   void PublicAccountUserLoggedIn(user_manager::User* user) override {}
   void SupervisedUserLoggedIn(const AccountId& account_id) override {}
   void OnUserRemoved(const AccountId& account_id) override {}

@@ -5,7 +5,9 @@
 #include "chrome/browser/chromeos/input_method/input_method_manager_impl.h"
 
 #include <stddef.h>
+
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -13,7 +15,6 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "chrome/browser/chromeos/input_method/mock_candidate_window_controller.h"
@@ -35,6 +36,7 @@
 #include "ui/chromeos/ime/input_method_menu_item.h"
 #include "ui/chromeos/ime/input_method_menu_manager.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/keyboard/content/keyboard_content_util.h"
 
 namespace chromeos {
 
@@ -134,7 +136,7 @@ class InputMethodManagerImplTest :  public BrowserWithTestWindowTest {
 
     delegate_ = new FakeInputMethodDelegate();
     manager_.reset(new InputMethodManagerImpl(
-        scoped_ptr<InputMethodDelegate>(delegate_), false));
+        std::unique_ptr<InputMethodDelegate>(delegate_), false));
     manager_->GetInputMethodUtil()->UpdateHardwareLayoutCache();
     candidate_window_controller_ = new MockCandidateWindowController;
     manager_->SetCandidateWindowControllerForTesting(
@@ -170,7 +172,8 @@ class InputMethodManagerImplTest :  public BrowserWithTestWindowTest {
   void InitComponentExtension() {
     mock_delegate_ = new MockComponentExtIMEManagerDelegate();
     mock_delegate_->set_ime_list(ime_list_);
-    scoped_ptr<ComponentExtensionIMEManagerDelegate> delegate(mock_delegate_);
+    std::unique_ptr<ComponentExtensionIMEManagerDelegate> delegate(
+        mock_delegate_);
 
     // CreateNewState(NULL) returns state with non-empty current_input_method.
     // So SetState() triggers ChangeInputMethod().
@@ -345,11 +348,11 @@ class InputMethodManagerImplTest :  public BrowserWithTestWindowTest {
     return TestingBrowserProcess::GetGlobal();
   }
 
-  scoped_ptr<TestingProfileManager> profile_manager_;
-  scoped_ptr<InputMethodManagerImpl> manager_;
+  std::unique_ptr<TestingProfileManager> profile_manager_;
+  std::unique_ptr<InputMethodManagerImpl> manager_;
   FakeInputMethodDelegate* delegate_;
   MockCandidateWindowController* candidate_window_controller_;
-  scoped_ptr<MockInputMethodEngine> mock_engine_handler_;
+  std::unique_ptr<MockInputMethodEngine> mock_engine_handler_;
   FakeImeKeyboard* keyboard_;
   MockComponentExtIMEManagerDelegate* mock_delegate_;
   std::vector<ComponentExtensionIME> ime_list_;
@@ -527,7 +530,7 @@ TEST_F(InputMethodManagerImplTest, TestActiveInputMethods) {
   manager_->GetActiveIMEState()->EnableLoginLayouts(
       "ja", keyboard_layouts);  // Japanese
   EXPECT_EQ(2U, manager_->GetActiveIMEState()->GetNumActiveInputMethods());
-  scoped_ptr<InputMethodDescriptors> methods(
+  std::unique_ptr<InputMethodDescriptors> methods(
       manager_->GetActiveIMEState()->GetActiveInputMethods());
   ASSERT_TRUE(methods.get());
   EXPECT_EQ(2U, methods->size());
@@ -1223,7 +1226,7 @@ TEST_F(InputMethodManagerImplTest, TestAddRemoveExtensionInputMethods) {
   EXPECT_EQ(2U, manager_->GetActiveIMEState()->GetNumActiveInputMethods());
 
   {
-    scoped_ptr<InputMethodDescriptors> methods(
+    std::unique_ptr<InputMethodDescriptors> methods(
         manager_->GetActiveIMEState()->GetActiveInputMethods());
     ASSERT_EQ(2U, methods->size());
     // Ext IMEs should be at the end of the list.
@@ -1251,7 +1254,7 @@ TEST_F(InputMethodManagerImplTest, TestAddRemoveExtensionInputMethods) {
   manager_->GetActiveIMEState()->SetEnabledExtensionImes(&extension_ime_ids);
   EXPECT_EQ(3U, manager_->GetActiveIMEState()->GetNumActiveInputMethods());
   {
-    scoped_ptr<InputMethodDescriptors> methods(
+    std::unique_ptr<InputMethodDescriptors> methods(
         manager_->GetActiveIMEState()->GetActiveInputMethods());
     ASSERT_EQ(3U, methods->size());
     // Ext IMEs should be at the end of the list.
@@ -1340,7 +1343,7 @@ TEST_F(InputMethodManagerImplTest, TestAddExtensionInputThenLockScreen) {
   EXPECT_EQ("us(dvorak)", keyboard_->last_layout_);
   {
     // This is for crosbug.com/27052.
-    scoped_ptr<InputMethodDescriptors> methods(
+    std::unique_ptr<InputMethodDescriptors> methods(
         manager_->GetActiveIMEState()->GetActiveInputMethods());
     ASSERT_EQ(2U, methods->size());
     // Ext. IMEs should be at the end of the list.
@@ -1405,6 +1408,51 @@ TEST_F(InputMethodManagerImplTest, MigrateInputMethodTest) {
   EXPECT_EQ(ImeIdFromEngineId("xkb:fr::fra"), input_method_ids[1]);
   EXPECT_EQ("_comp_ime_asdf_pinyin", input_method_ids[2]);
   EXPECT_EQ(ImeIdFromEngineId("zh-t-i0-pinyin"), input_method_ids[3]);
+}
+
+TEST_F(InputMethodManagerImplTest, OverrideKeyboardUrlRefWithKeyset) {
+  const GURL inputview_url(
+      "chrome-extension://"
+      "inputview.html#id=us.compact.qwerty&language=en-US&passwordLayout=us."
+      "compact.qwerty&name=keyboard_us");
+  keyboard::SetOverrideContentUrl(inputview_url);
+  EXPECT_EQ(inputview_url, keyboard::GetOverrideContentUrl());
+
+  // Override the keyboard url ref with 'emoji'.
+  const GURL overridden_url_emoji(
+      "chrome-extension://"
+      "inputview.html#id=us.compact.qwerty.emoji&language=en-US&passwordLayout="
+      "us.compact.qwerty&name=keyboard_us");
+  manager_->OverrideKeyboardUrlRef("emoji");
+  EXPECT_EQ(overridden_url_emoji, keyboard::GetOverrideContentUrl());
+
+  // Override the keyboard url ref with 'hwt'.
+  keyboard::SetOverrideContentUrl(inputview_url);
+  const GURL overridden_url_hwt(
+      "chrome-extension://"
+      "inputview.html#id=us.compact.qwerty.hwt&language=en-US&passwordLayout="
+      "us.compact.qwerty&name=keyboard_us");
+  manager_->OverrideKeyboardUrlRef("hwt");
+  EXPECT_EQ(overridden_url_hwt, keyboard::GetOverrideContentUrl());
+
+  // Override the keyboard url ref with 'voice'.
+  keyboard::SetOverrideContentUrl(inputview_url);
+  const GURL overridden_url_voice(
+      "chrome-extension://"
+      "inputview.html#id=us.compact.qwerty.voice&language=en-US"
+      "&passwordLayout=us.compact.qwerty&name=keyboard_us");
+  manager_->OverrideKeyboardUrlRef("voice");
+  EXPECT_EQ(overridden_url_voice, keyboard::GetOverrideContentUrl());
+}
+
+TEST_F(InputMethodManagerImplTest, OverrideDefaultKeyboardUrlRef) {
+  const GURL default_url("chrome://inputview.html");
+  keyboard::SetOverrideContentUrl(default_url);
+
+  EXPECT_EQ(default_url, keyboard::GetOverrideContentUrl());
+
+  manager_->OverrideKeyboardUrlRef("emoji");
+  EXPECT_EQ(default_url, keyboard::GetOverrideContentUrl());
 }
 
 }  // namespace input_method

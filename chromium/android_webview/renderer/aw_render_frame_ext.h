@@ -10,9 +10,11 @@
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
+#include "url/origin.h"
 
 namespace blink {
 enum WebMeaningfulLayout;
+class WebFrameWidget;
 class WebView;
 }
 
@@ -34,8 +36,9 @@ class AwRenderFrameExt : public content::RenderFrameObserver {
 
   bool OnMessageReceived(const IPC::Message& message) override;
   void FocusedNodeChanged(const blink::WebNode& node) override;
+  void OnDestruct() override;
 
-  void OnDocumentHasImagesRequest(int id);
+  void OnDocumentHasImagesRequest(uint32_t id);
   void OnDoHitTest(const gfx::PointF& touch_center,
                    const gfx::SizeF& touch_area);
 
@@ -47,9 +50,12 @@ class AwRenderFrameExt : public content::RenderFrameObserver {
 
   void OnSetBackgroundColor(SkColor c);
 
-  void OnSmoothScroll(int target_x, int target_y, long duration_ms);
+  void OnSmoothScroll(int target_x, int target_y, int duration_ms);
 
   blink::WebView* GetWebView();
+  blink::WebFrameWidget* GetWebFrameWidget();
+
+  url::Origin last_origin_;
 
   DISALLOW_COPY_AND_ASSIGN(AwRenderFrameExt);
 };

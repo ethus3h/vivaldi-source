@@ -4,9 +4,11 @@
 
 #import "components/translate/ios/browser/translate_controller.h"
 
+#include <memory>
+
 #include "base/values.h"
 #import "components/translate/ios/browser/js_translate_manager.h"
-#include "ios/web/public/test/test_web_state.h"
+#import "ios/web/public/test/fakes/test_web_state.h"
 #include "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #include "url/gurl.h"
@@ -50,9 +52,9 @@ class TranslateControllerTest : public PlatformTest,
     translation_time_ = translation_time;
   }
 
-  scoped_ptr<web::TestWebState> test_web_state_;
+  std::unique_ptr<web::TestWebState> test_web_state_;
   base::scoped_nsobject<id> mock_js_translate_manager_;
-  scoped_ptr<TranslateController> translate_controller_;
+  std::unique_ptr<TranslateController> translate_controller_;
   bool success_;
   double ready_time_;
   double load_time_;

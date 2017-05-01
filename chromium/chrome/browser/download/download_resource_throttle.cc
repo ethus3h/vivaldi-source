@@ -10,15 +10,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/download/download_stats.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_controller.h"
-#include "content/public/browser/web_contents_delegate.h"
 
 #if defined(OS_ANDROID)
-#include "content/public/browser/android/download_controller_android.h"
+#include "chrome/browser/android/download/download_controller_base.h"
 #include "content/public/browser/render_view_host.h"
-
-using content::DownloadControllerAndroid;
 #endif
+
+#include "content/public/browser/web_contents_delegate.h"
 
 using content::BrowserThread;
 
@@ -32,7 +30,7 @@ void OnCanDownloadDecided(base::WeakPtr<DownloadResourceThrottle> throttle,
 }
 
 void CanDownload(
-    scoped_ptr<DownloadResourceThrottle::DownloadRequestInfo> info) {
+    std::unique_ptr<DownloadResourceThrottle::DownloadRequestInfo> info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   info->limiter->CanDownload(info->web_contents_getter, info->url,
                              info->request_method,
@@ -42,7 +40,7 @@ void CanDownload(
 
 #if defined(OS_ANDROID)
 void OnAcquireFileAccessPermissionDone(
-    scoped_ptr<DownloadResourceThrottle::DownloadRequestInfo> info,
+    std::unique_ptr<DownloadResourceThrottle::DownloadRequestInfo> info,
     bool granted) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (granted)
@@ -53,12 +51,12 @@ void OnAcquireFileAccessPermissionDone(
 #endif
 
 void CanDownloadOnUIThread(
-    scoped_ptr<DownloadResourceThrottle::DownloadRequestInfo> info) {
+    std::unique_ptr<DownloadResourceThrottle::DownloadRequestInfo> info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 #if defined(OS_ANDROID)
   content::WebContents* contents = info->web_contents_getter.Run();
   if (contents) {
-    content::DownloadControllerAndroid::Get()->AcquireFileAccessPermission(
+    DownloadControllerBase::Get()->AcquireFileAccessPermission(
         contents, base::Bind(&OnAcquireFileAccessPermissionDone,
                              base::Passed(std::move(info))));
   } else {
@@ -99,11 +97,11 @@ DownloadResourceThrottle::DownloadResourceThrottle(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(
-          &CanDownloadOnUIThread,
-          base::Passed(scoped_ptr<DownloadRequestInfo>(new DownloadRequestInfo(
-              limiter, web_contents_getter, url, request_method, info,
-              base::Bind(&OnCanDownloadDecided, AsWeakPtr()))))));
+      base::Bind(&CanDownloadOnUIThread,
+                 base::Passed(std::unique_ptr<DownloadRequestInfo>(
+                     new DownloadRequestInfo(
+                         limiter, web_contents_getter, url, request_method, info,
+                         base::Bind(&OnCanDownloadDecided, AsWeakPtr()))))));
 }
 
 DownloadResourceThrottle::~DownloadResourceThrottle() {
@@ -138,7 +136,7 @@ void DownloadResourceThrottle::WillDownload(bool* defer) {
   }
 
   if (!request_allowed_)
-    controller()->Cancel();
+    Cancel();
 }
 
 void DownloadResourceThrottle::ContinueDownload(const content::DownloadItemAction& action) {
@@ -157,9 +155,9 @@ void DownloadResourceThrottle::ContinueDownload(const content::DownloadItemActio
   if (request_deferred_) {
     request_deferred_ = false;
     if (action.allow) {
-      controller()->Resume(action.open_when_done, action.ask_for_target);
+      Resume(action.open_when_done, action.ask_for_target);
     } else {
-      controller()->Cancel();
+      Cancel();
     }
   }
 }

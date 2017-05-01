@@ -8,7 +8,6 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/prefs/pref_service.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/printing/print_preview_test.h"
 #include "chrome/browser/printing/print_view_manager.h"
@@ -17,6 +16,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/prefs/pref_service.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/site_instance.h"
@@ -51,6 +51,7 @@ class PrintPreviewUIUnitTest : public PrintPreviewTest {
  protected:
   void SetUp() override;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(PrintPreviewUIUnitTest);
 };
 
@@ -75,7 +76,7 @@ TEST_F(PrintPreviewUIUnitTest, PrintPreviewData) {
 
   printing::PrintViewManager* print_view_manager =
       printing::PrintViewManager::FromWebContents(initiator);
-  print_view_manager->PrintPreviewNow(false);
+  print_view_manager->PrintPreviewNow(initiator->GetMainFrame(), false);
   WebContents* preview_dialog = controller->GetOrCreatePreviewDialog(initiator);
 
   EXPECT_NE(initiator, preview_dialog);
@@ -128,7 +129,7 @@ TEST_F(PrintPreviewUIUnitTest, PrintPreviewDraftPages) {
 
   printing::PrintViewManager* print_view_manager =
       printing::PrintViewManager::FromWebContents(initiator);
-  print_view_manager->PrintPreviewNow(false);
+  print_view_manager->PrintPreviewNow(initiator->GetMainFrame(), false);
   WebContents* preview_dialog = controller->GetOrCreatePreviewDialog(initiator);
 
   EXPECT_NE(initiator, preview_dialog);
@@ -188,7 +189,7 @@ TEST_F(PrintPreviewUIUnitTest, GetCurrentPrintPreviewStatus) {
 
   printing::PrintViewManager* print_view_manager =
       printing::PrintViewManager::FromWebContents(initiator);
-  print_view_manager->PrintPreviewNow(false);
+  print_view_manager->PrintPreviewNow(initiator->GetMainFrame(), false);
   WebContents* preview_dialog = controller->GetOrCreatePreviewDialog(initiator);
 
   EXPECT_NE(initiator, preview_dialog);

@@ -12,7 +12,6 @@
 #include "base/mac/sdk_forward_declarations.h"
 #include "base/macros.h"
 #include "base/memory/singleton.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,6 +21,7 @@
 #include "chrome/browser/command_observer.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/recovery/recovery_install_global_error_factory.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/sync/sync_global_error_factory.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -36,9 +36,13 @@
 #import "chrome/browser/ui/cocoa/extensions/browser_actions_controller.h"
 #import "chrome/browser/ui/cocoa/gradient_button_cell.h"
 #import "chrome/browser/ui/cocoa/image_button_cell.h"
+#import "chrome/browser/ui/cocoa/l10n_util.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field_editor.h"
+#import "chrome/browser/ui/cocoa/location_bar/location_bar_decoration.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
+#import "chrome/browser/ui/cocoa/location_bar/star_decoration.h"
 #import "chrome/browser/ui/cocoa/menu_button.h"
+#import "chrome/browser/ui/cocoa/toolbar/app_toolbar_button.h"
 #import "chrome/browser/ui/cocoa/toolbar/app_toolbar_button_cell.h"
 #import "chrome/browser/ui/cocoa/toolbar/back_forward_menu_controller.h"
 #import "chrome/browser/ui/cocoa/toolbar/reload_button_cocoa.h"
@@ -46,23 +50,27 @@
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_view_cocoa.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/toolbar/app_menu_badge_controller.h"
+#include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/metrics/proto/omnibox_event.pb.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
+#include "components/omnibox/browser/omnibox_edit_model.h"
 #include "components/omnibox/browser/omnibox_view.h"
+#include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_fixer.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/components_strings.h"
-#include "grit/theme_resources.h"
 #import "ui/base/cocoa/menu_controller.h"
+#import "ui/base/cocoa/nsview_additions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image.h"
 
@@ -75,79 +83,54 @@ namespace {
 // Duration of the toolbar animation.
 const NSTimeInterval kToolBarAnimationDuration = 0.12;
 
-// Height of the toolbar in pixels when the bookmark bar is closed.
-const CGFloat kBaseToolbarHeightNormal = 35.0;
+// The height of the location bar.
+const CGFloat kLocationBarHeight = 28;
 
-// Height of the location bar. Used for animating the toolbar in and out when
-// the location bar is displayed stand-alone for bookmark apps.
-const CGFloat kLocationBarHeight = 29.0;
+// The padding between the top of the toolbar and the top of the
+// location bar.
+const CGFloat kLocationBarPadding = 2;
 
-// The padding above the toolbar elements. This is calculated from the values
-// in Toolbar.xib: the height of the toolbar (35) minus the height of the child
-// elements (29) minus the y-origin of the elements (4).
-const CGFloat kToolbarElementTopPadding = 2.0;
+// The padding between elements and the edges of the toolbar.
+const CGFloat kElementPadding = 4;
+
+// Toolbar buttons are 24x24 and centered in a 28x28 space, so there is a 2pt-
+// wide inset.
+const CGFloat kButtonInset = 2;
+
+// The y-offset of the browser actions container from the location bar.
+const CGFloat kContainerYOffset = 2;
 
 // The minimum width of the location bar in pixels.
 const CGFloat kMinimumLocationBarWidth = 100.0;
-
-// The amount of left padding that the app menu should have.
-const CGFloat kAppMenuLeftPadding = 3.0;
-
-class BrowserActionsContainerDelegate :
-    public BrowserActionsContainerViewSizeDelegate {
- public:
-  BrowserActionsContainerDelegate(
-      AutocompleteTextField* location_bar,
-      BrowserActionsContainerView* browser_actions_container_view);
-  ~BrowserActionsContainerDelegate() override;
-
- private:
-  // BrowserActionsContainerSizeDelegate:
-  CGFloat GetMaxAllowedWidth() override;
-
-  AutocompleteTextField* location_bar_;
-  BrowserActionsContainerView* browser_actions_container_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserActionsContainerDelegate);
-};
-
-BrowserActionsContainerDelegate::BrowserActionsContainerDelegate(
-    AutocompleteTextField* location_bar,
-    BrowserActionsContainerView* browser_actions_container_view)
-    : location_bar_(location_bar),
-      browser_actions_container_(browser_actions_container_view) {
-  [browser_actions_container_ setDelegate:this];
-}
-
-BrowserActionsContainerDelegate::~BrowserActionsContainerDelegate() {
-  [browser_actions_container_ setDelegate:nil];
-}
-
-CGFloat BrowserActionsContainerDelegate::GetMaxAllowedWidth() {
-  CGFloat location_bar_flex =
-      NSWidth([location_bar_ frame]) - kMinimumLocationBarWidth;
-  return NSWidth([browser_actions_container_ frame]) + location_bar_flex;
-}
 
 }  // namespace
 
 @interface ToolbarController()
 @property(assign, nonatomic) Browser* browser;
+// Height of the location bar. Used for animating the toolbar in and out when
+// the location bar is displayed stand-alone for bookmark apps.
++ (CGFloat)locationBarHeight;
+// Return the amount of horizontal padding that the app menu should have on
+// each side.
++ (CGFloat)appMenuPadding;
 - (void)cleanUp;
 - (void)addAccessibilityDescriptions;
 - (void)initCommandStatus:(CommandUpdater*)commands;
 - (void)prefChanged:(const std::string&)prefName;
 - (ToolbarView*)toolbarView;
+// Height of the toolbar in pixels when the bookmark bar is closed.
+- (CGFloat)baseToolbarHeight;
 - (void)toolbarFrameChanged;
 - (void)showLocationBarOnly;
-- (void)pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:(BOOL)animate;
+- (void)pinLocationBarBeforeBrowserActionsContainerAndAnimate:(BOOL)animate;
 - (void)maintainMinimumLocationBarWidth;
 - (void)adjustBrowserActionsContainerForNewWindow:(NSNotification*)notification;
 - (void)browserActionsContainerDragged:(NSNotification*)notification;
 - (void)browserActionsVisibilityChanged:(NSNotification*)notification;
 - (void)browserActionsContainerWillAnimate:(NSNotification*)notification;
 - (void)adjustLocationSizeBy:(CGFloat)dX animate:(BOOL)animate;
-- (void)updateAppMenuButtonSeverity:(AppMenuIconPainter::Severity)severity
+- (void)updateAppMenuButtonSeverity:(AppMenuIconController::Severity)severity
+                           iconType:(AppMenuIconController::IconType)iconType
                             animate:(BOOL)animate;
 @end
 
@@ -180,22 +163,21 @@ class CommandObserverBridge : public CommandObserver {
 // A class registered for C++ notifications. This is used to detect changes in
 // preferences and upgrade available notifications. Bridges the notification
 // back to the ToolbarController.
-class NotificationBridge : public AppMenuBadgeController::Delegate {
+class NotificationBridge : public AppMenuIconController::Delegate {
  public:
   explicit NotificationBridge(ToolbarController* controller)
       : controller_(controller),
-        badge_controller_([controller browser]->profile(), this) {
-  }
+        app_menu_icon_controller_([controller browser]->profile(), this) {}
   ~NotificationBridge() override {}
 
-  void UpdateBadgeSeverity() {
-    badge_controller_.UpdateDelegate();
-  }
+  void UpdateSeverity() { app_menu_icon_controller_.UpdateDelegate(); }
 
-  void UpdateBadgeSeverity(AppMenuBadgeController::BadgeType type,
-                           AppMenuIconPainter::Severity severity,
-                           bool animate) override {
-    [controller_ updateAppMenuButtonSeverity:severity animate:animate];
+  void UpdateSeverity(AppMenuIconController::IconType type,
+                      AppMenuIconController::Severity severity,
+                      bool animate) override {
+    [controller_ updateAppMenuButtonSeverity:severity
+                                    iconType:type
+                                     animate:animate];
   }
 
   void OnPreferenceChanged(const std::string& pref_name) {
@@ -205,7 +187,7 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
  private:
   ToolbarController* controller_;  // weak, owns us
 
-  AppMenuBadgeController badge_controller_;
+  AppMenuIconController app_menu_icon_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(NotificationBridge);
 };
@@ -215,6 +197,18 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 @implementation ToolbarController
 
 @synthesize browser = browser_;
+
++ (CGFloat)locationBarHeight {
+  return kLocationBarHeight;
+}
+
++ (CGFloat)appMenuPadding {
+  return kElementPadding;
+}
+
++ (CGFloat)materialDesignButtonInset {
+  return kButtonInset;
+}
 
 - (id)initWithCommands:(CommandUpdater*)commands
                profile:(Profile*)profile
@@ -246,6 +240,7 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
     // Start global error services now so we badge the menu correctly.
     SyncGlobalErrorFactory::GetForProfile(profile);
+    RecoveryInstallGlobalErrorFactory::GetForProfile(profile);
   }
   return self;
 }
@@ -264,52 +259,110 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   // When linking and running on 10.10+, both -awakeFromNib and -viewDidLoad may
   // be called, don't initialize twice.
   if (locationBarView_) {
-    DCHECK(base::mac::IsOSYosemiteOrLater());
+    DCHECK(base::mac::IsAtLeastOS10_10());
     return;
   }
 
-  [[backButton_ cell] setImageID:IDR_BACK
-                  forButtonState:image_button_cell::kDefaultState];
-  [[backButton_ cell] setImageID:IDR_BACK_H
-                  forButtonState:image_button_cell::kHoverState];
-  [[backButton_ cell] setImageID:IDR_BACK_P
-                  forButtonState:image_button_cell::kPressedState];
-  [[backButton_ cell] setImageID:IDR_BACK_D
-                  forButtonState:image_button_cell::kDisabledState];
+  BOOL isRTL = cocoa_l10n_util::ShouldDoExperimentalRTLLayout();
+  NSAutoresizingMaskOptions leadingButtonMask =
+      isRTL ? NSViewMinXMargin | NSViewMinYMargin
+            : NSViewMaxXMargin | NSViewMinYMargin;
+  NSAutoresizingMaskOptions trailingButtonMask =
+      isRTL ? NSViewMaxXMargin | NSViewMinYMargin
+            : NSViewMinXMargin | NSViewMinYMargin;
 
-  [[forwardButton_ cell] setImageID:IDR_FORWARD
-                     forButtonState:image_button_cell::kDefaultState];
-  [[forwardButton_ cell] setImageID:IDR_FORWARD_H
-                     forButtonState:image_button_cell::kHoverState];
-  [[forwardButton_ cell] setImageID:IDR_FORWARD_P
-                     forButtonState:image_button_cell::kPressedState];
-  [[forwardButton_ cell] setImageID:IDR_FORWARD_D
-                     forButtonState:image_button_cell::kDisabledState];
+  // Make Material Design layout adjustments to the NIB items.
+  ToolbarView* toolbarView = [self toolbarView];
+  NSRect toolbarBounds = [toolbarView bounds];
+  NSSize toolbarButtonSize = [ToolbarButton toolbarButtonSize];
 
-  [[reloadButton_ cell] setImageID:IDR_RELOAD
-                    forButtonState:image_button_cell::kDefaultState];
-  [[reloadButton_ cell] setImageID:IDR_RELOAD_H
-                    forButtonState:image_button_cell::kHoverState];
-  [[reloadButton_ cell] setImageID:IDR_RELOAD_P
-                    forButtonState:image_button_cell::kPressedState];
+  // Set the toolbar height.
+  NSRect frame = [toolbarView frame];
+  frame.size.height = [self baseToolbarHeight];
+  [toolbarView setFrame:frame];
 
-  [[homeButton_ cell] setImageID:IDR_HOME
-                  forButtonState:image_button_cell::kDefaultState];
-  [[homeButton_ cell] setImageID:IDR_HOME_H
-                  forButtonState:image_button_cell::kHoverState];
-  [[homeButton_ cell] setImageID:IDR_HOME_P
-                  forButtonState:image_button_cell::kPressedState];
+  NSArray* leadingButtons =
+      @[ backButton_, forwardButton_, reloadButton_, homeButton_ ];
+  const CGFloat xStart = kElementPadding + kButtonInset;
+  const CGFloat xOffset = toolbarButtonSize.width + kButtonInset * 2;
+  const CGFloat yPosition =
+      NSMaxY(toolbarBounds) - kElementPadding - toolbarButtonSize.height;
+  for (NSUInteger i = 0; i < [leadingButtons count]; i++) {
+    NSButton* button = leadingButtons[i];
+    NSRect buttonFrame = [button frame];
+    buttonFrame.size = toolbarButtonSize;
+    buttonFrame.origin.y = yPosition;
+    const CGFloat xPosition = xStart + i * xOffset;
+    buttonFrame.origin.x =
+        isRTL ? NSWidth(frame) - toolbarButtonSize.width - xPosition
+              : xPosition;
+    [button setFrame:buttonFrame];
+    [button setAutoresizingMask:leadingButtonMask];
+  }
 
-  [[appMenuButton_ cell] setImageID:IDR_TOOLS
-                     forButtonState:image_button_cell::kDefaultState];
-  [[appMenuButton_ cell] setImageID:IDR_TOOLS_H
-                     forButtonState:image_button_cell::kHoverState];
-  [[appMenuButton_ cell] setImageID:IDR_TOOLS_P
-                     forButtonState:image_button_cell::kPressedState];
+  // Replace the app button from the nib with an AppToolbarButton instance for
+  // Material Design.
+  AppToolbarButton* newMenuButton =
+      [[[AppToolbarButton alloc] initWithFrame:[appMenuButton_ frame]]
+          autorelease];
+  [newMenuButton setAutoresizingMask:[appMenuButton_ autoresizingMask]];
+  [[appMenuButton_ superview] addSubview:newMenuButton];
+  [appMenuButton_ removeFromSuperview];
+  appMenuButton_ = newMenuButton;
+
+  // Adjust the menu button's position.
+  NSRect menuButtonFrame = [appMenuButton_ frame];
+  if (isRTL) {
+    menuButtonFrame.origin.x = [ToolbarController appMenuPadding];
+  } else {
+    CGFloat menuButtonFrameMaxX =
+        NSMaxX(toolbarBounds) - [ToolbarController appMenuPadding];
+    menuButtonFrame.origin.x =
+        menuButtonFrameMaxX - kButtonInset - toolbarButtonSize.width;
+  }
+  menuButtonFrame.origin.y = yPosition;
+  menuButtonFrame.size = toolbarButtonSize;
+  [appMenuButton_ setFrame:menuButtonFrame];
+  [appMenuButton_ setAutoresizingMask:trailingButtonMask];
+
+  // Adjust the size and location on the location bar to take up the
+  // space between the reload and menu buttons.
+  NSRect locationBarFrame = [locationBar_ frame];
+  locationBarFrame.origin.x = isRTL
+                                  ? NSMaxX(menuButtonFrame) + kButtonInset
+                                  : NSMaxX([homeButton_ frame]) + kButtonInset;
+  if (![homeButton_ isHidden] && !isRTL) {
+    // Ensure proper spacing between the home button and location bar
+    locationBarFrame.origin.x += kElementPadding;
+  }
+  locationBarFrame.origin.y =
+      NSMaxY(toolbarBounds) - kLocationBarPadding - kLocationBarHeight;
+  CGFloat rightEdge = 0;
+  if (isRTL) {
+    rightEdge = NSMinX([homeButton_ frame]) - kButtonInset;
+    if (![homeButton_ isHidden])
+      rightEdge -= kElementPadding;
+  } else {
+    rightEdge = NSMinX(menuButtonFrame);
+  }
+  locationBarFrame.size.width = rightEdge - NSMinX(locationBarFrame);
+
+  locationBarFrame.size.height = kLocationBarHeight;
+  [locationBar_ setFrame:locationBarFrame];
+
+  // Correctly position the extension buttons' container view.
+  NSRect containerFrame = [browserActionsContainerView_ frame];
+  containerFrame.size.width += kButtonInset;
+  containerFrame.origin.y = locationBarFrame.origin.y + kContainerYOffset;
+  containerFrame.size.height = toolbarButtonSize.height;
+  if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+    containerFrame.origin.x = NSMinX(locationBarFrame);
+  [browserActionsContainerView_ setFrame:containerFrame];
+  [browserActionsContainerView_ setAutoresizingMask:trailingButtonMask];
 
   notificationBridge_.reset(
       new ToolbarControllerInternal::NotificationBridge(self));
-  notificationBridge_->UpdateBadgeSeverity();
+  notificationBridge_->UpdateSeverity();
 
   [appMenuButton_ setOpenMenuOnClick:YES];
 
@@ -326,7 +379,20 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
   locationBarView_.reset(new LocationBarViewMac(locationBar_, commands_,
                                                 profile_, browser_));
-  [locationBar_ setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
+  [locationBar_ setFont:[NSFont systemFontOfSize:14]];
+
+  // Add the location bar's accessibility views as direct subviews of the
+  // toolbar. They are logical children of the location bar, but the location
+  // bar's actual Cocoa control is an NSCell, so it cannot have child views.
+  // The |locationBarView_| is responsible for positioning the accessibility
+  // views.
+  std::vector<NSView*> accessibility_views =
+      locationBarView_->GetDecorationAccessibilityViews();
+  for (const auto& view : accessibility_views) {
+    [[self toolbarView] addSubview:view
+                        positioned:NSWindowAbove
+                        relativeTo:locationBar_];
+  }
 
   // Register pref observers for the optional home and page/options buttons
   // and then add them to the toolbar based on those prefs.
@@ -339,7 +405,7 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   [self showOptionalHomeButton];
   [self installAppMenu];
 
-  [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+  [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
 
   // Create the controllers for the back/forward menus.
   backMenuController_.reset([[BackForwardMenuController alloc]
@@ -359,17 +425,17 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
                                            NSTrackingActiveAlways
                                      owner:self
                                   userInfo:nil]);
-  NSView* toolbarView = [self view];
-  [toolbarView addTrackingArea:trackingArea_.get()];
+  NSView* parentView = [self view];
+  [parentView addTrackingArea:trackingArea_.get()];
 
   // If the user has any Browser Actions installed, the container view for them
   // may have to be resized depending on the width of the toolbar frame.
-  [toolbarView setPostsFrameChangedNotifications:YES];
+  [parentView setPostsFrameChangedNotifications:YES];
   [[NSNotificationCenter defaultCenter]
       addObserver:self
          selector:@selector(toolbarFrameChanged)
              name:NSViewFrameDidChangeNotification
-           object:toolbarView];
+           object:parentView];
 
   // Set ViewIDs for toolbar elements which don't have their dedicated class.
   // ViewIDs of |toolbarView|, |reloadButton_|, |locationBar_| and
@@ -426,7 +492,6 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
   // Destroy owned objects that hold a weak Browser*.
   locationBarView_.reset();
-  browserActionsContainerDelegate_.reset();
   browser_ = nullptr;
 }
 
@@ -503,6 +568,12 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
 - (LocationBarViewMac*)locationBarBridge {
   return locationBarView_.get();
+}
+
+- (void)locationBarWasAddedToWindow {
+  // Allow the |locationBarView_| to update itself to match the browser window
+  // theme.
+  locationBarView_->OnAddedToWindow();
 }
 
 - (void)focusLocationBar:(BOOL)selectAll {
@@ -601,7 +672,7 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
 - (id)customFieldEditorForObject:(id)obj {
   if (obj == locationBar_) {
-    // Lazilly construct Field editor, Cocoa UI code always runs on the
+    // Lazily construct Field editor, Cocoa UI code always runs on the
     // same thread, so there shoudn't be a race condition here.
     if (autocompleteTextFieldEditor_.get() == nil) {
       autocompleteTextFieldEditor_.reset(
@@ -612,33 +683,17 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
     // aren't sent correctly.
     DCHECK(autocompleteTextFieldEditor_.get());
     [autocompleteTextFieldEditor_.get() setFieldEditor:YES];
-    if (base::mac::IsOSSnowLeopard()) {
-      // Manually transferring the drawsBackground and backgroundColor
-      // properties is necessary to ensure anti-aliased text on 10.6.
-      [autocompleteTextFieldEditor_
-          setDrawsBackground:[locationBar_ drawsBackground]];
-      [autocompleteTextFieldEditor_
-          setBackgroundColor:[locationBar_ backgroundColor]];
-    }
     return autocompleteTextFieldEditor_.get();
   }
   return nil;
 }
 
-// Returns an array of views in the order of the outlets above.
+// Returns an array of views, ordered leading to trailing.
 - (NSArray*)toolbarViews {
-  return [NSArray arrayWithObjects:backButton_, forwardButton_, reloadButton_,
-                                   homeButton_, appMenuButton_, locationBar_,
-                                   browserActionsContainerView_, nil];
-}
-
-// Moves |rect| to the right by |delta|, keeping the right side fixed by
-// shrinking the width to compensate. Passing a negative value for |deltaX|
-// moves to the left and increases the width.
-- (NSRect)adjustRect:(NSRect)rect byAmount:(CGFloat)deltaX {
-  NSRect frame = NSOffsetRect(rect, deltaX, 0);
-  frame.size.width -= deltaX;
-  return frame;
+  return @[
+    backButton_, forwardButton_, reloadButton_, homeButton_, locationBar_,
+    browserActionsContainerView_, appMenuButton_
+  ];
 }
 
 // Show or hide the home button based on the pref.
@@ -653,12 +708,16 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   // Always shift the text field by the width of the home button minus one pixel
   // since the frame edges of each button are right on top of each other. When
   // hiding the button, reverse the direction of the movement (to the left).
-  CGFloat moveX = [homeButton_ frame].size.width - 1.0;
+  CGFloat moveX = [homeButton_ frame].size.width;
+  // Ensure proper spacing between the home button and the location bar.
+  moveX += kElementPadding;
   if (hide)
     moveX *= -1;  // Reverse the direction of the move.
-
-  [locationBar_ setFrame:[self adjustRect:[locationBar_ frame]
-                                 byAmount:moveX]];
+  CGRect locationBarFrame = [locationBar_ frame];
+  locationBarFrame.size.width -= moveX;
+  if (!cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+    locationBarFrame.origin.x += moveX;
+  [locationBar_ setFrame:locationBarFrame];
   [homeButton_ setHidden:hide];
 }
 
@@ -674,11 +733,12 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   [appMenuButton_ setAttachedMenu:[appMenuController_ menu]];
 }
 
-- (void)updateAppMenuButtonSeverity:(AppMenuIconPainter::Severity)severity
+- (void)updateAppMenuButtonSeverity:(AppMenuIconController::Severity)severity
+                           iconType:(AppMenuIconController::IconType)iconType
                             animate:(BOOL)animate {
-  AppToolbarButtonCell* cell =
-      base::mac::ObjCCastStrict<AppToolbarButtonCell>([appMenuButton_ cell]);
-  [cell setSeverity:severity shouldAnimate:animate];
+  AppToolbarButton* appMenuButton =
+      base::mac::ObjCCastStrict<AppToolbarButton>(appMenuButton_);
+  [appMenuButton setSeverity:severity iconType:iconType shouldAnimate:animate];
 }
 
 - (void)prefChanged:(const std::string&)prefName {
@@ -689,9 +749,6 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
 - (void)createBrowserActionButtons {
   if (!browserActionsController_.get()) {
-    browserActionsContainerDelegate_.reset(
-        new BrowserActionsContainerDelegate(locationBar_,
-                                            browserActionsContainerView_));
     browserActionsController_.reset([[BrowserActionsController alloc]
             initWithBrowser:browser_
               containerView:browserActionsContainerView_
@@ -717,12 +774,11 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
                name:NSWindowDidBecomeKeyNotification
              object:[[self view] window]];
   }
-  if (![browserActionsContainerView_ isHidden])
-    [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+  [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
 }
 
 - (void)updateVisibility:(BOOL)visible withAnimation:(BOOL)animate {
-  CGFloat newHeight = visible ? kLocationBarHeight : 0;
+  CGFloat newHeight = visible ? [ToolbarController locationBarHeight] : 0;
 
   // Perform the animation, which will cause the BrowserWindowController to
   // resize this view in the browser layout as required.
@@ -744,32 +800,41 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 }
 
 - (void)browserActionsContainerDragged:(NSNotification*)notification {
-  [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+  [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
 }
 
 - (void)browserActionsVisibilityChanged:(NSNotification*)notification {
-  [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+  [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
 }
 
 - (void)browserActionsContainerWillAnimate:(NSNotification*)notification {
-  [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:YES];
+  [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:YES];
 }
 
-- (void)pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:(BOOL)animate {
-  CGFloat locationBarXPos = NSMaxX([locationBar_ frame]);
-  CGFloat leftDistance = 0.0;
-
-  if ([browserActionsContainerView_ isHidden]) {
-    CGFloat edgeXPos = [appMenuButton_ frame].origin.x;
-    leftDistance = edgeXPos - locationBarXPos - kAppMenuLeftPadding;
+- (void)pinLocationBarBeforeBrowserActionsContainerAndAnimate:(BOOL)animate {
+  CGFloat delta = 0.0;
+  if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout()) {
+    CGFloat leftEdge = NSMinX([locationBar_ frame]);
+    if ([browserActionsContainerView_ isHidden]) {
+      delta = leftEdge - NSMaxX([appMenuButton_ frame]) +
+              [ToolbarController appMenuPadding] + kButtonInset;
+    } else {
+      delta = leftEdge -
+              NSMaxX([browserActionsContainerView_ animationEndFrame]) +
+              kButtonInset;
+    }
   } else {
-    leftDistance = NSMinX([browserActionsContainerView_ animationEndFrame]) -
-        locationBarXPos;
+    CGFloat rightEdge = NSMaxX([locationBar_ frame]);
+    if ([browserActionsContainerView_ isHidden]) {
+      delta = NSMinX([appMenuButton_ frame]) -
+              [ToolbarController appMenuPadding] - kButtonInset - rightEdge;
+    } else {
+      delta = NSMinX([browserActionsContainerView_ animationEndFrame]) -
+              kButtonInset - rightEdge;
+    }
   }
-  if (leftDistance != 0.0)
-    [self adjustLocationSizeBy:leftDistance animate:animate];
-  else
-    [locationBar_ stopAnimation];
+
+  [self adjustLocationSizeBy:delta animate:animate];
 }
 
 - (void)maintainMinimumLocationBarWidth {
@@ -795,11 +860,9 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
     // it afterwards.
     [browserActionsContainerView_ stopAnimation];
     NSRect containerFrame = [browserActionsContainerView_ frame];
-    containerFrame.origin.y =
-        NSHeight([[self view] frame]) - NSHeight(containerFrame) -
-        kToolbarElementTopPadding;
+    containerFrame.origin.y = [locationBar_ frame].origin.y + kContainerYOffset;
     [browserActionsContainerView_ setFrame:containerFrame];
-    [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+    [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
   }
 
   [self maintainMinimumLocationBarWidth];
@@ -810,9 +873,14 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
     NSRect containerFrame = [browserActionsContainerView_ frame];
     // Determine how much the container needs to move in case it's overlapping
     // with the location bar.
-    CGFloat dX = NSMaxX([locationBar_ frame]) - containerFrame.origin.x;
-    containerFrame = NSOffsetRect(containerFrame, dX, 0);
-    containerFrame.size.width -= dX;
+    if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout()) {
+      CGFloat dX = NSMaxX(containerFrame) - NSMinX([locationBar_ frame]);
+      containerFrame.size.width -= dX;
+    } else {
+      CGFloat dX = NSMaxX([locationBar_ frame]) - containerFrame.origin.x;
+      containerFrame = NSOffsetRect(containerFrame, dX, 0);
+      containerFrame.size.width -= dX;
+    }
     [browserActionsContainerView_ setFrame:containerFrame];
   } else if (!locationBarAtMinSize_ &&
       [browserActionsContainerView_ grippyPinned]) {
@@ -822,18 +890,21 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
     CGFloat dX = NSWidth([locationBar_ frame]) -
         (kMinimumLocationBarWidth + 0.1);
     NSRect containerFrame = [browserActionsContainerView_ frame];
-    containerFrame = NSOffsetRect(containerFrame, -dX, 0);
+    if (!cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+      containerFrame = NSOffsetRect(containerFrame, -dX, 0);
     containerFrame.size.width += dX;
     CGFloat savedContainerWidth =
         [browserActionsController_ preferredSize].width();
     if (NSWidth(containerFrame) >= savedContainerWidth) {
-      containerFrame = NSOffsetRect(containerFrame,
-          NSWidth(containerFrame) - savedContainerWidth, 0);
+      if (!cocoa_l10n_util::ShouldDoExperimentalRTLLayout()) {
+        containerFrame = NSOffsetRect(
+            containerFrame, NSWidth(containerFrame) - savedContainerWidth, 0);
+      }
       containerFrame.size.width = savedContainerWidth;
       [browserActionsContainerView_ setGrippyPinned:NO];
     }
     [browserActionsContainerView_ setFrame:containerFrame];
-    [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:NO];
+    [self pinLocationBarBeforeBrowserActionsContainerAndAnimate:NO];
   }
 }
 
@@ -850,25 +921,37 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
   // Ensure the location bar fills the toolbar.
   NSRect toolbarFrame = [[self view] frame];
-  toolbarFrame.size.height = kLocationBarHeight;
+  toolbarFrame.size.height = [ToolbarController locationBarHeight];
   [[self view] setFrame:toolbarFrame];
 
   [locationBar_ setFrame:NSMakeRect(0, 0, NSWidth([[self view] frame]),
-                                    kLocationBarHeight)];
+                                    [ToolbarController locationBarHeight])];
 
   [backButton_ setHidden:YES];
   [forwardButton_ setHidden:YES];
   [reloadButton_ setHidden:YES];
   [appMenuButton_ setHidden:YES];
   [homeButton_ setHidden:YES];
+  [browserActionsContainerView_ setHidden:YES];
 }
 
 - (void)adjustLocationSizeBy:(CGFloat)dX animate:(BOOL)animate {
-  // Ensure that the location bar is in its proper place.
   NSRect locationFrame = [locationBar_ frame];
-  locationFrame.size.width += dX;
+
+  CGFloat location_bar_flex = NSWidth(locationFrame) - kMinimumLocationBarWidth;
+  [browserActionsController_
+      setMaxWidth:NSWidth(browserActionsContainerView_.frame) +
+                  location_bar_flex];
 
   [locationBar_ stopAnimation];
+
+  if (dX == 0)
+    return;
+
+  // Ensure that the location bar is in its proper place.
+  locationFrame.size.width += dX;
+  if (cocoa_l10n_util::ShouldDoExperimentalRTLLayout())
+    locationFrame.origin.x -= dX;
 
   if (animate)
     [locationBar_ animateToFrame:locationFrame];
@@ -878,26 +961,35 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
 
 - (NSPoint)bookmarkBubblePoint {
   if (locationBarView_->IsStarEnabled())
-    return locationBarView_->GetBookmarkBubblePoint();
+    return locationBarView_->GetBubblePointForDecoration(
+        locationBarView_->star_decoration());
 
-  // Grab bottom middle of hotdogs.
-  NSRect frame = appMenuButton_.frame;
-  NSPoint point = NSMakePoint(NSMidX(frame), NSMinY(frame));
-  // Inset to account for the whitespace around the hotdogs.
-  point.y += app_menu_controller::kAppMenuBubblePointOffsetY;
-  return [self.view convertPoint:point toView:nil];
-}
-
-- (NSPoint)managePasswordsBubblePoint {
-  return locationBarView_->GetManagePasswordsBubblePoint();
+  return [self appMenuBubblePoint];
 }
 
 - (NSPoint)saveCreditCardBubblePoint {
   return locationBarView_->GetSaveCreditCardBubblePoint();
 }
 
-- (NSPoint)translateBubblePoint {
-  return locationBarView_->GetTranslateBubblePoint();
+- (NSPoint)appMenuBubblePoint {
+  NSRect frame = appMenuButton_.frame;
+  NSPoint point;
+  if (ui::MaterialDesignController::IsSecondaryUiMaterial()) {
+    // Use the bottom right for MD-style anchoring (no arrow).
+    point = NSMakePoint(NSMaxX(frame), NSMinY(frame));
+  } else {
+    // Grab bottom middle of hotdogs.
+    point = NSMakePoint(NSMidX(frame), NSMinY(frame));
+    // Inset to account for the whitespace around the hotdogs.
+    point.y += app_menu_controller::kAppMenuBubblePointOffsetY;
+  }
+  return [self.view convertPoint:point toView:nil];
+}
+
+- (CGFloat)baseToolbarHeight {
+  // Height of the toolbar in pixels when the bookmark bar is closed.
+  const CGFloat kBaseToolbarHeightNormal = 37;
+  return kBaseToolbarHeightNormal;
 }
 
 - (CGFloat)desiredHeightForCompression:(CGFloat)compressByHeight {
@@ -905,7 +997,7 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   if (!hasToolbar_)
     return NSHeight([locationBar_ frame]);
 
-  return kBaseToolbarHeightNormal - compressByHeight;
+  return [self baseToolbarHeight] - compressByHeight;
 }
 
 - (void)setDividerOpacity:(CGFloat)opacity {
@@ -927,6 +1019,11 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
   return appMenuController_.get();
 }
 
+- (BOOL)isLocationBarFocused {
+  OmniboxEditModel* model = locationBarView_->GetOmniboxView()->model();
+  return model->has_focus();
+}
+
 // (URLDropTargetController protocol)
 - (void)dropURLs:(NSArray*)urls inView:(NSView*)view at:(NSPoint)point {
   // TODO(viettrungluu): This code is more or less copied from the code in
@@ -937,21 +1034,30 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
     return;
   }
 
-  // TODO(viettrungluu): dropping multiple URLs?
-  if ([urls count] > 1)
-    NOTIMPLEMENTED();
+  for (NSUInteger index = 0; index < [urls count]; index++) {
+    // Refactor this code.
+    // https://crbug.com/665261.
+    GURL url = url_formatter::FixupURL(
+        base::SysNSStringToUTF8([urls objectAtIndex:index]), std::string());
 
-  // Get the first URL and fix it up.
-  GURL url(url_formatter::FixupURL(
-      base::SysNSStringToUTF8([urls objectAtIndex:0]), std::string()));
+    // If the URL isn't valid, don't bother.
+    if (!url.is_valid())
+      continue;
 
-  if (url.SchemeIs(url::kJavaScriptScheme)) {
-    browser_->window()->GetLocationBar()->GetOmniboxView()->SetUserText(
-          OmniboxView::StripJavascriptSchemas(base::UTF8ToUTF16(url.spec())));
+    // Security: Sanitize text to prevent self-XSS.
+    if (url.SchemeIs(url::kJavaScriptScheme))
+      continue;
+
+    WindowOpenDisposition disposition;
+    if (index == 0)
+      disposition = WindowOpenDisposition::CURRENT_TAB;
+    else
+      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+
+    OpenURLParams params(url, Referrer(), disposition,
+                         ui::PAGE_TRANSITION_TYPED, false);
+    browser_->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
   }
-  OpenURLParams params(
-      url, Referrer(), CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false);
-  browser_->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
 }
 
 // (URLDropTargetController protocol)
@@ -967,8 +1073,12 @@ class NotificationBridge : public AppMenuBadgeController::Delegate {
       metrics::OmniboxEventProto::BLANK, &match, NULL);
   GURL url(match.destination_url);
 
-  OpenURLParams params(
-      url, Referrer(), CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false);
+  // Security: Block JavaScript to prevent self-XSS.
+  if (url.SchemeIs(url::kJavaScriptScheme))
+    return;
+
+  OpenURLParams params(url, Referrer(), WindowOpenDisposition::CURRENT_TAB,
+                       ui::PAGE_TRANSITION_TYPED, false);
   browser_->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
 }
 

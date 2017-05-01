@@ -7,18 +7,17 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "media/base/data_source.h"
 #include "media/base/ranges.h"
-#include "media/blink/buffered_data_source.h"
 #include "media/blink/media_blink_export.h"
 #include "media/blink/url_index.h"
 #include "url/gurl.h"
@@ -28,6 +27,7 @@ class SingleThreadTaskRunner;
 }
 
 namespace media {
+class BufferedDataSourceHost;
 class MediaLog;
 class MultiBufferReader;
 
@@ -36,10 +36,30 @@ class MultiBufferReader;
 //
 // MultibufferDataSource must be created and destroyed on the thread associated
 // with the |task_runner| passed in the constructor.
-class MEDIA_BLINK_EXPORT MultibufferDataSource
-    : NON_EXPORTED_BASE(public BufferedDataSourceInterface) {
+class MEDIA_BLINK_EXPORT MultibufferDataSource : public DataSource {
  public:
   typedef base::Callback<void(bool)> DownloadingCB;
+
+  // Used to specify video preload states. They are "hints" to the browser about
+  // how aggressively the browser should load and buffer data.
+  // Please see the HTML5 spec for the descriptions of these values:
+  // http://www.w3.org/TR/html5/video.html#attr-media-preload
+  //
+  // Enum values must match the values in blink::WebMediaPlayer::Preload and
+  // there will be assertions at compile time if they do not match.
+  enum Preload {
+    NONE,
+    METADATA,
+    AUTO,
+  };
+
+  // Enum values must match the values in
+  // blink::WebMediaPlayer::BufferingStrategy and there will be assertions at
+  // compile time if they do not match.
+  enum BufferingStrategy {
+    BUFFERING_STRATEGY_NORMAL,
+    BUFFERING_STRATEGY_AGGRESSIVE,
+  };
 
   // |url| and |cors_mode| are passed to the object. Buffered byte range changes
   // will be reported to |host|. |downloading_cb| will be called whenever the
@@ -58,50 +78,49 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   // Executes |init_cb| with the result of initialization when it has completed.
   //
   // Method called on the render thread.
-  void Initialize(const InitializeCB& init_cb) override;
+  typedef base::Callback<void(bool)> InitializeCB;
+  void Initialize(const InitializeCB& init_cb);
 
   // Adjusts the buffering algorithm based on the given preload value.
-  void SetPreload(Preload preload) override;
+  void SetPreload(Preload preload);
 
   // Adjusts the buffering algorithm based on the given buffering strategy
   // value.
-  void SetBufferingStrategy(BufferingStrategy buffering_strategy) override;
+  void SetBufferingStrategy(BufferingStrategy buffering_strategy);
 
   // Returns true if the media resource has a single origin, false otherwise.
   // Only valid to call after Initialize() has completed.
   //
   // Method called on the render thread.
-  bool HasSingleOrigin() override;
+  bool HasSingleOrigin();
 
   // Returns true if the media resource passed a CORS access control check.
-  bool DidPassCORSAccessCheck() const override;
-
-  // Cancels initialization, any pending loaders, and any pending read calls
-  // from the demuxer. The caller is expected to release its reference to this
-  // object and never call it again.
-  //
-  // Method called on the render thread.
-  void Abort() override;
+  bool DidPassCORSAccessCheck() const;
 
   // Notifies changes in playback state for controlling media buffering
   // behavior.
-  void MediaPlaybackRateChanged(double playback_rate) override;
-  void MediaIsPlaying() override;
-  bool media_has_played() const override;
+  void MediaPlaybackRateChanged(double playback_rate);
+  void MediaIsPlaying();
+  bool media_has_played() const;
 
   // Returns true if the resource is local.
-  bool assume_fully_buffered() override;
+  bool assume_fully_buffered();
 
-  // Cancels any open network connections once reaching the deferred state for
-  // preload=metadata, non-streaming resources that have not started playback.
-  // If already deferred, connections will be immediately closed.
-  void OnBufferingHaveEnough() override;
+  // Cancels any open network connections once reaching the deferred state. If
+  // |always_cancel| is false this is done only for preload=metadata, non-
+  // streaming resources that have not started playback. If |always_cancel| is
+  // true, all resource types will have their connections canceled. If already
+  // deferred, connections will be immediately closed.
+  void OnBufferingHaveEnough(bool always_cancel);
 
-  int64_t GetMemoryUsage() const override;
+  int64_t GetMemoryUsage() const;
+
+  GURL GetUrlAfterRedirects() const;
 
   // DataSource implementation.
   // Called from demuxer thread.
   void Stop() override;
+  void Abort() override;
 
   void Read(int64_t position,
             int size,
@@ -110,6 +129,8 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   bool GetSize(int64_t* size_out) override;
   bool IsStreaming() override;
   void SetBitrate(int bitrate) override;
+
+  const std::string& mime_type() const { return mime_type_; }
 
  protected:
   void OnRedirect(const scoped_refptr<UrlData>& destination);
@@ -143,10 +164,14 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   // MultiBufferReader progress callback.
   void ProgressCallback(int64_t begin, int64_t end);
 
+  // Update progress based on current reader state.
+  void UpdateProgress();
+
   // call downloading_cb_ if needed.
   // If |force_loading| is true, we call downloading_cb_ and tell it that
   // we are currently loading, regardless of what reader_->IsLoading() says.
-  void UpdateLoadingState(bool force_loading);
+  // Caller must hold |lock_|.
+  void UpdateLoadingState_Locked(bool force_loading);
 
   // Update |reader_|'s preload and buffer settings.
   void UpdateBufferSizes();
@@ -162,6 +187,8 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   // determined by reaching EOF.
   int64_t total_bytes_;
 
+  std::string mime_type_;
+
   // This value will be true if this data source can only support streaming.
   // i.e. range request is not supported.
   bool streaming_;
@@ -169,6 +196,9 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   // This is the loading state that we last reported to our owner through
   // |downloading_cb_|.
   bool loading_;
+
+  // True if a failure has occured.
+  bool failed_;
 
   // The task runner of the render thread.
   const scoped_refptr<base::SingleThreadTaskRunner> render_task_runner_;
@@ -180,7 +210,7 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   blink::WebFrame* frame_;
 
   // A resource reader for the media resource.
-  scoped_ptr<MultiBufferReader> reader_;
+  std::unique_ptr<MultiBufferReader> reader_;
 
   // Callback method from the pipeline for initialization.
   InitializeCB init_cb_;
@@ -188,9 +218,9 @@ class MEDIA_BLINK_EXPORT MultibufferDataSource
   // Read parameters received from the Read() method call. Must be accessed
   // under |lock_|.
   class ReadOperation;
-  scoped_ptr<ReadOperation> read_op_;
+  std::unique_ptr<ReadOperation> read_op_;
 
-  // Protects |stop_signal_received_| and |read_op_|.
+  // Protects |stop_signal_received_|, |read_op_| and |total_bytes_|.
   base::Lock lock_;
 
   // Whether we've been told to stop via Abort() or Stop().

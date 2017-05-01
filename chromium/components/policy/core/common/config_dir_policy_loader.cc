@@ -77,8 +77,8 @@ void ConfigDirPolicyLoader::InitOnBackgroundThread() {
                              callback);
 }
 
-scoped_ptr<PolicyBundle> ConfigDirPolicyLoader::Load() {
-  scoped_ptr<PolicyBundle> bundle(new PolicyBundle());
+std::unique_ptr<PolicyBundle> ConfigDirPolicyLoader::Load() {
+  std::unique_ptr<PolicyBundle> bundle(new PolicyBundle());
   LoadFromPath(config_dir_.Append(kMandatoryConfigDir),
                POLICY_LEVEL_MANDATORY,
                bundle.get());
@@ -142,11 +142,11 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
   for (std::set<base::FilePath>::reverse_iterator config_file_iter =
            files.rbegin(); config_file_iter != files.rend();
        ++config_file_iter) {
-    JSONFileValueDeserializer deserializer(*config_file_iter);
-    deserializer.set_allow_trailing_comma(true);
+    JSONFileValueDeserializer deserializer(*config_file_iter,
+                                           base::JSON_ALLOW_TRAILING_COMMAS);
     int error_code = 0;
     std::string error_msg;
-    scoped_ptr<base::Value> value =
+    std::unique_ptr<base::Value> value =
         deserializer.Deserialize(&error_code, &error_msg);
     if (!value.get()) {
       LOG(WARNING) << "Failed to read configuration file "
@@ -163,7 +163,7 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
     }
 
     // Detach the "3rdparty" node.
-    scoped_ptr<base::Value> third_party;
+    std::unique_ptr<base::Value> third_party;
     if (dictionary_value->Remove("3rdparty", &third_party))
       Merge3rdPartyPolicy(third_party.get(), level, bundle);
 
@@ -196,7 +196,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(
 
   for (base::DictionaryValue::Iterator domains_it(*domains_dictionary);
        !domains_it.IsAtEnd(); domains_it.Advance()) {
-    if (!ContainsKey(supported_domains, domains_it.key())) {
+    if (!base::ContainsKey(supported_domains, domains_it.key())) {
       LOG(WARNING) << "Unsupported 3rd party policy domain: "
                    << domains_it.key();
       continue;

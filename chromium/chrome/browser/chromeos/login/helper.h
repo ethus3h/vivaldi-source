@@ -15,8 +15,6 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/view.h"
 
-class GURL;
-
 namespace gfx {
 class Rect;
 class Size;
@@ -86,11 +84,12 @@ class NetworkStateHelper {
  private:
   void OnCreateConfiguration(const base::Closure& success_callback,
                              const base::Closure& error_callback,
-                             const std::string& service_path) const;
+                             const std::string& service_path,
+                             const std::string& guid) const;
   void OnCreateOrConnectNetworkFailed(
       const base::Closure& error_callback,
       const std::string& error_name,
-      scoped_ptr<base::DictionaryValue> error_data) const;
+      std::unique_ptr<base::DictionaryValue> error_data) const;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkStateHelper);
 };
@@ -108,6 +107,12 @@ content::StoragePartition* GetSigninPartition();
 // based flow, the context of the sign-in profile is returned. For webview based
 // flow, the context of the sign-in webview storage partition is returned.
 net::URLRequestContextGetter* GetSigninContext();
+
+using OnPipeReadyCallback = base::Callback<void(base::ScopedFD fd)>;
+// Returns file descriptor of a pipe, open for reading. Pipe keeps the passed
+// data.
+void GetPipeReadEnd(const std::string& data,
+                    const OnPipeReadyCallback& callback);
 
 }  // namespace login
 

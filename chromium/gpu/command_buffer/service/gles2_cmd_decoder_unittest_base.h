@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/message_loop/message_loop.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
@@ -18,6 +20,7 @@
 #include "gpu/command_buffer/service/gl_context_mock.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_mock.h"
+#include "gpu/command_buffer/service/gpu_preferences.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/query_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
@@ -25,7 +28,7 @@
 #include "gpu/command_buffer/service/shader_manager.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "gpu/command_buffer/service/texture_manager.h"
-#include "gpu/command_buffer/service/valuebuffer_manager.h"
+#include "gpu/command_buffer/service/transform_feedback_manager.h"
 #include "gpu/command_buffer/service/vertex_array_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_mock.h"
@@ -67,11 +70,6 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     return reinterpret_cast<T*>(immediate_buffer_);
   }
 
-  template <typename T, typename Command>
-  T GetImmediateDataAs(Command* cmd) {
-    return reinterpret_cast<T>(ImmediateDataAddress(cmd));
-  }
-
   void ClearSharedMemory() {
     engine_->ClearSharedMemory();
   }
@@ -106,17 +104,16 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     return reinterpret_cast<T>(ptr);
   }
 
-  Buffer* GetBuffer(GLuint service_id) {
-    return group_->buffer_manager()->GetBuffer(service_id);
+  Buffer* GetBuffer(GLuint client_id) {
+    return group_->buffer_manager()->GetBuffer(client_id);
   }
 
-  Framebuffer* GetFramebuffer(GLuint service_id) {
-    return group_->framebuffer_manager()->GetFramebuffer(service_id);
+  Framebuffer* GetFramebuffer(GLuint client_id) {
+    return group_->framebuffer_manager()->GetFramebuffer(client_id);
   }
 
-  Renderbuffer* GetRenderbuffer(
-      GLuint service_id) {
-    return group_->renderbuffer_manager()->GetRenderbuffer(service_id);
+  Renderbuffer* GetRenderbuffer(GLuint client_id) {
+    return group_->renderbuffer_manager()->GetRenderbuffer(client_id);
   }
 
   TextureRef* GetTexture(GLuint client_id) {
@@ -131,10 +128,6 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     return group_->program_manager()->GetProgram(client_id);
   }
 
-  Valuebuffer* GetValuebuffer(GLuint client_id) {
-    return group_->valuebuffer_manager()->GetValuebuffer(client_id);
-  }
-
   QueryManager::Query* GetQueryInfo(GLuint client_id) {
     return decoder_->GetQueryManager()->GetQuery(client_id);
   }
@@ -143,9 +136,9 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     return group_->sampler_manager()->GetSampler(client_id);
   }
 
-  bool GetTransformFeedbackServiceId(
-      GLuint client_id, GLuint* service_id) const {
-    return group_->GetTransformFeedbackServiceId(client_id, service_id);
+  TransformFeedback* GetTransformFeedback(GLuint client_id) {
+    return decoder_->GetTransformFeedbackManager()->GetTransformFeedback(
+        client_id);
   }
 
   bool GetSyncServiceId(GLuint client_id, GLsync* service_id) const {
@@ -162,16 +155,12 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     return group_->program_manager();
   }
 
-  ValuebufferManager* valuebuffer_manager() {
-    return group_->valuebuffer_manager();
-  }
-
-  ValueStateMap* pending_valuebuffer_state() {
-    return group_->pending_valuebuffer_state();
-  }
-
   FeatureInfo* feature_info() {
     return group_->feature_info();
+  }
+
+  FramebufferCompletenessCache* framebuffer_completeness_cache() const {
+    return group_->framebuffer_completeness_cache();
   }
 
   ImageManager* GetImageManager() { return decoder_->GetImageManager(); }
@@ -179,6 +168,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   void DoCreateProgram(GLuint client_id, GLuint service_id);
   void DoCreateShader(GLenum shader_type, GLuint client_id, GLuint service_id);
   void DoFenceSync(GLuint client_id, GLuint service_id);
+  void DoCreateSampler(GLuint client_id, GLuint service_id);
+  void DoCreateTransformFeedback(GLuint client_id, GLuint service_id);
 
   void SetBucketData(uint32_t bucket_id, const void* data, uint32_t data_size);
   void SetBucketAsCString(uint32_t bucket_id, const char* str);
@@ -196,6 +187,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
 
   struct InitState {
     InitState();
+    InitState(const InitState& other);
 
     std::string extensions;
     std::string gl_version;
@@ -225,7 +217,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
     group_->LoseContexts(reason);
   }
 
-  ::testing::StrictMock< ::gfx::MockGLInterface>* GetGLMock() const {
+  ::testing::StrictMock<::gl::MockGLInterface>* GetGLMock() const {
     return gl_.get();
   }
 
@@ -279,6 +271,9 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   void EnsureRenderbufferBound(bool expect_bind);
   void DoBindTexture(GLenum target, GLuint client_id, GLuint service_id);
   void DoBindVertexArrayOES(GLuint client_id, GLuint service_id);
+  void DoBindSampler(GLuint unit, GLuint client_id, GLuint service_id);
+  void DoBindTransformFeedback(
+      GLenum target, GLuint client_id, GLuint service_id);
 
   bool DoIsBuffer(GLuint client_id);
   bool DoIsFramebuffer(GLuint client_id);
@@ -296,6 +291,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   void DoDeleteRenderbuffer(GLuint client_id, GLuint service_id);
   void DoDeleteShader(GLuint client_id, GLuint service_id);
   void DoDeleteTexture(GLuint client_id, GLuint service_id);
+  void DoDeleteSampler(GLuint client_id, GLuint service_id);
+  void DoDeleteTransformFeedback(GLuint client_id, GLuint service_id);
 
   void DoCompressedTexImage2D(GLenum target,
                               GLint level,
@@ -327,6 +324,17 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
                                          uint32_t shared_memory_id,
                                          uint32_t shared_memory_offset,
                                          GLenum expected_internal_format);
+  void DoTexImage3D(GLenum target,
+                    GLint level,
+                    GLenum internal_format,
+                    GLsizei width,
+                    GLsizei height,
+                    GLsizei depth,
+                    GLint border,
+                    GLenum format,
+                    GLenum type,
+                    uint32_t shared_memory_id,
+                    uint32_t shared_memory_offset);
   void DoRenderbufferStorage(
       GLenum target, GLenum internal_format, GLenum actual_format,
       GLsizei width, GLsizei height, GLenum error);
@@ -341,6 +349,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
       GLenum target, GLenum attachment, GLenum tex_target,
       GLuint texture_client_id, GLuint texture_service_id,
       GLint level, GLenum error);
+  GLenum DoCheckFramebufferStatus(GLenum target);
   void DoVertexAttribPointer(
       GLuint index, GLint size, GLenum type, GLsizei stride, GLuint offset);
   void DoVertexAttribDivisorANGLE(GLuint index, GLuint divisor);
@@ -504,7 +513,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLuint kServiceQueryId = 309;
   static const GLuint kServiceVertexArrayId = 310;
   static const GLuint kServiceTransformFeedbackId = 311;
-  static const GLuint kServiceSyncId = 312;
+  static const GLuint kServiceDefaultTransformFeedbackId = 312;
+  static const GLuint kServiceSyncId = 313;
 
   static const int32_t kSharedMemoryId = 401;
   static const size_t kSharedBufferSize = 2048;
@@ -564,6 +574,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const char* kUniform5Name;
   static const char* kUniform6Name;
   static const char* kUniform7Name;
+  static const char* kUniform8Name;
   static const GLint kUniform1Size = 1;
   static const GLint kUniform2Size = 3;
   static const GLint kUniform3Size = 2;
@@ -571,6 +582,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLint kUniform5Size = 1;
   static const GLint kUniform6Size = 1;
   static const GLint kUniform7Size = 1;
+  static const GLint kUniform8Size = 2;
   static const GLint kUniform1RealLocation = 3;
   static const GLint kUniform2RealLocation = 10;
   static const GLint kUniform2ElementRealLocation = 12;
@@ -579,6 +591,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLint kUniform5RealLocation = 30;
   static const GLint kUniform6RealLocation = 32;
   static const GLint kUniform7RealLocation = 44;
+  static const GLint kUniform8RealLocation = 56;
   static const GLint kUniform1FakeLocation = 0;               // These are
   static const GLint kUniform2FakeLocation = 1;               // hardcoded
   static const GLint kUniform2ElementFakeLocation = 0x10001;  // to match
@@ -587,6 +600,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLint kUniform5FakeLocation = 4;               //
   static const GLint kUniform6FakeLocation = 5;               //
   static const GLint kUniform7FakeLocation = 6;               //
+  static const GLint kUniform8FakeLocation = 7;               //
   static const GLint kUniform1DesiredLocation = -1;
   static const GLint kUniform2DesiredLocation = -1;
   static const GLint kUniform3DesiredLocation = -1;
@@ -594,6 +608,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLint kUniform5DesiredLocation = -1;
   static const GLint kUniform6DesiredLocation = -1;
   static const GLint kUniform7DesiredLocation = -1;
+  static const GLint kUniform8DesiredLocation = -1;
   static const GLenum kUniform1Type = GL_SAMPLER_2D;
   static const GLenum kUniform2Type = GL_INT_VEC2;
   static const GLenum kUniform3Type = GL_FLOAT_VEC3;
@@ -601,6 +616,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const GLenum kUniform5Type = GL_UNSIGNED_INT_VEC2;
   static const GLenum kUniform6Type = GL_UNSIGNED_INT_VEC3;
   static const GLenum kUniform7Type = GL_UNSIGNED_INT_VEC4;
+  static const GLenum kUniform8Type = GL_INT;
   static const GLenum kUniformSamplerExternalType = GL_SAMPLER_EXTERNAL_OES;
   static const GLenum kUniformCubemapType = GL_SAMPLER_CUBE;
   static const GLint kInvalidUniformLocation = 30;
@@ -614,11 +630,11 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   static const char* kOutputVariable1NameESSL3;
 
   // Use StrictMock to make 100% sure we know how GL will be called.
-  scoped_ptr< ::testing::StrictMock< ::gfx::MockGLInterface> > gl_;
-  scoped_refptr<gfx::GLSurfaceStub> surface_;
+  std::unique_ptr<::testing::StrictMock<::gl::MockGLInterface>> gl_;
+  scoped_refptr<gl::GLSurfaceStub> surface_;
   scoped_refptr<GLContextMock> context_;
-  scoped_ptr<MockGLES2Decoder> mock_decoder_;
-  scoped_ptr<GLES2Decoder> decoder_;
+  std::unique_ptr<MockGLES2Decoder> mock_decoder_;
+  std::unique_ptr<GLES2Decoder> decoder_;
   MemoryTracker* memory_tracker_;
 
   GLuint client_buffer_id_;
@@ -633,7 +649,6 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   GLuint client_fragment_shader_id_;
   GLuint client_query_id_;
   GLuint client_vertexarray_id_;
-  GLuint client_valuebuffer_id_;
   GLuint client_transformfeedback_id_;
   GLuint client_sync_id_;
 
@@ -740,8 +755,10 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool> {
   void SetupMockGLBehaviors();
 
   void SetupInitStateManualExpectations(bool es3_capable);
+  void SetupInitStateManualExpectationsForDoLineWidth(GLfloat width);
 
-  scoped_ptr< ::testing::StrictMock<MockCommandBufferEngine> > engine_;
+  std::unique_ptr<::testing::StrictMock<MockCommandBufferEngine>> engine_;
+  GpuPreferences gpu_preferences_;
   scoped_refptr<ContextGroup> group_;
   MockGLStates gl_states_;
   base::MessageLoop message_loop_;
@@ -761,6 +778,14 @@ class GLES2DecoderWithShaderTestBase : public GLES2DecoderTestBase {
 // SpecializedSetup specializations that are needed in multiple unittest files.
 template <>
 void GLES2DecoderTestBase::SpecializedSetup<cmds::LinkProgram, 0>(bool valid);
+
+MATCHER_P2(PointsToArray, array, size, "") {
+  for (size_t i = 0; i < static_cast<size_t>(size); ++i) {
+    if (arg[i] != array[i])
+      return false;
+  }
+  return true;
+}
 
 }  // namespace gles2
 }  // namespace gpu

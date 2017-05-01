@@ -9,10 +9,6 @@
 #include "chrome/utility/importer/bookmarks_file_importer.h"
 #include "chrome/utility/importer/firefox_importer.h"
 
-#include "importer/chromium_importer.h"
-#include "importer/viv_importer.h"
-
-
 #if defined(OS_WIN)
 #include "chrome/common/importer/edge_importer_utils_win.h"
 #include "chrome/utility/importer/edge_importer_win.h"
@@ -25,6 +21,9 @@
 #include "base/mac/foundation_util.h"
 #include "chrome/utility/importer/safari_importer.h"
 #endif
+
+#include "importer/chromium_importer.h"
+#include "importer/viv_importer.h"
 
 namespace importer {
 
@@ -53,6 +52,7 @@ scoped_refptr<Importer> CreateImporterByType(ImporterType type,
     case TYPE_OPERA_BOOKMARK_FILE:
       return new OperaImporter(import_config);
     case TYPE_CHROME:
+    case TYPE_CHROMIUM:
     case TYPE_YANDEX:
     case TYPE_OPERA_OPIUM:
     case TYPE_OPERA_OPIUM_BETA:

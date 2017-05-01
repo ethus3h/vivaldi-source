@@ -12,9 +12,9 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browsing_data/cookies_tree_model.h"
+#include "chrome/browser/ui/views/harmony/layout_delegate.h"
 #include "chrome/grit/generated_resources.h"
 #include "net/cookies/canonical_cookie.h"
-#include "net/cookies/parsed_cookie.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/canvas.h"
@@ -23,7 +23,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/layout/layout_constants.h"
 #include "ui/views/window/dialog_delegate.h"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -69,14 +68,6 @@ void CookieInfoView::SetCookie(const std::string& domain,
   Layout();
 }
 
-void CookieInfoView::SetCookieString(const GURL& url,
-                                     const std::string& cookie_line) {
-  net::ParsedCookie pc(cookie_line);
-  net::CanonicalCookie cookie(url, pc);
-  SetCookie(pc.HasDomain() ? pc.Domain() : url.host(), cookie);
-}
-
-
 void CookieInfoView::ClearCookieDisplay() {
   base::string16 no_cookie_string =
       l10n_util::GetStringUTF16(IDS_COOKIES_COOKIE_NONESELECTED);
@@ -120,7 +111,7 @@ void CookieInfoView::AddLabelRow(int layout_id,
 
   // Now that the Textfield is in the view hierarchy, it can be initialized.
   textfield->SetReadOnly(true);
-  textfield->SetBorder(views::Border::NullBorder());
+  textfield->SetBorder(views::NullBorder());
   // Color these borderless text areas the same as the containing dialog.
   textfield->SetBackgroundColor(GetNativeTheme()->GetSystemColor(
       ui::NativeTheme::kColorId_DialogBackground));
@@ -156,15 +147,21 @@ void CookieInfoView::Init() {
   expires_value_field_ = new views::Textfield;
 
   views::GridLayout* layout = new views::GridLayout(this);
-  layout->SetInsets(0, views::kButtonHEdgeMarginNew,
-                    0, views::kButtonHEdgeMarginNew);
+  layout->SetInsets(
+      0, LayoutDelegate::Get()->GetLayoutDistance(
+             LayoutDelegate::LayoutDistanceType::BUTTON_HEDGE_MARGIN_NEW),
+      0, LayoutDelegate::Get()->GetLayoutDistance(
+             LayoutDelegate::LayoutDistanceType::BUTTON_HEDGE_MARGIN_NEW));
   SetLayoutManager(layout);
 
   int three_column_layout_id = 0;
   views::ColumnSet* column_set = layout->AddColumnSet(three_column_layout_id);
-  column_set->AddColumn(views::GridLayout::TRAILING, views::GridLayout::CENTER,
-                        0, views::GridLayout::USE_PREF, 0, 0);
-  column_set->AddPaddingColumn(0, views::kRelatedControlHorizontalSpacing);
+  column_set->AddColumn(LayoutDelegate::Get()->GetControlLabelGridAlignment(),
+                        views::GridLayout::CENTER, 0,
+                        views::GridLayout::USE_PREF, 0, 0);
+  column_set->AddPaddingColumn(0, LayoutDelegate::Get()->GetLayoutDistance(
+                                      LayoutDelegate::LayoutDistanceType::
+                                          RELATED_CONTROL_HORIZONTAL_SPACING));
   column_set->AddColumn(views::GridLayout::TRAILING, views::GridLayout::CENTER,
                         0, views::GridLayout::USE_PREF, 0, 0);
   column_set->AddColumn(views::GridLayout::FILL, views::GridLayout::CENTER,

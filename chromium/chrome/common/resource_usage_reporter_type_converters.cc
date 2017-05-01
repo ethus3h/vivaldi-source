@@ -12,20 +12,21 @@ namespace mojo {
 
 namespace {
 
-ResourceTypeStatPtr StatToMojo(const blink::WebCache::ResourceTypeStat& obj) {
-  ResourceTypeStatPtr stat = ResourceTypeStat::New();
+chrome::mojom::ResourceTypeStatPtr StatToMojo(
+    const blink::WebCache::ResourceTypeStat& obj) {
+  chrome::mojom::ResourceTypeStatPtr stat =
+      chrome::mojom::ResourceTypeStat::New();
   stat->count = obj.count;
   stat->size = obj.size;
-  stat->live_size = obj.liveSize;
   stat->decoded_size = obj.decodedSize;
   return stat;
 }
 
-blink::WebCache::ResourceTypeStat StatFromMojo(const ResourceTypeStat& obj) {
+blink::WebCache::ResourceTypeStat StatFromMojo(
+    const chrome::mojom::ResourceTypeStat& obj) {
   blink::WebCache::ResourceTypeStat stat;
   stat.count = base::saturated_cast<size_t>(obj.count);
   stat.size = base::saturated_cast<size_t>(obj.size);
-  stat.liveSize = base::saturated_cast<size_t>(obj.live_size);
   stat.decodedSize = base::saturated_cast<size_t>(obj.decoded_size);
   return stat;
 }
@@ -33,10 +34,12 @@ blink::WebCache::ResourceTypeStat StatFromMojo(const ResourceTypeStat& obj) {
 }  // namespace
 
 // static
-ResourceTypeStatsPtr
-TypeConverter<ResourceTypeStatsPtr, blink::WebCache::ResourceTypeStats>::
+chrome::mojom::ResourceTypeStatsPtr
+TypeConverter<chrome::mojom::ResourceTypeStatsPtr,
+              blink::WebCache::ResourceTypeStats>::
     Convert(const blink::WebCache::ResourceTypeStats& obj) {
-  ResourceTypeStatsPtr stats = ResourceTypeStats::New();
+  chrome::mojom::ResourceTypeStatsPtr stats =
+      chrome::mojom::ResourceTypeStats::New();
   stats->images = StatToMojo(obj.images);
   stats->css_style_sheets = StatToMojo(obj.cssStyleSheets);
   stats->scripts = StatToMojo(obj.scripts);
@@ -48,8 +51,9 @@ TypeConverter<ResourceTypeStatsPtr, blink::WebCache::ResourceTypeStats>::
 
 // static
 blink::WebCache::ResourceTypeStats
-TypeConverter<blink::WebCache::ResourceTypeStats, ResourceTypeStats>::Convert(
-    const ResourceTypeStats& obj) {
+TypeConverter<blink::WebCache::ResourceTypeStats,
+              chrome::mojom::ResourceTypeStats>::
+    Convert(const chrome::mojom::ResourceTypeStats& obj) {
   if (!obj.images || !obj.css_style_sheets || !obj.scripts ||
       !obj.xsl_style_sheets || !obj.fonts || !obj.other) {
     return {};

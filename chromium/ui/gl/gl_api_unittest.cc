@@ -4,9 +4,10 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_gl_api_implementation.h"
@@ -14,19 +15,19 @@
 #include "ui/gl/gl_switches.h"
 #include "ui/gl/gpu_timing.h"
 
-namespace gfx {
+namespace gl {
 
 class GLContextFake : public GLContext {
  public:
   bool Initialize(GLSurface* compatible_surface,
-                  GpuPreference gpu_preference) override {
+                  const GLContextAttribs& attribs) override {
     return true;
   }
   bool MakeCurrent(GLSurface* surface) override { return true; }
   void ReleaseCurrent(GLSurface* surface) override {}
   bool IsCurrent(GLSurface* surface) override { return true; }
   void* GetHandle() override { return NULL; }
-  scoped_refptr<gfx::GPUTimingClient> CreateGPUTimingClient() override {
+  scoped_refptr<GPUTimingClient> CreateGPUTimingClient() override {
     return NULL;
   }
   void OnSetSwapInterval(int interval) override {}
@@ -50,8 +51,9 @@ class GLApiTest : public testing::Test {
         static_cast<GLGetProcAddressProc>(&FakeGLGetProcAddress));
   }
 
-  static void* GL_BINDING_CALL FakeGLGetProcAddress(const char *proc) {
-    return reinterpret_cast<void*>(0x1);
+  static GLFunctionPointerType GL_BINDING_CALL
+  FakeGLGetProcAddress(const char* proc) {
+    return reinterpret_cast<GLFunctionPointerType>(0x1);
   }
 
   void TearDown() override {
@@ -137,8 +139,8 @@ class GLApiTest : public testing::Test {
   static const char** fake_extension_strings_;
 
   scoped_refptr<GLContext> fake_context_;
-  scoped_ptr<DriverGL> driver_;
-  scoped_ptr<RealGLApi> api_;
+  std::unique_ptr<DriverGL> driver_;
+  std::unique_ptr<RealGLApi> api_;
 };
 
 const char* GLApiTest::fake_extension_string_ = "";
@@ -216,4 +218,4 @@ TEST_F(GLApiTest, DisabledExtensionStringIndexTest) {
   }
 }
 
-}  // namespace gfx
+}  // namespace gl

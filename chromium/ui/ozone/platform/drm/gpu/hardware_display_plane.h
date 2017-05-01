@@ -8,21 +8,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <xf86drmMode.h>
+
 #include <vector>
 
 #include "base/macros.h"
-#include "ui/ozone/ozone_export.h"
 #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
-
-namespace gfx {
-class Rect;
-}
 
 namespace ui {
 
 class DrmDevice;
 
-class OZONE_EXPORT HardwareDisplayPlane {
+class HardwareDisplayPlane {
  public:
   enum Type { kDummy, kPrimary, kOverlay, kCursor };
 
@@ -32,10 +29,13 @@ class OZONE_EXPORT HardwareDisplayPlane {
 
   bool Initialize(DrmDevice* drm,
                   const std::vector<uint32_t>& formats,
+                  const std::vector<drm_format_modifier>& format_info,
                   bool is_dummy,
                   bool test_only);
 
   bool IsSupportedFormat(uint32_t format);
+
+  std::vector<uint64_t> ModifiersForFormat(uint32_t format);
 
   bool CanUseForCrtc(uint32_t crtc_index);
 
@@ -63,6 +63,7 @@ class OZONE_EXPORT HardwareDisplayPlane {
   bool in_use_ = false;
   Type type_ = kPrimary;
   std::vector<uint32_t> supported_formats_;
+  std::vector<drm_format_modifier> supported_format_modifiers_;
 
   DISALLOW_COPY_AND_ASSIGN(HardwareDisplayPlane);
 };

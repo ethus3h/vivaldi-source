@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/importer/importer_progress_observer.h"
 #include "chrome/browser/importer/profile_writer.h"
@@ -18,11 +19,11 @@
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/search_engines/template_url_service.h"
 #include "ui/gfx/native_widget_types.h"
+
 #include "importer/chromium_profile_lock.h"
 
 class ExternalProcessImporterClient;
 class FirefoxProfileLock;
-class Importer;
 class Profile;
 
 namespace importer {
@@ -78,6 +79,8 @@ class ExternalProcessImporterHost
   void NotifyImportItemStarted(importer::ImportItem item);
   void NotifyImportItemEnded(importer::ImportItem item);
   void NotifyImportEnded();
+  void NotifyImportItemFailed(importer::ImportItem item,
+                              const std::string& error);
 
  private:
   // ExternalProcessImporterHost deletes itself in OnImportEnded().
@@ -119,8 +122,8 @@ class ExternalProcessImporterHost
   void OnChromiumImportLockDialogEnd(bool is_continue);
   bool CheckForChromeLock(const importer::SourceProfile& source_profile);
   void ShowChromeWarningDialog();
-  scoped_ptr<ChromiumProfileLock> chromium_lock_;
- 
+  std::unique_ptr<ChromiumProfileLock> chromium_lock_;
+
   // Make sure BookmarkModel and TemplateURLService are loaded before import
   // process starts, if bookmarks and/or search engines are among the items
   // which are to be imported.
@@ -137,7 +140,7 @@ class ExternalProcessImporterHost
   importer::ImporterProgressObserver* observer_;
 
   // Firefox profile lock.
-  scoped_ptr<FirefoxProfileLock> firefox_lock_;
+  std::unique_ptr<FirefoxProfileLock> firefox_lock_;
 
   // Profile we're importing from.
   Profile* profile_;
@@ -147,7 +150,8 @@ class ExternalProcessImporterHost
 
   // May contain a Subscription waiting for the TemplateURLService to finish
   // loading.
-  scoped_ptr<TemplateURLService::Subscription> template_service_subscription_;
+  std::unique_ptr<TemplateURLService::Subscription>
+      template_service_subscription_;
 
   // Have we installed a listener on the bookmark model?
   bool installed_bookmark_observer_;

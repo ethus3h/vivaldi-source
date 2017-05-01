@@ -24,19 +24,19 @@ class FakeAudioRenderCallback
   // The function used to fulfill Render() is f(x) = sin(2 * PI * x * |step|),
   // where x = [|number_of_frames| * m, |number_of_frames| * (m + 1)] and m =
   // the number of Render() calls fulfilled thus far.
-  explicit FakeAudioRenderCallback(double step);
+  FakeAudioRenderCallback(double step, int sample_rate);
   ~FakeAudioRenderCallback() override;
 
   // Renders a sine wave into the provided audio data buffer.  If |half_fill_|
   // is set, will only fill half the buffer.
-  int Render(AudioBus* audio_bus,
-             uint32_t audio_delay_milliseconds,
-             uint32_t frames_skipped) override;
+  int Render(base::TimeDelta delay,
+             base::TimeTicks delay_timestamp,
+             int prior_frames_skipped,
+             AudioBus* audio_bus) override;
   MOCK_METHOD0(OnRenderError, void());
 
   // AudioTransform::ProvideAudioTransformInput implementation.
-  double ProvideInput(AudioBus* audio_bus,
-                      base::TimeDelta buffer_delay) override;
+  double ProvideInput(AudioBus* audio_bus, uint32_t frames_delayed) override;
 
   // Toggles only filling half the requested amount during Render().
   void set_half_fill(bool half_fill) { half_fill_ = half_fill; }
@@ -44,11 +44,9 @@ class FakeAudioRenderCallback
   // Reset the sine state to initial value.
   void reset() { x_ = 0; }
 
-  // Returns the last |audio_delay_milliseconds| provided to Render() or -1 if
-  // no Render() call occurred.
-  int last_audio_delay_milliseconds() const {
-    return last_audio_delay_milliseconds_;
-  }
+  // Returns the last |delay| provided to Render() or base::TimeDelta::Max()
+  // if no Render() call occurred.
+  base::TimeDelta last_delay() const { return last_delay_; }
 
   // Set volume information used by ProvideAudioTransformInput().
   void set_volume(double volume) { volume_ = volume; }
@@ -56,12 +54,15 @@ class FakeAudioRenderCallback
   int last_channel_count() const { return last_channel_count_; }
 
  private:
+  int RenderInternal(AudioBus* audio_bus, base::TimeDelta delay, double volume);
+
   bool half_fill_;
   double x_;
   double step_;
-  int last_audio_delay_milliseconds_;
+  base::TimeDelta last_delay_;
   int last_channel_count_;
   double volume_;
+  int sample_rate_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeAudioRenderCallback);
 };

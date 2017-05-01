@@ -43,7 +43,7 @@ class WinMultiprocess {
     ASSERT_NO_FATAL_FAILURE(
         WinChildProcess::EntryPoint<ChildProcessHelper<T>>());
     // If WinChildProcess::EntryPoint returns, we are in the parent process.
-    scoped_ptr<WinChildProcess::Handles> child_handles =
+    std::unique_ptr<WinChildProcess::Handles> child_handles =
         WinChildProcess::Launch();
     ASSERT_TRUE(child_handles.get());
     T parent_process;
@@ -71,7 +71,7 @@ class WinMultiprocess {
   //!
   //! The default expected termination code is `EXIT_SUCCESS` (`0`).
   //!
-  //! \param[in] code The expected exit status of the child.
+  //! \param[in] exit_code The expected exit status of the child.
   void SetExpectedChildExitCode(unsigned int exit_code);
 
   //! \brief Returns the read pipe's file handle.

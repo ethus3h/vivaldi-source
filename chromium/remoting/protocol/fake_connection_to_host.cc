@@ -22,10 +22,12 @@ void FakeConnectionToHost::set_clipboard_stub(
 void FakeConnectionToHost::set_video_renderer(
     protocol::VideoRenderer* video_renderer) {}
 
-void FakeConnectionToHost::set_audio_stub(protocol::AudioStub* audio_stub) {}
+void FakeConnectionToHost::InitializeAudio(
+    scoped_refptr<base::SingleThreadTaskRunner> audio_decode_task_runner,
+    base::WeakPtr<protocol::AudioStub> audio_stub) {}
 
 void FakeConnectionToHost::Connect(
-    scoped_ptr<protocol::Session> session,
+    std::unique_ptr<protocol::Session> session,
     scoped_refptr<protocol::TransportContext> transport_context,
     HostEventCallback* event_callback) {
   DCHECK(event_callback);

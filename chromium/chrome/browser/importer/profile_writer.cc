@@ -10,15 +10,16 @@
 #include <set>
 #include <string>
 
-#include "base/prefs/pref_service.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -32,21 +33,22 @@
 #include "components/favicon/core/favicon_service.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/password_manager/core/browser/password_store.h"
+#include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "grit/generated_resources.h"
 
 #if defined(OS_WIN)
-#include "chrome/browser/web_data_service_factory.h"
 #include "components/password_manager/core/browser/webdata/password_web_data_service_win.h"
 #endif
 
 #include "app/vivaldi_resources.h"
+#include "grit/components_strings.h"
 #include "importer/imported_notes_entry.h"
+#include "importer/imported_speeddial_entry.h"
 #include "notes/notesnode.h"
 #include "notes/notes_factory.h"
 #include "notes/notes_model.h"
+#include "ui/base/l10n/l10n_util.h"
 
 using namespace vivaldi;
 
@@ -94,7 +96,7 @@ void ShowBookmarkBar(Profile* profile) {
 ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
 
 bool ProfileWriter::BookmarkModelIsLoaded() const {
-  return BookmarkModelFactory::GetForProfile(profile_)->loaded();
+  return BookmarkModelFactory::GetForBrowserContext(profile_)->loaded();
 }
 
 bool ProfileWriter::TemplateURLServiceIsLoaded() const {
@@ -115,9 +117,16 @@ void ProfileWriter::AddIE7PasswordInfo(const IE7PasswordInfo& info) {
 
 void ProfileWriter::AddHistoryPage(const history::URLRows& page,
                                    history::VisitSource visit_source) {
-  HistoryServiceFactory::GetForProfile(profile_,
-                                       ServiceAccessType::EXPLICIT_ACCESS)
-      ->AddPagesWithDetails(page, visit_source);
+  if (!page.empty())
+    HistoryServiceFactory::GetForProfile(profile_,
+                                         ServiceAccessType::EXPLICIT_ACCESS)
+        ->AddPagesWithDetails(page, visit_source);
+  // Measure the size of the history page after Auto Import on first run.
+  if (first_run::IsChromeFirstRun() &&
+      visit_source == history::SOURCE_IE_IMPORTED) {
+    UMA_HISTOGRAM_COUNTS("Import.ImportedHistorySize.AutoImportFromIE",
+                         page.size());
+  }
 }
 
 void ProfileWriter::AddHomepage(const GURL& home_page) {
@@ -137,7 +146,7 @@ void ProfileWriter::AddBookmarks(
   if (bookmarks.empty())
     return;
 
-  BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile_);
+  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile_);
   DCHECK(model->loaded());
 
   // If the bookmark bar is currently empty, we should import directly to it.
@@ -218,8 +227,9 @@ void ProfileWriter::AddBookmarks(
       if (!child) {
         BookmarkNode::MetaInfoMap meta_info;
         meta_info["Speeddial"] = "true";
-        child = model->AddFolderWithMetaInfo(parent, parent->child_count(), *folder_name,
-                                            (bookmark->speeddial) ? &meta_info : NULL);
+        child = model->AddFolderWithMetaInfo(
+            parent, parent->child_count(), *folder_name,
+            (bookmark->speeddial) ? &meta_info : NULL);
       }
       parent = child;
     }
@@ -257,6 +267,39 @@ void ProfileWriter::AddBookmarks(
     ShowBookmarkBar(profile_);
 }
 
+void ProfileWriter::AddSpeedDial(
+    const std::vector<ImportedSpeedDialEntry>& speeddial) {
+  if (speeddial.empty())
+    return;
+
+  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile_);
+  DCHECK(model->loaded());
+  const BookmarkNode* bookmark_bar = model->bookmark_bar_node();
+  const base::string16& first_folder_name =
+      l10n_util::GetStringUTF16(IDS_SPEEDDIAL_GROUP_FROM_OPERA);
+
+  model->BeginExtensiveChanges();
+
+  const BookmarkNode* top_level_folder = NULL;
+
+  base::string16 name =
+      GenerateUniqueFolderName(model, first_folder_name);
+
+  BookmarkNode::MetaInfoMap meta_info;
+  meta_info["Speeddial"] = "true";
+  top_level_folder = model->AddFolderWithMetaInfo(
+      bookmark_bar, bookmark_bar->child_count(), name, &meta_info);
+
+  for (auto& item : speeddial) {
+    if (!model->AddURL(top_level_folder, top_level_folder->child_count(),
+                       item.title, item.url))
+      break;
+  }
+
+  model->EndExtensiveChanges();
+}
+
+
 void ProfileWriter::AddNotes(const std::vector<ImportedNotesEntry> &notes,
                              const base::string16 &top_level_folder_name) {
   Notes_Model *model = NotesModelFactory::GetForProfile(profile_);
@@ -274,8 +317,10 @@ void ProfileWriter::AddNotes(const std::vector<ImportedNotesEntry> &notes,
     if (!top_level_folder) {
       base::string16 name;
       name = l10n_util::GetStringUTF16(IDS_NOTES_GROUP_FROM_OPERA);
-      top_level_folder =
-          model->AddFolder(model->root(), model->root()->child_count(), name);
+      top_level_folder = model->AddFolder(
+          model->main_node(),
+          model->main_node()->child_count(),
+          name);
     }
     parent = top_level_folder;
 
@@ -360,33 +405,33 @@ static void BuildHostPathMap(TemplateURLService* model,
         template_urls[i], model->search_terms_data(), false);
     if (!host_path.empty()) {
       const TemplateURL* existing_turl = (*host_path_map)[host_path];
-      if (!existing_turl ||
-          (template_urls[i]->show_in_default_list() &&
-           !existing_turl->show_in_default_list())) {
+      TemplateURL* t_url = template_urls[i];
+      if (!existing_turl || (model->ShowInDefaultList(t_url) &&
+                             !model->ShowInDefaultList(existing_turl))) {
         // If there are multiple TemplateURLs with the same host+path, favor
         // those shown in the default list.  If there are multiple potential
         // defaults, favor the first one, which should be the more commonly used
         // one.
-        (*host_path_map)[host_path] = template_urls[i];
+        (*host_path_map)[host_path] = t_url;
       }
     }  // else case, TemplateURL doesn't have a search url, doesn't support
        // replacement, or doesn't have valid GURL. Ignore it.
   }
 }
 
-void ProfileWriter::AddKeywords(ScopedVector<TemplateURL> template_urls,
-                                bool unique_on_host_and_path) {
+void ProfileWriter::AddKeywords(
+    TemplateURLService::OwnedTemplateURLVector template_urls,
+    bool unique_on_host_and_path) {
   TemplateURLService* model =
       TemplateURLServiceFactory::GetForProfile(profile_);
   HostPathMap host_path_map;
   if (unique_on_host_and_path)
     BuildHostPathMap(model, &host_path_map);
 
-  for (ScopedVector<TemplateURL>::iterator i = template_urls.begin();
-       i != template_urls.end(); ++i) {
+  for (auto& turl : template_urls) {
     // TemplateURLService requires keywords to be unique. If there is already a
     // TemplateURL with this keyword, don't import it again.
-    if (model->GetTemplateURLForKeyword((*i)->keyword()) != NULL)
+    if (model->GetTemplateURLForKeyword(turl->keyword()) != nullptr)
       continue;
 
     // For search engines if there is already a keyword with the same
@@ -394,16 +439,14 @@ void ProfileWriter::AddKeywords(ScopedVector<TemplateURL> template_urls,
     // search providers (such as two Googles, or two Yahoos) as well as making
     // sure the search engines we provide aren't replaced by those from the
     // imported browser.
-    if (unique_on_host_and_path &&
-        (host_path_map.find(BuildHostPathKey(
-            *i, model->search_terms_data(), true)) != host_path_map.end()))
+    if (unique_on_host_and_path && (host_path_map.find(BuildHostPathKey(
+                                        turl.get(), model->search_terms_data(),
+                                        true)) != host_path_map.end()))
       continue;
 
     // Only add valid TemplateURLs to the model.
-    if ((*i)->url_ref().IsValid(model->search_terms_data())) {
-      model->Add(*i);  // Takes ownership.
-      *i = NULL;  // Prevent the vector from deleting *i later.
-    }
+    if (turl->url_ref().IsValid(model->search_terms_data()))
+      model->Add(std::move(turl));
   }
 }
 

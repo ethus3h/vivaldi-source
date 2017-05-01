@@ -44,10 +44,12 @@ enum AutoupdateStatus {
 // the notification.  Its userInfo dictionary will contain an AutoupdateStatus
 // value as an intValue at key kAutoupdateStatusStatus.  If a version is
 // available (see AutoupdateStatus), it will be present at key
-// kAutoupdateStatusVersion.
+// kAutoupdateStatusVersion.  If any error messages were supplied by Keystone,
+// they will be present at key kAutoupdateStatusErrorMessages.
 extern NSString* const kAutoupdateStatusNotification;
 extern NSString* const kAutoupdateStatusStatus;
 extern NSString* const kAutoupdateStatusVersion;
+extern NSString* const kAutoupdateStatusErrorMessages;
 
 namespace {
 
@@ -164,6 +166,10 @@ enum BrandFileType {
 - (BOOL)needsPromotion;
 - (BOOL)wantsPromotion;
 
+// -isAutoupdateEnabledForAllUsers indicates whether or not autoupdate is
+// turned on for all users.
+- (BOOL)isAutoupdateEnabledForAllUsers;
+
 // Promotes the Keystone ticket into the system store.  System Keystone will
 // be installed if necessary.  If synchronous is NO, the promotion may occur
 // in the background.  synchronous should be YES for promotion during
@@ -181,6 +187,8 @@ enum BrandFileType {
 - (void)setAppPath:(NSString*)appPath;
 
 // Sets the total number of profiles and the number of signed in profiles.
+// Passing zeroes sets the application as active, but does not update
+// profile metrics.
 - (void)updateProfileCountsWithNumProfiles:(uint32_t)profiles
                        numSignedInProfiles:(uint32_t)signedInProfiles;
 

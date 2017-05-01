@@ -81,8 +81,6 @@ class GmailPage(BlinkMemoryMobilePage):
     google_login.LoginGoogleAccount(action_runner, 'google',
                                     self.credentials_path)
     super(GmailPage, self).RunNavigateSteps(action_runner)
-    # Needs to wait for navigation to handle redirects.
-    action_runner.WaitForNavigate()
     action_runner.WaitForElement(selector='#apploadingdiv')
     action_runner.WaitForJavaScriptCondition(
         'document.querySelector("#apploadingdiv").style.opacity == "0"')
@@ -102,8 +100,7 @@ class BlinkMemoryMobilePageSet(story.StorySet):
         page_set=self,
         name='Pinterest'))
     self.AddStory(FacebookPage(self))
-    # TODO(bashi): Enable TheVergePage. http://crbug.com/522381
-    # self.AddStory(TheVergePage(self))
+    self.AddStory(TheVergePage(self))
 
     # Why: High rate of Blink's memory comsumption rate on low-RAM devices.
     self.AddStory(BlinkMemoryMobilePage(
@@ -117,7 +114,7 @@ class BlinkMemoryMobilePageSet(story.StorySet):
     self.AddStory(BlinkMemoryMobilePage(
         'https://en.blog.wordpress.com/2012/09/04/freshly-pressed-editors-picks-for-august-2012/',
         page_set=self,
-       name='Wordpress'))
+        name='Wordpress'))
 
     # Why: Renderer memory usage is high.
     self.AddStory(BlinkMemoryMobilePage(

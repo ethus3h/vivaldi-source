@@ -6,12 +6,12 @@
 
 #include <utility>
 
-#include "base/ios/ios_util.h"
 #import "base/ios/weak_nsobject.h"
 #include "base/mac/bind_objc_block.h"
 #include "base/memory/scoped_vector.h"
-#include "base/message_loop/message_loop.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "components/password_manager/core/browser/form_saver.h"
 #include "components/password_manager/core/browser/password_store_consumer.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
@@ -20,6 +20,7 @@
 #include "ios/web/public/web_state/credential.h"
 #include "ios/web/public/web_state/url_verification_constants.h"
 #include "ios/web/public/web_state/web_state.h"
+#include "url/origin.h"
 
 namespace {
 
@@ -42,7 +43,7 @@ web::Credential WebCredentialFromCredentialInfo(
   credential.name = credential_info.name;
   credential.avatar_url = credential_info.icon;
   credential.password = credential_info.password;
-  credential.federation_url = credential_info.federation;
+  credential.federation_origin = credential_info.federation;
   return credential;
 }
 
@@ -68,7 +69,7 @@ password_manager::CredentialInfo CredentialInfoFromWebCredential(
   credential_info.name = credential.name;
   credential_info.icon = credential.avatar_url;
   credential_info.password = credential.password;
-  credential_info.federation = credential.federation_url;
+  credential_info.federation = credential.federation_origin;
   return credential_info;
 }
 
@@ -87,7 +88,8 @@ CredentialManager::CredentialManager(
       driver_(driver),
       weak_factory_(this) {
   zero_click_sign_in_enabled_.Init(
-      password_manager::prefs::kPasswordManagerAutoSignin, client_->GetPrefs());
+      password_manager::prefs::kCredentialsEnableAutosignin,
+      client_->GetPrefs());
 }
 
 CredentialManager::~CredentialManager() = default;
@@ -98,8 +100,7 @@ void CredentialManager::PageLoaded(
   web::URLVerificationTrustLevel trust_level =
       web::URLVerificationTrustLevel::kNone;
   const GURL page_url(web_state()->GetCurrentURL(&trust_level));
-  if (!base::ios::IsRunningOnIOS8OrLater() ||
-      trust_level != web::URLVerificationTrustLevel::kAbsolute ||
+  if (trust_level != web::URLVerificationTrustLevel::kAbsolute ||
       !web::UrlHasWebScheme(page_url) || !web_state()->ContentIsHTML()) {
     return;
   }
@@ -115,7 +116,7 @@ void CredentialManager::CredentialsRequested(
   // Invoked when the page invokes navigator.credentials.request(), this
   // function will attempt to retrieve a Credential from the PasswordStore that
   // meets the specified parameters and, if successful, send it back to the page
-  // via SendCredential.
+  // via SendCredentialByID.
   DCHECK_GE(request_id, 0);
   password_manager::PasswordStore* store = GetPasswordStore();
 
@@ -123,7 +124,7 @@ void CredentialManager::CredentialsRequested(
   // the request should fail outright and the JS Promise should be rejected
   // with an appropriate error.
   if (pending_request_ || !store) {
-    base::MessageLoop::current()->PostTask(
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::Bind(&CredentialManager::RejectPromise,
                    weak_factory_.GetWeakPtr(), request_id,
@@ -136,8 +137,8 @@ void CredentialManager::CredentialsRequested(
   // without first asking the user -- and if zero-click isn't currently
   // available, send back an empty credential.
   if (zero_click_only && !IsZeroClickAllowed()) {
-    base::MessageLoop::current()->PostTask(
-        FROM_HERE, base::Bind(&CredentialManager::SendCredential,
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(&CredentialManager::SendCredentialByID,
                               weak_factory_.GetWeakPtr(), request_id,
                               password_manager::CredentialInfo()));
     return;
@@ -156,12 +157,14 @@ void CredentialManager::CredentialsRequested(
   std::vector<GURL> federation_urls;
   for (const auto& federation : federations)
     federation_urls.push_back(GURL(federation));
-  std::vector<std::string> realms;
   pending_request_.reset(
       new password_manager::CredentialManagerPendingRequestTask(
-          this, request_id, zero_click_only, page_url, federation_urls,
-          realms));
-  store->GetAutofillableLogins(pending_request_.get());
+          this, base::Bind(&CredentialManager::SendCredentialByID,
+                           base::Unretained(this), request_id),
+          zero_click_only, true, federation_urls));
+  password_manager::PasswordStore::FormDigest form = {
+      autofill::PasswordForm::SCHEME_HTML, page_url.spec(), page_url};
+  store->GetLogins(form, pending_request_.get());
 }
 
 void CredentialManager::SignedIn(int request_id,
@@ -192,7 +195,7 @@ void CredentialManager::SignedIn(int request_id,
 
   // Store the signed-in credential so that the user can save it, if desired.
   // Prompting the user and saving are handled by the PasswordFormManager.
-  scoped_ptr<autofill::PasswordForm> form(
+  std::unique_ptr<autofill::PasswordForm> form(
       password_manager::CreatePasswordFormFromCredentialInfo(
           CredentialInfoFromWebCredential(credential), page_url));
   form->skip_zero_click = !IsZeroClickAllowed();
@@ -202,7 +205,9 @@ void CredentialManager::SignedIn(int request_id,
   // accordingly.
   form_manager_.reset(
       new password_manager::CredentialManagerPasswordFormManager(
-          client_, driver_->AsWeakPtr(), *form, this));
+          client_, driver_->AsWeakPtr(),
+          *password_manager::CreateObservedPasswordFormFromOrigin(page_url),
+          std::move(form), this, nullptr, nullptr));
 }
 
 void CredentialManager::SignedOut(int request_id, const GURL& source_url) {
@@ -225,20 +230,14 @@ void CredentialManager::SignedOut(int request_id, const GURL& source_url) {
   // information to the PasswordStore via an asynchronous task.
   password_manager::PasswordStore* store = GetPasswordStore();
   if (store) {
-    // Bundle the origins that are sent to the PasswordStore if the task hasn't
-    // yet resolved. This task lives across page-loads to enable this bundling.
-    if (pending_require_user_mediation_) {
-      pending_require_user_mediation_->AddOrigin(page_url);
-    } else {
+    if (!pending_require_user_mediation_) {
       pending_require_user_mediation_.reset(
           new password_manager::
-              CredentialManagerPendingRequireUserMediationTask(
-                  this, page_url, std::vector<std::string>()));
-
-      // This will result in a callback to
-      // CredentialManagerPendingSignedOutTask::OnGetPasswordStoreResults().
-      store->GetAutofillableLogins(pending_require_user_mediation_.get());
+              CredentialManagerPendingRequireUserMediationTask(this));
     }
+    password_manager::PasswordStore::FormDigest form = {
+        autofill::PasswordForm::SCHEME_HTML, source_url.spec(), source_url};
+    pending_require_user_mediation_->AddOrigin(form);
   }
 
   // Acknowledge the page's signOut notification without waiting for the
@@ -267,6 +266,12 @@ GURL CredentialManager::GetOrigin() const {
 }
 
 void CredentialManager::SendCredential(
+    const password_manager::SendCredentialCallback& send_callback,
+    const password_manager::CredentialInfo& credential) {
+  send_callback.Run(credential);
+}
+
+void CredentialManager::SendCredentialByID(
     int request_id,
     const password_manager::CredentialInfo& credential) {
   // Invoked when the asynchronous interaction with the PasswordStore completes,
@@ -282,18 +287,23 @@ void CredentialManager::SendCredential(
                 }];
 }
 
-password_manager::PasswordManagerClient* CredentialManager::client() const {
-  return client_;
+void CredentialManager::SendPasswordForm(
+    const password_manager::SendCredentialCallback& send_callback,
+    const autofill::PasswordForm* form) {
+  password_manager::CredentialInfo info;
+  if (form) {
+    password_manager::CredentialType type_to_return =
+        form->federation_origin.unique()
+            ? password_manager::CredentialType::CREDENTIAL_TYPE_PASSWORD
+            : password_manager::CredentialType::CREDENTIAL_TYPE_FEDERATED;
+    info = password_manager::CredentialInfo(*form, type_to_return);
+    // TODO(vasilii): update |skip_zero_click| in the store (crbug.com/594110).
+  }
+  SendCredential(send_callback, info);
 }
 
-autofill::PasswordForm CredentialManager::GetSynthesizedFormForOrigin() const {
-  autofill::PasswordForm synthetic_form;
-  synthetic_form.origin = web_state()->GetLastCommittedURL().GetOrigin();
-  synthetic_form.signon_realm = synthetic_form.origin.spec();
-  synthetic_form.scheme = autofill::PasswordForm::SCHEME_HTML;
-  synthetic_form.ssl_valid = synthetic_form.origin.SchemeIsCryptographic() &&
-                             !client_->DidLastPageLoadEncounterSSLErrors();
-  return synthetic_form;
+password_manager::PasswordManagerClient* CredentialManager::client() const {
+  return client_;
 }
 
 void CredentialManager::OnProvisionalSaveComplete() {

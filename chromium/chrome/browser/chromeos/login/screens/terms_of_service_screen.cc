@@ -9,7 +9,6 @@
 
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/prefs/pref_service.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
@@ -18,6 +17,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -29,7 +29,8 @@ namespace chromeos {
 TermsOfServiceScreen::TermsOfServiceScreen(
     BaseScreenDelegate* base_screen_delegate,
     TermsOfServiceScreenActor* actor)
-    : BaseScreen(base_screen_delegate), actor_(actor) {
+    : BaseScreen(base_screen_delegate, OobeScreen::SCREEN_TERMS_OF_SERVICE),
+      actor_(actor) {
   DCHECK(actor_);
   if (actor_)
     actor_->SetDelegate(this);
@@ -38,9 +39,6 @@ TermsOfServiceScreen::TermsOfServiceScreen(
 TermsOfServiceScreen::~TermsOfServiceScreen() {
   if (actor_)
     actor_->SetDelegate(NULL);
-}
-
-void TermsOfServiceScreen::PrepareToShow() {
 }
 
 void TermsOfServiceScreen::Show() {
@@ -62,10 +60,6 @@ void TermsOfServiceScreen::Show() {
 void TermsOfServiceScreen::Hide() {
   if (actor_)
     actor_->Hide();
-}
-
-std::string TermsOfServiceScreen::GetName() const {
-  return WizardController::kTermsOfServiceScreenName;
 }
 
 void TermsOfServiceScreen::OnDecline() {
@@ -129,7 +123,8 @@ void TermsOfServiceScreen::OnURLFetchComplete(const net::URLFetcher* source) {
   download_timer_.Stop();
 
   // Destroy the fetcher when this method returns.
-  scoped_ptr<net::URLFetcher> fetcher(std::move(terms_of_service_fetcher_));
+  std::unique_ptr<net::URLFetcher> fetcher(
+      std::move(terms_of_service_fetcher_));
   if (!actor_)
     return;
 

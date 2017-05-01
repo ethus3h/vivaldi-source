@@ -4,25 +4,39 @@
 
 package org.chromium.chrome.browser.ntp;
 
-import android.test.suitebuilder.annotation.LargeTest;
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.Smoke;
+import android.support.test.filters.LargeTest;
+import android.support.test.filters.MediumTest;
 
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.UrlConstants;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeTabbedActivityTestBase;
-import org.chromium.chrome.test.util.TestHttpServerClient;
+import org.chromium.net.test.EmbeddedTestServer;
 
 /**
  * Tests loading the NTP and navigating between it and other pages.
  */
+@RetryOnFailure
 public class NewTabPageNavigationTest extends ChromeTabbedActivityTestBase {
+
+    private EmbeddedTestServer mTestServer;
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        mTestServer = EmbeddedTestServer.createAndStartServer(getInstrumentation().getContext());
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        mTestServer.stopAndDestroyServer();
+        super.tearDown();
+    }
 
     /**
      * Sanity check that we do start on the NTP by default.
      */
-    @Smoke
     @MediumTest
     @Feature({"NewTabPage", "Main"})
     public void testNTPIsDefault() {
@@ -41,7 +55,7 @@ public class NewTabPageNavigationTest extends ChromeTabbedActivityTestBase {
     @LargeTest
     @Feature({"NewTabPage"})
     public void testNavigatingFromNTP() throws InterruptedException {
-        String url = TestHttpServerClient.getUrl("chrome/test/data/android/google.html");
+        String url = mTestServer.getURL("/chrome/test/data/android/google.html");
         loadUrl(url);
         assertEquals(url, getActivity().getActivityTab().getUrl());
     }
@@ -52,7 +66,7 @@ public class NewTabPageNavigationTest extends ChromeTabbedActivityTestBase {
     @MediumTest
     @Feature({"NewTabPage"})
     public void testNavigateBackToNTPViaUrl() throws InterruptedException {
-        String url = TestHttpServerClient.getUrl("chrome/test/data/android/google.html");
+        String url = mTestServer.getURL("/chrome/test/data/android/google.html");
         loadUrl(url);
         assertEquals(url, getActivity().getActivityTab().getUrl());
 

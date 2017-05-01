@@ -5,12 +5,12 @@
 package org.chromium.content.browser;
 
 import android.content.Context;
-import android.os.SystemClock;
+import android.support.test.filters.MediumTest;
 import android.test.InstrumentationTestCase;
-import android.test.suitebuilder.annotation.MediumTest;
 import android.view.WindowManager;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.ui.VSyncMonitor;
 
 import java.util.Arrays;
@@ -25,7 +25,6 @@ public class VSyncMonitorTest extends InstrumentationTestCase {
     private static class VSyncDataCollector implements VSyncMonitor.Listener {
         public long mFramePeriods[];
         public int mFrameCount;
-        public long mLastVSyncCpuTimeMillis;
 
         private boolean mDone;
         private long mPreviousVSyncTimeMicros;
@@ -44,7 +43,6 @@ public class VSyncMonitorTest extends InstrumentationTestCase {
         @Override
         public void onVSync(VSyncMonitor monitor, long vsyncTimeMicros) {
             ThreadUtils.assertOnUiThread();
-            mLastVSyncCpuTimeMillis = SystemClock.uptimeMillis();
             if (mPreviousVSyncTimeMicros == 0) {
                 mPreviousVSyncTimeMicros = vsyncTimeMicros;
             } else {
@@ -95,6 +93,7 @@ public class VSyncMonitorTest extends InstrumentationTestCase {
 
     // Check that the vsync period roughly matches the timestamps that the monitor generates.
     @MediumTest
+    @DisabledTest(message = "crbug.com/674129")
     public void testVSyncPeriod() throws InterruptedException {
         // Collect roughly one second of data on a 60 fps display.
         VSyncDataCollector collector = new VSyncDataCollector(FRAME_COUNT);
@@ -126,22 +125,5 @@ public class VSyncMonitorTest extends InstrumentationTestCase {
             // Estimated vsync period is expected to be lower than (1000000 / 30) microseconds
             assertTrue(monitor.getVSyncPeriodInMicroseconds() < 1000000 / 30);
         }
-    }
-
-    @MediumTest
-    public void testVSyncActivationFromIdle() throws InterruptedException {
-        // Check that the vsync period roughly matches the timestamps that the monitor generates.
-        VSyncDataCollector collector = new VSyncDataCollector(1);
-        VSyncMonitor monitor = createVSyncMonitor(collector);
-
-        requestVSyncMonitorUpdate(monitor);
-        collector.waitTillDone();
-        assertTrue(collector.isDone());
-
-        long period = monitor.getVSyncPeriodInMicroseconds() / 1000;
-        long delay = SystemClock.uptimeMillis() - collector.mLastVSyncCpuTimeMillis;
-
-        // The VSync should have activated immediately instead of at the next real vsync.
-        assertTrue(delay < period);
     }
 }

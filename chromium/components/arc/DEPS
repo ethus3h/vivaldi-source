@@ -1,10 +1,13 @@
 include_rules = [
-  "+chromeos/arc",
   "+chromeos/chromeos_switches.h",
+  "+chromeos/cryptohome",
   "+chromeos/dbus",
+  "+components/exo",
+  "+components/prefs",
   "+components/signin/core/account_id",
-  "+ipc",
+  "+components/user_manager",
   "+mojo",
-  "+third_party/mojo",
-  "+ui/arc",
+  "+third_party/re2",
+  "+third_party/skia",
+  "+ui/gfx/geometry/rect.h",
 ]

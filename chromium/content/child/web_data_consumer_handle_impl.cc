@@ -5,12 +5,14 @@
 #include "content/child/web_data_consumer_handle_impl.h"
 
 #include <stdint.h>
+
 #include <limits>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "mojo/public/c/system/types.h"
 
 namespace content {
@@ -53,6 +55,26 @@ Result WebDataConsumerHandleImpl::ReaderImpl::read(void* data,
   DCHECK_LE(size, std::numeric_limits<uint32_t>::max());
 
   *read_size = 0;
+
+  if (!size) {
+    // Even if there is unread data available, mojo::ReadDataRaw() returns
+    // FAILED_PRECONDITION when |size| is 0 and the producer handle was closed.
+    // But in this case, WebDataConsumerHandle::Reader::read() must return Ok.
+    // So we use mojo::Wait() with 0 deadline to check whether readable or not.
+    MojoResult wait_result = mojo::Wait(
+        context_->handle().get(), MOJO_HANDLE_SIGNAL_READABLE, 0, nullptr);
+    switch (wait_result) {
+      case MOJO_RESULT_OK:
+        return Ok;
+      case MOJO_RESULT_FAILED_PRECONDITION:
+        return Done;
+      case MOJO_RESULT_DEADLINE_EXCEEDED:
+        return ShouldWait;
+      default:
+        NOTREACHED();
+        return UnexpectedError;
+    }
+  }
 
   uint32_t size_to_pass = size;
   MojoReadDataFlags flags_to_pass = MOJO_READ_DATA_FLAG_NONE;
@@ -99,8 +121,6 @@ Result WebDataConsumerHandleImpl::ReaderImpl::HandleReadResult(
     case MOJO_RESULT_BUSY:
       return Busy;
     case MOJO_RESULT_SHOULD_WAIT:
-      if (client_)
-        StartWatching();
       return ShouldWait;
     case MOJO_RESULT_RESOURCE_EXHAUSTED:
       return ResourceExhausted;
@@ -112,7 +132,6 @@ Result WebDataConsumerHandleImpl::ReaderImpl::HandleReadResult(
 void WebDataConsumerHandleImpl::ReaderImpl::StartWatching() {
   handle_watcher_.Start(
       context_->handle().get(), MOJO_HANDLE_SIGNAL_READABLE,
-      MOJO_DEADLINE_INDEFINITE,
       base::Bind(&ReaderImpl::OnHandleGotReadable, base::Unretained(this)));
 }
 
@@ -127,14 +146,9 @@ WebDataConsumerHandleImpl::WebDataConsumerHandleImpl(Handle handle)
 WebDataConsumerHandleImpl::~WebDataConsumerHandleImpl() {
 }
 
-scoped_ptr<blink::WebDataConsumerHandle::Reader>
-WebDataConsumerHandleImpl::ObtainReader(Client* client) {
-  return make_scoped_ptr(obtainReaderInternal(client));
-}
-
-WebDataConsumerHandleImpl::ReaderImpl*
-WebDataConsumerHandleImpl::obtainReaderInternal(Client* client) {
-  return new ReaderImpl(context_, client);
+std::unique_ptr<blink::WebDataConsumerHandle::Reader>
+WebDataConsumerHandleImpl::obtainReader(Client* client) {
+  return base::WrapUnique(new ReaderImpl(context_, client));
 }
 
 const char* WebDataConsumerHandleImpl::debugName() const {

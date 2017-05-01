@@ -14,10 +14,9 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/swap_result.h"
 #include "ui/gfx/vsync_provider.h"
-#include "ui/ozone/ozone_export.h"
 #include "ui/ozone/platform/drm/gpu/overlay_plane.h"
 #include "ui/ozone/platform/drm/gpu/page_flip_request.h"
-#include "ui/ozone/public/surface_ozone_egl.h"
+#include "ui/ozone/public/swap_completion_callback.h"
 
 class SkBitmap;
 
@@ -29,7 +28,6 @@ class Rect;
 namespace ui {
 
 class DrmBuffer;
-class DrmDevice;
 class DrmDeviceManager;
 class DrmOverlayValidator;
 class HardwareDisplayController;
@@ -46,7 +44,7 @@ class ScreenManager;
 //
 // If there's no display whose bounds match the window's, the window is
 // disconnected and its contents will not be visible to the user.
-class OZONE_EXPORT DrmWindow {
+class DrmWindow {
  public:
   DrmWindow(gfx::AcceleratedWidget widget,
             DrmDeviceManager* device_manager,
@@ -119,7 +117,7 @@ class OZONE_EXPORT DrmWindow {
   // The controller associated with the current window. This may be nullptr if
   // the window isn't over an active display.
   HardwareDisplayController* controller_ = nullptr;
-  scoped_ptr<DrmOverlayValidator> overlay_validator_;
+  std::unique_ptr<DrmOverlayValidator> overlay_validator_;
 
   base::RepeatingTimer cursor_timer_;
 

@@ -215,6 +215,8 @@ void DetachShader(GLuint program, GLuint shader) override;
 
 void Disable(GLenum cap) override;
 
+void DisableVertexAttribArray(GLuint index) override;
+
 void DrawArrays(GLenum mode, GLint first, GLsizei count) override;
 
 void DrawElements(GLenum mode,
@@ -230,6 +232,8 @@ void DrawRangeElements(GLenum mode,
                        const void* indices) override;
 
 void Enable(GLenum cap) override;
+
+void EnableVertexAttribArray(GLuint index) override;
 
 GLsync FenceSync(GLenum condition, GLbitfield flags) override;
 
@@ -381,6 +385,8 @@ void GetShaderSource(GLuint shader,
 
 const GLubyte* GetString(GLenum name) override;
 
+const GLubyte* GetStringi(GLenum name, GLuint index) override;
+
 void GetSynciv(GLsync sync,
                GLenum pname,
                GLsizei bufsize,
@@ -413,6 +419,14 @@ void GetUniformIndices(GLuint program,
                        GLuint* indices) override;
 
 GLint GetUniformLocation(GLuint program, const char* name) override;
+
+void GetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) override;
+
+void GetVertexAttribiv(GLuint index, GLenum pname, GLint* params) override;
+
+void GetVertexAttribIiv(GLuint index, GLenum pname, GLint* params) override;
+
+void GetVertexAttribIuiv(GLuint index, GLenum pname, GLuint* params) override;
 
 void GetVertexAttribPointerv(GLuint index,
                              GLenum pname,
@@ -858,6 +872,10 @@ void* MapBufferRange(GLenum target,
 
 GLboolean UnmapBuffer(GLenum target) override;
 
+void FlushMappedBufferRange(GLenum target,
+                            GLintptr offset,
+                            GLsizeiptr size) override;
+
 void* MapTexSubImage2DCHROMIUM(GLenum target,
                                GLint level,
                                GLint xoffset,
@@ -911,6 +929,8 @@ GLuint CreateGpuMemoryBufferImageCHROMIUM(GLsizei width,
                                           GLenum internalformat,
                                           GLenum usage) override;
 
+void DescheduleUntilFinishedCHROMIUM() override;
+
 void GetTranslatedShaderSourceANGLE(GLuint shader,
                                     GLsizei bufsize,
                                     GLsizei* length,
@@ -921,14 +941,10 @@ void PostSubBufferCHROMIUM(GLint x,
                            GLint width,
                            GLint height) override;
 
-void TexImageIOSurface2DCHROMIUM(GLenum target,
-                                 GLsizei width,
-                                 GLsizei height,
-                                 GLuint ioSurfaceId,
-                                 GLuint plane) override;
-
 void CopyTextureCHROMIUM(GLenum source_id,
+                         GLint source_level,
                          GLenum dest_id,
+                         GLint dest_level,
                          GLint internalformat,
                          GLenum dest_type,
                          GLboolean unpack_flip_y,
@@ -936,7 +952,9 @@ void CopyTextureCHROMIUM(GLenum source_id,
                          GLboolean unpack_unmultiply_alpha) override;
 
 void CopySubTextureCHROMIUM(GLenum source_id,
+                            GLint source_level,
                             GLenum dest_id,
+                            GLint dest_level,
                             GLint xoffset,
                             GLint yoffset,
                             GLint x,
@@ -979,22 +997,6 @@ void BindUniformLocationCHROMIUM(GLuint program,
                                  GLint location,
                                  const char* name) override;
 
-void GenValuebuffersCHROMIUM(GLsizei n, GLuint* buffers) override;
-
-void DeleteValuebuffersCHROMIUM(GLsizei n, const GLuint* valuebuffers) override;
-
-GLboolean IsValuebufferCHROMIUM(GLuint valuebuffer) override;
-
-void BindValuebufferCHROMIUM(GLenum target, GLuint valuebuffer) override;
-
-void SubscribeValueCHROMIUM(GLenum target, GLenum subscription) override;
-
-void PopulateSubscribedValuesCHROMIUM(GLenum target) override;
-
-void UniformValuebufferCHROMIUM(GLint location,
-                                GLenum target,
-                                GLenum subscription) override;
-
 void BindTexImage2DCHROMIUM(GLenum target, GLint imageId) override;
 
 void ReleaseTexImage2DCHROMIUM(GLenum target, GLint imageId) override;
@@ -1009,10 +1011,6 @@ void DiscardFramebufferEXT(GLenum target,
                            const GLenum* attachments) override;
 
 void LoseContextCHROMIUM(GLenum current, GLenum other) override;
-
-GLuint InsertSyncPointCHROMIUM() override;
-
-void WaitSyncPointCHROMIUM(GLuint sync_point) override;
 
 GLuint64 InsertFenceSyncCHROMIUM() override;
 
@@ -1041,22 +1039,29 @@ void ScheduleOverlayPlaneCHROMIUM(GLint plane_z_order,
                                   GLfloat uv_width,
                                   GLfloat uv_height) override;
 
+void ScheduleCALayerSharedStateCHROMIUM(GLfloat opacity,
+                                        GLboolean is_clipped,
+                                        const GLfloat* clip_rect,
+                                        GLint sorting_context_id,
+                                        const GLfloat* transform) override;
+
 void ScheduleCALayerCHROMIUM(GLuint contents_texture_id,
                              const GLfloat* contents_rect,
-                             GLfloat opacity,
                              GLuint background_color,
                              GLuint edge_aa_mask,
                              const GLfloat* bounds_rect,
-                             GLboolean is_clipped,
-                             const GLfloat* clip_rect,
-                             GLint sorting_context_id,
-                             const GLfloat* transform) override;
+                             GLuint filter) override;
+
+void ScheduleCALayerInUseQueryCHROMIUM(GLsizei count,
+                                       const GLuint* textures) override;
 
 void CommitOverlayPlanesCHROMIUM() override;
 
 void SwapInterval(GLint interval) override;
 
 void FlushDriverCachesCHROMIUM() override;
+
+GLuint GetLastFlushIdCHROMIUM() override;
 
 void MatrixLoadfCHROMIUM(GLenum matrixMode, const GLfloat* m) override;
 
@@ -1170,6 +1175,10 @@ void ProgramPathFragmentInputGenCHROMIUM(GLuint program,
                                          GLint components,
                                          const GLfloat* coeffs) override;
 
+void* GetBufferSubDataAsyncCHROMIUM(GLenum target,
+                                    GLintptr offset,
+                                    GLsizeiptr size) override;
+
 void CoverageModulationCHROMIUM(GLenum components) override;
 
 GLenum GetGraphicsResetStatusKHR() override;
@@ -1188,5 +1197,20 @@ void BindFragDataLocationEXT(GLuint program,
                              const char* name) override;
 
 GLint GetFragDataIndexEXT(GLuint program, const char* name) override;
+
+void UniformMatrix4fvStreamTextureMatrixCHROMIUM(
+    GLint location,
+    GLboolean transpose,
+    const GLfloat* transform) override;
+
+void OverlayPromotionHintCHROMIUM(GLuint texture,
+                                  GLboolean promotion_hint,
+                                  GLint display_x,
+                                  GLint display_y) override;
+
+void SwapBuffersWithDamageCHROMIUM(GLint x,
+                                   GLint y,
+                                   GLint width,
+                                   GLint height) override;
 
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_IMPLEMENTATION_AUTOGEN_H_

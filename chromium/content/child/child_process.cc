@@ -10,8 +10,10 @@
 #include "base/message_loop/message_loop.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/process/process_handle.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task_scheduler/task_scheduler.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_local.h"
 #include "build/build_config.h"
@@ -34,18 +36,33 @@ base::LazyInstance<base::ThreadLocalPointer<ChildProcess> > g_lazy_tls =
     LAZY_INSTANCE_INITIALIZER;
 }
 
-ChildProcess::ChildProcess()
+ChildProcess::ChildProcess() : ChildProcess(base::ThreadPriority::NORMAL) {}
+
+ChildProcess::ChildProcess(base::ThreadPriority io_thread_priority)
     : ref_count_(0),
-      shutdown_event_(true, false),
+      shutdown_event_(base::WaitableEvent::ResetPolicy::MANUAL,
+                      base::WaitableEvent::InitialState::NOT_SIGNALED),
       io_thread_("Chrome_ChildIOThread") {
   DCHECK(!g_lazy_tls.Pointer()->Get());
   g_lazy_tls.Pointer()->Set(this);
 
   base::StatisticsRecorder::Initialize();
 
+  // Initialize TaskScheduler if not already done. A TaskScheduler may already
+  // exist when ChildProcess is instantiated in the browser process or in a
+  // test process.
+  if (!base::TaskScheduler::GetInstance()) {
+    InitializeTaskScheduler();
+    DCHECK(base::TaskScheduler::GetInstance());
+    initialized_task_scheduler_ = true;
+  }
+
   // We can't recover from failing to start the IO thread.
   base::Thread::Options thread_options(base::MessageLoop::TYPE_IO, 0);
+  thread_options.priority = io_thread_priority;
 #if defined(OS_ANDROID)
+  // TODO(reveman): Remove this in favor of setting it explicitly for each type
+  // of process.
   thread_options.priority = base::ThreadPriority::DISPLAY;
 #endif
   CHECK(io_thread_.StartWithOptions(thread_options));
@@ -60,15 +77,24 @@ ChildProcess::~ChildProcess() {
   // notice shutdown before the render process begins waiting for them to exit.
   shutdown_event_.Signal();
 
-  // Kill the main thread object before nulling child_process, since
-  // destruction code might depend on it.
   if (main_thread_) {  // null in unittests.
     main_thread_->Shutdown();
-    main_thread_.reset();
+    if (main_thread_->ShouldBeDestroyed()) {
+      main_thread_.reset();
+    } else {
+      // Leak the main_thread_. See a comment in
+      // RenderThreadImpl::ShouldBeDestroyed.
+      main_thread_.release();
+    }
   }
 
   g_lazy_tls.Pointer()->Set(NULL);
   io_thread_.Stop();
+
+  if (initialized_task_scheduler_) {
+    DCHECK(base::TaskScheduler::GetInstance());
+    base::TaskScheduler::GetInstance()->Shutdown();
+  }
 }
 
 ChildThreadImpl* ChildProcess::main_thread() {
@@ -81,13 +107,13 @@ void ChildProcess::set_main_thread(ChildThreadImpl* thread) {
 
 void ChildProcess::AddRefProcess() {
   DCHECK(!main_thread_.get() ||  // null in unittests.
-         base::MessageLoop::current() == main_thread_->message_loop());
+         main_thread_->message_loop()->task_runner()->BelongsToCurrentThread());
   ref_count_++;
 }
 
 void ChildProcess::ReleaseProcess() {
   DCHECK(!main_thread_.get() ||  // null in unittests.
-         base::MessageLoop::current() == main_thread_->message_loop());
+         main_thread_->message_loop()->task_runner()->BelongsToCurrentThread());
   DCHECK(ref_count_);
   if (--ref_count_)
     return;
@@ -95,6 +121,13 @@ void ChildProcess::ReleaseProcess() {
   if (main_thread_)  // null in unittests.
     main_thread_->OnProcessFinalRelease();
 }
+
+#if defined(OS_LINUX)
+void ChildProcess::SetIOThreadPriority(
+    base::ThreadPriority io_thread_priority) {
+  main_thread_->SetThreadPriority(io_thread_.GetThreadId(), io_thread_priority);
+}
+#endif
 
 ChildProcess* ChildProcess::current() {
   return g_lazy_tls.Pointer()->Get();
@@ -142,6 +175,11 @@ void ChildProcess::WaitForDebugger(const std::string& label) {
   pause();
 #endif  // defined(OS_ANDROID)
 #endif  // defined(OS_POSIX)
+}
+
+void ChildProcess::InitializeTaskScheduler() {
+  constexpr int kMaxThreads = 2;
+  base::TaskScheduler::CreateAndSetSimpleTaskScheduler(kMaxThreads);
 }
 
 }  // namespace content

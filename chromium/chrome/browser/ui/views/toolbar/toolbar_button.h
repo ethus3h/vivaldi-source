@@ -5,8 +5,9 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_BUTTON_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_BUTTON_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/button.h"
@@ -14,12 +15,16 @@
 
 class Profile;
 
+namespace test {
+class ToolbarButtonTestApi;
+}
+
 namespace ui {
 class MenuModel;
 }
 
 namespace views {
-class InkDropDelegate;
+class MenuModelAdapter;
 class MenuRunner;
 }
 
@@ -28,6 +33,9 @@ class MenuRunner;
 class ToolbarButton : public views::LabelButton,
                       public views::ContextMenuController {
  public:
+  // Padding inside the border (around the image).
+  static constexpr int kInteriorPadding = 6;
+
   // Takes ownership of the |model|, which can be null if no menu
   // is to be shown.
   ToolbarButton(Profile* profile,
@@ -52,10 +60,9 @@ class ToolbarButton : public views::LabelButton,
   void OnMouseCaptureLost() override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-  void GetAccessibleState(ui::AXViewState* state) override;
-  scoped_ptr<views::LabelButtonBorder> CreateDefaultBorder() const override;
-  void AddInkDropLayer(ui::Layer* ink_drop_layer) override;
-  void RemoveInkDropLayer(ui::Layer* ink_drop_layer) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  std::unique_ptr<views::LabelButtonBorder> CreateDefaultBorder()
+      const override;
 
   // views::ContextMenuController:
   void ShowContextMenuForView(View* source,
@@ -70,6 +77,11 @@ class ToolbarButton : public views::LabelButton,
   virtual void ShowDropDownMenu(ui::MenuSourceType source_type);
 
  private:
+  friend test::ToolbarButtonTestApi;
+
+  // Callback for MenuModelAdapter.
+  void OnMenuClosed();
+
   // views::LabelButton:
   const char* GetClassName() const override;
 
@@ -77,7 +89,7 @@ class ToolbarButton : public views::LabelButton,
   Profile* profile_;
 
   // The model that populates the attached menu.
-  scoped_ptr<ui::MenuModel> model_;
+  std::unique_ptr<ui::MenuModel> model_;
 
   // Indicates if menu is currently showing.
   bool menu_showing_;
@@ -85,11 +97,11 @@ class ToolbarButton : public views::LabelButton,
   // Y position of mouse when left mouse button is pressed.
   int y_position_on_lbuttondown_;
 
-  // Menu runner to display drop down menu.
-  scoped_ptr<views::MenuRunner> menu_runner_;
+  // The model adapter for the drop down menu.
+  std::unique_ptr<views::MenuModelAdapter> menu_model_adapter_;
 
-  // Controls the visual feedback for the button state.
-  scoped_ptr<views::InkDropDelegate> ink_drop_delegate_;
+  // Menu runner to display drop down menu.
+  std::unique_ptr<views::MenuRunner> menu_runner_;
 
   // A factory for tasks that show the dropdown context menu for the button.
   base::WeakPtrFactory<ToolbarButton> show_menu_factory_;

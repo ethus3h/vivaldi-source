@@ -4,17 +4,18 @@
 
 if (!is_android) {
   import("//build/config/features.gni")
+  import("//chrome/common/features.gni")
   import("//tools/grit/grit_rule.gni")
 }
 
 action("devtools_protocol_constants") {
   script = "devtools_protocol_constants_generator.py"
-
-  blink_protocol = "//third_party/WebKit/Source/devtools/protocol.json"
-  browser_protocol = "//content/browser/devtools/browser_protocol.json"
+  deps = [
+    "//third_party/WebKit/Source/core/inspector:protocol_version",
+  ]
+  blink_protocol = "$root_gen_dir/blink/core/inspector/protocol.json"
   inputs = [
     blink_protocol,
-    browser_protocol,
   ]
   outputs = [
     "$target_gen_dir/devtools_protocol_constants.cc",
@@ -24,15 +25,11 @@ action("devtools_protocol_constants") {
   args = [ "chrome" ]
   args += rebase_path(outputs, root_build_dir)
   args += [ rebase_path(blink_protocol, root_build_dir) ]
-  args += [ rebase_path(browser_protocol, root_build_dir) ]
 }
 
-# GYP version: chrome/chrome_debugger.gypi:debugger
 static_library("devtools") {
   # Note: new sources and deps should be generally added in (!is_android) below.
   sources = [
-    "chrome_devtools_manager_delegate.cc",
-    "chrome_devtools_manager_delegate.h",
     "devtools_network_conditions.cc",
     "devtools_network_conditions.h",
     "devtools_network_controller.cc",
@@ -58,7 +55,6 @@ static_library("devtools") {
     "//build/config/compiler:no_size_t_to_int_warning",
     "//build/config/compiler:wexit_time_destructors",
     "//build/config:precompiled_headers",
-    "//third_party/WebKit/public:debug_devtools",
   ]
 
   deps = [
@@ -66,6 +62,8 @@ static_library("devtools") {
     "//base",
     "//content/public/browser",
     "//net",
+    "//third_party/WebKit/public:features",
+    "//ui/events:dom_keycode_converter",
   ]
 
   if (!is_android) {
@@ -74,17 +72,16 @@ static_library("devtools") {
       "//chrome:resources",
       "//chrome:strings",
       "//chrome/app/theme:theme_resources",
+      "//chrome/common",
       "//chrome/common/extensions/api",
-      "//components/devtools_http_handler",
       "//net:http_server",
       "//skia",
       "//third_party/icu",
       "//third_party/leveldatabase",
-      "//third_party/libusb",
     ]
     sources += [
-      "chrome_devtools_discovery_provider.cc",
-      "chrome_devtools_discovery_provider.h",
+      "chrome_devtools_manager_delegate.cc",
+      "chrome_devtools_manager_delegate.h",
       "device/adb/adb_client_socket.cc",
       "device/adb/adb_client_socket.h",
       "device/adb/adb_device_provider.cc",
@@ -95,6 +92,8 @@ static_library("devtools") {
       "device/android_web_socket.cc",
       "device/devtools_android_bridge.cc",
       "device/devtools_android_bridge.h",
+      "device/devtools_device_discovery.cc",
+      "device/devtools_device_discovery.h",
       "device/port_forwarding_controller.cc",
       "device/port_forwarding_controller.h",
       "device/tcp_device_provider.cc",
@@ -107,6 +106,8 @@ static_library("devtools") {
       "device/usb/android_usb_socket.h",
       "device/usb/usb_device_provider.cc",
       "device/usb/usb_device_provider.h",
+      "devtools_auto_opener.cc",
+      "devtools_auto_opener.h",
       "devtools_contents_resizing_strategy.cc",
       "devtools_contents_resizing_strategy.h",
       "devtools_embedder_message_dispatcher.cc",
@@ -117,8 +118,6 @@ static_library("devtools") {
       "devtools_file_system_indexer.h",
       "devtools_file_watcher.cc",
       "devtools_file_watcher.h",
-      "devtools_target_impl.cc",
-      "devtools_target_impl.h",
       "devtools_targets_ui.cc",
       "devtools_targets_ui.h",
       "devtools_toggle_action.cc",
@@ -131,6 +130,8 @@ static_library("devtools") {
       "global_confirm_info_bar.h",
       "remote_debugging_server.cc",
       "remote_debugging_server.h",
+      "url_constants.cc",
+      "url_constants.h",
     ]
     if (enable_service_discovery) {
       sources += [

@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 
 #include "base/files/file.h"
@@ -27,12 +28,10 @@ class NativeFileUtilTest : public testing::Test {
   void SetUp() override { ASSERT_TRUE(data_dir_.CreateUniqueTempDir()); }
 
  protected:
-  base::FilePath Path() {
-    return data_dir_.path();
-  }
+  base::FilePath Path() { return data_dir_.GetPath(); }
 
   base::FilePath Path(const char* file_name) {
-    return data_dir_.path().AppendASCII(file_name);
+    return data_dir_.GetPath().AppendASCII(file_name);
   }
 
   bool FileExists(const base::FilePath& path) {
@@ -168,7 +167,7 @@ TEST_F(NativeFileUtilTest, CreateFileEnumerator) {
             NativeFileUtil::EnsureFileExists(path_121, &created));
 
   {
-    scoped_ptr<FileSystemFileUtil::AbstractFileEnumerator> enumerator =
+    std::unique_ptr<FileSystemFileUtil::AbstractFileEnumerator> enumerator =
         NativeFileUtil::CreateFileEnumerator(Path(), false);
     std::set<base::FilePath> set;
     set.insert(path_1);
@@ -180,9 +179,9 @@ TEST_F(NativeFileUtilTest, CreateFileEnumerator) {
   }
 
   {
-    scoped_ptr<FileSystemFileUtil::AbstractFileEnumerator> enumerator =
+    std::unique_ptr<FileSystemFileUtil::AbstractFileEnumerator> enumerator =
         NativeFileUtil::CreateFileEnumerator(Path(), true);
-        std::set<base::FilePath> set;
+    std::set<base::FilePath> set;
     set.insert(path_1);
     set.insert(path_2);
     set.insert(path_11);

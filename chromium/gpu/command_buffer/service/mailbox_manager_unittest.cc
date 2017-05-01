@@ -21,7 +21,7 @@ using namespace ::testing;
 
 static const SyncToken g_sync_token(gpu::CommandBufferNamespace::GPU_IO,
                                     0,
-                                    123,
+                                    gpu::CommandBufferId::FromUnsafeValue(123),
                                     0);
 
 class MailboxManagerTest : public GpuServiceTest {
@@ -51,7 +51,7 @@ class MailboxManagerTest : public GpuServiceTest {
   }
 
   void SetTarget(Texture* texture, GLenum target, GLuint max_level) {
-    texture->SetTarget(NULL, target, max_level);
+    texture->SetTarget(target, max_level);
   }
 
   void SetLevelInfo(Texture* texture,
@@ -65,8 +65,8 @@ class MailboxManagerTest : public GpuServiceTest {
                     GLenum format,
                     GLenum type,
                     const gfx::Rect& cleared_rect) {
-    texture->SetLevelInfo(NULL, target, level, internal_format, width, height,
-                          depth, border, format, type, cleared_rect);
+    texture->SetLevelInfo(target, level, internal_format, width, height, depth,
+                          border, format, type, cleared_rect);
   }
 
   void SetLevelCleared(Texture* texture,
@@ -80,9 +80,7 @@ class MailboxManagerTest : public GpuServiceTest {
     return texture->SetParameteri(feature_info_.get(), pname, param);
   }
 
-  void DestroyTexture(Texture* texture) {
-    delete texture;
-  }
+  void DestroyTexture(TextureBase* texture) { delete texture; }
 
   scoped_refptr<MailboxManager> manager_;
 
@@ -198,8 +196,8 @@ class MailboxManagerSyncTest : public MailboxManagerTest {
   void SetUp() override {
     MailboxManagerTest::SetUpWithSynchronizer();
     manager2_ = new MailboxManagerSync();
-    context_ = new gfx::GLContextStub();
-    surface_ = new gfx::GLSurfaceStub();
+    context_ = new gl::GLContextStub();
+    surface_ = new gl::GLSurfaceStub();
     context_->MakeCurrent(surface_.get());
   }
 
@@ -253,8 +251,8 @@ class MailboxManagerSyncTest : public MailboxManagerTest {
   }
 
   scoped_refptr<MailboxManager> manager2_;
-  scoped_refptr<gfx::GLContext> context_;
-  scoped_refptr<gfx::GLSurface> surface_;
+  scoped_refptr<gl::GLContext> context_;
+  scoped_refptr<gl::GLSurface> surface_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MailboxManagerSyncTest);
@@ -331,8 +329,8 @@ TEST_F(MailboxManagerSyncTest, ProduceConsumeResize) {
       .WillOnce(SetArgPointee<1>(kNewTextureId));
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* new_texture = manager2_->ConsumeTexture(name);
-  EXPECT_FALSE(new_texture == NULL);
+  Texture* new_texture = static_cast<Texture*>(manager2_->ConsumeTexture(name));
+  EXPECT_NE(nullptr, new_texture);
   EXPECT_NE(texture, new_texture);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
 
@@ -388,8 +386,8 @@ TEST_F(MailboxManagerSyncTest, ProduceConsumeBidirectional) {
   Mailbox name1 = Mailbox::Generate();
   Texture* texture2 = DefineTexture();
   Mailbox name2 = Mailbox::Generate();
-  Texture* new_texture1 = NULL;
-  Texture* new_texture2 = NULL;
+  TextureBase* new_texture1 = NULL;
+  TextureBase* new_texture2 = NULL;
 
   manager_->ProduceTexture(name1, texture1);
   manager2_->ProduceTexture(name2, texture2);
@@ -471,8 +469,8 @@ TEST_F(MailboxManagerSyncTest, ProduceAndClobber) {
       .WillOnce(SetArgPointee<1>(kNewTextureId));
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* new_texture = manager2_->ConsumeTexture(name);
-  EXPECT_FALSE(new_texture == NULL);
+  Texture* new_texture = static_cast<Texture*>(manager2_->ConsumeTexture(name));
+  EXPECT_NE(nullptr, new_texture);
   EXPECT_NE(texture, new_texture);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
 
@@ -505,7 +503,7 @@ TEST_F(MailboxManagerSyncTest, ProduceAndClobber) {
       .WillOnce(SetArgPointee<1>(kNewTextureId));
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_NEAREST, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* tmp_texture = manager2_->ConsumeTexture(name);
+  TextureBase* tmp_texture = manager2_->ConsumeTexture(name);
   EXPECT_NE(new_texture, tmp_texture);
   DestroyTexture(tmp_texture);
 
@@ -536,8 +534,8 @@ TEST_F(MailboxManagerSyncTest, ClearedStateSynced) {
       .WillOnce(SetArgPointee<1>(kNewTextureId));
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* new_texture = manager2_->ConsumeTexture(name);
-  EXPECT_FALSE(new_texture == NULL);
+  Texture* new_texture = static_cast<Texture*>(manager2_->ConsumeTexture(name));
+  EXPECT_NE(nullptr, new_texture);
   EXPECT_NE(texture, new_texture);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
   EXPECT_TRUE(texture->SafeToRenderFrom());
@@ -584,8 +582,8 @@ TEST_F(MailboxManagerSyncTest, SyncIncompleteTexture) {
   SetupUpdateTexParamExpectations(kNewTextureId, texture->min_filter(),
                                   texture->mag_filter(), texture->wrap_s(),
                                   texture->wrap_t());
-  Texture* new_texture = manager2_->ConsumeTexture(name);
-  ASSERT_TRUE(new_texture);
+  Texture* new_texture = static_cast<Texture*>(manager2_->ConsumeTexture(name));
+  EXPECT_NE(nullptr, new_texture);
   EXPECT_NE(texture, new_texture);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
   EXPECT_FALSE(new_texture->IsDefined());
@@ -632,7 +630,7 @@ TEST_F(MailboxManagerSyncTest, SharedThroughMultipleMailboxes) {
   manager2_->PullTextureUpdates(g_sync_token);
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* new_texture = manager2_->ConsumeTexture(name1);
+  TextureBase* new_texture = manager2_->ConsumeTexture(name1);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
 
   manager_->ProduceTexture(name2, texture);
@@ -670,7 +668,7 @@ TEST_F(MailboxManagerSyncTest, ProduceBothWays) {
       .WillOnce(SetArgPointee<1>(kNewTextureId));
   SetupUpdateTexParamExpectations(
       kNewTextureId, GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT);
-  Texture* new_texture = manager2_->ConsumeTexture(name);
+  TextureBase* new_texture = manager2_->ConsumeTexture(name);
   EXPECT_EQ(kNewTextureId, new_texture->service_id());
 
   // Clobber

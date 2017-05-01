@@ -32,13 +32,14 @@ CacheStorageBlobToDiskCache::~CacheStorageBlobToDiskCache() {
 void CacheStorageBlobToDiskCache::StreamBlobToCache(
     disk_cache::ScopedEntryPtr entry,
     int disk_cache_body_index,
-    const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
-    scoped_ptr<storage::BlobDataHandle> blob_data_handle,
+    net::URLRequestContextGetter* request_context_getter,
+    std::unique_ptr<storage::BlobDataHandle> blob_data_handle,
     const EntryAndBoolCallback& callback) {
   DCHECK(entry);
   DCHECK_LE(0, disk_cache_body_index);
   DCHECK(blob_data_handle);
   DCHECK(!blob_request_);
+  DCHECK(request_context_getter);
 
   if (!request_context_getter->GetURLRequestContext()) {
     callback.Run(std::move(entry), false /* success */);
@@ -58,8 +59,11 @@ void CacheStorageBlobToDiskCache::StreamBlobToCache(
   blob_request_->Start();
 }
 
-void CacheStorageBlobToDiskCache::OnResponseStarted(net::URLRequest* request) {
-  if (!request->status().is_success()) {
+void CacheStorageBlobToDiskCache::OnResponseStarted(net::URLRequest* request,
+                                                    int net_error) {
+  DCHECK_NE(net::ERR_IO_PENDING, net_error);
+
+  if (net_error != net::OK) {
     RunCallbackAndRemoveObserver(false);
     return;
   }
@@ -69,9 +73,11 @@ void CacheStorageBlobToDiskCache::OnResponseStarted(net::URLRequest* request) {
 
 void CacheStorageBlobToDiskCache::OnReadCompleted(net::URLRequest* request,
                                                   int bytes_read) {
-  if (!request->status().is_success()) {
-    RunCallbackAndRemoveObserver(false);
-    return;
+  if (bytes_read < 0) {
+    if (bytes_read != net::ERR_IO_PENDING) {
+      RunCallbackAndRemoveObserver(false);
+      return;
+    }
   }
 
   if (bytes_read == 0) {
@@ -113,10 +119,6 @@ void CacheStorageBlobToDiskCache::OnSSLCertificateError(
     bool fatal) {
   NOTREACHED();
 }
-void CacheStorageBlobToDiskCache::OnBeforeNetworkStart(net::URLRequest* request,
-                                                       bool* defer) {
-  NOTREACHED();
-}
 
 void CacheStorageBlobToDiskCache::OnContextShuttingDown() {
   DCHECK(blob_request_);
@@ -124,9 +126,8 @@ void CacheStorageBlobToDiskCache::OnContextShuttingDown() {
 }
 
 void CacheStorageBlobToDiskCache::ReadFromBlob() {
-  int bytes_read = 0;
-  bool done = blob_request_->Read(buffer_.get(), buffer_->size(), &bytes_read);
-  if (done)
+  int bytes_read = blob_request_->Read(buffer_.get(), buffer_->size());
+  if (bytes_read != net::ERR_IO_PENDING)
     OnReadCompleted(blob_request_.get(), bytes_read);
 }
 

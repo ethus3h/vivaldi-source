@@ -184,6 +184,9 @@ has_arabic_joining (hb_script_t script)
     case HB_SCRIPT_MANICHAEAN:
     case HB_SCRIPT_PSALTER_PAHLAVI:
 
+    /* Unicode-9.0 additions */
+    case HB_SCRIPT_ADLAM:
+
       return true;
 
     default:
@@ -227,12 +230,12 @@ data_destroy_use (void *data)
 enum syllable_type_t {
   independent_cluster,
   virama_terminated_cluster,
-  consonant_cluster,
-  vowel_cluster,
+  standard_cluster,
   number_joiner_terminated_cluster,
   numeral_cluster,
   symbol_cluster,
   broken_cluster,
+  non_cluster,
 };
 
 #include "hb-ot-shape-complex-use-machine.hh"
@@ -312,13 +315,13 @@ setup_topographical_masks (const hb_ot_shape_plan_t *plan,
     {
       case independent_cluster:
       case symbol_cluster:
+      case non_cluster:
 	/* These don't join.  Nothing to do. */
 	last_form = _NONE;
 	break;
 
       case virama_terminated_cluster:
-      case consonant_cluster:
-      case vowel_cluster:
+      case standard_cluster:
       case number_joiner_terminated_cluster:
       case numeral_cluster:
       case broken_cluster:
@@ -421,15 +424,14 @@ reorder_syllable (hb_buffer_t *buffer, unsigned int start, unsigned int end)
   /* Only a few syllable types need reordering. */
   if (unlikely (!(FLAG_SAFE (syllable_type) &
 		  (FLAG (virama_terminated_cluster) |
-		   FLAG (consonant_cluster) |
-		   FLAG (vowel_cluster) |
+		   FLAG (standard_cluster) |
 		   FLAG (broken_cluster) |
 		   0))))
     return;
 
   hb_glyph_info_t *info = buffer->info;
 
-#define BASE_FLAGS (FLAG (USE_B) | FLAG (USE_GB) | FLAG (USE_IV))
+#define BASE_FLAGS (FLAG (USE_B) | FLAG (USE_GB))
 
   /* Move things forward. */
   if (info[start].use_category() == USE_R && end - start > 1)
@@ -499,7 +501,7 @@ insert_dotted_circles (const hb_ot_shape_plan_t *plan HB_UNUSED,
     return;
 
   hb_glyph_info_t dottedcircle = {0};
-  if (!font->get_glyph (0x25CCu, 0, &dottedcircle.codepoint))
+  if (!font->get_nominal_glyph (0x25CCu, &dottedcircle.codepoint))
     return;
   dottedcircle.use_category() = hb_use_get_categories (0x25CC);
 
@@ -522,7 +524,7 @@ insert_dotted_circles (const hb_ot_shape_plan_t *plan HB_UNUSED,
       /* TODO Set glyph_props? */
 
       /* Insert dottedcircle after possible Repha. */
-      while (buffer->idx < buffer->len &&
+      while (buffer->idx < buffer->len && !buffer->in_error &&
 	     last_syllable == buffer->cur().syllable() &&
 	     buffer->cur().use_category() == USE_R)
         buffer->next_glyph ();
@@ -557,6 +559,47 @@ reorder (const hb_ot_shape_plan_t *plan,
 }
 
 static bool
+decompose_use (const hb_ot_shape_normalize_context_t *c,
+                hb_codepoint_t  ab,
+                hb_codepoint_t *a,
+                hb_codepoint_t *b)
+{
+  switch (ab)
+  {
+    /* Chakma:
+     * Special case where the Unicode decomp gives matras in the wrong order
+     * for cluster validation.
+     */
+    case 0x1112Eu : *a = 0x11127u; *b= 0x11131u; return true;
+    case 0x1112Fu : *a = 0x11127u; *b= 0x11132u; return true;
+
+    /*
+     * Decompose split matras that don't have Unicode decompositions.
+     */
+
+    /* Limbu */
+    case 0x1925u  : *a = 0x1920u; *b= 0x1923u; return true;
+    case 0x1926u  : *a = 0x1920u; *b= 0x1924u; return true;
+
+    /* Balinese */
+    case 0x1B3Cu  : *a = 0x1B42u; *b= 0x1B3Cu; return true;
+
+#if 0
+    /* Lepcha */
+    case 0x1C29u  : *a = no decomp, -> LEFT; return true;
+
+    /* Javanese */
+    case 0xA9C0u  : *a = no decomp, -> RIGHT; return true;
+
+    /* Sharada */
+    case 0x111BFu  : *a = no decomp, -> ABOVE; return true;
+#endif
+  }
+
+  return (bool) c->unicode->decompose (ab, a, b);
+}
+
+static bool
 compose_use (const hb_ot_shape_normalize_context_t *c,
 	     hb_codepoint_t  a,
 	     hb_codepoint_t  b,
@@ -580,9 +623,10 @@ const hb_ot_complex_shaper_t _hb_ot_complex_shaper_use =
   NULL, /* preprocess_text */
   NULL, /* postprocess_glyphs */
   HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
-  NULL, /* decompose */
+  decompose_use,
   compose_use,
   setup_masks_use,
-  HB_OT_SHAPE_ZERO_WIDTH_MARKS_NONE,
+  NULL, /* disable_otl */
+  HB_OT_SHAPE_ZERO_WIDTH_MARKS_BY_GDEF_EARLY,
   false, /* fallback_position */
 };

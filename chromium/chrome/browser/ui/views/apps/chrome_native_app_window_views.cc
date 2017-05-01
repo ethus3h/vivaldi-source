@@ -8,28 +8,31 @@
 #include <utility>
 
 #include "apps/ui/views/app_window_frame_view.h"
-#include "base/files/file_util.h"
 #include "base/macros.h"
-#include "base/path_service.h"
-#include "base/strings/sys_string_conversions.h"
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/views/extensions/extension_keybinding_registry_views.h"
-#include "chrome/browser/ui/views/frame/taskbar_decorator.h"
 #include "components/favicon/content/content_favicon_driver.h"
-#include "components/ui/zoom/page_zoom.h"
-#include "components/ui/zoom/zoom_controller.h"
-#include "content/public/browser/browser_thread.h"
-#include "ui/aura/window.h"
+#include "components/zoom/page_zoom.h"
+#include "components/zoom/zoom_controller.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
-#include "ui/wm/core/easy_resize_window_targeter.h"
-#include "chrome/browser/ui/browser_commands.h"
 
 #include "app/vivaldi_apptools.h"
+#include "base/files/file_util.h"
+#include "base/path_service.h"
+#include "base/strings/sys_string_conversions.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "content/public/browser/browser_thread.h"
 #include "ui/views/vivaldi_pin_shortcut.h"
+#include "ui/wm/core/easy_resize_window_targeter.h"
+
+#if !defined(OS_MACOSX)
+#include "ui/aura/window.h"
+#endif
 
 using extensions::AppWindow;
 
@@ -205,7 +208,7 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
   // of the accelerators will cause a crash. Note CHECK here because DCHECK
   // will not be noticed, as this could only be relevant on real hardware.
   CHECK(!is_kiosk_app_mode ||
-        ui_zoom::ZoomController::FromWebContents(web_view()->GetWebContents()));
+        zoom::ZoomController::FromWebContents(web_view()->GetWebContents()));
 
   for (std::map<ui::Accelerator, int>::const_iterator iter =
            accelerator_table.begin();
@@ -239,6 +242,7 @@ void ChromeNativeAppWindowViews::InitializePanelWindow(
 
   // When a panel is not docked it will be placed at a default origin in the
   // currently active target root window.
+  // TODO(afakhry): Remove Docked Windows in M58.
   bool use_default_bounds = create_params.state != ui::SHOW_STATE_DOCKED;
   // Sanitize initial origin reseting it in case it was not specified.
   using BoundsSpecification = AppWindow::BoundsSpecification;
@@ -260,23 +264,18 @@ ChromeNativeAppWindowViews::CreateStandardDesktopAppFrame() {
 
 void ChromeNativeAppWindowViews::UpdateEventTargeterWithInset() {
 #if !defined(OS_MACOSX)
-  // For non-Ash windows, install an easy resize window targeter, which ensures
-  // that the root window (not the app) receives mouse events on the edges.
-  if (chrome::GetHostDesktopTypeForNativeWindow(widget()->GetNativeWindow()) !=
-    chrome::HOST_DESKTOP_TYPE_ASH) {
-    bool is_maximized = IsMaximized();
-    aura::Window* window = widget()->GetNativeWindow();
-    int resize_inside = is_maximized ? 0 : 5;// frame->resize_inside_bounds_size();
-    gfx::Insets inset(
-      resize_inside, resize_inside, resize_inside, resize_inside);
-    // Add the EasyResizeWindowTargeter on the window, not its root window. The
-    // root window does not have a delegate, which is needed to handle the event
-    // in Linux.
-    scoped_ptr<ui::EventTargeter> old_eventtarget =
-      window->SetEventTargeter(scoped_ptr<ui::EventTargeter>(
-      new wm::EasyResizeWindowTargeter(window, inset, inset)));
-    delete old_eventtarget.release();
-  }
+  bool is_maximized = IsMaximized();
+  aura::Window* window = widget()->GetNativeWindow();
+  int resize_inside = is_maximized ? 0 : 5;// frame->resize_inside_bounds_size();
+  gfx::Insets inset(
+    resize_inside, resize_inside, resize_inside, resize_inside);
+  // Add the EasyResizeWindowTargeter on the window, not its root window. The
+  // root window does not have a delegate, which is needed to handle the event
+  // in Linux.
+  std::unique_ptr<ui::EventTargeter> old_eventtarget =
+    window->SetEventTargeter(std::unique_ptr<ui::EventTargeter>(
+    new wm::EasyResizeWindowTargeter(window, inset, inset)));
+  delete old_eventtarget.release();
 #endif
 }
 
@@ -361,16 +360,15 @@ bool ChromeNativeAppWindowViews::AcceleratorPressed(
       return true;
 
     case IDC_ZOOM_MINUS:
-      ui_zoom::PageZoom::Zoom(web_view()->GetWebContents(),
-                              content::PAGE_ZOOM_OUT);
+      zoom::PageZoom::Zoom(web_view()->GetWebContents(),
+                           content::PAGE_ZOOM_OUT);
       return true;
     case IDC_ZOOM_NORMAL:
-      ui_zoom::PageZoom::Zoom(web_view()->GetWebContents(),
-                              content::PAGE_ZOOM_RESET);
+      zoom::PageZoom::Zoom(web_view()->GetWebContents(),
+                           content::PAGE_ZOOM_RESET);
       return true;
     case IDC_ZOOM_PLUS:
-      ui_zoom::PageZoom::Zoom(web_view()->GetWebContents(),
-                              content::PAGE_ZOOM_IN);
+      zoom::PageZoom::Zoom(web_view()->GetWebContents(), content::PAGE_ZOOM_IN);
       return true;
     default:
       NOTREACHED() << "Unknown accelerator sent to app window.";
@@ -392,9 +390,9 @@ bool ChromeNativeAppWindowViews::IsFullscreenOrPending() const {
   return widget()->IsFullscreen();
 }
 
-void ChromeNativeAppWindowViews::UpdateShape(scoped_ptr<SkRegion> region) {
+void ChromeNativeAppWindowViews::UpdateShape(std::unique_ptr<SkRegion> region) {
   shape_ = std::move(region);
-  widget()->SetShape(shape() ? new SkRegion(*shape()) : nullptr);
+  widget()->SetShape(shape() ? base::MakeUnique<SkRegion>(*shape()) : nullptr);
   widget()->OnSizeConstraintsChanged();
 }
 

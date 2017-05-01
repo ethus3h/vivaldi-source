@@ -4,45 +4,47 @@
 
 #include "ash/shell/content/client/shell_browser_main_parts.h"
 
-#include "ash/ash_switches.h"
+#include "ash/common/login_status.h"
+#include "ash/common/material_design/material_design_controller.h"
+#include "ash/common/wm_shell.h"
 #include "ash/content/shell_content_state.h"
-#include "ash/desktop_background/desktop_background_controller.h"
 #include "ash/shell.h"
 #include "ash/shell/content/shell_content_state_impl.h"
+#include "ash/shell/example_app_list_presenter.h"
 #include "ash/shell/shell_delegate_impl.h"
 #include "ash/shell/window_watcher.h"
 #include "ash/shell_init_params.h"
-#include "ash/system/user/login_status.h"
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
+#include "chromeos/audio/cras_audio_handler.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_factory.h"
 #include "content/public/common/content_switches.h"
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_net_log.h"
+#include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "net/base/net_module.h"
+#include "ui/app_list/presenter/app_list.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/ui_base_paths.h"
 #include "ui/compositor/compositor.h"
-#include "ui/gfx/screen.h"
+#include "ui/display/screen.h"
 #include "ui/message_center/message_center.h"
 #include "ui/views/test/test_views_delegate.h"
 #include "ui/wm/core/wm_state.h"
 
 #if defined(USE_X11)
-#include "ui/events/devices/x11/touch_factory_x11.h"
-#endif
-
-#if defined(OS_CHROMEOS)
-#include "chromeos/audio/cras_audio_handler.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
+#include "ui/events/devices/x11/touch_factory_x11.h"  // nogncheck
 #endif
 
 namespace ash {
@@ -93,13 +95,13 @@ void ShellBrowserMainParts::PreMainMessageLoopStart() {
 }
 
 void ShellBrowserMainParts::PostMainMessageLoopStart() {
-#if defined(OS_CHROMEOS)
-  chromeos::DBusThreadManager::Initialize();
-#endif
+  chromeos::DBusThreadManager::Initialize(
+      chromeos::DBusThreadManager::PROCESS_ASH);
 }
 
 void ShellBrowserMainParts::ToolkitInitialized() {
-  wm_state_.reset(new wm::WMState);
+  ash::MaterialDesignController::Initialize();
+  wm_state_.reset(new ::wm::WMState);
 }
 
 void ShellBrowserMainParts::PreMainMessageLoopRun() {
@@ -116,35 +118,39 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   // g_browser_process.
   message_center::MessageCenter::Initialize();
 
-#if defined(OS_CHROMEOS)
   // Create CrasAudioHandler for testing since g_browser_process
   // is absent.
   chromeos::CrasAudioHandler::InitializeForTesting();
-#endif
+
+  bluez::BluezDBusManager::Initialize(nullptr, true /* use stub */);
 
   ShellContentState::SetInstance(
       new ShellContentStateImpl(browser_context_.get()));
-
+  ui::MaterialDesignController::Initialize();
   ash::ShellInitParams init_params;
   init_params.delegate = delegate_;
   init_params.context_factory = content::GetContextFactory();
+  init_params.context_factory_private = content::GetContextFactoryPrivate();
   init_params.blocking_pool = content::BrowserThread::GetBlockingPool();
   ash::Shell::CreateInstance(init_params);
-  ash::Shell::GetInstance()->CreateShelf();
-  ash::Shell::GetInstance()->UpdateAfterLoginStatusChange(user::LOGGED_IN_USER);
+  ash::WmShell::Get()->CreateShelfView();
+  ash::WmShell::Get()->UpdateAfterLoginStatusChange(LoginStatus::USER);
 
   window_watcher_.reset(new ash::shell::WindowWatcher);
-  gfx::Screen* screen = Shell::GetInstance()->GetScreen();
-  screen->AddObserver(window_watcher_.get());
+  display::Screen::GetScreen()->AddObserver(window_watcher_.get());
 
   ash::shell::InitWindowTypeLauncher();
+
+  // Initialize the example app list presenter.
+  example_app_list_presenter_ = base::MakeUnique<ExampleAppListPresenter>();
+  WmShell::Get()->app_list()->SetAppListPresenter(
+      example_app_list_presenter_->CreateInterfacePtrAndBind());
 
   ash::Shell::GetPrimaryRootWindow()->GetHost()->Show();
 }
 
 void ShellBrowserMainParts::PostMainMessageLoopRun() {
-  gfx::Screen* screen = Shell::GetInstance()->GetScreen();
-  screen->RemoveObserver(window_watcher_.get());
+  display::Screen::GetScreen()->RemoveObserver(window_watcher_.get());
 
   window_watcher_.reset();
   delegate_ = nullptr;
@@ -154,11 +160,7 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
   // g_browser_process.
   message_center::MessageCenter::Shutdown();
 
-#if defined(OS_CHROMEOS)
   chromeos::CrasAudioHandler::Shutdown();
-#endif
-
-  aura::Env::DeleteInstance();
 
   views_delegate_.reset();
 
@@ -170,7 +172,7 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
 }
 
 bool ShellBrowserMainParts::MainMessageLoopRun(int* result_code) {
-  base::MessageLoopForUI::current()->Run();
+  base::RunLoop().Run();
   return true;
 }
 

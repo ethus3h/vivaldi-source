@@ -7,13 +7,13 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/infobars/core/infobar_delegate.h"
@@ -29,7 +29,6 @@ class InfoBarManager;
 
 namespace translate {
 
-class TranslateClient;
 class TranslateDriver;
 class TranslateManager;
 
@@ -223,7 +222,7 @@ class TranslateInfoBarDelegate : public infobars::InfoBarDelegate {
   TranslateErrors::Type error_type_;
 
   // The translation related preferences.
-  scoped_ptr<TranslatePrefs> prefs_;
+  std::unique_ptr<TranslatePrefs> prefs_;
 
   // Whether the translation was triggered via a menu click vs automatically
   // (due to language detection, preferences...)

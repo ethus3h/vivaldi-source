@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.appmenu;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.res.TypedArray;
 import android.graphics.Point;
@@ -77,10 +78,13 @@ public class AppMenuHandler {
      * @return True, if the menu is shown, false, if menu is not shown, example reasons:
      *         the menu is not yet available to be shown, or the menu is already showing.
      */
+    // TODO(crbug.com/635567): Fix this properly.
+    @SuppressLint("ResourceType")
     public boolean showAppMenu(View anchorView, boolean startDragging) {
         if (!mDelegate.shouldShowAppMenu() || isAppMenuShowing()) return false;
         boolean isByPermanentButton = false;
 
+        int rotation = mActivity.getWindowManager().getDefaultDisplay().getRotation();
         if (anchorView == null) {
             // This fixes the bug where the bottom of the menu starts at the top of
             // the keyboard, instead of overlapping the keyboard as it should.
@@ -130,7 +134,6 @@ public class AppMenuHandler {
             appRect.right = mActivity.getWindow().getDecorView().getWidth();
             appRect.bottom = mActivity.getWindow().getDecorView().getHeight();
         }
-        int rotation = mActivity.getWindowManager().getDefaultDisplay().getRotation();
         Point pt = new Point();
         mActivity.getWindowManager().getDefaultDisplay().getSize(pt);
         mAppMenu.show(wrapper, anchorView, isByPermanentButton,

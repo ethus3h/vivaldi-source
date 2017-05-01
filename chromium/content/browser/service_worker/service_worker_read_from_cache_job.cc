@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_disk_cache.h"
@@ -34,7 +35,12 @@ ServiceWorkerReadFromCacheJob::ServiceWorkerReadFromCacheJob(
       resource_id_(resource_id),
       context_(context),
       version_(version),
-      weak_factory_(this) {}
+      weak_factory_(this) {
+  DCHECK(version_);
+  DCHECK(resource_type_ == RESOURCE_TYPE_SCRIPT ||
+         (resource_type_ == RESOURCE_TYPE_SERVICE_WORKER &&
+          version_->script_url() == request_->url()));
+}
 
 ServiceWorkerReadFromCacheJob::~ServiceWorkerReadFromCacheJob() {
 }
@@ -139,7 +145,6 @@ void ServiceWorkerReadFromCacheJob::StartAsync() {
       http_info_io_buffer_.get(),
       base::Bind(&ServiceWorkerReadFromCacheJob::OnReadInfoComplete,
                  weak_factory_.GetWeakPtr()));
-  SetStatus(net::URLRequestStatus(net::URLRequestStatus::IO_PENDING, 0));
 }
 
 const net::HttpResponseInfo* ServiceWorkerReadFromCacheJob::http_info() const {
@@ -161,12 +166,11 @@ void ServiceWorkerReadFromCacheJob::OnReadInfoComplete(int result) {
     return;
   }
   DCHECK_GE(result, 0);
-  SetStatus(net::URLRequestStatus());  // Clear the IO_PENDING status
   http_info_.reset(http_info_io_buffer_->http_info.release());
   if (is_range_request())
     SetupRangeResponse(http_info_io_buffer_->response_data_size);
   http_info_io_buffer_ = nullptr;
-  if (request_->url() == version_->script_url())
+  if (is_main_script())
     version_->SetMainScriptHttpResponseInfo(*http_info_);
   TRACE_EVENT_ASYNC_END1("ServiceWorker",
                          "ServiceWorkerReadFromCacheJob::ReadInfo",

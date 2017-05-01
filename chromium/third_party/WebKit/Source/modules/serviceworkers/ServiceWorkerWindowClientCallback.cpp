@@ -8,28 +8,32 @@
 #include "core/dom/DOMException.h"
 #include "modules/serviceworkers/ServiceWorkerError.h"
 #include "modules/serviceworkers/ServiceWorkerWindowClient.h"
+#include "wtf/PtrUtil.h"
 
 namespace blink {
 
-void NavigateClientCallback::onSuccess(WebPassOwnPtr<WebServiceWorkerClientInfo> clientInfo)
-{
-    if (!m_resolver->executionContext() || m_resolver->executionContext()->activeDOMObjectsAreStopped())
-        return;
-    m_resolver->resolve(ServiceWorkerWindowClient::take(m_resolver.get(), clientInfo.release()));
+void NavigateClientCallback::onSuccess(
+    std::unique_ptr<WebServiceWorkerClientInfo> clientInfo) {
+  if (!m_resolver->getExecutionContext() ||
+      m_resolver->getExecutionContext()->isContextDestroyed())
+    return;
+  m_resolver->resolve(ServiceWorkerWindowClient::take(
+      m_resolver.get(), WTF::wrapUnique(clientInfo.release())));
 }
 
-void NavigateClientCallback::onError(const WebServiceWorkerError& error)
-{
-    if (!m_resolver->executionContext() || m_resolver->executionContext()->activeDOMObjectsAreStopped())
-        return;
+void NavigateClientCallback::onError(const WebServiceWorkerError& error) {
+  if (!m_resolver->getExecutionContext() ||
+      m_resolver->getExecutionContext()->isContextDestroyed())
+    return;
 
-    if (error.errorType == WebServiceWorkerError::ErrorTypeNavigation)  {
-        ScriptState::Scope scope(m_resolver->scriptState());
-        m_resolver->reject(V8ThrowException::createTypeError(m_resolver->scriptState()->isolate(), error.message));
-        return;
-    }
+  if (error.errorType == WebServiceWorkerError::ErrorTypeNavigation) {
+    ScriptState::Scope scope(m_resolver->getScriptState());
+    m_resolver->reject(V8ThrowException::createTypeError(
+        m_resolver->getScriptState()->isolate(), error.message));
+    return;
+  }
 
-    m_resolver->reject(ServiceWorkerError::take(m_resolver.get(), error));
+  m_resolver->reject(ServiceWorkerError::take(m_resolver.get(), error));
 }
 
-} // namespace blink
+}  // namespace blink

@@ -4,36 +4,42 @@
 
 #include "app/vivaldi_apptools.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "components/web_cache/browser/web_cache_manager.h"
+#include "chrome/browser/ui/webui/site_settings_helper.h"
 #include "components/guest_view/browser/guest_view_event.h"
 #include "components/guest_view/browser/guest_view_manager.h"
+#include "components/security_state/content/content_utils.h"
+#include "components/security_state/core/security_state.h"
+#include "components/web_cache/browser/web_cache_manager.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/origin_util.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "extensions/browser/guest_view/web_view/web_view_constants.h"
 #include "extensions/browser/view_type_utils.h"
+#include "extensions/helper/vivaldi_init_helpers.h"
 #include "net/cert/x509_certificate.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "content/public/browser/cert_store.h"
 
-#ifdef VIVALDI_BUILD
-#include "base/prefs/pref_service.h"
-#include "chrome/browser/ssl/chrome_security_state_model_client.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/toolbar/toolbar_model_impl.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "extensions/api/extension_action_utils/extension_action_utils_api.h"
 #include "prefs/vivaldi_pref_names.h"
-#endif // VIVALDI_BUILD
+
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#endif
 
 #define ROCKER_GESTURES
 
@@ -46,12 +52,9 @@
 using content::WebContents;
 using guest_view::GuestViewEvent;
 using guest_view::GuestViewManager;
-using security_state::SecurityStateModel;
+using namespace security_state;
 using vivaldi::IsVivaldiApp;
 using vivaldi::IsVivaldiRunning;
-
-// TODO(andre@vivaldi.com) : Move this into some other space than global.
-extensions::WebViewGuest* s_current_webviewguest = NULL;
 
 namespace extensions {
 
@@ -71,54 +74,94 @@ ExtensionHostForWebContents::~ExtensionHostForWebContents() {
 
 namespace {
 
-#ifdef VIVALDI_BUILD
-static std::string SSLStateToString(SecurityStateModel::SecurityLevel status) {
+static std::string SSLStateToString(SecurityLevel status) {
   switch (status) {
-  case SecurityStateModel::NONE:
+  case NONE:
     // HTTP/no URL/user is editing
     return "none";
-  case SecurityStateModel::EV_SECURE:
+  case HTTP_SHOW_WARNING:
+    // HTTP, show a visible warning about the page's lack of security
+    return "http_show_warning";
+  case EV_SECURE:
     // HTTPS with valid EV cert
     return "secure_with_ev";
-  case SecurityStateModel::SECURE:
+  case SECURE:
     // HTTPS (non-EV)
     return "secure_no_ev";
-  case SecurityStateModel::SECURITY_WARNING:
+  case SECURITY_WARNING:
     // HTTPS, but unable to check certificate revocation status or with insecure
     // content on the page
     return "security_warning";
-  case SecurityStateModel::SECURITY_POLICY_WARNING:
+  case SECURE_WITH_POLICY_INSTALLED_CERT:
     // HTTPS, but the certificate verification chain is anchored on a certificate
     // that was installed by the system administrator
     return "security_policy_warning";
-  case SecurityStateModel::SECURITY_ERROR:
+  case DANGEROUS:
     // Attempted HTTPS and failed, page not authenticated
     return "security_error";
   default:
-    //fallthrough
+    // fallthrough
     break;
   }
-  NOTREACHED() << "Unknown SecurityStateModel::SecurityLevel";
+  NOTREACHED() << "Unknown SecurityLevel";
   return "unknown";
 }
 
-static std::string TabMediaStateToString(TabMediaState status) {
+static std::string TabAlertStateToString(TabAlertState status) {
   switch (status) {
-  case TAB_MEDIA_STATE_NONE:
+  case TabAlertState::NONE:
     return "none";
-  case TAB_MEDIA_STATE_RECORDING:
+  case TabAlertState::MEDIA_RECORDING:
     return "recording";
-  case TAB_MEDIA_STATE_CAPTURING:
+  case TabAlertState::TAB_CAPTURING:
     return "capturing";
-  case TAB_MEDIA_STATE_AUDIO_PLAYING:
+  case TabAlertState::AUDIO_PLAYING:
     return "playing";
-  case TAB_MEDIA_STATE_AUDIO_MUTING:
+  case TabAlertState::AUDIO_MUTING:
     return "muting";
+  case TabAlertState::BLUETOOTH_CONNECTED:
+    return "bluetooth";
+  case TabAlertState::USB_CONNECTED:
+    return "usb";
   }
-  NOTREACHED() << "Unknown TabMediaState Status.";
+  NOTREACHED() << "Unknown TabAlertState Status.";
   return "unknown";
 }
-#endif //VIVALDI_BUILD
+
+static std::string
+ContentSettingsTypeToString(ContentSettingsType content_type) {
+  // Note there are more types, but these are the ones in
+  // ContentSettingSimpleBubbleModel. Also note that some of these will be moved
+  // elsewhere soon, based on comments in Chromium-code.
+  switch (content_type) {
+  case CONTENT_SETTINGS_TYPE_COOKIES:
+    return "cookies";
+  case CONTENT_SETTINGS_TYPE_IMAGES:
+    return "images";
+  case CONTENT_SETTINGS_TYPE_JAVASCRIPT:
+    return "javascript";
+  case CONTENT_SETTINGS_TYPE_PLUGINS:
+      return "plugins";
+  case CONTENT_SETTINGS_TYPE_POPUPS:
+      return "popups";
+  case CONTENT_SETTINGS_TYPE_GEOLOCATION:
+      return "location";
+  case CONTENT_SETTINGS_TYPE_MIXEDSCRIPT:
+      return "mixed-script";
+  case CONTENT_SETTINGS_TYPE_PROTOCOL_HANDLERS:
+      return "register-protocol-handler";
+  case CONTENT_SETTINGS_TYPE_PPAPI_BROKER:
+      return "ppapi-broker";
+  case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+      return "multiple-automatic-downloads";
+  case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      return "midi-sysex";
+  default:
+      //fallthrough
+      break;
+  }
+  return "unknown";
+}
 
 } // namespace
 
@@ -129,7 +172,7 @@ WebContents::CreateParams WebViewGuest::GetWebContentsCreateParams(
   // partition, we should use the same SiteInstance so the existing tag and
   // the new tag can script each other.
   auto guest_view_manager = GuestViewManager::FromBrowserContext(context);
-  content::SiteInstance* guest_site_instance =
+  scoped_refptr<content::SiteInstance> guest_site_instance =
       guest_view_manager ? guest_view_manager->GetGuestSiteInstance(site)
                          : nullptr;
   if (!guest_site_instance) {
@@ -152,24 +195,26 @@ void WebViewGuest::ExtendedLoadProgressChanged(WebContents* source,
                                                double loaded_bytes,
                                                int loaded_elements,
                                                int total_elements) {
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->SetString(guest_view::kUrl, web_contents()->GetURL().spec());
   args->SetDouble(webview::kProgress, progress);
   args->SetDouble(webview::kLoadedBytes, loaded_bytes);
   args->SetInteger(webview::kLoadedElements, loaded_elements);
   args->SetInteger(webview::kTotalElements, total_elements);
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventLoadProgress, std::move(args)));
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventLoadProgress, std::move(args))));
 }
 
 // Initialize listeners (cannot do it in constructor as RenderViewHost not ready.)
 void WebViewGuest::InitListeners() {
   content::RenderViewHost* render_view_host =
           web_contents()->GetRenderViewHost();
+
+
   if (render_view_host && current_host_ != render_view_host) {
     // Add mouse event listener, only one for every new render_view_host
-    render_view_host->GetWidget()->AddMouseEventCallback(
-          base::Bind(&WebViewGuest::OnMouseEvent, base::Unretained(this)));
+    mouseevent_callback_ = base::Bind(&WebViewGuest::OnMouseEvent, base::Unretained(this));
+    render_view_host->GetWidget()->AddMouseEventCallback(mouseevent_callback_);
     current_host_ = render_view_host;
   }
 }
@@ -177,7 +222,7 @@ void WebViewGuest::InitListeners() {
 void WebViewGuest::ToggleFullscreenModeForTab(
     content::WebContents* web_contents,
     bool enter_fullscreen) {
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->SetBoolean("enterFullscreen", enter_fullscreen);
 
   bool state_changed = enter_fullscreen != is_fullscreen_;
@@ -185,10 +230,23 @@ void WebViewGuest::ToggleFullscreenModeForTab(
 
   extensions::AppWindow* app_win = GetAppWindow();
   if (app_win) {
-
     extensions::NativeAppWindow* native_app_window = app_win->GetBaseWindow();
     ui::WindowShowState current_window_state =
         native_app_window->GetRestoredState();
+#if defined(USE_AURA)
+    PrefService *pref_service =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext())
+        ->GetPrefs();
+    bool hide_cursor =
+        pref_service->GetBoolean(vivaldiprefs::kHideMouseCursorInFullscreen);
+    if (hide_cursor && enter_fullscreen) {
+      aura::Window *window =
+          static_cast<aura::Window *>(web_contents->GetNativeView());
+      cursor_hider_.reset(new CursorHider(window->GetRootWindow()));
+    } else {
+      cursor_hider_.reset(nullptr);
+    }
+#endif // USE_AURA
 
     if (enter_fullscreen) {
       window_state_prior_to_fullscreen_ = current_window_state;
@@ -216,8 +274,8 @@ void WebViewGuest::ToggleFullscreenModeForTab(
     }
   }
   if (state_changed) {
-    DispatchEventToView(
-        new GuestViewEvent(webview::kEventOnFullscreen, std::move(args)));
+    DispatchEventToView(base::WrapUnique(
+        new GuestViewEvent(webview::kEventOnFullscreen, std::move(args))));
   }
 }
 
@@ -231,7 +289,8 @@ void WebViewGuest::ShowValidationMessage(content::WebContents *web_contents,
 }
 
 void WebViewGuest::HideValidationMessage(content::WebContents* web_contents) {
-  validation_message_bubble_.reset();
+  if (validation_message_bubble_)
+    validation_message_bubble_->CloseValidationMessage();
 }
 
 void WebViewGuest::MoveValidationMessage(content::WebContents *web_contents,
@@ -269,11 +328,6 @@ void WebViewGuest::SetVisible(bool is_visible) {
     }
   }
 
-  // NOTE(andre@vivaldi.com): Note that this assume we only have one visible
-  // VivaldiViewGuest.
-  if (is_visible)
-    s_current_webviewguest = this;
-
 }
 
 bool WebViewGuest::IsVisible() {
@@ -299,7 +353,6 @@ extensions::AppWindow* WebViewGuest::GetAppWindow() {
 }
 
 void WebViewGuest::ShowPageInfo(gfx::Point pos) {
-#ifdef VIVALDI_BUILD
   content::NavigationController& controller =
     web_contents()->GetController();
   const content::NavigationEntry* activeEntry = controller.GetActiveEntry();
@@ -308,39 +361,44 @@ void WebViewGuest::ShowPageInfo(gfx::Point pos) {
   }
 
   const GURL url = controller.GetActiveEntry()->GetURL();
-
-  const ChromeSecurityStateModelClient *security_info =
-      ChromeSecurityStateModelClient::FromWebContents(web_contents());
+  auto security_info = security_state::GetVisibleSecurityState(web_contents());
   DCHECK(security_info);
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
 
-  if (browser->window())
-    browser->window()->VivaldiShowWebsiteSettingsAt(
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
-      web_contents(), url, security_info->GetSecurityInfo(), pos);
+  // Happens for WebContents not in a tabstrip.
+  if (!browser) {
+    browser = chrome::FindLastActiveWithProfile(profile);
+  }
 
-#endif // VIVALDI_BUILD
+  if (browser->window()) {
+    security_state::SecurityInfo security_state;
+    security_state::GetSecurityInfo(std::move(security_info),
+        false,
+        base::Bind(&content::IsOriginSecure),
+        &security_state);
+    browser->window()->VivaldiShowWebsiteSettingsAt(profile, web_contents(),
+                                                    url, security_state, pos);
+  }
 }
 
-#ifdef VIVALDI_BUILD
-void WebViewGuest::UpdateMediaState(TabMediaState state) {
+void WebViewGuest::UpdateMediaState(TabAlertState state) {
   if (state != media_state_) {
-    scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+    std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
 
-    args->SetString("activeMediaType", TabMediaStateToString(state));
+    args->SetString("activeMediaType", TabAlertStateToString(state));
 
-    DispatchEventToView(
-        new GuestViewEvent(webview::kEventMediaStateChanged, std::move(args)));
+    DispatchEventToView(base::WrapUnique(
+        new GuestViewEvent(webview::kEventMediaStateChanged, std::move(args))));
   }
   media_state_ = state;
 }
-#endif // VIVALDI_BUILD
 
 void WebViewGuest::NavigationStateChanged(
     content::WebContents* source,
     content::InvalidateTypes changed_flags) {
-#ifdef VIVALDI_BUILD
-  UpdateMediaState(chrome::GetTabMediaStateForContents(web_contents()));
+  UpdateMediaState(chrome::GetTabAlertStateForContents(web_contents()));
 
   // TODO(gisli):  This would normally be done in the browser, but until we get
   // Vivaldi browser object we do it here (as we did remove the webcontents
@@ -350,7 +408,6 @@ void WebViewGuest::NavigationStateChanged(
     static_cast<content::WebContentsDelegate*>(browser)
         ->NavigationStateChanged(web_contents(), changed_flags);
   }
-#endif // VIVALDI_BUILD
 }
 
 bool WebViewGuest::EmbedsFullscreenWidget() const {
@@ -363,16 +420,17 @@ void WebViewGuest::SetIsFullscreen(bool is_fullscreen) {
   is_fullscreen_ = is_fullscreen;
 }
 
-void WebViewGuest::VisibleSSLStateChanged(const WebContents* source) {
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
-#ifdef VIVALDI_BUILD
-  const ChromeSecurityStateModelClient *security_model =
-      ChromeSecurityStateModelClient::FromWebContents(source);
-  if (!security_model)
-    return;
+void WebViewGuest::VisibleSecurityStateChanged(WebContents* source) {
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  auto security_info = security_state::GetVisibleSecurityState(web_contents());
 
-  SecurityStateModel::SecurityLevel current_level =
-    security_model->GetSecurityInfo().security_level;
+  security_state::SecurityInfo security_state;
+  security_state::GetSecurityInfo(std::move(security_info),
+    false,
+    base::Bind(&content::IsOriginSecure),
+    &security_state);
+  SecurityLevel current_level =
+      security_state.security_level;
   args->SetString("SSLState", SSLStateToString(current_level));
 
   content::NavigationController& controller =
@@ -380,9 +438,7 @@ void WebViewGuest::VisibleSSLStateChanged(const WebContents* source) {
   content::NavigationEntry* entry = controller.GetVisibleEntry();
   if (entry) {
 
-    scoped_refptr<net::X509Certificate> cert;
-    content::CertStore::GetInstance()->RetrieveCert(entry->GetSSL().cert_id,
-                                                    &cert);
+    scoped_refptr<net::X509Certificate> cert(security_state.certificate);
 
     // EV are required to have an organization name and country.
     if (cert.get() && (!cert.get()->subject().organization_names.empty() &&
@@ -395,19 +451,15 @@ void WebViewGuest::VisibleSSLStateChanged(const WebContents* source) {
     }
 
   }
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventSSLStateChanged, std::move(args)));
-#endif // VIVALDI_BUILD
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventSSLStateChanged, std::move(args))));
 }
 
-#ifdef VIVALDI_BUILD
-//vivaldi addition:
 bool WebViewGuest::GetMousegesturesEnabled() {
   PrefService *pref_service = Profile::FromBrowserContext(
     web_contents()->GetBrowserContext())->GetPrefs();
   return pref_service->GetBoolean(vivaldiprefs::kMousegesturesEnabled);
 }
-#endif //VIVALDI_BUILD
 
 bool WebViewGuest::IsRockerGesturesEnabled() const {
   PrefService* pref_service = Profile::FromBrowserContext(
@@ -420,49 +472,49 @@ bool WebViewGuest::OnMouseEvent(const blink::WebMouseEvent& mouse_event) {
 #ifdef ROCKER_GESTURES
   if (IsRockerGesturesEnabled()) {
     if (has_left_mousebutton_down_ &&
-        mouse_event.type == blink::WebInputEvent::MouseUp &&
-        mouse_event.button == blink::WebMouseEvent::ButtonLeft) {
+        mouse_event.type() == blink::WebInputEvent::MouseUp &&
+        mouse_event.button == blink::WebMouseEvent::Button::Left) {
       has_left_mousebutton_down_ = false;
     }
-    else if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-        mouse_event.button == blink::WebMouseEvent::ButtonLeft) {
+    else if (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+        mouse_event.button == blink::WebMouseEvent::Button::Left) {
       has_left_mousebutton_down_ = true;
     }
 
     if (has_right_mousebutton_down_ &&
-        mouse_event.type == blink::WebInputEvent::MouseUp &&
-        mouse_event.button == blink::WebMouseEvent::ButtonRight) {
+        mouse_event.type() == blink::WebInputEvent::MouseUp &&
+        mouse_event.button == blink::WebMouseEvent::Button::Right) {
       has_right_mousebutton_down_ = false;
     }
-    else if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-        mouse_event.button == blink::WebMouseEvent::ButtonRight) {
+    else if (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+        mouse_event.button == blink::WebMouseEvent::Button::Right) {
       has_right_mousebutton_down_ = true;
     }
 
-    if (mouse_event.button == blink::WebMouseEvent::ButtonNone) {
+    if (mouse_event.button == blink::WebMouseEvent::Button::NoButton) {
       has_right_mousebutton_down_ = false;
       has_left_mousebutton_down_ = false;
     }
 
     if (has_left_mousebutton_down_ &&
-        (mouse_event.type == blink::WebInputEvent::MouseDown &&
-        mouse_event.button == blink::WebMouseEvent::ButtonRight)) {
+        (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+        mouse_event.button == blink::WebMouseEvent::Button::Right)) {
       eat_next_right_mouseup_ = true;
       Go(1);
       return true;
     }
 
     if (has_right_mousebutton_down_ &&
-        (mouse_event.type == blink::WebInputEvent::MouseDown &&
-        mouse_event.button == blink::WebMouseEvent::ButtonLeft)) {
+        (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+        mouse_event.button == blink::WebMouseEvent::Button::Left)) {
       Go(-1);
       eat_next_right_mouseup_ = true;
       return true;
     }
 
     if (eat_next_right_mouseup_ &&
-        mouse_event.type == blink::WebInputEvent::MouseUp &&
-        mouse_event.button == blink::WebMouseEvent::ButtonRight) {
+        mouse_event.type() == blink::WebInputEvent::MouseUp &&
+        mouse_event.button == blink::WebMouseEvent::Button::Right) {
       eat_next_right_mouseup_ = false;
       return true;
     }
@@ -474,112 +526,71 @@ bool WebViewGuest::OnMouseEvent(const blink::WebMouseEvent& mouse_event) {
     return false;
   }
 
-  if (IsVivaldiRunning() &&
-      mouse_event.type == blink::WebInputEvent::MouseMove &&
-      mouse_event.type != blink::WebInputEvent::MouseDown &&
-      gesture_state_ == GestureStateRecording) {
-    // recording a gesture when the mouse is not down does not make sense
-    gesture_state_ = GestureStateNone;
-  }
-
   // Record the gesture
-  if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-    mouse_event.button == blink::WebMouseEvent::ButtonRight &&
-    !(mouse_event.modifiers & blink::WebInputEvent::LeftButtonDown) &&
-    gesture_state_ == GestureStateNone) {
-    gesture_state_ = GestureStateRecording;
-    gesture_direction_candidate_x_ = x_ = mouse_event.x;
-    gesture_direction_candidate_y_ = y_ = mouse_event.y;
-    gesture_direction_ = GestureDirectionNONE;
-    gesture_data_ = 0;
+  if (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+    mouse_event.button == blink::WebMouseEvent::Button::Right &&
+    !(mouse_event.modifiers() & blink::WebInputEvent::LeftButtonDown) &&
+    !gesture_recording_) {
+    gesture_recording_ = true;
+    mousedown_x_ = mouse_event.x;
+    mousedown_y_ = mouse_event.y;
+    fire_context_menu_ = true;
     return true;
-  } else if (gesture_state_ == GestureStateRecording) {
-    if (mouse_event.type == blink::WebInputEvent::MouseMove ||
-      mouse_event.type == blink::WebInputEvent::MouseUp) {
-      int dx = mouse_event.x - gesture_direction_candidate_x_;
-      int dy = mouse_event.y - gesture_direction_candidate_y_;
-      GestureDirection candidate_direction;
-      // Find current direction from last candidate location.
-      if (abs(dx) > abs(dy))
-        candidate_direction =
-            dx > 0 ? GestureDirectionRight : GestureDirectionLeft;
-      else // abs(dx) <= abs(dy)
-        candidate_direction =
-            dy > 0 ? GestureDirectionDown : GestureDirectionUp;
+  } else if (gesture_recording_ &&
+      (mouse_event.type() == blink::WebInputEvent::MouseMove ||
+      mouse_event.type() == blink::WebInputEvent::MouseUp)) {
 
-      if (candidate_direction == gesture_direction_) {
-        // The mouse is still moving in an overall direction of the last gesture
-        // direction, update the candidate location.
-        gesture_direction_candidate_x_ = mouse_event.x;
-        gesture_direction_candidate_y_ = mouse_event.y;
-      } else if (abs(dx) >= 5 || abs(dy) >= 5) {
-        gesture_data_ = 0x1; // no more info needed since mouse gestures are
-                             // handled by javascript
-      }
+    int dx = mouse_event.x - mousedown_x_;
+    int dy = mouse_event.y - mousedown_y_;
+
+    // If we went over the 5px threshold to cancel the context menu,
+    // the flag is set. It persists if we go under the threshold by
+    // moving you mouse into the original coords, which is expected.
+    if (abs(dx) >= 5 || abs(dy) >= 5) {
+      fire_context_menu_ = false;
     }
 
-    // Map a gesture to an action
-    if (mouse_event.type == blink::WebInputEvent::MouseUp &&
-      mouse_event.button == blink::WebMouseEvent::ButtonRight) {
+    // Copy event and fire
+    if (mouse_event.type() == blink::WebInputEvent::MouseUp &&
+      mouse_event.button == blink::WebMouseEvent::Button::Right) {
       blink::WebMouseEvent event_copy(mouse_event);
       content::RenderViewHost *render_view_host =
           web_contents()->GetRenderViewHost();
-      // At this point we may be sending events that could look like new
-      // gestures, don't consume them.
-      gesture_state_ = GestureStateBlocked;
-      switch (gesture_data_) {
-      case 0: // No sufficient movement
-        // Send the originally-culled right mouse down at original coords
-        event_copy.type = blink::WebInputEvent::MouseDown;
-        event_copy.windowX -= (mouse_event.x - x_);
-        event_copy.windowY -= (mouse_event.y - y_);
-        event_copy.x = x_;
-        event_copy.y = y_;
-        render_view_host->GetWidget()->ForwardMouseEvent(event_copy);
-        break;
-      default:
-        //Unknown gesture, don't do anything.
-        break;
-      }
-      gesture_state_ = GestureStateNone;
-      return gesture_data_ != 0;
-    }
-    else if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-      mouse_event.button == blink::WebMouseEvent::ButtonLeft) {
-      gesture_state_ = GestureStateNone;
-    }
-  }
-  /*if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-    mouse_event.button == blink::WebMouseEvent::ButtonLeft &&
-    (mouse_event.modifiers & blink::WebInputEvent::RightButtonDown)) {
-    if (mouse_event.modifiers & blink::WebInputEvent::ShiftKey)
-      // Rewind
-      ;
-    else
-      Go(-1);
-    return true;
-  }
-  if (mouse_event.type == blink::WebInputEvent::MouseDown &&
-    mouse_event.button == blink::WebMouseEvent::ButtonRight &&
-    (mouse_event.modifiers & blink::WebInputEvent::LeftButtonDown)) {
-    if (mouse_event.modifiers & blink::WebInputEvent::ShiftKey)
-      // Fast-forward
-      ;
-    else
-      Go(1);
-    return true;
-  }*/
-#endif // MOUSE_GESTURES
 
+      if (fire_context_menu_) {
+        // Send the originally-culled right mouse down at original coords
+        event_copy.setType(blink::WebInputEvent::MouseDown);
+        event_copy.windowX -= (mouse_event.x - mousedown_x_);
+        event_copy.windowY -= (mouse_event.y - mousedown_y_);
+        event_copy.x = mousedown_x_;
+        event_copy.y = mousedown_y_;
+        render_view_host->GetWidget()->ForwardMouseEvent(event_copy);
+      }
+
+      gesture_recording_ = false;
+      return fire_context_menu_;
+    }
+    else if (mouse_event.type() == blink::WebInputEvent::MouseDown &&
+      mouse_event.button == blink::WebMouseEvent::Button::Left) {
+      fire_context_menu_ = true;
+      gesture_recording_ = false;
+    }
+
+    if ((mouse_event.modifiers() & blink::WebInputEvent::RightButtonDown) ==
+        0) {
+      gesture_recording_ = false;
+    }
+  }
+#endif // MOUSE_GESTURES
   return false;
 }
 
 void WebViewGuest::UpdateTargetURL(content::WebContents *source,
                                    const GURL &url) {
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->SetString(webview::kNewURL, url.spec());
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventTargetURLChanged, std::move(args)));
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventTargetURLChanged, std::move(args))));
 }
 
 void WebViewGuest::CreateSearch(const base::ListValue & search) {
@@ -594,30 +605,73 @@ void WebViewGuest::CreateSearch(const base::ListValue & search) {
     return;
   }
 
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->SetString(webview::kNewSearchName, keyword);
   args->SetString(webview::kNewSearchUrl, url);
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventCreateSearch, std::move(args)));
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventCreateSearch, std::move(args))));
 }
 
 void WebViewGuest::PasteAndGo(const base::ListValue & search) {
   std::string clipBoardText;
+  std::string pasteTarget;
+  std::string modifiers;
 
   if (!search.GetString(0, &clipBoardText)) {
     NOTREACHED();
     return;
   }
+  if (!search.GetString(1, &pasteTarget)) {
+    NOTREACHED();
+    return;
+  }
+  if (!search.GetString(2, &modifiers)) {
+    NOTREACHED();
+    return;
+  }
 
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->SetString(webview::kClipBoardText, clipBoardText);
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventPasteAndGo, std::move(args)));
+  args->SetString(webview::kPasteTarget, pasteTarget);
+  args->SetString(webview::kModifiers, modifiers);
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventPasteAndGo, std::move(args))));
 }
 
-void WebViewGuest::SetWebContentsWasInitiallyGuest(bool born_guest) {
-  webcontents_was_created_as_guest_ = born_guest;
+void WebViewGuest::SimpleAction(const base::ListValue & list) {
+  std::string command;
+  std::string text;
+  std::string url;
+  std::string modifiers;
+
+  if (!list.GetString(0, &command)) {
+    NOTREACHED();
+    return;
+  }
+  if (!list.GetString(1, &text)) {
+    NOTREACHED();
+    return;
+  }
+  if (!list.GetString(2, &url)) {
+    NOTREACHED();
+    return;
+  }
+  if (!list.GetString(3, &modifiers)) {
+    NOTREACHED();
+    return;
+  }
+
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  args->SetString(webview::kGenCommand, command);
+  args->SetString(webview::kGenText, text);
+  args->SetString(webview::kGenUrl, url);
+  args->SetString(webview::kModifiers, modifiers);
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventSimpleAction, std::move(args))));
 }
+
+
+
 
 void WebViewGuest::ParseNewWindowUserInput(const std::string& user_input,
                                            int& window_id,
@@ -650,15 +704,12 @@ void WebViewGuest::ParseNewWindowUserInput(const std::string& user_input,
 void WebViewGuest::AddGuestToTabStripModel(WebViewGuest* guest,
                                            int windowId,
                                            bool activePage) {
-#ifdef VIVALDI_BUILD
   Browser* browser = chrome::FindBrowserWithID(windowId);
 
   if (!browser || !browser->window()) {
     // TODO(gisli@vivaldi.com): Error message?
     return;
   }
-
-  guest->SetWebContentsWasInitiallyGuest(true);
 
   TabStripModel* tab_strip = browser->tab_strip_model();
 
@@ -680,8 +731,9 @@ void WebViewGuest::AddGuestToTabStripModel(WebViewGuest* guest,
     add_types |= TabStripModel::ADD_PINNED;
   chrome::NavigateParams navigate_params(
     browser, guest->web_contents());
-  navigate_params.disposition =
-    active ? NEW_FOREGROUND_TAB : NEW_BACKGROUND_TAB;
+  navigate_params.disposition = active ?
+      WindowOpenDisposition::NEW_FOREGROUND_TAB :
+      WindowOpenDisposition::NEW_BACKGROUND_TAB;
   navigate_params.tabstrip_index = index;
   navigate_params.tabstrip_add_types = add_types;
   navigate_params.source_contents = web_contents();
@@ -692,18 +744,16 @@ void WebViewGuest::AddGuestToTabStripModel(WebViewGuest* guest,
 
   if (navigate_params.target_contents) {
     navigate_params.target_contents->Send(new ChromeViewMsg_SetWindowFeatures(
-        navigate_params.target_contents->GetRoutingID(),
+        navigate_params.target_contents->GetRenderViewHost()->GetRoutingID(),
         blink::WebWindowFeatures()));
   }
-
-#endif //VIVALDI_BUILD
 }
 
 bool WebViewGuest::RequestPageInfo(const GURL& url) {
-  scoped_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
   args->Set(webview::kTargetURL, new base::StringValue(url.spec()));
-  DispatchEventToView(
-      new GuestViewEvent(webview::kEventRequestPageInfo, std::move(args)));
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventRequestPageInfo, std::move(args))));
   return true;
 }
 
@@ -754,4 +804,92 @@ void WebViewGuest::CreateExtensionHost(const std::string& extension_id) {
 void WebViewGuest::SetExtensionHost(const std::string& extensionhost) {
 }
 
+blink::WebSecurityStyle WebViewGuest::GetSecurityStyle(
+    WebContents* contents,
+    content::SecurityStyleExplanations* security_style_explanations) {
+  Browser* browser = chrome::FindBrowserWithWebContents(contents);
+  if (browser) {
+    return browser->GetSecurityStyle(contents, security_style_explanations);
+  } else {
+    return blink::WebSecurityStyleUnknown;
+  }
+}
+
+void WebViewGuest::ShowCertificateViewerInDevTools(
+    content::WebContents *web_contents,
+    scoped_refptr<net::X509Certificate> certificate) {
+  scoped_refptr<content::DevToolsAgentHost> agent(
+      content::DevToolsAgentHost::GetOrCreateFor(web_contents));
+
+  DevToolsWindow* window = DevToolsWindow::FindDevToolsWindow(agent.get());
+  if (window)
+    window->ShowCertificateViewer(certificate);
+}
+
+void WebViewGuest::OnContentBlocked(ContentSettingsType settings_type,
+                                    const base::string16 &details) {
+  std::unique_ptr<base::DictionaryValue> args(new base::DictionaryValue());
+
+  args->SetString("blockedType", ContentSettingsTypeToString(settings_type));
+
+  DispatchEventToView(base::WrapUnique(
+      new GuestViewEvent(webview::kEventContentBlocked, std::move(args))));
+}
+
+void WebViewGuest::AllowRunningInsecureContent() {
+  web_contents()->SendToAllFrames(
+      new ChromeViewMsg_SetAllowRunningInsecureContent(MSG_ROUTING_NONE, true));
+  web_contents()->GetMainFrame()->Send(new ChromeViewMsg_ReloadFrame(
+      web_contents()->GetMainFrame()->GetRoutingID()));
+}
+
+void WebViewGuest::OnMouseEnter() {
+#if defined(USE_AURA)
+  // Reset the timer so that the hiding sequence starts over.
+  if (cursor_hider_.get()) {
+    cursor_hider_.get()->Reset();
+  }
+#endif // USE_AURA
+}
+
+void WebViewGuest::OnMouseLeave() {
+#if defined(USE_AURA)
+  // Stop hiding the mouse cursor if the mouse leaves the view.
+  if (cursor_hider_.get()) {
+    cursor_hider_.get()->Stop();
+  }
+#endif // USE_AURA
+}
+
 } // namespace extensions
+
+////////////////////////////////////////////////////////////////////////////////
+// Bridge helpers to allow usage of component code in the browser.
+////////////////////////////////////////////////////////////////////////////////
+namespace guest_view {
+
+// Vivaldi helper function that is declared in
+// src/components/guest_view/browser/guest_view_base.h.
+// Returns true if a Browser object owns and manage the lifecycle of the
+// |content::WebContents|
+bool HandOverToBrowser(content::WebContents* contents) {
+  // gisli@vivaldi.com:  In case of Vivaldi view the view is not
+  // an owner of the web contents (the browser object owns it).
+  Browser* browser = chrome::FindBrowserWithWebContents(contents);
+  if (browser) {
+    // Hand the web contents over to the browser.
+    contents->SetDelegate(browser);
+  }
+  return !!browser;
+}
+
+// declared in src/components/guest_view/browser/guest_view_base.h
+void AttachWebContentsObservers(content::WebContents* contents) {
+  if (vivaldi::IsVivaldiRunning()) {
+    extensions::WebNavigationTabObserver::CreateForWebContents(
+        contents);
+    vivaldi::InitHelpers(contents);
+  }
+}
+
+}

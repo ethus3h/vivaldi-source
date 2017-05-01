@@ -7,64 +7,54 @@
  * networkingPrivate calls to populate it.
  */
 
-/**
- * @element cr-network-select
- */
 Polymer({
   is: 'cr-network-select',
 
   properties: {
     /**
-     * Network state for the active network.
-     * @type {?CrOnc.NetworkStateProperties}
+     * Show all buttons in list items.
      */
-    activeNetworkState: {
-      type: Object,
-      value: null
-    },
-
-    /**
-     * If true, the element includes an 'expand' button that toggles the
-     * expanded state of the network list.
-     */
-    expandable: {
+    showButtons: {
       type: Boolean,
-      value: false
+      value: false,
+      reflectToAttribute: true,
     },
 
     /**
-     * The maximum height in pixels for the list.
+     * The list of custom items to display after the list of networks.
+     * See CrNetworkList for details.
+     * @type {!Array<CrNetworkList.CustomItemState>}
      */
-    maxHeight: {
-      type: Number,
-      value: 1000
+    customItems: {
+      type: Array,
+      value: function() {
+        return [];
+      },
     },
 
     /**
-     * If true, expand the network list.
+     * Whether to handle "item-selected" for network items.
+     * If this property is false, "network-item-selected" event is fired
+     * carrying CrOnc.NetworkStateProperties as event detail.
+     * @type {Function}
      */
-    networkListOpened: {
+    handleNetworkItemSelected: {
       type: Boolean,
-      value: true,
-      observer: "networkListOpenedChanged_"
-    },
-
-    /**
-     * If true, show the active network state.
-     */
-    showActive: {
-      type: Boolean,
-      value: false
+      value: false,
+      reflectToAttribute: true,
     },
 
     /**
      * List of all network state data for all visible networks.
-     * @type {!Array<!CrOnc.NetworkStateProperties>}
+     * @private {!Array<!CrOnc.NetworkStateProperties>}
      */
-    networkStateList: {
+    networkStateList_: {
       type: Array,
-      value: function() { return []; }
-    }
+      value: function() {
+        return [];
+      }
+    },
+
   },
 
   /**
@@ -84,15 +74,15 @@ Polymer({
 
   /** @override */
   attached: function() {
-    this.networkListChangedListener_ = this.refreshNetworks_.bind(this);
+    this.networkListChangedListener_ = this.refreshNetworks.bind(this);
     chrome.networkingPrivate.onNetworkListChanged.addListener(
         this.networkListChangedListener_);
 
-    this.deviceStateListChangedListener_ = this.refreshNetworks_.bind(this);
+    this.deviceStateListChangedListener_ = this.refreshNetworks.bind(this);
     chrome.networkingPrivate.onDeviceStateListChanged.addListener(
         this.deviceStateListChangedListener_);
 
-    this.refreshNetworks_();
+    this.refreshNetworks();
     chrome.networkingPrivate.requestNetworkScan();
   },
 
@@ -105,19 +95,11 @@ Polymer({
   },
 
   /**
-   * Polymer chnaged function.
+   * Request the list of visible networks. May be called externally to force a
+   * refresh and list update (e.g. when the element is shown).
    * @private
    */
-  networkListOpenedChanged_: function() {
-    if (this.networkListOpened)
-      chrome.networkingPrivate.requestNetworkScan();
-  },
-
-  /**
-   * Request the list of visible networks.
-   * @private
-   */
-  refreshNetworks_: function() {
+  refreshNetworks: function() {
     var filter = {
       networkType: chrome.networkingPrivate.NetworkType.ALL,
       visible: true,
@@ -132,19 +114,26 @@ Polymer({
    * @private
    */
   getNetworksCallback_: function(states) {
-    this.activeNetworkState = states[0] || null;
-    this.networkStateList = states;
+    this.networkStateList_ = states;
   },
 
   /**
    * Event triggered when a cr-network-list-item is selected.
-   * @param {!{detail: !CrOnc.NetworkStateProperties}} event
+   * @param {!{target: HTMLElement, detail: !CrOnc.NetworkStateProperties}} e
    * @private
    */
-  onNetworkListItemSelected_: function(event) {
-    var state = event.detail;
+  onNetworkListItemSelected_: function(e) {
+    var state = e.detail;
+    e.target.blur();
+
+    if (!this.handleNetworkItemSelected) {
+      this.fire('network-item-selected', state);
+      return;
+    }
+
     if (state.ConnectionState != CrOnc.ConnectionState.NOT_CONNECTED)
       return;
+
     chrome.networkingPrivate.startConnect(state.GUID, function() {
       var lastError = chrome.runtime.lastError;
       if (lastError && lastError != 'connecting')

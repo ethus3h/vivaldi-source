@@ -30,14 +30,13 @@ MACHINE_TYPE_AMD64 = 0x8664
 # Please do not add your file here without confirming that it indeed doesn't
 # require /NXCOMPAT and /DYNAMICBASE.  Contact cpu@chromium.org or your local
 # Windows guru for advice.
-EXCLUDED_FILES = ['chrome_frame_mini_installer.exe',
-                  'mini_installer.exe',
-                  'wow_helper.exe',
-                  'xinput1_3.dll' # Microsoft DirectX redistributable.
+EXCLUDED_FILES = ['mini_installer.exe',
+                  'next_version_mini_installer.exe'
                   ]
 
 EXCLUDED_RE_FILES = [re.compile("^"+x+"$") for x in [
                   r'Vivaldi\..*\.exe',
+                  r'api-ms-win-.*\.dll',
                 ]]
 
 def IsPEFile(path):

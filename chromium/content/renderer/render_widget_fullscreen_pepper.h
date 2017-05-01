@@ -7,43 +7,46 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/renderer/mouse_lock_dispatcher.h"
 #include "content/renderer/pepper/fullscreen_container.h"
-#include "content/renderer/render_widget_fullscreen.h"
+#include "content/renderer/render_widget.h"
 #include "third_party/WebKit/public/web/WebWidget.h"
+#include "url/gurl.h"
 
 namespace blink {
 class WebLayer;
 }
 
 namespace content {
+class CompositorDependencies;
 class PepperPluginInstanceImpl;
 
 // A RenderWidget that hosts a fullscreen pepper plugin. This provides a
 // FullscreenContainer that the plugin instance can callback into to e.g.
 // invalidate rects.
-class RenderWidgetFullscreenPepper : public RenderWidgetFullscreen,
+class RenderWidgetFullscreenPepper : public RenderWidget,
                                      public FullscreenContainer {
  public:
   static RenderWidgetFullscreenPepper* Create(
-      int32_t opener_id,
+      int32_t routing_id,
+      const RenderWidget::ShowCallback& show_callback,
       CompositorDependencies* compositor_deps,
       PepperPluginInstanceImpl* plugin,
       const GURL& active_url,
-      const blink::WebScreenInfo& screen_info);
+      const ScreenInfo& screen_info);
 
   // pepper::FullscreenContainer API.
   void Invalidate() override;
   void InvalidateRect(const blink::WebRect& rect) override;
   void ScrollRect(int dx, int dy, const blink::WebRect& rect) override;
   void Destroy() override;
-  void DidChangeCursor(const blink::WebCursorInfo& cursor) override;
+  void PepperDidChangeCursor(const blink::WebCursorInfo& cursor) override;
   void SetLayer(blink::WebLayer* layer) override;
 
-  // IPC::Listener implementation. This overrides the implementation
-  // in RenderWidgetFullscreen.
+  // RenderWidget overrides.
   bool OnMessageReceived(const IPC::Message& msg) override;
 
   // Could be NULL when this widget is closing.
@@ -54,24 +57,21 @@ class RenderWidgetFullscreenPepper : public RenderWidgetFullscreen,
   }
 
  protected:
-  RenderWidgetFullscreenPepper(CompositorDependencies* compositor_deps,
+  RenderWidgetFullscreenPepper(int32_t routing_id,
+                               CompositorDependencies* compositor_deps,
                                PepperPluginInstanceImpl* plugin,
                                const GURL& active_url,
-                               const blink::WebScreenInfo& screen_info);
+                               const ScreenInfo& screen_info);
   ~RenderWidgetFullscreenPepper() override;
 
   // RenderWidget API.
   void DidInitiatePaint() override;
-  void DidFlushPaint() override;
   void Close() override;
-  void OnResize(const ViewMsg_Resize_Params& params) override;
-
-  // RenderWidgetFullscreen API.
-  blink::WebWidget* CreateWebWidget() override;
+  void OnResize(const ResizeParams& params) override;
 
   // RenderWidget overrides.
   GURL GetURLForGraphicsContext3D() override;
-  void SetDeviceScaleFactor(float device_scale_factor) override;
+  void OnDeviceScaleFactorChanged() override;
 
  private:
   // URL that is responsible for this widget, passed to ggl::CreateViewContext.
@@ -82,7 +82,7 @@ class RenderWidgetFullscreenPepper : public RenderWidgetFullscreen,
 
   blink::WebLayer* layer_;
 
-  scoped_ptr<MouseLockDispatcher> mouse_lock_dispatcher_;
+  std::unique_ptr<MouseLockDispatcher> mouse_lock_dispatcher_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetFullscreenPepper);
 };

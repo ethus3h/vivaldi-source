@@ -6,9 +6,27 @@ import("//build/config/android/config.gni")
 import("//build/config/android/rules.gni")
 
 android_library("net_java") {
-  DEPRECATED_java_in_dir = "java/src"
+  java_files = [
+    "java/src/org/chromium/net/AndroidCellularSignalStrength.java",
+    "java/src/org/chromium/net/AndroidCertVerifyResult.java",
+    "java/src/org/chromium/net/AndroidKeyStore.java",
+    "java/src/org/chromium/net/AndroidNetworkLibrary.java",
+    "java/src/org/chromium/net/AndroidTrafficStats.java",
+    "java/src/org/chromium/net/GURLUtils.java",
+    "java/src/org/chromium/net/HttpNegotiateAuthenticator.java",
+    "java/src/org/chromium/net/HttpNegotiateConstants.java",
+    "java/src/org/chromium/net/NetStringUtil.java",
+    "java/src/org/chromium/net/NetworkChangeNotifier.java",
+    "java/src/org/chromium/net/NetworkChangeNotifierAutoDetect.java",
+    "java/src/org/chromium/net/ProxyChangeListener.java",
+    "java/src/org/chromium/net/RegistrationPolicyAlwaysRegister.java",
+    "java/src/org/chromium/net/RegistrationPolicyApplicationStatus.java",
+    "java/src/org/chromium/net/X509Util.java",
+  ]
   deps = [
     "//base:base_java",
+    "//third_party/android_tools:android_support_annotations_java",
+    "//third_party/jsr-305:jsr_305_javalib",
   ]
   srcjar_deps = [
     ":net_errors_java",
@@ -25,11 +43,21 @@ android_aidl("embedded_test_server_aidl") {
 
 android_library("net_java_test_support") {
   testonly = true
-  DEPRECATED_java_in_dir = "../test/android/javatests/src"
+  java_files = [
+    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticator.java",
+    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticatorService.java",
+    "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServer.java",
+    "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerImpl.java",
+    "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerService.java",
+    "../test/android/javatests/src/org/chromium/net/test/util/CertTestUtil.java",
+    "../test/android/javatests/src/org/chromium/net/test/util/NetworkChangeNotifierTestUtil.java",
+    "../test/android/javatests/src/org/chromium/net/test/util/TestWebServer.java",
+  ]
   deps = [
     ":net_java",
     "//base:base_java",
     "//base:base_java_test_support",
+    "//third_party/android_tools:android_support_annotations_java",
     "//third_party/android_tools:legacy_http_javalib",
   ]
   srcjar_deps = [
@@ -66,14 +94,16 @@ shared_library("net_java_test_native_support") {
 
 android_apk("net_test_support_apk") {
   testonly = true
+
+  # Used as an additional_apk in test scripts.
+  never_incremental = true
   deps = [
-    ":net_java_test_native_support",
     ":net_java_test_support",
     "//base:base_java",
   ]
   android_manifest = "../test/android/javatests/AndroidManifest.xml"
   apk_name = "ChromiumNetTestSupport"
-  native_libs = [ "libnet_java_test_native_support.so" ]
+  shared_libraries = [ ":net_java_test_native_support" ]
 }
 
 android_resources("net_unittests_apk_resources") {
@@ -83,12 +113,20 @@ android_resources("net_unittests_apk_resources") {
 
 android_library("net_javatests") {
   testonly = true
-  DEPRECATED_java_in_dir = "javatests/src"
+  java_files = [
+    "javatests/src/org/chromium/net/AndroidKeyStoreTestUtil.java",
+    "javatests/src/org/chromium/net/AndroidNetworkLibraryTestUtil.java",
+    "javatests/src/org/chromium/net/AndroidProxySelectorTest.java",
+    "javatests/src/org/chromium/net/NetErrorsTest.java",
+    "javatests/src/org/chromium/net/NetworkChangeNotifierTest.java",
+    "javatests/src/org/chromium/net/X509UtilTest.java",
+  ]
   deps = [
     ":net_java",
     ":net_java_test_support",
     "//base:base_java",
     "//base:base_java_test_support",
+    "//third_party/android_support_test_runner:runner_java",
   ]
 }
 
@@ -110,8 +148,8 @@ java_cpp_enum("net_java_test_support_enums_srcjar") {
 
 java_cpp_enum("net_android_java_enums_srcjar") {
   sources = [
-    "../base/mime_util.h",
     "../base/network_change_notifier.h",
+    "cellular_signal_strength.cc",
     "cert_verify_result_android.h",
     "keystore.h",
     "network_change_notifier_android.cc",
@@ -126,7 +164,7 @@ junit_binary("net_junit_tests") {
     ":net_java",
     "//base:base_java",
     "//base:base_java_test_support",
-    "//base:base_junit_test_support",
-    "//third_party/junit:hamcrest",
+    "//third_party/hamcrest:hamcrest_java",
   ]
+  srcjar_deps = [ "//base:base_build_config_gen" ]
 }

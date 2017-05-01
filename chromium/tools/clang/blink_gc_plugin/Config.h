@@ -17,24 +17,30 @@
 #include "clang/AST/AST.h"
 #include "clang/AST/Attr.h"
 
-const char kNewOperatorName[] = "operator new";
-const char kCreateName[] = "create";
-const char kTraceName[] = "trace";
-const char kTraceImplName[] = "traceImpl";
-const char kFinalizeName[] = "finalizeGarbageCollectedObject";
-const char kTraceAfterDispatchName[] = "traceAfterDispatch";
-const char kTraceAfterDispatchImplName[] = "traceAfterDispatchImpl";
-const char kRegisterWeakMembersName[] = "registerWeakMembers";
-const char kHeapAllocatorName[] = "HeapAllocator";
-const char kTraceIfNeededName[] = "TraceIfNeeded";
-const char kVisitorDispatcherName[] = "VisitorDispatcher";
-const char kVisitorVarName[] = "visitor";
-const char kAdjustAndMarkName[] = "adjustAndMark";
-const char kIsHeapObjectAliveName[] = "isHeapObjectAlive";
-const char kIsEagerlyFinalizedName[] = "IsEagerlyFinalizedMarker";
+extern const char kNewOperatorName[];
+extern const char* kCreateName;
+extern const char* kTraceName;
+extern const char* kTraceImplName;
+extern const char* kFinalizeName;
+extern const char* kTraceAfterDispatchName;
+extern const char* kTraceAfterDispatchImplName;
+extern const char* kRegisterWeakMembersName;
+extern const char kHeapAllocatorName[];
+extern const char kTraceIfNeededName[];
+extern const char kVisitorDispatcherName[];
+extern const char kVisitorVarName[];
+extern const char* kAdjustAndMarkName;
+extern const char* kIsHeapObjectAliveName;
+extern const char kIsEagerlyFinalizedName[];
+extern const char kConstIteratorName[];
+extern const char kIteratorName[];
+extern const char kConstReverseIteratorName[];
+extern const char kReverseIteratorName[];
 
 class Config {
  public:
+  static void UseLegacyNames();
+
   static bool IsMember(const std::string& name) {
     return name == "Member";
   }
@@ -49,16 +55,13 @@ class Config {
   }
 
   static bool IsPersistent(const std::string& name) {
-    return name == "Persistent";
+    return name == "Persistent" ||
+           name == "WeakPersistent" ;
   }
 
-  static bool IsPersistentHandle(const std::string& name) {
-    return IsPersistent(name) ||
-           IsPersistentGCCollection(name);
-  }
-
-  static bool IsRawPtr(const std::string& name) {
-    return name == "RawPtr";
+  static bool IsCrossThreadPersistent(const std::string& name) {
+    return name == "CrossThreadPersistent" ||
+           name == "CrossThreadWeakPersistent" ;
   }
 
   static bool IsRefPtr(const std::string& name) {
@@ -67,6 +70,10 @@ class Config {
 
   static bool IsOwnPtr(const std::string& name) {
     return name == "OwnPtr";
+  }
+
+  static bool IsUniquePtr(const std::string& name) {
+    return name == "unique_ptr";
   }
 
   static bool IsWTFCollection(const std::string& name) {
@@ -100,27 +107,25 @@ class Config {
            name == "PersistentHeapHashMap";
   }
 
+  static bool IsGCCollectionWithUnsafeIterator(const std::string& name) {
+    if (!IsGCCollection(name))
+      return false;
+    // The list hash set iterators refer to the set, not the
+    // backing store and are consequently safe.
+    if (name == "HeapListHashSet" || name == "PersistentHeapListHashSet")
+      return false;
+    return true;
+  }
+
   static bool IsHashMap(const std::string& name) {
     return name == "HashMap" ||
            name == "HeapHashMap" ||
            name == "PersistentHeapHashMap";
   }
 
-  // Following http://crrev.com/369633033 (Blink r177436),
-  // ignore blink::ScriptWrappable's destructor.
-  // TODO: remove when its non-Oilpan destructor is removed.
-  static bool HasIgnorableDestructor(const std::string& ns,
-                                     const std::string& name) {
-    return ns == "blink" && name == "ScriptWrappable";
-  }
-
   // Assumes name is a valid collection name.
   static size_t CollectionDimension(const std::string& name) {
     return (IsHashMap(name) || name == "pair") ? 2 : 1;
-  }
-
-  static bool IsDummyBase(const std::string& name) {
-    return name == "DummyBase";
   }
 
   static bool IsRefCountedBase(const std::string& name) {
@@ -133,14 +138,7 @@ class Config {
   }
 
   static bool IsGCFinalizedBase(const std::string& name) {
-    return name == "GarbageCollectedFinalized" ||
-           name == "RefCountedGarbageCollected" ||
-           name == "ThreadSafeRefCountedGarbageCollected";
-  }
-
-  static bool IsGCRefCountedBase(const std::string& name) {
-    return name == "RefCountedGarbageCollected" ||
-           name == "ThreadSafeRefCountedGarbageCollected";
+    return name == "GarbageCollectedFinalized";
   }
 
   static bool IsGCBase(const std::string& name) {
@@ -149,10 +147,15 @@ class Config {
            IsGCMixinBase(name);
   }
 
+  static bool IsIterator(const std::string& name) {
+    return name == kIteratorName || name == kConstIteratorName ||
+           name == kReverseIteratorName || name == kConstReverseIteratorName;
+  }
+
   // Returns true of the base classes that do not need a vtable entry for trace
   // because they cannot possibly initiate a GC during construction.
   static bool IsSafePolymorphicBase(const std::string& name) {
-    return IsGCBase(name) || IsDummyBase(name) || IsRefCountedBase(name);
+    return IsGCBase(name) || IsRefCountedBase(name);
   }
 
   static bool IsAnnotated(clang::Decl* decl, const std::string& anno) {

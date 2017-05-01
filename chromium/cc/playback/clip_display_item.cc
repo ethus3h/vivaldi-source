@@ -18,14 +18,17 @@
 #include "ui/gfx/skia_util.h"
 
 namespace cc {
+class ImageSerializationProcessor;
 
-ClipDisplayItem::ClipDisplayItem(
-    const gfx::Rect& clip_rect,
-    const std::vector<SkRRect>& rounded_clip_rects) {
-  SetNew(clip_rect, rounded_clip_rects);
+ClipDisplayItem::ClipDisplayItem(const gfx::Rect& clip_rect,
+                                 const std::vector<SkRRect>& rounded_clip_rects,
+                                 bool antialias)
+    : DisplayItem(CLIP) {
+  SetNew(clip_rect, rounded_clip_rects, antialias);
 }
 
-ClipDisplayItem::ClipDisplayItem(const proto::DisplayItem& proto) {
+ClipDisplayItem::ClipDisplayItem(const proto::DisplayItem& proto)
+    : DisplayItem(CLIP) {
   DCHECK_EQ(proto::DisplayItem::Type_Clip, proto.type());
 
   const proto::ClipDisplayItem& details = proto.clip_item();
@@ -35,13 +38,16 @@ ClipDisplayItem::ClipDisplayItem(const proto::DisplayItem& proto) {
   for (int i = 0; i < details.rounded_rects_size(); i++) {
     rounded_clip_rects.push_back(ProtoToSkRRect(details.rounded_rects(i)));
   }
-  SetNew(clip_rect, rounded_clip_rects);
+  bool antialias = details.antialias();
+  SetNew(clip_rect, rounded_clip_rects, antialias);
 }
 
 void ClipDisplayItem::SetNew(const gfx::Rect& clip_rect,
-                             const std::vector<SkRRect>& rounded_clip_rects) {
+                             const std::vector<SkRRect>& rounded_clip_rects,
+                             bool antialias) {
   clip_rect_ = clip_rect;
   rounded_clip_rects_ = rounded_clip_rects;
+  antialias_ = antialias;
 }
 
 ClipDisplayItem::~ClipDisplayItem() {}
@@ -55,23 +61,18 @@ void ClipDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
   for (const auto& rrect : rounded_clip_rects_) {
     SkRRectToProto(rrect, details->add_rounded_rects());
   }
+  details->set_antialias(antialias_);
 }
 
 void ClipDisplayItem::Raster(SkCanvas* canvas,
-                             const gfx::Rect& canvas_target_playback_rect,
                              SkPicture::AbortCallback* callback) const {
-  bool antialiased = true;
   canvas->save();
-  canvas->clipRect(SkRect::MakeXYWH(clip_rect_.x(), clip_rect_.y(),
-                                    clip_rect_.width(), clip_rect_.height()),
-                   SkRegion::kIntersect_Op, antialiased);
+  canvas->clipRect(gfx::RectToSkRect(clip_rect_), antialias_);
   for (size_t i = 0; i < rounded_clip_rects_.size(); ++i) {
     if (rounded_clip_rects_[i].isRect()) {
-      canvas->clipRect(rounded_clip_rects_[i].rect(), SkRegion::kIntersect_Op,
-                       antialiased);
+      canvas->clipRect(rounded_clip_rects_[i].rect(), antialias_);
     } else {
-      canvas->clipRRect(rounded_clip_rects_[i], SkRegion::kIntersect_Op,
-                        antialiased);
+      canvas->clipRRect(rounded_clip_rects_[i], antialias_);
     }
   }
 }
@@ -104,13 +105,10 @@ void ClipDisplayItem::AsValueInto(const gfx::Rect& visual_rect,
   array->AppendString(value);
 }
 
-size_t ClipDisplayItem::ExternalMemoryUsage() const {
-  return rounded_clip_rects_.capacity() * sizeof(rounded_clip_rects_[0]);
-}
+EndClipDisplayItem::EndClipDisplayItem() : DisplayItem(END_CLIP) {}
 
-EndClipDisplayItem::EndClipDisplayItem() {}
-
-EndClipDisplayItem::EndClipDisplayItem(const proto::DisplayItem& proto) {
+EndClipDisplayItem::EndClipDisplayItem(const proto::DisplayItem& proto)
+    : DisplayItem(END_CLIP) {
   DCHECK_EQ(proto::DisplayItem::Type_EndClip, proto.type());
 }
 
@@ -122,7 +120,6 @@ void EndClipDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
 }
 
 void EndClipDisplayItem::Raster(SkCanvas* canvas,
-                                const gfx::Rect& canvas_target_playback_rect,
                                 SkPicture::AbortCallback* callback) const {
   canvas->restore();
 }
@@ -132,10 +129,6 @@ void EndClipDisplayItem::AsValueInto(
     base::trace_event::TracedValue* array) const {
   array->AppendString(base::StringPrintf("EndClipDisplayItem visualRect: [%s]",
                                          visual_rect.ToString().c_str()));
-}
-
-size_t EndClipDisplayItem::ExternalMemoryUsage() const {
-  return 0;
 }
 
 }  // namespace cc

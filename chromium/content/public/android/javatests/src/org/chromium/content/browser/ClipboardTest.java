@@ -7,7 +7,7 @@ package org.chromium.content.browser;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
-import android.test.suitebuilder.annotation.LargeTest;
+import android.support.test.filters.LargeTest;
 import android.text.TextUtils;
 
 import org.chromium.base.ThreadUtils;
@@ -60,7 +60,7 @@ public class ClipboardTest extends ContentShellTestBase {
         copy(webContents);
 
         // Waits until data has been made available on the Android clipboard.
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+        CriteriaHelper.pollUiThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 return hasPrimaryClip(clipboardManager);

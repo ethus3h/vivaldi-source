@@ -4,28 +4,30 @@
 
 #include "ui/views/controls/menu/menu_image_util.h"
 
-#include "ui/base/resource/material_design/material_design_controller.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "ui/base/material_design/material_design_controller.h"
+#include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/gfx/vector_icons_public.h"
-#include "ui/views/resources/grit/views_resources.h"
+#include "ui/gfx/vector_icon_types.h"
+#include "ui/views/resources/vector_icons/vector_icons.h"
 
 namespace views {
 
 gfx::ImageSkia GetMenuCheckImage(SkColor icon_color) {
-  return gfx::CreateVectorIcon(gfx::VectorIconId::MENU_CHECK, kMenuCheckSize,
-                               icon_color);
+  return gfx::CreateVectorIcon(kMenuCheckIcon, icon_color);
 }
 
-gfx::ImageSkia GetRadioButtonImage(bool selected) {
-  int image_id = selected ? IDR_MENU_RADIO_SELECTED : IDR_MENU_RADIO_EMPTY;
-  return ui::ResourceBundle::GetSharedInstance().GetImageNamed(image_id).
-      AsImageSkia();
+gfx::ImageSkia GetRadioButtonImage(bool toggled,
+                                   bool hovered,
+                                   SkColor default_icon_color) {
+  const gfx::VectorIcon& icon =
+      toggled ? kMenuRadioSelectedIcon : kMenuRadioEmptyIcon;
+  SkColor color =
+      toggled && !hovered ? gfx::kGoogleBlue500 : default_icon_color;
+  return gfx::CreateVectorIcon(icon, kMenuCheckSize, color);
 }
 
 gfx::ImageSkia GetSubmenuArrowImage(SkColor icon_color) {
-  return gfx::CreateVectorIcon(gfx::VectorIconId::SUBMENU_ARROW,
-                               kSubmenuArrowSize, icon_color);
+  return gfx::CreateVectorIcon(kSubmenuArrowIcon, icon_color);
 }
 
 }  // namespace views

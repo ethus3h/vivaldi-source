@@ -7,8 +7,6 @@
 #include <stddef.h>
 
 #include "base/files/file_path.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -18,7 +16,8 @@
 #include "chrome/browser/profiles/gaia_info_update_service.h"
 #include "chrome/browser/profiles/gaia_info_update_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_info_cache.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_error_controller_factory.h"
@@ -26,12 +25,18 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/common/profile_management_switches.h"
 #include "components/signin/core/common/signin_pref_names.h"
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/text_elider.h"
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/login/login_state.h"
+#endif
 
 namespace profiles {
 
@@ -54,10 +59,12 @@ void RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kProfileLastUsed, std::string());
   registry->RegisterIntegerPref(prefs::kProfilesNumCreated, 1);
   registry->RegisterListPref(prefs::kProfilesLastActive);
+  registry->RegisterListPref(prefs::kProfilesDeleted);
 
   // Preferences about the user manager.
   registry->RegisterBooleanPref(prefs::kBrowserGuestModeEnabled, true);
   registry->RegisterBooleanPref(prefs::kBrowserAddPersonEnabled, true);
+  registry->RegisterBooleanPref(prefs::kForceBrowserSignin, false);
 
   registry->RegisterBooleanPref(
       prefs::kProfileAvatarRightClickTutorialDismissed, false);
@@ -69,11 +76,11 @@ base::string16 GetAvatarNameForProfile(const base::FilePath& profile_path) {
   if (profile_path == ProfileManager::GetGuestProfilePath()) {
     display_name = l10n_util::GetStringUTF16(IDS_GUEST_PROFILE_NAME);
   } else {
-    const ProfileInfoCache& cache =
-        g_browser_process->profile_manager()->GetProfileInfoCache();
-    size_t index = cache.GetIndexOfProfileWithPath(profile_path);
+    ProfileAttributesStorage& storage =
+        g_browser_process->profile_manager()->GetProfileAttributesStorage();
 
-    if (index == std::string::npos)
+    ProfileAttributesEntry* entry;
+    if (!storage.GetProfileAttributesWithPath(profile_path, &entry))
       return l10n_util::GetStringUTF16(IDS_SINGLE_PROFILE_DISPLAY_NAME);
 
     // Using the --new-avatar-menu flag, there's a couple of rules about what
@@ -82,12 +89,12 @@ base::string16 GetAvatarNameForProfile(const base::FilePath& profile_path) {
     // IDS_SINGLE_PROFILE_DISPLAY_NAME. If the profile is signed in but is using
     // a default name, use the profiles's email address. Otherwise, it
     // will return the actual name of the profile.
-    const base::string16 profile_name = cache.GetNameOfProfileAtIndex(index);
-    const base::string16 email = cache.GetUserNameOfProfileAtIndex(index);
-    bool is_default_name = cache.ProfileIsUsingDefaultNameAtIndex(index) &&
-        cache.IsDefaultProfileName(profile_name);
+    const base::string16 profile_name = entry->GetName();
+    const base::string16 email = entry->GetUserName();
+    bool is_default_name = entry->IsUsingDefaultName() &&
+        storage.IsDefaultProfileName(profile_name);
 
-    if (cache.GetNumberOfProfiles() == 1 && is_default_name)
+    if (storage.GetNumberOfProfiles() == 1u && is_default_name)
       display_name = l10n_util::GetStringUTF16(IDS_SINGLE_PROFILE_DISPLAY_NAME);
     else
       display_name = (is_default_name && !email.empty()) ? email : profile_name;
@@ -120,13 +127,13 @@ base::string16 GetProfileSwitcherTextForItem(const AvatarMenu::Item& item) {
 
 void UpdateProfileName(Profile* profile,
                        const base::string16& new_profile_name) {
-  const ProfileInfoCache& cache =
-      g_browser_process->profile_manager()->GetProfileInfoCache();
-  size_t profile_index = cache.GetIndexOfProfileWithPath(profile->GetPath());
-  if (profile_index == std::string::npos)
+  ProfileAttributesEntry* entry;
+  if (!g_browser_process->profile_manager()->GetProfileAttributesStorage().
+          GetProfileAttributesWithPath(profile->GetPath(), &entry)) {
     return;
+  }
 
-  if (new_profile_name == cache.GetNameOfProfileAtIndex(profile_index))
+  if (new_profile_name == entry->GetName())
     return;
 
   // This is only called when updating the profile name through the UI,
@@ -134,8 +141,8 @@ void UpdateProfileName(Profile* profile,
   PrefService* pref_service = profile->GetPrefs();
   pref_service->SetBoolean(prefs::kProfileUsingDefaultName, false);
 
-  // Updating the profile preference will cause the cache to be updated for
-  // this preference.
+  // Updating the profile preference will cause the profile attributes storage
+  // to be updated for this preference.
   pref_service->SetString(prefs::kProfileName,
                           base::UTF16ToUTF8(new_profile_name));
 }
@@ -161,15 +168,14 @@ bool IsRegularOrGuestSession(Browser* browser) {
   return profile->IsGuestSession() || !profile->IsOffTheRecord();
 }
 
-bool IsProfileLocked(const base::FilePath& path) {
-  const ProfileInfoCache& cache =
-      g_browser_process->profile_manager()->GetProfileInfoCache();
-  size_t profile_index = cache.GetIndexOfProfileWithPath(path);
-
-  if (profile_index == std::string::npos)
+bool IsProfileLocked(const base::FilePath& profile_path) {
+  ProfileAttributesEntry* entry;
+  if (!g_browser_process->profile_manager()->GetProfileAttributesStorage().
+          GetProfileAttributesWithPath(profile_path, &entry)) {
     return false;
+  }
 
-  return cache.ProfileIsSigninRequiredAtIndex(profile_index);
+  return entry->IsSigninRequired();
 }
 
 void UpdateIsProfileLockEnabledIfNeeded(Profile* profile) {
@@ -211,9 +217,13 @@ bool SetActiveProfileToGuestIfLocked() {
   if (active_profile_path == guest_path)
     return true;
 
-  const ProfileInfoCache& cache = profile_manager->GetProfileInfoCache();
-  size_t index = cache.GetIndexOfProfileWithPath(active_profile_path);
-  if (!cache.ProfileIsSigninRequiredAtIndex(index))
+  ProfileAttributesEntry* entry;
+  bool has_entry =
+      g_browser_process->profile_manager()->GetProfileAttributesStorage().
+          GetProfileAttributesWithPath(active_profile_path, &entry);
+
+  // |has_entry| may be false if a profile is specified on the command line.
+  if (has_entry && !entry->IsSigninRequired())
     return false;
 
   SetLastUsedProfile(guest_path.BaseName().MaybeAsASCII());
@@ -237,7 +247,7 @@ void RemoveBrowsingDataForProfile(const base::FilePath& profile_path) {
     profile = profile->GetOffTheRecordProfile();
 
   BrowsingDataRemoverFactory::GetForBrowserContext(profile)->Remove(
-      BrowsingDataRemover::Unbounded(),
+      base::Time(), base::Time::Max(),
       BrowsingDataRemover::REMOVE_WIPE_PROFILE, BrowsingDataHelper::ALL);
 }
 
@@ -250,6 +260,36 @@ void SetLastUsedProfile(const std::string& profile_dir) {
   PrefService* local_state = g_browser_process->local_state();
   DCHECK(local_state);
   local_state->SetString(prefs::kProfileLastUsed, profile_dir);
+}
+
+bool AreAllNonChildNonSupervisedProfilesLocked() {
+  bool at_least_one_regular_profile_present = false;
+
+  std::vector<ProfileAttributesEntry*> entries =
+      g_browser_process->profile_manager()->GetProfileAttributesStorage().
+          GetAllProfilesAttributes();
+  for (const ProfileAttributesEntry* entry : entries) {
+    if (entry->IsOmitted())
+      continue;
+
+    // Only consider non-child and non-supervised profiles.
+    if (!entry->IsChild() && !entry->IsLegacySupervised()) {
+      at_least_one_regular_profile_present = true;
+
+      if (!entry->IsSigninRequired())
+        return false;
+    }
+  }
+  return at_least_one_regular_profile_present;
+}
+
+bool IsPublicSession() {
+#if defined(OS_CHROMEOS)
+  if (chromeos::LoginState::IsInitialized()) {
+    return chromeos::LoginState::Get()->IsPublicSessionUser();
+  }
+#endif
+  return false;
 }
 
 }  // namespace profiles

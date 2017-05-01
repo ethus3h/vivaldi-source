@@ -6,7 +6,9 @@
 
 #include <utility>
 
+#include "base/memory/free_deleter.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -16,17 +18,17 @@ void BoundBoolSet(bool* var, bool val) {
   *var = val;
 }
 
-void BoundBoolSetFromScopedPtr(bool* var, scoped_ptr<bool> val) {
+void BoundBoolSetFromScopedPtr(bool* var, std::unique_ptr<bool> val) {
   *var = *val;
 }
 
 void BoundBoolSetFromScopedPtrFreeDeleter(
     bool* var,
-    scoped_ptr<bool, base::FreeDeleter> val) {
-  *var = val;
+    std::unique_ptr<bool, base::FreeDeleter> val) {
+  *var = *val;
 }
 
-void BoundBoolSetFromScopedArray(bool* var, scoped_ptr<bool[]> val) {
+void BoundBoolSetFromScopedArray(bool* var, std::unique_ptr<bool[]> val) {
   *var = val[0];
 }
 
@@ -48,12 +50,13 @@ class BindToTaskRunnerTest : public ::testing::Test {
 
 TEST_F(BindToTaskRunnerTest, Closure) {
   // Test the closure is run inside the loop, not outside it.
-  base::WaitableEvent waiter(false, false);
+  base::WaitableEvent waiter(base::WaitableEvent::ResetPolicy::AUTOMATIC,
+                             base::WaitableEvent::InitialState::NOT_SIGNALED);
   base::Closure cb = BindToCurrentThread(
       base::Bind(&base::WaitableEvent::Signal, Unretained(&waiter)));
   cb.Run();
   EXPECT_FALSE(waiter.IsSignaled());
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(waiter.IsSignaled());
 }
 
@@ -63,60 +66,60 @@ TEST_F(BindToTaskRunnerTest, Bool) {
       BindToCurrentThread(base::Bind(&BoundBoolSet, &bool_var));
   cb.Run(true);
   EXPECT_FALSE(bool_var);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_var);
 }
 
 TEST_F(BindToTaskRunnerTest, BoundScopedPtrBool) {
   bool bool_val = false;
-  scoped_ptr<bool> scoped_ptr_bool(new bool(true));
+  std::unique_ptr<bool> scoped_ptr_bool(new bool(true));
   base::Closure cb = BindToCurrentThread(base::Bind(
       &BoundBoolSetFromScopedPtr, &bool_val, base::Passed(&scoped_ptr_bool)));
   cb.Run();
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
 TEST_F(BindToTaskRunnerTest, PassedScopedPtrBool) {
   bool bool_val = false;
-  scoped_ptr<bool> scoped_ptr_bool(new bool(true));
-  base::Callback<void(scoped_ptr<bool>)> cb =
+  std::unique_ptr<bool> scoped_ptr_bool(new bool(true));
+  base::Callback<void(std::unique_ptr<bool>)> cb =
       BindToCurrentThread(base::Bind(&BoundBoolSetFromScopedPtr, &bool_val));
   cb.Run(std::move(scoped_ptr_bool));
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
 TEST_F(BindToTaskRunnerTest, BoundScopedArrayBool) {
   bool bool_val = false;
-  scoped_ptr<bool[]> scoped_array_bool(new bool[1]);
+  std::unique_ptr<bool[]> scoped_array_bool(new bool[1]);
   scoped_array_bool[0] = true;
   base::Closure cb =
       BindToCurrentThread(base::Bind(&BoundBoolSetFromScopedArray, &bool_val,
                                      base::Passed(&scoped_array_bool)));
   cb.Run();
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
 TEST_F(BindToTaskRunnerTest, PassedScopedArrayBool) {
   bool bool_val = false;
-  scoped_ptr<bool[]> scoped_array_bool(new bool[1]);
+  std::unique_ptr<bool[]> scoped_array_bool(new bool[1]);
   scoped_array_bool[0] = true;
-  base::Callback<void(scoped_ptr<bool[]>)> cb =
+  base::Callback<void(std::unique_ptr<bool[]>)> cb =
       BindToCurrentThread(base::Bind(&BoundBoolSetFromScopedArray, &bool_val));
   cb.Run(std::move(scoped_array_bool));
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
 TEST_F(BindToTaskRunnerTest, BoundScopedPtrFreeDeleterBool) {
   bool bool_val = false;
-  scoped_ptr<bool, base::FreeDeleter> scoped_ptr_free_deleter_bool(
+  std::unique_ptr<bool, base::FreeDeleter> scoped_ptr_free_deleter_bool(
       static_cast<bool*>(malloc(sizeof(bool))));
   *scoped_ptr_free_deleter_bool = true;
   base::Closure cb = BindToCurrentThread(
@@ -124,21 +127,21 @@ TEST_F(BindToTaskRunnerTest, BoundScopedPtrFreeDeleterBool) {
                  base::Passed(&scoped_ptr_free_deleter_bool)));
   cb.Run();
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
 TEST_F(BindToTaskRunnerTest, PassedScopedPtrFreeDeleterBool) {
   bool bool_val = false;
-  scoped_ptr<bool, base::FreeDeleter> scoped_ptr_free_deleter_bool(
+  std::unique_ptr<bool, base::FreeDeleter> scoped_ptr_free_deleter_bool(
       static_cast<bool*>(malloc(sizeof(bool))));
   *scoped_ptr_free_deleter_bool = true;
-  base::Callback<void(scoped_ptr<bool, base::FreeDeleter>)> cb =
+  base::Callback<void(std::unique_ptr<bool, base::FreeDeleter>)> cb =
       BindToCurrentThread(
           base::Bind(&BoundBoolSetFromScopedPtrFreeDeleter, &bool_val));
   cb.Run(std::move(scoped_ptr_free_deleter_bool));
   EXPECT_FALSE(bool_val);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_val);
 }
 
@@ -150,7 +153,7 @@ TEST_F(BindToTaskRunnerTest, BoolConstRef) {
       base::Bind(&BoundBoolSetFromConstRef, &bool_var, true_ref));
   cb.Run();
   EXPECT_FALSE(bool_var);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(bool_var);
 }
 
@@ -162,7 +165,7 @@ TEST_F(BindToTaskRunnerTest, Integers) {
   cb.Run(1, -1);
   EXPECT_EQ(a, 0);
   EXPECT_EQ(b, 0);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_EQ(a, 1);
   EXPECT_EQ(b, -1);
 }

@@ -6,12 +6,19 @@
 
 #include <utility>
 
+#include "base/bind.h"
+#include "base/callback.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/engagement/site_engagement_service.h"
-#include "chrome/browser/engagement/site_engagement_service_factory.h"
+#include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/associated_interface_provider.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace {
 
@@ -22,64 +29,101 @@ int g_seconds_delay_after_show = 5;
 
 }  // anonymous namespace
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(SiteEngagementHelper);
+DEFINE_WEB_CONTENTS_USER_DATA_KEY(SiteEngagementService::Helper);
 
-SiteEngagementHelper::PeriodicTracker::PeriodicTracker(
-    SiteEngagementHelper* helper)
+// static
+void SiteEngagementService::Helper::SetSecondsBetweenUserInputCheck(
+    int seconds) {
+  g_seconds_to_pause_engagement_detection = seconds;
+}
+
+// static
+void SiteEngagementService::Helper::SetSecondsTrackingDelayAfterNavigation(
+    int seconds) {
+  g_seconds_delay_after_navigation = seconds;
+}
+
+// static
+void SiteEngagementService::Helper::SetSecondsTrackingDelayAfterShow(
+    int seconds) {
+  g_seconds_delay_after_show = seconds;
+}
+
+SiteEngagementService::Helper::~Helper() {
+  service_->HelperDeleted(this);
+  if (web_contents()) {
+    input_tracker_.Stop();
+    media_tracker_.Stop();
+  }
+}
+
+void SiteEngagementService::Helper::OnEngagementLevelChanged(
+    const GURL& url,
+    blink::mojom::EngagementLevel level) {
+  web_contents()->ForEachFrame(base::Bind(
+      &SiteEngagementService::Helper::SendEngagementLevelToFramesMatchingOrigin,
+      base::Unretained(this), url::Origin(url), level));
+}
+
+SiteEngagementService::Helper::PeriodicTracker::PeriodicTracker(
+    SiteEngagementService::Helper* helper)
     : helper_(helper), pause_timer_(new base::Timer(true, false)) {}
 
-SiteEngagementHelper::PeriodicTracker::~PeriodicTracker() {}
+SiteEngagementService::Helper::PeriodicTracker::~PeriodicTracker() {}
 
-void SiteEngagementHelper::PeriodicTracker::Start(
+void SiteEngagementService::Helper::PeriodicTracker::Start(
     base::TimeDelta initial_delay) {
   StartTimer(initial_delay);
 }
 
-void SiteEngagementHelper::PeriodicTracker::Pause() {
+void SiteEngagementService::Helper::PeriodicTracker::Pause() {
   TrackingStopped();
   StartTimer(
       base::TimeDelta::FromSeconds(g_seconds_to_pause_engagement_detection));
 }
 
-void SiteEngagementHelper::PeriodicTracker::Stop() {
+void SiteEngagementService::Helper::PeriodicTracker::Stop() {
   TrackingStopped();
   pause_timer_->Stop();
 }
 
-bool SiteEngagementHelper::PeriodicTracker::IsTimerRunning() {
+bool SiteEngagementService::Helper::PeriodicTracker::IsTimerRunning() {
   return pause_timer_->IsRunning();
 }
 
-void SiteEngagementHelper::PeriodicTracker::SetPauseTimerForTesting(
-    scoped_ptr<base::Timer> timer) {
+void SiteEngagementService::Helper::PeriodicTracker::SetPauseTimerForTesting(
+    std::unique_ptr<base::Timer> timer) {
   pause_timer_ = std::move(timer);
 }
 
-void SiteEngagementHelper::PeriodicTracker::StartTimer(
+void SiteEngagementService::Helper::PeriodicTracker::StartTimer(
     base::TimeDelta delay) {
   pause_timer_->Start(
       FROM_HERE, delay,
-      base::Bind(&SiteEngagementHelper::PeriodicTracker::TrackingStarted,
-                 base::Unretained(this)));
+      base::Bind(
+          &SiteEngagementService::Helper::PeriodicTracker::TrackingStarted,
+          base::Unretained(this)));
 }
 
-SiteEngagementHelper::InputTracker::InputTracker(
-    SiteEngagementHelper* helper,
+SiteEngagementService::Helper::InputTracker::InputTracker(
+    SiteEngagementService::Helper* helper,
     content::WebContents* web_contents)
-    : PeriodicTracker(helper), content::WebContentsObserver(web_contents) {}
+    : PeriodicTracker(helper),
+      content::WebContentsObserver(web_contents),
+      is_tracking_(false) {}
 
-void SiteEngagementHelper::InputTracker::TrackingStarted() {
+void SiteEngagementService::Helper::InputTracker::TrackingStarted() {
   is_tracking_ = true;
 }
 
-void SiteEngagementHelper::InputTracker::TrackingStopped() {
+void SiteEngagementService::Helper::InputTracker::TrackingStopped() {
   is_tracking_ = false;
 }
 
 // Record that there was some user input, and defer handling of the input event.
 // Once the timer finishes running, the callbacks detecting user input will be
 // registered again.
-void SiteEngagementHelper::InputTracker::DidGetUserInteraction(
+void SiteEngagementService::Helper::InputTracker::DidGetUserInteraction(
     const blink::WebInputEvent::Type type) {
   // Only respond to raw key down to avoid multiple triggering on a single input
   // (e.g. keypress is a key down then key up).
@@ -96,12 +140,15 @@ void SiteEngagementHelper::InputTracker::DidGetUserInteraction(
     case blink::WebInputEvent::MouseDown:
       helper()->RecordUserInput(SiteEngagementMetrics::ENGAGEMENT_MOUSE);
       break;
-    case blink::WebInputEvent::GestureTapDown:
+    case blink::WebInputEvent::TouchStart:
       helper()->RecordUserInput(
           SiteEngagementMetrics::ENGAGEMENT_TOUCH_GESTURE);
       break;
-    case blink::WebInputEvent::MouseWheel:
-      helper()->RecordUserInput(SiteEngagementMetrics::ENGAGEMENT_WHEEL);
+    case blink::WebInputEvent::GestureScrollBegin:
+      helper()->RecordUserInput(SiteEngagementMetrics::ENGAGEMENT_SCROLL);
+      break;
+    case blink::WebInputEvent::Undefined:
+      // Explicitly ignore browser-initiated navigation input.
       break;
     default:
       NOTREACHED();
@@ -109,23 +156,24 @@ void SiteEngagementHelper::InputTracker::DidGetUserInteraction(
   Pause();
 }
 
-SiteEngagementHelper::MediaTracker::MediaTracker(
-    SiteEngagementHelper* helper,
+SiteEngagementService::Helper::MediaTracker::MediaTracker(
+    SiteEngagementService::Helper* helper,
     content::WebContents* web_contents)
     : PeriodicTracker(helper),
       content::WebContentsObserver(web_contents),
       is_hidden_(false) {}
 
-SiteEngagementHelper::MediaTracker::~MediaTracker() {}
+SiteEngagementService::Helper::MediaTracker::~MediaTracker() {}
 
-void SiteEngagementHelper::MediaTracker::TrackingStarted() {
+void SiteEngagementService::Helper::MediaTracker::TrackingStarted() {
   if (!active_media_players_.empty())
     helper()->RecordMediaPlaying(is_hidden_);
 
   Pause();
 }
 
-void SiteEngagementHelper::MediaTracker::MediaStartedPlaying(
+void SiteEngagementService::Helper::MediaTracker::MediaStartedPlaying(
+    const MediaPlayerInfo& media_info,
     const MediaPlayerId& id) {
   // Only begin engagement detection when media actually starts playing.
   active_media_players_.push_back(id);
@@ -133,112 +181,114 @@ void SiteEngagementHelper::MediaTracker::MediaStartedPlaying(
     Start(base::TimeDelta::FromSeconds(g_seconds_delay_after_media_starts));
 }
 
-void SiteEngagementHelper::MediaTracker::MediaStoppedPlaying(
+void SiteEngagementService::Helper::MediaTracker::MediaStoppedPlaying(
+    const MediaPlayerInfo& media_info,
     const MediaPlayerId& id) {
   active_media_players_.erase(std::remove(active_media_players_.begin(),
                                           active_media_players_.end(), id),
                               active_media_players_.end());
 }
 
-void SiteEngagementHelper::MediaTracker::WasShown() {
+void SiteEngagementService::Helper::MediaTracker::WasShown() {
   is_hidden_ = false;
 }
 
-void SiteEngagementHelper::MediaTracker::WasHidden() {
+void SiteEngagementService::Helper::MediaTracker::WasHidden() {
   is_hidden_ = true;
 }
 
-SiteEngagementHelper::~SiteEngagementHelper() {
-  content::WebContents* contents = web_contents();
-  if (contents) {
-    input_tracker_.Stop();
-    media_tracker_.Stop();
-  }
-}
-
-SiteEngagementHelper::SiteEngagementHelper(content::WebContents* web_contents)
+SiteEngagementService::Helper::Helper(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
       input_tracker_(this, web_contents),
       media_tracker_(this, web_contents),
-      record_engagement_(false) {}
+      service_(SiteEngagementService::Get(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()))) {
+  service_->HelperCreated(this);
+}
 
-void SiteEngagementHelper::RecordUserInput(
+void SiteEngagementService::Helper::RecordUserInput(
     SiteEngagementMetrics::EngagementType type) {
   TRACE_EVENT0("SiteEngagement", "RecordUserInput");
   content::WebContents* contents = web_contents();
-  if (contents) {
-    Profile* profile =
-        Profile::FromBrowserContext(contents->GetBrowserContext());
-    SiteEngagementService* service =
-        SiteEngagementServiceFactory::GetForProfile(profile);
-
-    // Service is null in incognito.
-    if (service)
-      service->HandleUserInput(contents->GetVisibleURL(), type);
-  }
+  if (contents)
+    service_->HandleUserInput(contents, type);
 }
 
-void SiteEngagementHelper::RecordMediaPlaying(bool is_hidden) {
+void SiteEngagementService::Helper::RecordMediaPlaying(bool is_hidden) {
   content::WebContents* contents = web_contents();
-  if (contents) {
-    Profile* profile =
-        Profile::FromBrowserContext(contents->GetBrowserContext());
-    SiteEngagementService* service =
-        SiteEngagementServiceFactory::GetForProfile(profile);
+  if (contents)
+    service_->HandleMediaPlaying(contents, is_hidden);
+}
 
-    if (service)
-      service->HandleMediaPlaying(contents->GetVisibleURL(), is_hidden);
+void SiteEngagementService::Helper::SendEngagementLevelToFramesMatchingOrigin(
+    const url::Origin& origin,
+    blink::mojom::EngagementLevel level,
+    content::RenderFrameHost* render_frame_host) {
+  if (origin == render_frame_host->GetLastCommittedOrigin()) {
+    SendEngagementLevelToFrame(origin, level, render_frame_host);
   }
 }
 
-void SiteEngagementHelper::DidNavigateMainFrame(
-    const content::LoadCommittedDetails& details,
-    const content::FrameNavigateParams& params) {
+void SiteEngagementService::Helper::SendEngagementLevelToFrame(
+    const url::Origin& origin,
+    blink::mojom::EngagementLevel level,
+    content::RenderFrameHost* render_frame_host) {
+  blink::mojom::EngagementClientAssociatedPtr client;
+  render_frame_host->GetRemoteAssociatedInterfaces()->GetInterface(&client);
+  client->SetEngagementLevel(origin, level);
+}
+
+void SiteEngagementService::Helper::DidFinishNavigation(
+    content::NavigationHandle* handle) {
+  // Ignore uncommitted, non main-frame, same page, or error page navigations.
+  if (!handle->HasCommitted() || !handle->IsInMainFrame() ||
+      handle->IsSamePage() || handle->IsErrorPage()) {
+    return;
+  }
+
   input_tracker_.Stop();
   media_tracker_.Stop();
 
-  record_engagement_ = params.url.SchemeIsHTTPOrHTTPS();
-
-  // Ignore all schemes except HTTP and HTTPS.
-  if (!record_engagement_)
+  // Ignore prerender loads. This means that prerenders will not receive
+  // navigation engagement. The implications are as follows:
+  //
+  // - Instant search prerenders from the omnibox trigger DidFinishNavigation
+  //   twice: once for the prerender, and again when the page swaps in. The
+  //   second trigger has transition GENERATED and receives navigation
+  //   engagement.
+  // - Prerenders initiated by <link rel="prerender"> (e.g. search results) are
+  //   always assigned the LINK transition, which is ignored for navigation
+  //   engagement.
+  //
+  // Prerenders trigger WasShown() when they are swapped in, so input engagement
+  // will activate even if navigation engagement is not scored.
+  if (prerender::PrerenderContents::FromWebContents(web_contents()) != nullptr)
     return;
 
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  SiteEngagementService* service =
-      SiteEngagementServiceFactory::GetForProfile(profile);
-
-  if (service)
-    service->HandleNavigation(params.url, params.transition);
+  service_->HandleNavigation(web_contents(), handle->GetPageTransition());
 
   input_tracker_.Start(
       base::TimeDelta::FromSeconds(g_seconds_delay_after_navigation));
 }
 
-void SiteEngagementHelper::WasShown() {
-  // Ensure that the input callbacks are registered when we come into view.
-  if (record_engagement_) {
-    input_tracker_.Start(
-        base::TimeDelta::FromSeconds(g_seconds_delay_after_show));
+void SiteEngagementService::Helper::ReadyToCommitNavigation(
+    content::NavigationHandle* handle) {
+  if (service_->ShouldRecordEngagement(handle->GetURL())) {
+    // Don't bother sending the engagement if we wouldn't have recorded any for
+    // the URL. These will have NONE engagement by default.
+    SendEngagementLevelToFrame(url::Origin(handle->GetURL()),
+                               service_->GetEngagementLevel(handle->GetURL()),
+                               handle->GetRenderFrameHost());
   }
 }
 
-void SiteEngagementHelper::WasHidden() {
+void SiteEngagementService::Helper::WasShown() {
+  // Ensure that the input callbacks are registered when we come into view.
+  input_tracker_.Start(
+      base::TimeDelta::FromSeconds(g_seconds_delay_after_show));
+}
+
+void SiteEngagementService::Helper::WasHidden() {
   // Ensure that the input callbacks are not registered when hidden.
   input_tracker_.Stop();
-}
-
-// static
-void SiteEngagementHelper::SetSecondsBetweenUserInputCheck(int seconds) {
-  g_seconds_to_pause_engagement_detection = seconds;
-}
-
-// static
-void SiteEngagementHelper::SetSecondsTrackingDelayAfterNavigation(int seconds) {
-  g_seconds_delay_after_navigation = seconds;
-}
-
-// static
-void SiteEngagementHelper::SetSecondsTrackingDelayAfterShow(int seconds) {
-  g_seconds_delay_after_show = seconds;
 }

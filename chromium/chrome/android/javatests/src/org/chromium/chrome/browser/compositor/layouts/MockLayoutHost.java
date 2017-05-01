@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.compositor.layouts;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.graphics.RectF;
 
 import org.chromium.chrome.browser.compositor.TitleCache;
 import org.chromium.chrome.browser.fullscreen.ChromeFullscreenManager;
@@ -64,14 +65,6 @@ class MockLayoutHost implements LayoutManagerHost, LayoutRenderHost {
     public void onPhysicalBackingSizeChanged(int width, int height) { }
 
     @Override
-    public void onOverdrawBottomHeightChanged(int overdrawHeight) {}
-
-    @Override
-    public int getCurrentOverdrawBottomHeight() {
-        return 0;
-    }
-
-    @Override
     public Context getContext() {
         return mContext;
     }
@@ -91,6 +84,26 @@ class MockLayoutHost implements LayoutManagerHost, LayoutRenderHost {
     }
 
     @Override
+    public void getWindowViewport(RectF outRect) {
+        outRect.set(0, 0, getWidth(), getHeight());
+    }
+
+    @Override
+    public void getVisibleViewport(RectF outRect) {
+        outRect.set(0, 0, getWidth(), getHeight());
+    }
+
+    @Override
+    public void getViewportFullControls(RectF outRect) {
+        outRect.set(0, 0, getWidth(), getHeight());
+    }
+
+    @Override
+    public float getHeightMinusBrowserControls() {
+        return getHeight();
+    }
+
+    @Override
     public LayoutRenderHost getLayoutRenderHost() {
         return this;
     }
@@ -100,11 +113,6 @@ class MockLayoutHost implements LayoutManagerHost, LayoutRenderHost {
 
     @Override
     public void loadPersitentTextureDataIfNeeded() { }
-
-    @Override
-    public int getLayoutTabsDrawnCount() {
-        return 0;
-    }
 
     @Override
     public void setContentOverlayVisibility(boolean visible) { }
@@ -120,19 +128,7 @@ class MockLayoutHost implements LayoutManagerHost, LayoutRenderHost {
     }
 
     @Override
-    public Rect getVisibleViewport(Rect rect) {
-        if (rect == null) rect = new Rect();
-        rect.set(0, 0, getWidth(), getHeight());
-        return rect;
-    }
-
-    @Override
-    public int getTopControlsHeightPixels() {
-        return 0;
-    }
-
-    @Override
-    public boolean areTopControlsPermanentlyHidden() {
+    public boolean areBrowserControlsPermanentlyHidden() {
         return false;
     }
 
@@ -145,18 +141,18 @@ class MockLayoutHost implements LayoutManagerHost, LayoutRenderHost {
     public void invalidateAccessibilityProvider() { }
 
     @Override
-    public void onContentViewCoreAdded(ContentViewCore content) { }
+    public void onOverlayPanelContentViewCoreAdded(ContentViewCore content) { }
 
     @Override
     public void onContentChanged() { }
 
     @Override
-    public int getTopControlsBackgroundColor() {
+    public int getBrowserControlsBackgroundColor() {
         return 0;
     }
 
     @Override
-    public float getTopControlsUrlBarAlpha() {
+    public float getBrowserControlsUrlBarAlpha() {
         return 1f;
     }
 

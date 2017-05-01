@@ -8,28 +8,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "media/blink/media_blink_export.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModule.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleResult.h"
 
 namespace blink {
-#if defined(ENABLE_PEPPER_CDMS)
-class WebLocalFrame;
-#endif
 class WebSecurityOrigin;
 }
 
 namespace media {
 
 struct CdmConfig;
-class CdmContext;
 class CdmFactory;
 class CdmSessionAdapter;
-class WebContentDecryptionModuleSessionImpl;
+class ContentDecryptionModule;
 
 class MEDIA_BLINK_EXPORT WebContentDecryptionModuleImpl
     : public blink::WebContentDecryptionModule {
@@ -39,7 +36,7 @@ class MEDIA_BLINK_EXPORT WebContentDecryptionModuleImpl
       const base::string16& key_system,
       const blink::WebSecurityOrigin& security_origin,
       const CdmConfig& cdm_config,
-      scoped_ptr<blink::WebContentDecryptionModuleResult> result);
+      std::unique_ptr<blink::WebContentDecryptionModuleResult> result);
 
   ~WebContentDecryptionModuleImpl() override;
 
@@ -51,10 +48,8 @@ class MEDIA_BLINK_EXPORT WebContentDecryptionModuleImpl
       size_t server_certificate_length,
       blink::WebContentDecryptionModuleResult result) override;
 
-  // Returns the CdmContext associated with this CDM, which must not be nullptr.
-  // TODO(jrummell): Figure out lifetimes, as WMPI may still use the decryptor
-  // after WebContentDecryptionModule is freed. http://crbug.com/330324
-  CdmContext* GetCdmContext();
+  // Returns a reference to the CDM used by |adapter_|.
+  scoped_refptr<ContentDecryptionModule> GetCdm();
 
  private:
   friend CdmSessionAdapter;

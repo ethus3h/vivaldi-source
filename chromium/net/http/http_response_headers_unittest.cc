@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/http/http_response_headers.h"
+
 #include <stdint.h>
 
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <memory>
 
-#include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "net/http/http_byte_range.h"
-#include "net/http/http_response_headers.h"
+#include "net/log/net_log_capture_mode.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
@@ -457,7 +459,7 @@ TEST(HttpResponseHeadersTest, EnumerateHeader_Coalesced) {
   HeadersToRaw(&headers);
   scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
 
-  void* iter = NULL;
+  size_t iter = 0;
   std::string value;
   EXPECT_TRUE(parsed->EnumerateHeader(&iter, "cache-control", &value));
   EXPECT_EQ("private", value);
@@ -478,7 +480,7 @@ TEST(HttpResponseHeadersTest, EnumerateHeader_Challenge) {
   HeadersToRaw(&headers);
   scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
 
-  void* iter = NULL;
+  size_t iter = 0;
   std::string value;
   EXPECT_TRUE(parsed->EnumerateHeader(&iter, "WWW-Authenticate", &value));
   EXPECT_EQ("Digest realm=foobar, nonce=x, domain=y", value);
@@ -531,6 +533,71 @@ TEST(HttpResponseHeadersTest, DefaultDateToGMT) {
   // used "UTC" which is equivalent to GMT.
   if (parsed->GetExpiresValue(&value))
     EXPECT_EQ(expected_value, value);
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValue10) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: 10\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_TRUE(parsed->GetAgeValue(&age));
+  EXPECT_EQ(10, age.InSeconds());
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValue0) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: 0\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_TRUE(parsed->GetAgeValue(&age));
+  EXPECT_EQ(0, age.InSeconds());
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValueBogus) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: donkey\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_FALSE(parsed->GetAgeValue(&age));
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValueNegative) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: -10\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_FALSE(parsed->GetAgeValue(&age));
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValueLeadingPlus) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: +10\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_FALSE(parsed->GetAgeValue(&age));
+}
+
+TEST(HttpResponseHeadersTest, GetAgeValueOverflow) {
+  std::string headers =
+      "HTTP/1.1 200 OK\n"
+      "Age: 999999999999999999999999999999999999999999\n";
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  base::TimeDelta age;
+  ASSERT_TRUE(parsed->GetAgeValue(&age));
+
+  // Should have saturated to 2^32 - 1.
+  EXPECT_EQ(static_cast<int64_t>(0xFFFFFFFFL), age.InSeconds());
 }
 
 struct ContentTypeTestData {
@@ -713,9 +780,12 @@ TEST_P(RequiresValidationTest, RequiresValidation) {
   const RequiresValidationTestData test = GetParam();
 
   base::Time request_time, response_time, current_time;
-  base::Time::FromString("Wed, 28 Nov 2007 00:40:09 GMT", &request_time);
-  base::Time::FromString("Wed, 28 Nov 2007 00:40:12 GMT", &response_time);
-  base::Time::FromString("Wed, 28 Nov 2007 00:45:20 GMT", &current_time);
+  ASSERT_TRUE(
+      base::Time::FromString("Wed, 28 Nov 2007 00:40:09 GMT", &request_time));
+  ASSERT_TRUE(
+      base::Time::FromString("Wed, 28 Nov 2007 00:40:12 GMT", &response_time));
+  ASSERT_TRUE(
+      base::Time::FromString("Wed, 28 Nov 2007 00:45:20 GMT", &current_time));
 
   std::string headers(test.headers);
   HeadersToRaw(&headers);
@@ -1055,7 +1125,7 @@ TEST_P(EnumerateHeaderLinesTest, EnumerateHeaderLines) {
 
   std::string name, value, lines;
 
-  void* iter = NULL;
+  size_t iter = 0;
   while (parsed->EnumerateHeaderLines(&iter, &name, &value)) {
     lines.append(name);
     lines.append(": ");
@@ -1271,7 +1341,7 @@ class ContentRangeTest
       public ::testing::WithParamInterface<ContentRangeTestData> {
 };
 
-TEST_P(ContentRangeTest, GetContentRange) {
+TEST_P(ContentRangeTest, GetContentRangeFor206) {
   const ContentRangeTestData test = GetParam();
 
   std::string headers(test.headers);
@@ -1281,9 +1351,8 @@ TEST_P(ContentRangeTest, GetContentRange) {
   int64_t first_byte_position;
   int64_t last_byte_position;
   int64_t instance_size;
-  bool return_value = parsed->GetContentRange(&first_byte_position,
-                                              &last_byte_position,
-                                              &instance_size);
+  bool return_value = parsed->GetContentRangeFor206(
+      &first_byte_position, &last_byte_position, &instance_size);
   EXPECT_EQ(test.expected_return_value, return_value);
   EXPECT_EQ(test.expected_first_byte_position, first_byte_position);
   EXPECT_EQ(test.expected_last_byte_position, last_byte_position);
@@ -1296,99 +1365,16 @@ const ContentRangeTestData content_range_tests[] = {
      "Content-Range:",
      false, -1, -1, -1},
     {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: megabytes 0-10/50",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: 0-10/50",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: Bytes 0-50/51",
-     true, 0, 50, 51},
-    {"HTTP/1.1 206 Partial Content\n"
      "Content-Range: bytes 0-50/51",
      true, 0, 50, 51},
     {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes\t0-50/51",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range:     bytes 0-50/51",
-     true, 0, 50, 51},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range:     bytes    0    -   50  \t / \t51",
-     true, 0, 50, 51},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0\t-\t50\t/\t51\t",
-     true, 0, 50, 51},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range:   \tbytes\t\t\t 0\t-\t50\t/\t51\t",
-     true, 0, 50, 51},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: \t   bytes \t  0    -   50   /   5   1",
-     false, 0, 50, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: \t   bytes \t  0    -   5 0   /   51",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
      "Content-Range: bytes 50-0/51",
-     false, 50, 0, -1},
-    {"HTTP/1.1 416 Requested range not satisfiable\n"
-     "Content-Range: bytes * /*",
      false, -1, -1, -1},
     {"HTTP/1.1 416 Requested range not satisfiable\n"
-     "Content-Range: bytes *   /    *   ",
+     "Content-Range: bytes */*",
      false, -1, -1, -1},
     {"HTTP/1.1 206 Partial Content\n"
      "Content-Range: bytes 0-50/*",
-     false, 0, 50, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-50  /    * ",
-     false, 0, 50, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-10000000000/10000000001",
-     true, 0, 10000000000ll, 10000000001ll},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-10000000000/10000000000",
-     false, 0, 10000000000ll, 10000000000ll},
-    // 64 bit wraparound.
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0 - 9223372036854775807 / 100",
-     false, 0, std::numeric_limits<int64_t>::max(), 100},
-    // 64 bit wraparound.
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0 - 100 / -9223372036854775808",
-     false, 0, 100, std::numeric_limits<int64_t>::min()},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes */50",
-     false, -1, -1, 50},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-50/10",
-     false, 0, 50, 10},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 40-50/45",
-     false, 40, 50, 45},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-50/-10",
-     false, 0, 50, -10},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-0/1",
-     true, 0, 0, 1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-40000000000000000000/40000000000000000001",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 1-/100",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes -/100",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes -1/100",
-     false, -1, -1, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes 0-1233/*",
-     false, 0, 1233, -1},
-    {"HTTP/1.1 206 Partial Content\n"
-     "Content-Range: bytes -123 - -1/100",
      false, -1, -1, -1},
 };
 
@@ -1633,6 +1619,40 @@ const HasStrongValidatorsTestData strong_validators_tests[] = {
 INSTANTIATE_TEST_CASE_P(HttpResponseHeaders,
                         HasStrongValidatorsTest,
                         testing::ValuesIn(strong_validators_tests));
+
+TEST(HttpResponseHeadersTest, HasValidatorsNone) {
+  std::string headers("HTTP/1.1 200 OK");
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  EXPECT_FALSE(parsed->HasValidators());
+}
+
+TEST(HttpResponseHeadersTest, HasValidatorsEtag) {
+  std::string headers(
+      "HTTP/1.1 200 OK\n"
+      "etag: \"anything\"");
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  EXPECT_TRUE(parsed->HasValidators());
+}
+
+TEST(HttpResponseHeadersTest, HasValidatorsLastModified) {
+  std::string headers(
+      "HTTP/1.1 200 OK\n"
+      "Last-Modified: Wed, 28 Nov 2007 00:40:10 GMT");
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  EXPECT_TRUE(parsed->HasValidators());
+}
+
+TEST(HttpResponseHeadersTest, HasValidatorsWeakEtag) {
+  std::string headers(
+      "HTTP/1.1 200 OK\n"
+      "etag: W/\"anything\"");
+  HeadersToRaw(&headers);
+  scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
+  EXPECT_TRUE(parsed->HasValidators());
+}
 
 struct AddHeaderTestData {
   const char* orig_headers;
@@ -1988,7 +2008,7 @@ TEST(HttpResponseHeadersTest, ToNetLogParamAndBackAgain) {
   HeadersToRaw(&headers);
   scoped_refptr<HttpResponseHeaders> parsed(new HttpResponseHeaders(headers));
 
-  scoped_ptr<base::Value> event_param(parsed->NetLogCallback(
+  std::unique_ptr<base::Value> event_param(parsed->NetLogCallback(
       NetLogCaptureMode::IncludeCookiesAndCredentials()));
   scoped_refptr<HttpResponseHeaders> recreated;
 

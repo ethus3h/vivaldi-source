@@ -6,25 +6,30 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/android/context_utils.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
+#include "base/android/unguessable_token_android.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "content/browser/android/scoped_surface_request_manager.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/media/android/browser_media_player_manager.h"
 #include "content/browser/media/android/media_web_contents_observer_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_switches.h"
+#include "gpu/ipc/common/gpu_surface_tracker.h"
 #include "jni/ChildProcessLauncher_jni.h"
 #include "media/base/android/media_player_android.h"
 #include "ui/gl/android/surface_texture.h"
 
 using base::android::AttachCurrentThread;
+using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ToJavaArrayOfStrings;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
@@ -41,7 +46,6 @@ static void SetSurfacePeer(
     base::ProcessHandle render_process_handle,
     int render_frame_id,
     int player_id) {
-#if !defined(USE_AURA)
   int render_process_id = 0;
   RenderProcessHost::iterator it = RenderProcessHost::AllHostsIterator();
   while (!it.IsAtEnd()) {
@@ -80,12 +84,9 @@ static void SetSurfacePeer(
   }
 
   if (player != player_manager->GetFullscreenPlayer()) {
-    gfx::ScopedJavaSurface scoped_surface(surface);
+    gl::ScopedJavaSurface scoped_surface(surface);
     player->SetVideoSurface(std::move(scoped_surface));
   }
-#else
-  NOTREACHED();
-#endif
 }
 
 }  // anonymous namespace
@@ -102,16 +103,17 @@ static void OnChildProcessStarted(JNIEnv*,
                                   jint handle) {
   StartChildProcessCallback* callback =
       reinterpret_cast<StartChildProcessCallback*>(client_context);
-  if (handle)
-    callback->Run(static_cast<base::ProcessHandle>(handle));
+  int launch_result = (handle == base::kNullProcessHandle)
+                      ? LAUNCH_RESULT_FAILURE
+                      : LAUNCH_RESULT_SUCCESS;
+  callback->Run(static_cast<base::ProcessHandle>(handle), launch_result);
   delete callback;
 }
 
 void StartChildProcess(
     const base::CommandLine::StringVector& argv,
     int child_process_id,
-    scoped_ptr<content::FileDescriptorInfo> files_to_register,
-    const std::map<int, base::MemoryMappedFile::Region>& regions,
+    content::FileDescriptorInfo* files_to_register,
     const StartChildProcessCallback& callback) {
   JNIEnv* env = AttachCurrentThread();
   DCHECK(env);
@@ -123,7 +125,7 @@ void StartChildProcess(
   DCHECK(file_count > 0);
 
   ScopedJavaLocalRef<jclass> j_file_info_class = base::android::GetClass(
-      env, "org/chromium/content/browser/FileDescriptorInfo");
+      env, "org/chromium/content/common/FileDescriptorInfo");
   ScopedJavaLocalRef<jobjectArray> j_file_infos(
       env, env->NewObjectArray(file_count, j_file_info_class.obj(), NULL));
   base::android::CheckException(env);
@@ -132,17 +134,11 @@ void StartChildProcess(
     int fd = files_to_register->GetFDAt(i);
     PCHECK(0 <= fd);
     int id = files_to_register->GetIDAt(i);
+    const auto& region = files_to_register->GetRegionAt(i);
     bool auto_close = files_to_register->OwnsFD(fd);
-    int64_t offset = 0L;
-    int64_t size = 0L;
-    auto found_region_iter = regions.find(id);
-    if (found_region_iter != regions.end()) {
-      offset = found_region_iter->second.offset;
-      size = found_region_iter->second.size;
-    }
     ScopedJavaLocalRef<jobject> j_file_info =
-        Java_ChildProcessLauncher_makeFdInfo(env, id, fd, auto_close, offset,
-                                             size);
+        Java_ChildProcessLauncher_makeFdInfo(env, id, fd, auto_close,
+            region.offset, region.size);
     PCHECK(j_file_info.obj());
     env->SetObjectArrayElement(j_file_infos.obj(), i, j_file_info.obj());
     if (auto_close) {
@@ -151,8 +147,8 @@ void StartChildProcess(
   }
 
   Java_ChildProcessLauncher_start(
-      env, base::android::GetApplicationContext(), j_argv.obj(),
-      child_process_id, j_file_infos.obj(),
+      env, base::android::GetApplicationContext(), j_argv, child_process_id,
+      j_file_infos,
       reinterpret_cast<intptr_t>(new StartChildProcessCallback(callback)));
 }
 
@@ -193,49 +189,37 @@ void EstablishSurfacePeer(JNIEnv* env,
       &SetSurfacePeer, jsurface, pid, primary_id, secondary_id));
 }
 
-void RegisterViewSurface(int surface_id, jobject j_surface) {
-  JNIEnv* env = AttachCurrentThread();
-  DCHECK(env);
-  Java_ChildProcessLauncher_registerViewSurface(env, surface_id, j_surface);
-}
+void CompleteScopedSurfaceRequest(JNIEnv* env,
+                                  const JavaParamRef<jclass>& clazz,
+                                  const JavaParamRef<jobject>& token,
+                                  const JavaParamRef<jobject>& surface) {
+  base::UnguessableToken requestToken =
+      base::android::UnguessableTokenAndroid::FromJavaUnguessableToken(env,
+                                                                       token);
+  if (!requestToken) {
+    DLOG(ERROR) << "Received invalid surface request token.";
+    return;
+  }
 
-void UnregisterViewSurface(int surface_id) {
-  JNIEnv* env = AttachCurrentThread();
-  DCHECK(env);
-  Java_ChildProcessLauncher_unregisterViewSurface(env, surface_id);
-}
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-void CreateSurfaceTextureSurface(int surface_texture_id,
-                                 int client_id,
-                                 gfx::SurfaceTexture* surface_texture) {
-  JNIEnv* env = AttachCurrentThread();
-  DCHECK(env);
-  Java_ChildProcessLauncher_createSurfaceTextureSurface(
-      env,
-      surface_texture_id,
-      client_id,
-      surface_texture->j_surface_texture().obj());
-}
-
-void DestroySurfaceTextureSurface(int surface_texture_id, int client_id) {
-  JNIEnv* env = AttachCurrentThread();
-  DCHECK(env);
-  Java_ChildProcessLauncher_destroySurfaceTextureSurface(
-      env, surface_texture_id, client_id);
-}
-
-gfx::ScopedJavaSurface GetSurfaceTextureSurface(int surface_texture_id,
-                                                int client_id) {
-  JNIEnv* env = AttachCurrentThread();
-  DCHECK(env);
-  return gfx::ScopedJavaSurface::AcquireExternalSurface(
-      Java_ChildProcessLauncher_getSurfaceTextureSurface(
-          env, surface_texture_id, client_id).obj());
+  ScopedJavaGlobalRef<jobject> jsurface;
+  jsurface.Reset(env, surface);
+  ScopedSurfaceRequestManager::GetInstance()->FulfillScopedSurfaceRequest(
+      requestToken, gl::ScopedJavaSurface(jsurface));
 }
 
 jboolean IsSingleProcess(JNIEnv* env, const JavaParamRef<jclass>& clazz) {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kSingleProcess);
+}
+
+base::android::ScopedJavaLocalRef<jobject> GetViewSurface(JNIEnv* env,
+    const base::android::JavaParamRef<jclass>& jcaller,
+    jint surface_id) {
+  gl::ScopedJavaSurface surface_view =
+      gpu::GpuSurfaceTracker::GetInstance()->AcquireJavaSurface(surface_id);
+  return base::android::ScopedJavaLocalRef<jobject>(surface_view.j_surface());
 }
 
 bool RegisterChildProcessLauncher(JNIEnv* env) {

@@ -4,8 +4,8 @@
 
 // Delete this file when WMPI_CAST is no longer needed.
 
-#ifndef MEDIA_BLINK_WEBMEDIAPLAYER_CAST_H_
-#define MEDIA_BLINK_WEBMEDIAPLAYER_CAST_H_
+#ifndef MEDIA_BLINK_WEBMEDIAPLAYER_CAST_ANDROID_H_
+#define MEDIA_BLINK_WEBMEDIAPLAYER_CAST_ANDROID_H_
 
 #include "base/memory/weak_ptr.h"
 #include "media/blink/media_blink_export.h"
@@ -16,12 +16,12 @@
 namespace blink {
 class WebLocalFrame;
 class WebMediaPlayerClient;
+class WebURL;
 }
 
 namespace media {
 
 class VideoFrame;
-class WebMediaPlayerDelegate;
 class WebMediaPlayerImpl;
 
 // This shim allows WebMediaPlayer to act sufficiently similar to
@@ -31,18 +31,21 @@ class WebMediaPlayerCast : public RendererMediaPlayerInterface {
  public:
   WebMediaPlayerCast(WebMediaPlayerImpl* impl,
                      blink::WebMediaPlayerClient* client,
-                     const WebMediaPlayerParams::Context3DCB& context_3d_cb,
-                     base::WeakPtr<WebMediaPlayerDelegate> delegate);
+                     const WebMediaPlayerParams::Context3DCB& context_3d_cb);
   ~WebMediaPlayerCast();
 
-  void Initialize(const GURL& url, blink::WebLocalFrame* frame);
+  void Initialize(const GURL& url,
+                  blink::WebLocalFrame* frame,
+                  int delegate_id);
 
   void requestRemotePlayback();
   void requestRemotePlaybackControl();
+  void requestRemotePlaybackStop();
 
   void SetMediaPlayerManager(
       RendererMediaPlayerManagerInterface* media_player_manager);
   bool isRemote() const { return is_remote_; }
+  bool IsPaused() const { return paused_; }
 
   double currentTime() const;
   void play();
@@ -72,44 +75,27 @@ class WebMediaPlayerCast : public RendererMediaPlayerInterface {
   void OnConnectedToRemoteDevice(
       const std::string& remote_playback_message) override;
   void OnDisconnectedFromRemoteDevice() override;
+  void OnCancelledRemotePlaybackRequest() override;
+  void OnRemotePlaybackStarted() override;
   void OnDidExitFullscreen() override;
   void OnMediaPlayerPlay() override;
   void OnMediaPlayerPause() override;
-  void OnRemoteRouteAvailabilityChanged(bool routes_available) override;
-
-  // Getters of playback state.
-  // bool paused() const override;
-
-  // True if the loaded media has a playable video track.
-  // bool hasVideo() const override;
+  void OnRemoteRouteAvailabilityChanged(
+      blink::WebRemotePlaybackAvailability availability) override;
 
   // This function is called by the RendererMediaPlayerManager to pause the
   // video and release the media player and surface texture when we switch tabs.
   // However, the actual GlTexture is not released to keep the video screenshot.
   void SuspendAndReleaseResources() override;
 
-#if defined(VIDEO_HOLE)
-  // Calculate the boundary rectangle of the media player (i.e. location and
-  // size of the video frame).
-  // Returns true if the geometry has been changed since the last call.
-  bool UpdateBoundaryRectangle() override;
-
-  const gfx::RectF GetBoundaryRectangle() override;
-#endif
-
-  void OnWaitingForDecryptionKey() override;
-
-  bool paused() const override;
-  bool hasVideo() const override;
-
   void SetDeviceScaleFactor(float scale_factor);
   scoped_refptr<VideoFrame> GetCastingBanner();
+  void setPoster(const blink::WebURL& poster);
 
  private:
   WebMediaPlayerImpl* webmediaplayer_;
   blink::WebMediaPlayerClient* client_;
   WebMediaPlayerParams::Context3DCB context_3d_cb_;
-  base::WeakPtr<WebMediaPlayerDelegate> delegate_;
 
   // Manages this object and delegates player calls to the browser process.
   // Owned by RenderFrameImpl.
@@ -128,6 +114,7 @@ class WebMediaPlayerCast : public RendererMediaPlayerInterface {
   // Last reported playout time.
   base::TimeDelta remote_time_;
   base::TimeTicks remote_time_at_;
+  base::TimeDelta duration_;
 
   // Whether the media player has been initialized.
   bool is_player_initialized_ = false;
@@ -148,4 +135,4 @@ MEDIA_BLINK_EXPORT scoped_refptr<VideoFrame> MakeTextFrameForCast(
 
 }  // namespace media
 
-#endif  // MEDIA_BLINK_WEBMEDIAPLAYER_CAST_H_
+#endif  // MEDIA_BLINK_WEBMEDIAPLAYER_CAST_ANDROID_H_

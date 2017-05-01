@@ -7,10 +7,12 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/scoped_vector.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/task_scheduler/task_scheduler.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/display/types/native_display_delegate.h"
 #include "ui/display/types/native_display_observer.h"
@@ -21,6 +23,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gl/gl_surface.h"
+#include "ui/gl/init/gl_factory.h"
 #include "ui/ozone/demo/gl_renderer.h"
 #include "ui/ozone/demo/software_renderer.h"
 #include "ui/ozone/demo/surfaceless_gl_renderer.h"
@@ -41,12 +44,12 @@ const char kWindowSize[] = "window-size";
 
 class DemoWindow;
 
-scoped_refptr<gfx::GLSurface> CreateGLSurface(gfx::AcceleratedWidget widget) {
-  scoped_refptr<gfx::GLSurface> surface;
+scoped_refptr<gl::GLSurface> CreateGLSurface(gfx::AcceleratedWidget widget) {
+  scoped_refptr<gl::GLSurface> surface;
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(kDisableSurfaceless))
-    surface = gfx::GLSurface::CreateSurfacelessViewGLSurface(widget);
+    surface = gl::init::CreateSurfacelessViewGLSurface(widget);
   if (!surface)
-    surface = gfx::GLSurface::CreateViewGLSurface(widget);
+    surface = gl::init::CreateViewGLSurface(widget);
   return surface;
 }
 
@@ -61,8 +64,8 @@ class RendererFactory {
   ~RendererFactory();
 
   bool Initialize();
-  scoped_ptr<ui::Renderer> CreateRenderer(gfx::AcceleratedWidget widget,
-                                          const gfx::Size& size);
+  std::unique_ptr<ui::Renderer> CreateRenderer(gfx::AcceleratedWidget widget,
+                                               const gfx::Size& size);
 
  private:
   RendererType type_ = SOFTWARE;
@@ -73,7 +76,7 @@ class RendererFactory {
   DISALLOW_COPY_AND_ASSIGN(RendererFactory);
 };
 
-class WindowManager : public ui::NativeDisplayObserver {
+class WindowManager : public display::NativeDisplayObserver {
  public:
   WindowManager(const base::Closure& quit_closure);
   ~WindowManager() override;
@@ -84,16 +87,18 @@ class WindowManager : public ui::NativeDisplayObserver {
   void RemoveWindow(DemoWindow* window);
 
  private:
-  void OnDisplaysAquired(const std::vector<ui::DisplaySnapshot*>& displays);
+  void OnDisplaysAquired(
+      const std::vector<display::DisplaySnapshot*>& displays);
   void OnDisplayConfigured(const gfx::Rect& bounds, bool success);
 
-  // ui::NativeDisplayDelegate:
+  // display::NativeDisplayDelegate:
   void OnConfigurationChanged() override;
+  void OnDisplaySnapshotsInvalidated() override;
 
-  scoped_ptr<ui::NativeDisplayDelegate> delegate_;
+  std::unique_ptr<display::NativeDisplayDelegate> delegate_;
   base::Closure quit_closure_;
   RendererFactory renderer_factory_;
-  std::vector<scoped_ptr<DemoWindow>> windows_;
+  std::vector<std::unique_ptr<DemoWindow>> windows_;
 
   // Flags used to keep track of the current state of display configuration.
   //
@@ -145,8 +150,7 @@ class DemoWindow : public ui::PlatformWindowDelegate {
   void OnBoundsChanged(const gfx::Rect& new_bounds) override {}
   void OnDamageRect(const gfx::Rect& damaged_region) override {}
   void DispatchEvent(ui::Event* event) override {
-    if (event->IsKeyEvent() &&
-        static_cast<ui::KeyEvent*>(event)->code() == ui::DomCode::US_Q)
+    if (event->IsKeyEvent() && event->AsKeyEvent()->code() == ui::DomCode::US_Q)
       Quit();
   }
   void OnCloseRequest() override { Quit(); }
@@ -175,10 +179,10 @@ class DemoWindow : public ui::PlatformWindowDelegate {
   WindowManager* window_manager_;      // Not owned.
   RendererFactory* renderer_factory_;  // Not owned.
 
-  scoped_ptr<ui::Renderer> renderer_;
+  std::unique_ptr<ui::Renderer> renderer_;
 
   // Window-related state.
-  scoped_ptr<ui::PlatformWindow> platform_window_;
+  std::unique_ptr<ui::PlatformWindow> platform_window_;
   gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
 
   base::WeakPtrFactory<DemoWindow> weak_ptr_factory_;
@@ -197,8 +201,7 @@ RendererFactory::~RendererFactory() {
 
 bool RendererFactory::Initialize() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(kDisableGpu) &&
-      gfx::GLSurface::InitializeOneOff() &&
+  if (!command_line->HasSwitch(kDisableGpu) && gl::init::InitializeGLOneOff() &&
       gpu_helper_.Initialize(base::ThreadTaskRunnerHandle::Get(),
                              base::ThreadTaskRunnerHandle::Get())) {
     type_ = GL;
@@ -209,22 +212,24 @@ bool RendererFactory::Initialize() {
   return true;
 }
 
-scoped_ptr<ui::Renderer> RendererFactory::CreateRenderer(
+std::unique_ptr<ui::Renderer> RendererFactory::CreateRenderer(
     gfx::AcceleratedWidget widget,
     const gfx::Size& size) {
   switch (type_) {
     case GL: {
-      scoped_refptr<gfx::GLSurface> surface = CreateGLSurface(widget);
+      scoped_refptr<gl::GLSurface> surface = CreateGLSurface(widget);
       if (!surface)
         LOG(FATAL) << "Failed to create GL surface";
+      if (!surface->SupportsAsyncSwap())
+        LOG(FATAL) << "GL surface must support SwapBuffersAsync";
       if (surface->IsSurfaceless())
-        return make_scoped_ptr(
-            new ui::SurfacelessGlRenderer(widget, surface, size));
+        return base::MakeUnique<ui::SurfacelessGlRenderer>(widget, surface,
+                                                           size);
       else
-        return make_scoped_ptr(new ui::GlRenderer(widget, surface, size));
+        return base::MakeUnique<ui::GlRenderer>(widget, surface, size);
     }
     case SOFTWARE:
-      return make_scoped_ptr(new ui::SoftwareRenderer(widget, size));
+      return base::MakeUnique<ui::SoftwareRenderer>(widget, size);
   }
 
   return nullptr;
@@ -280,8 +285,10 @@ void WindowManager::OnConfigurationChanged() {
       base::Bind(&WindowManager::OnDisplaysAquired, base::Unretained(this)));
 }
 
+void WindowManager::OnDisplaySnapshotsInvalidated() {}
+
 void WindowManager::OnDisplaysAquired(
-    const std::vector<ui::DisplaySnapshot*>& displays) {
+    const std::vector<display::DisplaySnapshot*>& displays) {
   windows_.clear();
 
   gfx::Point origin;
@@ -311,7 +318,7 @@ void WindowManager::OnDisplaysAquired(
 
 void WindowManager::OnDisplayConfigured(const gfx::Rect& bounds, bool success) {
   if (success) {
-    scoped_ptr<DemoWindow> window(
+    std::unique_ptr<DemoWindow> window(
         new DemoWindow(this, &renderer_factory_, bounds));
     window->Start();
     windows_.push_back(std::move(window));
@@ -331,6 +338,9 @@ int main(int argc, char** argv) {
   // Build UI thread message loop. This is used by platform
   // implementations for event polling & running background tasks.
   base::MessageLoopForUI message_loop;
+  constexpr int kMaxTaskSchedulerThreads = 3;
+  base::TaskScheduler::CreateAndSetSimpleTaskScheduler(
+      kMaxTaskSchedulerThreads);
 
   ui::OzonePlatform::InitializeForUI();
   ui::KeyboardLayoutEngineManager::GetKeyboardLayoutEngine()

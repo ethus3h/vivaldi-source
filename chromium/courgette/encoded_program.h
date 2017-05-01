@@ -8,10 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
 #include "courgette/disassembler.h"
+#include "courgette/label_manager.h"
 #include "courgette/memory_allocator.h"
 #include "courgette/types_elf.h"
 
@@ -48,10 +50,11 @@ class EncodedProgram {
   // (1) The image base can be specified at any time.
   void set_image_base(uint64_t base) { image_base_ = base; }
 
-  // (2) Address tables and indexes defined first.
-  CheckBool DefineRel32Label(int index, RVA address) WARN_UNUSED_RESULT;
-  CheckBool DefineAbs32Label(int index, RVA address) WARN_UNUSED_RESULT;
-  void EndLabels();
+  // (2) Address tables and indexes imported first.
+
+  CheckBool ImportLabels(const LabelManager& abs32_label_manager,
+                         const LabelManager& rel32_label_manager)
+      WARN_UNUSED_RESULT;
 
   // (3) Add instructions in the order needed to generate bytes of file.
   // NOTE: If any of these methods ever fail, the EncodedProgram instance
@@ -112,19 +115,25 @@ class EncodedProgram {
   typedef NoThrowBuffer<OP> OPVector;
 
   void DebuggingSummary();
+
+  // Helper for ImportLabels().
+  static CheckBool WriteRvasToList(const LabelManager& label_manager,
+                                   RvaVector* rvas);
+
+  // Helper for ImportLabels().
+  static void FillUnassignedRvaSlots(RvaVector* rvas);
+
   CheckBool GeneratePeRelocations(SinkStream* buffer,
                                   uint8_t type) WARN_UNUSED_RESULT;
   CheckBool GenerateElfRelocations(Elf32_Word pending_elf_relocation_table,
                                    SinkStream *buffer) WARN_UNUSED_RESULT;
-  CheckBool DefineLabelCommon(RvaVector*, int, RVA) WARN_UNUSED_RESULT;
-  void FinishLabelsCommon(RvaVector* addresses);
 
   // Decodes and evaluates courgette ops for ARM rel32 addresses.
   CheckBool EvaluateRel32ARM(OP op, size_t& ix_rel32_ix, RVA& current_rva,
                              SinkStream* output);
 
   // Binary assembly language tables.
-  uint64_t image_base_;
+  uint64_t image_base_ = 0;
   RvaVector rel32_rva_;
   RvaVector abs32_rva_;
   OPVector ops_;
@@ -141,5 +150,11 @@ class EncodedProgram {
   DISALLOW_COPY_AND_ASSIGN(EncodedProgram);
 };
 
+// Deserializes program from a stream set to |*output|. Returns C_OK if
+// successful, otherwise assigns |*output| to null and returns an error status.
+Status ReadEncodedProgram(SourceStreamSet* source,
+                          std::unique_ptr<EncodedProgram>* output);
+
 }  // namespace courgette
+
 #endif  // COURGETTE_ENCODED_PROGRAM_H_

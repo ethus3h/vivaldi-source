@@ -13,9 +13,7 @@ extern const wchar_t kChromeArchive[];
 extern const wchar_t kChromeCompressedArchive[];
 extern const wchar_t kVisualElements[];
 extern const wchar_t kVisualElementsManifest[];
-extern const wchar_t kWowHelperExe[];
 extern const wchar_t kStandaloneProfileHelper[];
-extern const wchar_t kCrashServiceExe[];
 
 extern const wchar_t kInstallSourceDir[];
 extern const wchar_t kInstallSourceChromeDir[];

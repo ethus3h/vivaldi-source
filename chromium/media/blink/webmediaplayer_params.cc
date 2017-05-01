@@ -13,7 +13,7 @@ namespace media {
 
 WebMediaPlayerParams::WebMediaPlayerParams(
     const DeferLoadCB& defer_load_cb,
-    const scoped_refptr<RestartableAudioRendererSink>& audio_renderer_sink,
+    const scoped_refptr<SwitchableAudioRendererSink>& audio_renderer_sink,
     const scoped_refptr<MediaLog>& media_log,
 #if defined(USE_SYSTEM_PROPRIETARY_CODECS)
     const IPCMediaPipelineHost::Creator& ipc_media_pipeline_host_creator,
@@ -23,8 +23,9 @@ WebMediaPlayerParams::WebMediaPlayerParams(
     const scoped_refptr<base::SingleThreadTaskRunner>& compositor_task_runner,
     const Context3DCB& context_3d_cb,
     const AdjustAllocatedMemoryCB& adjust_allocated_memory_cb,
-    MediaPermission* media_permission,
-    blink::WebContentDecryptionModule* initial_cdm)
+    blink::WebContentDecryptionModule* initial_cdm,
+    SurfaceManager* surface_manager,
+    base::WeakPtr<MediaObserver> media_observer)
     : defer_load_cb_(defer_load_cb),
       audio_renderer_sink_(audio_renderer_sink),
       media_log_(media_log),
@@ -36,8 +37,9 @@ WebMediaPlayerParams::WebMediaPlayerParams(
       compositor_task_runner_(compositor_task_runner),
       context_3d_cb_(context_3d_cb),
       adjust_allocated_memory_cb_(adjust_allocated_memory_cb),
-      media_permission_(media_permission),
-      initial_cdm_(initial_cdm) {}
+      initial_cdm_(initial_cdm),
+      surface_manager_(surface_manager),
+      media_observer_(media_observer) {}
 
 WebMediaPlayerParams::~WebMediaPlayerParams() {}
 

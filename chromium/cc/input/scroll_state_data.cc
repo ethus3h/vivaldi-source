@@ -3,49 +3,51 @@
 // found in the LICENSE file.
 
 #include "cc/input/scroll_state_data.h"
+#include "cc/trees/scroll_node.h"
 
 namespace cc {
 
-ScrollStateData::ScrollStateData(double delta_x,
-                                 double delta_y,
-                                 int start_position_x,
-                                 int start_position_y,
-                                 double velocity_x,
-                                 double velocity_y,
-                                 bool is_beginning,
-                                 bool is_in_inertial_phase,
-                                 bool is_ending,
-                                 bool should_propagate,
-                                 bool delta_consumed_for_scroll_sequence,
-                                 bool is_direct_manipulation)
-    : delta_x(delta_x),
-      delta_y(delta_y),
-      start_position_x(start_position_x),
-      start_position_y(start_position_y),
-      velocity_x(velocity_x),
-      velocity_y(velocity_y),
-      is_beginning(is_beginning),
-      is_in_inertial_phase(is_in_inertial_phase),
-      is_ending(is_ending),
-      should_propagate(should_propagate),
-      current_native_scrolling_layer(nullptr),
-      delta_consumed_for_scroll_sequence(delta_consumed_for_scroll_sequence),
-      is_direct_manipulation(is_direct_manipulation),
-      caused_scroll_x(false),
-      caused_scroll_y(false) {}
-
 ScrollStateData::ScrollStateData()
-    : ScrollStateData(0,
-                      0,
-                      0,
-                      0,
-                      0,
-                      0,
-                      false,
-                      false,
-                      false,
-                      true,
-                      false,
-                      false) {}
+    : delta_x(0),
+      delta_y(0),
+      position_x(0),
+      position_y(0),
+      velocity_x(0),
+      velocity_y(0),
+      is_beginning(false),
+      is_in_inertial_phase(false),
+      is_ending(false),
+      should_propagate(false),
+      from_user_input(false),
+      delta_consumed_for_scroll_sequence(false),
+      is_direct_manipulation(false),
+      delta_granularity(0),
+      caused_scroll_x(false),
+      caused_scroll_y(false),
+      current_native_scrolling_node_(nullptr) {}
+
+ScrollStateData::ScrollStateData(const ScrollStateData& other) = default;
+
+ScrollNode* ScrollStateData::current_native_scrolling_node() const {
+  return current_native_scrolling_node_;
+}
+
+void ScrollStateData::set_current_native_scrolling_node(
+    ScrollNode* current_native_scrolling_node) {
+  current_native_scrolling_node_ = current_native_scrolling_node;
+  current_native_scrolling_element_ = ElementId();
+}
+
+ElementId ScrollStateData::current_native_scrolling_element() const {
+  if (current_native_scrolling_node_)
+    return current_native_scrolling_node_->element_id;
+  return current_native_scrolling_element_;
+}
+
+void ScrollStateData::set_current_native_scrolling_element(
+    ElementId element_id) {
+  current_native_scrolling_element_ = element_id;
+  current_native_scrolling_node_ = nullptr;
+}
 
 }  // namespace cc

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "base/command_line.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/api/gcd_private/gcd_private_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/local_discovery/test_service_discovery_client.h"
@@ -91,13 +92,13 @@ class GcdPrivateAPITest : public ExtensionApiTest {
         "ddchlicdkolnonkihahngkmmmjnjlkkf");
   }
 
-  scoped_ptr<net::FakeURLFetcher> CreateFakeURLFetcher(
+  std::unique_ptr<net::FakeURLFetcher> CreateFakeURLFetcher(
       const GURL& url,
       net::URLFetcherDelegate* fetcher_delegate,
       const std::string& response_data,
       net::HttpStatusCode response_code,
       net::URLRequestStatus::Status status) {
-    scoped_ptr<net::FakeURLFetcher> fetcher(new net::FakeURLFetcher(
+    std::unique_ptr<net::FakeURLFetcher> fetcher(new net::FakeURLFetcher(
         url, fetcher_delegate, response_data, response_code, status));
     scoped_refptr<net::HttpResponseHeaders> headers =
         new net::HttpResponseHeaders("");
@@ -114,6 +115,7 @@ class GcdPrivateAPITest : public ExtensionApiTest {
 class GcdPrivateWithMdnsAPITest : public GcdPrivateAPITest {
  public:
   void SetUpOnMainThread() override {
+    GcdPrivateAPITest::SetUpOnMainThread();
     test_service_discovery_client_ =
         new local_discovery::TestServiceDiscoveryClient();
     test_service_discovery_client_->Start();
@@ -121,7 +123,7 @@ class GcdPrivateWithMdnsAPITest : public GcdPrivateAPITest {
 
   void TearDownOnMainThread() override {
     test_service_discovery_client_ = nullptr;
-    ExtensionApiTest::TearDownOnMainThread();
+    GcdPrivateAPITest::TearDownOnMainThread();
   }
 
  protected:

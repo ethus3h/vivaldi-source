@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/base_export.h"
@@ -103,22 +104,22 @@ class BASE_EXPORT ProcessMetrics {
   ~ProcessMetrics();
 
   // Creates a ProcessMetrics for the specified process.
-  // The caller owns the returned object.
 #if !defined(OS_MACOSX) || defined(OS_IOS)
-  static ProcessMetrics* CreateProcessMetrics(ProcessHandle process);
+  static std::unique_ptr<ProcessMetrics> CreateProcessMetrics(
+      ProcessHandle process);
 #else
 
   // The port provider needs to outlive the ProcessMetrics object returned by
   // this function. If NULL is passed as provider, the returned object
   // only returns valid metrics if |process| is the current process.
-  static ProcessMetrics* CreateProcessMetrics(ProcessHandle process,
-                                              PortProvider* port_provider);
+  static std::unique_ptr<ProcessMetrics> CreateProcessMetrics(
+      ProcessHandle process,
+      PortProvider* port_provider);
 #endif  // !defined(OS_MACOSX) || defined(OS_IOS)
 
   // Creates a ProcessMetrics for the current process. This a cross-platform
   // convenience wrapper for CreateProcessMetrics().
-  // The caller owns the returned object.
-  static ProcessMetrics* CreateCurrentProcessMetrics();
+  static std::unique_ptr<ProcessMetrics> CreateCurrentProcessMetrics();
 
   // Returns the current space allocated for the pagefile, in bytes (these pages
   // may or may not be in memory).  On Linux, this returns the total virtual
@@ -144,6 +145,9 @@ class BASE_EXPORT ProcessMetrics {
   // usage in bytes, as per definition of WorkingSetBytes. Note that this
   // function is somewhat expensive on Windows (a few ms per process).
   bool GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const;
+  // Computes pss (proportional set size) of a process. Note that this
+  // function is somewhat expensive on Windows (a few ms per process).
+  bool GetProportionalSetSizeBytes(uint64_t* pss_bytes) const;
 
 #if defined(OS_MACOSX)
   // Fills both CommitedKBytes and WorkingSetKBytes in a single operation. This
@@ -236,7 +240,10 @@ class BASE_EXPORT ProcessMetrics {
 // Returns 0 if it can't compute the commit charge.
 BASE_EXPORT size_t GetSystemCommitCharge();
 
-// Returns the number of bytes in a memory page.
+// Returns the number of bytes in a memory page. Do not use this to compute
+// the number of pages in a block of memory for calling mincore(). On some
+// platforms, e.g. iOS, mincore() uses a different page size from what is
+// returned by GetPageSize().
 BASE_EXPORT size_t GetPageSize();
 
 #if defined(OS_POSIX)
@@ -261,12 +268,21 @@ BASE_EXPORT void SetFdLimit(unsigned int max_descriptors);
 // Linux/Android/Chrome OS. Shmem/slab/gem_objects/gem_size are Chrome OS only.
 struct BASE_EXPORT SystemMemoryInfoKB {
   SystemMemoryInfoKB();
+  SystemMemoryInfoKB(const SystemMemoryInfoKB& other);
 
   // Serializes the platform specific fields to value.
-  scoped_ptr<Value> ToValue() const;
+  std::unique_ptr<Value> ToValue() const;
 
   int total;
   int free;
+
+#if defined(OS_LINUX)
+  // This provides an estimate of available memory as described here:
+  // https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=34e431b0ae398fc54ea69ff85ec700722c9da773
+  // NOTE: this is ONLY valid in kernels 3.14 and up.  Its value will always
+  // be 0 in earlier kernel versions.
+  int available;
+#endif
 
 #if !defined(OS_MACOSX)
   int swap_total;
@@ -283,9 +299,9 @@ struct BASE_EXPORT SystemMemoryInfoKB {
   int dirty;
 
   // vmstats data.
-  int pswpin;
-  int pswpout;
-  int pgmajfault;
+  unsigned long pswpin;
+  unsigned long pswpout;
+  unsigned long pgmajfault;
 #endif  // defined(OS_ANDROID) || defined(OS_LINUX)
 
 #if defined(OS_CHROMEOS)
@@ -336,9 +352,10 @@ BASE_EXPORT bool ParseProcVmstat(const std::string& input,
 // Data from /proc/diskstats about system-wide disk I/O.
 struct BASE_EXPORT SystemDiskInfo {
   SystemDiskInfo();
+  SystemDiskInfo(const SystemDiskInfo& other);
 
   // Serializes the platform specific fields to value.
-  scoped_ptr<Value> ToValue() const;
+  std::unique_ptr<Value> ToValue() const;
 
   uint64_t reads;
   uint64_t reads_merged;
@@ -361,6 +378,9 @@ BASE_EXPORT bool IsValidDiskName(const std::string& candidate);
 // Retrieves data from /proc/diskstats about system-wide disk I/O.
 // Fills in the provided |diskinfo| structure. Returns true on success.
 BASE_EXPORT bool GetSystemDiskInfo(SystemDiskInfo* diskinfo);
+
+// Returns the amount of time spent in user space since boot across all CPUs.
+BASE_EXPORT TimeDelta GetUserCpuTimeSinceBoot();
 #endif  // defined(OS_LINUX) || defined(OS_ANDROID)
 
 #if defined(OS_CHROMEOS)
@@ -375,7 +395,7 @@ struct BASE_EXPORT SwapInfo {
   }
 
   // Serializes the platform specific fields to value.
-  scoped_ptr<Value> ToValue() const;
+  std::unique_ptr<Value> ToValue() const;
 
   uint64_t num_reads;
   uint64_t num_writes;
@@ -399,7 +419,7 @@ class SystemMetrics {
   static SystemMetrics Sample();
 
   // Serializes the system metrics to value.
-  scoped_ptr<Value> ToValue() const;
+  std::unique_ptr<Value> ToValue() const;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SystemMetricsTest, SystemMetrics);

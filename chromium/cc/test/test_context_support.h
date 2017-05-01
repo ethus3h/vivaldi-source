@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <set>
 #include <vector>
 
 #include "base/macros.h"
@@ -26,23 +27,23 @@ class TestContextSupport : public gpu::ContextSupport {
   ~TestContextSupport() override;
 
   // gpu::ContextSupport implementation.
-  void SignalSyncPoint(uint32_t sync_point,
-                       const base::Closure& callback) override;
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        const base::Closure& callback) override;
+  bool IsSyncTokenSignalled(const gpu::SyncToken& sync_token) override;
   void SignalQuery(uint32_t query, const base::Closure& callback) override;
   void SetAggressivelyFreeResources(bool aggressively_free_resources) override;
   void Swap() override;
+  void SwapWithDamage(const gfx::Rect& damage) override;
   void PartialSwapBuffers(const gfx::Rect& sub_buffer) override;
   void CommitOverlayPlanes() override;
-  uint32_t InsertFutureSyncPointCHROMIUM() override;
-  void RetireSyncPointCHROMIUM(uint32_t sync_point) override;
   void ScheduleOverlayPlane(int plane_z_order,
                             gfx::OverlayTransform plane_transform,
                             unsigned overlay_texture_id,
                             const gfx::Rect& display_bounds,
                             const gfx::RectF& uv_rect) override;
   uint64_t ShareGroupTracingGUID() const override;
+  void SetErrorMessageCallback(
+      const base::Callback<void(const char*, int32_t)>& callback) override;
 
   void CallAllSyncPointCallbacks();
 

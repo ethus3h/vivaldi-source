@@ -10,6 +10,7 @@
 #include "components/bubble/bubble_controller.h"
 #include "components/bubble/bubble_delegate.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
 
 namespace {
@@ -97,6 +98,9 @@ static void LogBubbleCloseReason(BubbleReference bubble,
     case BUBBLE_CLOSE_CANCELED:
       UMA_HISTOGRAM_SPARSE_SLOWLY("Bubbles.Close.Canceled", bubble_id);
       return;
+    case BUBBLE_CLOSE_FRAME_DESTROYED:
+      UMA_HISTOGRAM_SPARSE_SLOWLY("Bubbles.Close.FrameDestroyed", bubble_id);
+      return;
   }
 
   NOTREACHED();
@@ -139,8 +143,16 @@ void ChromeBubbleManager::ActiveTabChanged(content::WebContents* old_contents,
   Observe(new_contents);
 }
 
+void ChromeBubbleManager::FrameDeleted(
+    content::RenderFrameHost* render_frame_host) {
+  // When a frame is destroyed, bubbles spawned by that frame should default to
+  // being closed, so that they can't traverse any references they hold to the
+  // destroyed frame.
+  CloseBubblesOwnedBy(render_frame_host);
+}
+
 void ChromeBubbleManager::DidToggleFullscreenModeForTab(
-    bool entered_fullscreen) {
+    bool entered_fullscreen, bool will_cause_resize) {
   CloseAllBubbles(BUBBLE_CLOSE_FULLSCREEN_TOGGLED);
   // Any bubble that didn't close should update its anchor position.
   UpdateAllBubbleAnchors();
@@ -148,7 +160,8 @@ void ChromeBubbleManager::DidToggleFullscreenModeForTab(
 
 void ChromeBubbleManager::NavigationEntryCommitted(
     const content::LoadCommittedDetails& load_details) {
-  CloseAllBubbles(BUBBLE_CLOSE_NAVIGATED);
+  if (!load_details.is_in_page)
+    CloseAllBubbles(BUBBLE_CLOSE_NAVIGATED);
 }
 
 void ChromeBubbleManager::ChromeBubbleMetrics::OnBubbleNeverShown(

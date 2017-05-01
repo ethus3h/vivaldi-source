@@ -33,27 +33,33 @@
 #import <AppKit/AppKit.h>
 
 #include "platform/mac/NSScrollerImpDetails.h"
-#include "platform/scroll/ScrollbarThemeMacCommon.h"
+#include "platform/scroll/ScrollbarThemeMac.h"
 
 using namespace blink;
 
 namespace blink {
 
-static_assert(static_cast<NSScrollerStyle>(ScrollerStyleLegacy) == NSScrollerStyleLegacy, "ScrollerStyleLegacy must match NSScrollerStyleLegacy");
-static_assert(static_cast<NSScrollerStyle>(ScrollerStyleOverlay) == NSScrollerStyleOverlay, "ScrollerStyleOverlay must match NSScrollerStyleOverlay");
+static_assert(static_cast<NSScrollerStyle>(ScrollerStyleLegacy) ==
+                  NSScrollerStyleLegacy,
+              "ScrollerStyleLegacy must match NSScrollerStyleLegacy");
+static_assert(static_cast<NSScrollerStyle>(ScrollerStyleOverlay) ==
+                  NSScrollerStyleOverlay,
+              "ScrollerStyleOverlay must match NSScrollerStyleOverlay");
 
 void WebScrollbarTheme::updateScrollbarsWithNSDefaults(
-    float initialButtonDelay, float autoscrollButtonDelay,
-    ScrollerStyle preferredScrollerStyle, bool redraw, bool scrollAnimationEnabled, WebScrollbarButtonsPlacement buttonPlacement)
-{
-    ScrollbarTheme& theme = ScrollbarTheme::theme();
-    if (theme.isMockTheme())
-        return;
+    float initialButtonDelay,
+    float autoscrollButtonDelay,
+    ScrollerStyle preferredScrollerStyle,
+    bool redraw,
+    WebScrollbarButtonsPlacement buttonPlacement) {
+  ScrollbarTheme& theme = ScrollbarTheme::theme();
+  if (theme.isMockTheme())
+    return;
 
-    static_cast<ScrollbarThemeMacCommon&>(theme).preferencesChanged(
-        initialButtonDelay, autoscrollButtonDelay,
-        static_cast<NSScrollerStyle>(preferredScrollerStyle),
-        redraw, scrollAnimationEnabled, buttonPlacement);
+  static_cast<ScrollbarThemeMac&>(theme).preferencesChanged(
+      initialButtonDelay, autoscrollButtonDelay,
+      static_cast<NSScrollerStyle>(preferredScrollerStyle), redraw,
+      buttonPlacement);
 }
 
-} // namespace blink
+}  // namespace blink

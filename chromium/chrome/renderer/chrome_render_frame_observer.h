@@ -7,9 +7,8 @@
 
 #include "base/macros.h"
 #include "base/timer/timer.h"
+#include "chrome/common/prerender_types.h"
 #include "content/public/renderer/render_frame_observer.h"
-
-class GURL;
 
 namespace gfx {
 class Size;
@@ -35,14 +34,15 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver {
 
   // RenderFrameObserver implementation.
   bool OnMessageReceived(const IPC::Message& message) override;
-  void DidFinishDocumentLoad() override;
   void DidStartProvisionalLoad() override;
   void DidFinishLoad() override;
   void DidCommitProvisionalLoad(bool is_new_navigation,
                                 bool is_same_page_navigation) override;
+  void DidMeaningfulLayout(blink::WebMeaningfulLayout layout_type) override;
+  void OnDestruct() override;
 
   // IPC handlers
-  void OnSetIsPrerendering(bool is_prerendering);
+  void OnSetIsPrerendering(prerender::PrerenderMode mode);
   void OnRequestReloadImageForContextNode();
   void OnRequestThumbnailForContextNode(
       int thumbnail_min_area_pixels,
@@ -50,8 +50,6 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver {
       int callback_id);
   void OnPrintNodeUnderContextMenu();
   void OnSetClientSidePhishingDetection(bool enable_phishing_detection);
-  void OnAppBannerPromptRequest(int request_id,
-                                const std::string& platform);
 
   // Captures page information using the top (main) frame of a frame tree.
   // Currently, this page information is just the text content of the all
@@ -62,9 +60,6 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver {
 
   void CapturePageTextLater(TextCaptureType capture_type,
                             base::TimeDelta delay);
-
-  // Used to delay calling CapturePageInfo.
-  base::Timer capture_timer_;
 
   // Have the same lifetime as us.
   translate::TranslateHelper* translate_helper_;

@@ -15,8 +15,6 @@
 #include "net/proxy/proxy_resolver.h"
 #include "url/gurl.h"
 
-#pragma comment(lib, "winhttp.lib")
-
 using base::TimeDelta;
 using base::TimeTicks;
 
@@ -62,11 +60,8 @@ class ProxyResolverWinHttp : public ProxyResolver {
   int GetProxyForURL(const GURL& url,
                      ProxyInfo* results,
                      const CompletionCallback& /*callback*/,
-                     RequestHandle* /*request*/,
-                     const BoundNetLog& /*net_log*/) override;
-  void CancelRequest(RequestHandle request) override;
-
-  LoadState GetLoadState(RequestHandle request) const override;
+                     std::unique_ptr<Request>* /*request*/,
+                     const NetLogWithSource& /*net_log*/) override;
 
  private:
   bool OpenWinHttpSession();
@@ -95,8 +90,8 @@ ProxyResolverWinHttp::~ProxyResolverWinHttp() {
 int ProxyResolverWinHttp::GetProxyForURL(const GURL& query_url,
                                          ProxyInfo* results,
                                          const CompletionCallback& /*callback*/,
-                                         RequestHandle* /*request*/,
-                                         const BoundNetLog& /*net_log*/) {
+                                         std::unique_ptr<Request>* /*request*/,
+                                         const NetLogWithSource& /*net_log*/) {
   // If we don't have a WinHTTP session, then create a new one.
   if (!session_handle_ && !OpenWinHttpSession())
     return ERR_FAILED;
@@ -175,16 +170,6 @@ int ProxyResolverWinHttp::GetProxyForURL(const GURL& query_url,
   return rv;
 }
 
-void ProxyResolverWinHttp::CancelRequest(RequestHandle request) {
-  // This is a synchronous ProxyResolver; no possibility for async requests.
-  NOTREACHED();
-}
-
-LoadState ProxyResolverWinHttp::GetLoadState(RequestHandle request) const {
-  NOTREACHED();
-  return LOAD_STATE_IDLE;
-}
-
 bool ProxyResolverWinHttp::OpenWinHttpSession() {
   DCHECK(!session_handle_);
   session_handle_ = WinHttpOpen(NULL,
@@ -220,9 +205,9 @@ ProxyResolverFactoryWinHttp::ProxyResolverFactoryWinHttp()
 
 int ProxyResolverFactoryWinHttp::CreateProxyResolver(
     const scoped_refptr<ProxyResolverScriptData>& pac_script,
-    scoped_ptr<ProxyResolver>* resolver,
+    std::unique_ptr<ProxyResolver>* resolver,
     const CompletionCallback& callback,
-    scoped_ptr<Request>* request) {
+    std::unique_ptr<Request>* request) {
   resolver->reset(new ProxyResolverWinHttp(pac_script));
   return OK;
 }

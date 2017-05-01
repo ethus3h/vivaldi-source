@@ -5,10 +5,8 @@
 #ifndef COMPONENTS_SESSIONS_IOS_IOS_SERIALIZED_NAVIGATION_BUILDER_H_
 #define COMPONENTS_SESSIONS_IOS_IOS_SERIALIZED_NAVIGATION_BUILDER_H_
 
+#include <memory>
 #include <vector>
-
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 
 namespace web {
 class NavigationItem;
@@ -26,17 +24,15 @@ class IOSSerializedNavigationBuilder {
   static SerializedNavigationEntry FromNavigationItem(
       int index, const web::NavigationItem& item);
 
-  // Convert the given SerializedNavigationEntry into a NavigationItem with the
-  // given page ID.  The NavigationItem will have a transition type of
+  // Convert the given SerializedNavigationEntry into a NavigationItem. The
+  // NavigationItem will have a transition type of
   // PAGE_TRANSITION_RELOAD and a new unique ID.
-  static scoped_ptr<web::NavigationItem> ToNavigationItem(
+  static std::unique_ptr<web::NavigationItem> ToNavigationItem(
       const SerializedNavigationEntry* navigation);
 
   // Converts a set of SerializedNavigationEntrys into a list of
   // NavigationItems with sequential page IDs.
-  // TODO(crbug.com/561329): Change this API to return a
-  // std::vector<scoped_ptr> in coordination with changing downstream clients.
-  static ScopedVector<web::NavigationItem> ToNavigationItems(
+  static std::vector<std::unique_ptr<web::NavigationItem>> ToNavigationItems(
       const std::vector<SerializedNavigationEntry>& navigations);
 };
 

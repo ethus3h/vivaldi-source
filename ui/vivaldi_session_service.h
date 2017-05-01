@@ -26,6 +26,10 @@
 
 namespace vivaldi {
 
+struct SessionOptions {
+  bool openInNewWindow_ = false;
+};
+
 // We cannot inherit from SessionService, and changing that class to be
 // suitable is risky and requires significant changes.
 class VivaldiSessionService {
@@ -39,24 +43,25 @@ class VivaldiSessionService {
   ~VivaldiSessionService();
 
   bool ShouldTrackWindow(Browser* browser, Profile* profile);
-  void ScheduleCommand(scoped_ptr<sessions::SessionCommand> command);
+  void ScheduleCommand(std::unique_ptr<sessions::SessionCommand> command);
   void BuildCommandsForTab(const SessionID& window_id,
                           content::WebContents* tab, int index_in_window,
                           bool is_pinned);
   void BuildCommandsForBrowser(Browser* browser);
   bool Save(const base::FilePath& file_name);
-  bool Load(const base::FilePath& file_name, Browser* browser);
+  bool Load(const base::FilePath &file_name, Browser *browser,
+            SessionOptions &opts);
 
  private:
   void ResetFile(const base::FilePath& file_name);
   base::File* OpenAndWriteHeader(const base::FilePath& path);
   bool AppendCommandsToFile(
       base::File* file,
-      const ScopedVector<sessions::SessionCommand>& commands);
-  bool Read(ScopedVector<sessions::SessionCommand>* commands);
+      const std::vector <std::unique_ptr<sessions::SessionCommand>>& commands);
+  bool Read(std::vector <std::unique_ptr<sessions::SessionCommand>>* commands);
   bool FillBuffer();
   Browser* ProcessSessionWindows(
-      std::vector<sessions::SessionWindow*>* windows,
+    std::vector<std::unique_ptr<sessions::SessionWindow>>* windows,
       SessionID::id_type active_window_id,
       std::vector<SessionRestoreDelegate::RestoredTab>* created_contents);
   void RestoreTabsToBrowser(
@@ -64,7 +69,7 @@ class VivaldiSessionService {
       int initial_tab_count, int selected_tab_index,
       std::vector<SessionRestoreDelegate::RestoredTab>* created_contents);
   void RemoveUnusedRestoreWindows(
-      std::vector<sessions::SessionWindow*>* window_list);
+    std::vector<std::unique_ptr<sessions::SessionWindow>>* window_list);
   Browser* CreateRestoredBrowser(Browser::Type type, gfx::Rect bounds,
                                  ui::WindowShowState show_state,
                                  const std::string& app_name);
@@ -78,12 +83,14 @@ class VivaldiSessionService {
   // either there are no commands, or there was an error. Use errored_ to
   // distinguish the two. If NULL is returned, and there is no error, it means
   // the end of file was successfully reached.
-  sessions::SessionCommand* ReadCommand();
-  const ScopedVector<sessions::SessionCommand>& pending_commands() {
+  std::unique_ptr<sessions::SessionCommand> ReadCommand();
+
+  const std::vector<std::unique_ptr<sessions::SessionCommand>>&
+  pending_commands() {
     return pending_commands_;
   }
   // Commands we need to send over to the backend.
-  ScopedVector<sessions::SessionCommand> pending_commands_;
+  std::vector <std::unique_ptr<sessions::SessionCommand>> pending_commands_;
 
   // Maps from session tab id to the range of navigation entries that has
   // been written to disk.
@@ -93,7 +100,7 @@ class VivaldiSessionService {
   IdToRange tab_to_available_range_;
 
   // Handle to the target file.
-  scoped_ptr<base::File> current_session_file_;
+  std::unique_ptr<base::File> current_session_file_;
 
   // Whether an error condition has been detected
   bool errored_;
@@ -111,6 +118,9 @@ class VivaldiSessionService {
   Browser* browser_;
 
   Profile* profile_;
+
+  // Session open options
+  SessionOptions opts_;
 
   DISALLOW_COPY_AND_ASSIGN(VivaldiSessionService);
 };

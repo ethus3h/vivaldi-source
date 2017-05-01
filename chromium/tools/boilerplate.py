@@ -25,7 +25,9 @@ EXTENSIONS_TO_COMMENTS = {
     'cc': '//',
     'mm': '//',
     'js': '//',
-    'py': '#'
+    'py': '#',
+    'gn': '#',
+    'gni': '#',
 }
 
 def _GetHeader(filename):
@@ -36,7 +38,9 @@ def _GetHeader(filename):
 
 
 def _CppHeader(filename):
-  guard = filename.replace('/', '_').replace('.', '_').upper() + '_'
+  guard = filename.upper() + '_'
+  for char in '/.+':
+    guard = guard.replace(char, '_')
   return '\n'.join([
     '',
     '#ifndef ' + guard,
@@ -47,10 +51,21 @@ def _CppHeader(filename):
   ])
 
 
-def _CppImplementation(filename):
+def _RemoveTestSuffix(filename):
   base, _ = os.path.splitext(filename)
-  include = '#include "' + base + '.h"'
-  return '\n'.join(['', include])
+  suffixes = [ '_test', '_unittest', '_browsertest' ]
+  for suffix in suffixes:
+    l = len(suffix)
+    if base[-l:] == suffix:
+      return base[:-l]
+  return base
+
+def _CppImplementation(filename):
+  return '\n#include "' + _RemoveTestSuffix(filename) + '.h"\n'
+
+
+def _ObjCppImplementation(filename):
+  return '\n#import "' + _RemoveTestSuffix(filename) + '.h"\n'
 
 
 def _CreateFile(filename):
@@ -58,8 +73,10 @@ def _CreateFile(filename):
 
   if filename.endswith('.h'):
     contents += _CppHeader(filename)
-  elif filename.endswith('.cc') or filename.endswith('.mm'):
+  elif filename.endswith('.cc'):
     contents += _CppImplementation(filename)
+  elif filename.endswith('.mm'):
+    contents += _ObjCppImplementation(filename)
 
   fd = open(filename, 'w')
   fd.write(contents)

@@ -45,6 +45,7 @@ class ProguardCmdBuilder(object):
     self._outjar = None
     self._cmd = None
     self._verbose = False
+    self._disabled_optimizations = []
 
   def outjar(self, path):
     assert self._cmd is None
@@ -87,6 +88,10 @@ class ProguardCmdBuilder(object):
     assert self._cmd is None
     self._verbose = verbose
 
+  def disable_optimizations(self, optimizations):
+    assert self._cmd is None
+    self._disabled_optimizations += optimizations
+
   def build(self):
     if self._cmd:
       return self._cmd
@@ -98,21 +103,8 @@ class ProguardCmdBuilder(object):
       '-forceprocessing',
     ]
     if self._tested_apk_info_path:
-      assert len(self._configs) == 1
       tested_apk_info = build_utils.ReadJson(self._tested_apk_info_path)
       self._configs += tested_apk_info['configs']
-      self._injars = [
-          p for p in self._injars if not p in tested_apk_info['inputs']]
-      if not self._libraries:
-        self._libraries = []
-      self._libraries += tested_apk_info['inputs']
-      self._mapping = tested_apk_info['mapping']
-      cmd += [
-        '-dontobfuscate',
-        '-dontoptimize',
-        '-dontshrink',
-        '-dontskipnonpubliclibraryclassmembers',
-      ]
 
     if self._mapping:
       cmd += [
@@ -124,6 +116,9 @@ class ProguardCmdBuilder(object):
         '-libraryjars', ':'.join(self._libraries),
       ]
 
+    for optimization in self._disabled_optimizations:
+      cmd += [ '-optimizations', '!' + optimization ]
+
     cmd += [
       '-injars', ':'.join(self._injars)
     ]
@@ -134,7 +129,6 @@ class ProguardCmdBuilder(object):
     # The output jar must be specified after inputs.
     cmd += [
       '-outjars', self._outjar,
-      '-dump', self._outjar + '.dump',
       '-printseeds', self._outjar + '.seeds',
       '-printusage', self._outjar + '.usage',
       '-printmapping', self._outjar + '.mapping',
@@ -157,16 +151,32 @@ class ProguardCmdBuilder(object):
       inputs += [self._tested_apk_info_path]
     return inputs
 
+  def _WriteFlagsFile(self, out):
+    # Quite useful for auditing proguard flags.
+    for config in self._configs:
+      out.write('#' * 80 + '\n')
+      out.write(config + '\n')
+      out.write('#' * 80 + '\n')
+      with open(config) as config_file:
+        out.write(config_file.read().rstrip())
+      out.write('\n\n')
+    out.write('#' * 80 + '\n')
+    out.write('Command-line\n')
+    out.write('#' * 80 + '\n')
+    out.write(' '.join(self._cmd) + '\n')
 
   def CheckOutput(self):
     self.build()
     # Proguard will skip writing these files if they would be empty. Create
     # empty versions of them all now so that they are updated as the build
     # expects.
-    open(self._outjar + '.dump', 'w').close()
     open(self._outjar + '.seeds', 'w').close()
     open(self._outjar + '.usage', 'w').close()
     open(self._outjar + '.mapping', 'w').close()
+
+    with open(self._outjar + '.flags', 'w') as out:
+      self._WriteFlagsFile(out)
+
     # Warning: and Error: are sent to stderr, but messages and Note: are sent
     # to stdout.
     stdout_filter = None

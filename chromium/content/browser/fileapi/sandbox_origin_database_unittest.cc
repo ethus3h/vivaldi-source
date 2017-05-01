@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,7 +38,7 @@ const base::FilePath::CharType kOriginDatabaseName[] =
 TEST(SandboxOriginDatabaseTest, BasicTest) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
 
@@ -67,7 +68,7 @@ TEST(SandboxOriginDatabaseTest, BasicTest) {
 TEST(SandboxOriginDatabaseTest, TwoPathTest) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
 
@@ -95,7 +96,7 @@ TEST(SandboxOriginDatabaseTest, TwoPathTest) {
 TEST(SandboxOriginDatabaseTest, DropDatabaseTest) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
 
@@ -123,7 +124,7 @@ TEST(SandboxOriginDatabaseTest, DropDatabaseTest) {
 TEST(SandboxOriginDatabaseTest, DeleteOriginTest) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
 
@@ -150,7 +151,7 @@ TEST(SandboxOriginDatabaseTest, DeleteOriginTest) {
 TEST(SandboxOriginDatabaseTest, ListOriginsTest) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
 
@@ -199,7 +200,7 @@ TEST(SandboxOriginDatabaseTest, DatabaseRecoveryTest) {
 
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
-  const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+  const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
   const base::FilePath kDBDir = kFSDir.Append(kOriginDatabaseName);
   EXPECT_FALSE(base::PathExists(kFSDir));
   EXPECT_TRUE(base::CreateDirectory(kFSDir));
@@ -212,7 +213,7 @@ TEST(SandboxOriginDatabaseTest, DatabaseRecoveryTest) {
     "fuga.example.com",
   };
 
-  scoped_ptr<SandboxOriginDatabase> database(
+  std::unique_ptr<SandboxOriginDatabase> database(
       new SandboxOriginDatabase(kFSDir, NULL));
   for (size_t i = 0; i < arraysize(kOrigins); ++i) {
     base::FilePath path;
@@ -274,7 +275,7 @@ TEST(SandboxOriginDatabaseTest, DatabaseRecoveryForMissingDBFileTest) {
   for (size_t i = 0; i < arraysize(kLevelDBFileTypes); ++i) {
     base::ScopedTempDir dir;
     ASSERT_TRUE(dir.CreateUniqueTempDir());
-    const base::FilePath kFSDir = dir.path().Append(kFileSystemDirName);
+    const base::FilePath kFSDir = dir.GetPath().Append(kFileSystemDirName);
     const base::FilePath kDBDir = kFSDir.Append(kOriginDatabaseName);
     EXPECT_FALSE(base::PathExists(kFSDir));
     EXPECT_TRUE(base::CreateDirectory(kFSDir));
@@ -282,7 +283,7 @@ TEST(SandboxOriginDatabaseTest, DatabaseRecoveryForMissingDBFileTest) {
     const std::string kOrigin = "foo.example.com";
     base::FilePath path;
 
-    scoped_ptr<SandboxOriginDatabase> database(
+    std::unique_ptr<SandboxOriginDatabase> database(
         new SandboxOriginDatabase(kFSDir, NULL));
     EXPECT_FALSE(database->HasOriginPath(kOrigin));
     EXPECT_TRUE(database->GetPathForOrigin(kOrigin, &path));

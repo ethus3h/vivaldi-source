@@ -32,14 +32,14 @@
       model->OnUpdateClicked(model->pending_password());
     }
   }
-  [delegate_ viewShouldDismiss];
+  [self.delegate viewShouldDismiss];
 }
 
 - (void)onNopeClicked:(id)sender {
   ManagePasswordsBubbleModel* model = [self model];
   if (model)
     model->OnNopeUpdateClicked();
-  [delegate_ viewShouldDismiss];
+  [self.delegate viewShouldDismiss];
 }
 
 - (NSView*)createPasswordView {
@@ -48,11 +48,9 @@
         [[CredentialsSelectionView alloc] initWithModel:self.model]);
     return passwordWithUsernameSelectionItem_.get();
   } else {
-    std::vector<const autofill::PasswordForm*> password_forms;
-    password_forms.push_back(&self.model->pending_password());
     passwordItem_.reset([[PasswordsListViewController alloc]
-        initWithModel:self.model
-                forms:password_forms]);
+        initWithModelAndForm:self.model
+                        form:&self.model->pending_password()]);
 
     return [passwordItem_ view];
   }

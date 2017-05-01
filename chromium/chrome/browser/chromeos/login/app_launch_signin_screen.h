@@ -41,7 +41,7 @@ class AppLaunchSigninScreen : public SigninScreenHandlerDelegate,
     virtual ~Delegate() {}
   };
 
-  AppLaunchSigninScreen(OobeUI* oobe_display, Delegate *delegate);
+  AppLaunchSigninScreen(OobeUI* oobe_ui, Delegate* delegate);
   ~AppLaunchSigninScreen() override;
 
   void Show();
@@ -63,6 +63,7 @@ class AppLaunchSigninScreen : public SigninScreenHandlerDelegate,
   void LoadWallpaper(const AccountId& account_id) override;
   void LoadSigninWallpaper() override;
   void OnSigninScreenReady() override;
+  void OnGaiaScreenReady() override;
   void RemoveUser(const AccountId& account_id) override;
   void ResyncUserData() override;
   void ShowEnterpriseEnrollmentScreen() override;
@@ -75,6 +76,9 @@ class AppLaunchSigninScreen : public SigninScreenHandlerDelegate,
                                         const std::string& password);
   bool IsShowGuest() const override;
   bool IsShowUsers() const override;
+  bool ShowUsersHasChanged() const override;
+  bool IsAllowNewUser() const override;
+  bool AllowNewUserChanged() const override;
   bool IsSigninInProgress() const override;
   bool IsUserSigninCompleted() const override;
   void SetDisplayEmail(const std::string& email) override;

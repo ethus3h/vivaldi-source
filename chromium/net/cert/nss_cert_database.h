@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -41,18 +42,10 @@ class NET_EXPORT NSSCertDatabase {
    public:
     virtual ~Observer() {}
 
-    // Will be called when a new certificate is added.
-    // Called with |cert| == NULL after importing a list of certificates
-    // in ImportFromPKCS12().
-    virtual void OnCertAdded(const X509Certificate* cert) {}
-
-    // Will be called when a certificate is removed.
-    virtual void OnCertRemoved(const X509Certificate* cert) {}
-
     // Will be called when a CA certificate is changed.
     // Called with |cert| == NULL after importing a list of certificates
     // in ImportCACerts().
-    virtual void OnCACertChanged(const X509Certificate* cert) {}
+    virtual void OnCertDBChanged(const X509Certificate* cert) {}
 
    protected:
     Observer() {}
@@ -65,6 +58,7 @@ class NET_EXPORT NSSCertDatabase {
   struct NET_EXPORT ImportCertFailure {
    public:
     ImportCertFailure(const scoped_refptr<X509Certificate>& cert, int err);
+    ImportCertFailure(const ImportCertFailure& other);
     ~ImportCertFailure();
 
     scoped_refptr<X509Certificate> certificate;
@@ -98,7 +92,7 @@ class NET_EXPORT NSSCertDatabase {
     DISTRUSTED_OBJ_SIGN   = 1 << 5,
   };
 
-  typedef base::Callback<void(scoped_ptr<CertificateList> certs)>
+  typedef base::Callback<void(std::unique_ptr<CertificateList> certs)>
       ListCertsCallback;
 
   typedef base::Callback<void(bool)> DeleteCertCallback;
@@ -151,18 +145,6 @@ class NET_EXPORT NSSCertDatabase {
   // Can return NULL.
   crypto::ScopedPK11Slot GetPrivateSlot() const;
 
-  // Get the default module for public key data.
-  // The returned pointer must be stored in a scoped_refptr<CryptoModule>.
-  // DEPRECATED: use GetPublicSlot instead.
-  // TODO(mattm): remove usage of this method and remove it.
-  CryptoModule* GetPublicModule() const;
-
-  // Get the default module for private key or mixed private/public key data.
-  // The returned pointer must be stored in a scoped_refptr<CryptoModule>.
-  // DEPRECATED: use GetPrivateSlot instead.
-  // TODO(mattm): remove usage of this method and remove it.
-  CryptoModule* GetPrivateModule() const;
-
   // Get all modules.
   // If |need_rw| is true, only writable modules will be returned.
   // TODO(mattm): come up with better alternative to CryptoModuleList.
@@ -174,7 +156,7 @@ class NET_EXPORT NSSCertDatabase {
   // Returns OK or a network error code such as ERR_PKCS12_IMPORT_BAD_PASSWORD
   // or ERR_PKCS12_IMPORT_ERROR. |imported_certs|, if non-NULL, returns a list
   // of certs that were imported.
-  int ImportFromPKCS12(CryptoModule* module,
+  int ImportFromPKCS12(PK11SlotInfo* slot_info,
                        const std::string& data,
                        const base::string16& password,
                        bool is_extractable,
@@ -197,6 +179,7 @@ class NET_EXPORT NSSCertDatabase {
   // already be installed, otherwise we return ERR_NO_PRIVATE_KEY_FOR_CERT.
   // Returns OK or a network error code.
   int ImportUserCert(const std::string& data);
+  int ImportUserCert(X509Certificate* cert);
 
   // Import CA certificates.
   // Tries to import all the certificates given.  The root will be trusted
@@ -273,9 +256,7 @@ class NET_EXPORT NSSCertDatabase {
 
  protected:
   // Broadcasts notifications to all registered observers.
-  void NotifyObserversOfCertAdded(const X509Certificate* cert);
-  void NotifyObserversOfCertRemoved(const X509Certificate* cert);
-  void NotifyObserversOfCACertChanged(const X509Certificate* cert);
+  void NotifyObserversCertDBChanged(const X509Certificate* cert);
 
  private:
   // Registers |observer| to receive notifications of certificate changes.  The
@@ -304,7 +285,7 @@ class NET_EXPORT NSSCertDatabase {
   crypto::ScopedPK11Slot private_slot_;
 
   // A helper observer that forwards events from this database to CertDatabase.
-  scoped_ptr<Observer> cert_notification_forwarder_;
+  std::unique_ptr<Observer> cert_notification_forwarder_;
 
   // Task runner that should be used in tests if set.
   scoped_refptr<base::TaskRunner> slow_task_runner_for_test_;

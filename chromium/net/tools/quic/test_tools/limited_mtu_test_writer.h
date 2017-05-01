@@ -8,11 +8,10 @@
 #include <stddef.h>
 
 #include "base/macros.h"
-#include "net/quic/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/tools/quic/quic_packet_writer_wrapper.h"
 
 namespace net {
-namespace tools {
 namespace test {
 
 // Simulates a connection over a link with fixed MTU.  Drops packets which
@@ -25,8 +24,9 @@ class LimitedMtuTestWriter : public QuicPacketWriterWrapper {
   // Inherited from QuicPacketWriterWrapper.
   WriteResult WritePacket(const char* buffer,
                           size_t buf_len,
-                          const IPAddressNumber& self_address,
-                          const IPEndPoint& peer_address) override;
+                          const QuicIpAddress& self_address,
+                          const QuicSocketAddress& peer_address,
+                          PerPacketOptions* options) override;
 
  private:
   QuicByteCount mtu_;
@@ -35,7 +35,6 @@ class LimitedMtuTestWriter : public QuicPacketWriterWrapper {
 };
 
 }  // namespace test
-}  // namespace tools
 }  // namespace net
 
 #endif  // NET_TOOLS_QUIC_TEST_TOOLS_LIMITED_MTU_TEST_WRITER_H_

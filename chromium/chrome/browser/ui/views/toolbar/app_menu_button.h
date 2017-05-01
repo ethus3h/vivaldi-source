@@ -5,10 +5,11 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_APP_MENU_BUTTON_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_APP_MENU_BUTTON_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/toolbar/app_menu_icon_painter.h"
+#include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/button/menu_button_listener.h"
 #include "ui/views/view.h"
@@ -17,20 +18,20 @@ class AppMenu;
 class AppMenuModel;
 
 namespace views {
-class InkDropDelegate;
 class LabelButtonBorder;
 class MenuListener;
 }
 
 class ToolbarView;
 
-class AppMenuButton : public views::MenuButton,
-                      public AppMenuIconPainter::Delegate {
+class AppMenuButton : public views::MenuButton {
  public:
   explicit AppMenuButton(ToolbarView* toolbar_view);
   ~AppMenuButton() override;
 
-  void SetSeverity(AppMenuIconPainter::Severity severity, bool animate);
+  void SetSeverity(AppMenuIconController::IconType type,
+                   AppMenuIconController::Severity severity,
+                   bool animate);
 
   // Shows the app menu. |for_drop| indicates whether the menu is opened for a
   // drag-and-drop operation.
@@ -53,11 +54,7 @@ class AppMenuButton : public views::MenuButton,
   // views::MenuButton:
   gfx::Size GetPreferredSize() const override;
 
-  // AppMenuIconPainter::Delegate:
-  void ScheduleAppMenuIconPaint() override;
-
   // Updates the presentation according to |severity_| and the theme provider.
-  // Only used in MD.
   void UpdateIcon();
 
   // Sets |margin_trailing_| when the browser is maximized and updates layout
@@ -70,13 +67,9 @@ class AppMenuButton : public views::MenuButton,
 
  private:
   // views::MenuButton:
-  void AddInkDropLayer(ui::Layer* ink_drop_layer) override;
-  void RemoveInkDropLayer(ui::Layer* ink_drop_layer) override;
-  gfx::Point CalculateInkDropCenter() const override;
-
-  // views::MenuButton:
   const char* GetClassName() const override;
-  scoped_ptr<views::LabelButtonBorder> CreateDefaultBorder() const override;
+  std::unique_ptr<views::LabelButtonBorder> CreateDefaultBorder()
+      const override;
   gfx::Rect GetThemePaintRect() const override;
   bool GetDropFormats(
       int* formats,
@@ -87,13 +80,9 @@ class AppMenuButton : public views::MenuButton,
   int OnDragUpdated(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
   int OnPerformDrop(const ui::DropTargetEvent& event) override;
-  void OnPaint(gfx::Canvas* canvas) override;
 
-  // Only used in pre-MD.
-  scoped_ptr<AppMenuIconPainter> icon_painter_;
-
-  // Only used in MD.
-  AppMenuIconPainter::Severity severity_;
+  AppMenuIconController::Severity severity_;
+  AppMenuIconController::IconType type_;
 
   // Our owning toolbar view.
   ToolbarView* toolbar_view_;
@@ -108,19 +97,12 @@ class AppMenuButton : public views::MenuButton,
   // App model and menu.
   // Note that the menu should be destroyed before the model it uses, so the
   // menu should be listed later.
-  scoped_ptr<AppMenuModel> menu_model_;
-  scoped_ptr<AppMenu> menu_;
-
-  // Used by ShowMenu() to detect when |this| has been deleted; see comments
-  // there.
-  bool* destroyed_;
+  std::unique_ptr<AppMenuModel> menu_model_;
+  std::unique_ptr<AppMenu> menu_;
 
   // Any trailing margin to be applied. Used when the browser is in
   // a maximized state to extend to the full window width.
   int margin_trailing_;
-
-  // Controls the visual feedback for the button state.
-  scoped_ptr<views::InkDropDelegate> ink_drop_delegate_;
 
   // Used to spawn weak pointers for delayed tasks to open the overflow menu.
   base::WeakPtrFactory<AppMenuButton> weak_factory_;

@@ -4,12 +4,14 @@
 
 #include "base/trace_event/heap_profiler_stack_frame_deduplicator.h"
 
+#include <inttypes.h>
 #include <stddef.h>
 
 #include <string>
 #include <utility>
 
 #include "base/strings/stringprintf.h"
+#include "base/trace_event/memory_usage_estimator.h"
 #include "base/trace_event/trace_event_argument.h"
 #include "base/trace_event/trace_event_memory_overhead.h"
 
@@ -19,7 +21,12 @@ namespace trace_event {
 StackFrameDeduplicator::FrameNode::FrameNode(StackFrame frame,
                                              int parent_frame_index)
     : frame(frame), parent_frame_index(parent_frame_index) {}
+StackFrameDeduplicator::FrameNode::FrameNode(const FrameNode& other) = default;
 StackFrameDeduplicator::FrameNode::~FrameNode() {}
+
+size_t StackFrameDeduplicator::FrameNode::EstimateMemoryUsage() const {
+  return base::trace_event::EstimateMemoryUsage(children);
+}
 
 StackFrameDeduplicator::StackFrameDeduplicator() {}
 StackFrameDeduplicator::~StackFrameDeduplicator() {}
@@ -30,7 +37,7 @@ int StackFrameDeduplicator::Insert(const StackFrame* beginFrame,
   std::map<StackFrame, int>* nodes = &roots_;
 
   // Loop through the frames, early out when a frame is null.
-  for (const StackFrame* it = beginFrame; it != endFrame && *it; it++) {
+  for (const StackFrame* it = beginFrame; it != endFrame; it++) {
     StackFrame frame = *it;
 
     auto node = nodes->find(frame);
@@ -76,8 +83,26 @@ void StackFrameDeduplicator::AppendAsTraceFormat(std::string* out) const {
     SStringPrintf(&stringify_buffer, "\"%d\":", i);
     out->append(stringify_buffer);
 
-    scoped_refptr<TracedValue> frame_node_value = new TracedValue;
-    frame_node_value->SetString("name", frame_node->frame);
+    std::unique_ptr<TracedValue> frame_node_value(new TracedValue);
+    const StackFrame& frame = frame_node->frame;
+    switch (frame.type) {
+      case StackFrame::Type::TRACE_EVENT_NAME:
+        frame_node_value->SetString(
+            "name", static_cast<const char*>(frame.value));
+        break;
+      case StackFrame::Type::THREAD_NAME:
+        SStringPrintf(&stringify_buffer,
+                      "[Thread: %s]",
+                      static_cast<const char*>(frame.value));
+        frame_node_value->SetString("name", stringify_buffer);
+        break;
+      case StackFrame::Type::PROGRAM_COUNTER:
+        SStringPrintf(&stringify_buffer,
+                      "pc:%" PRIxPTR,
+                      reinterpret_cast<uintptr_t>(frame.value));
+        frame_node_value->SetString("name", stringify_buffer);
+        break;
+    }
     if (frame_node->parent_frame_index >= 0) {
       SStringPrintf(&stringify_buffer, "%d", frame_node->parent_frame_index);
       frame_node_value->SetString("parent", stringify_buffer);
@@ -96,19 +121,10 @@ void StackFrameDeduplicator::AppendAsTraceFormat(std::string* out) const {
 
 void StackFrameDeduplicator::EstimateTraceMemoryOverhead(
     TraceEventMemoryOverhead* overhead) {
-  // The sizes here are only estimates; they fail to take into account the
-  // overhead of the tree nodes for the map, but as an estimate this should be
-  // fine.
-  size_t maps_size = roots_.size() * sizeof(std::pair<StackFrame, int>);
-  size_t frames_allocated = frames_.capacity() * sizeof(FrameNode);
-  size_t frames_resident = frames_.size() * sizeof(FrameNode);
-
-  for (const FrameNode& node : frames_)
-    maps_size += node.children.size() * sizeof(std::pair<StackFrame, int>);
-
+  size_t memory_usage =
+      EstimateMemoryUsage(frames_) + EstimateMemoryUsage(roots_);
   overhead->Add("StackFrameDeduplicator",
-                sizeof(StackFrameDeduplicator) + maps_size + frames_allocated,
-                sizeof(StackFrameDeduplicator) + maps_size + frames_resident);
+                sizeof(StackFrameDeduplicator) + memory_usage);
 }
 
 }  // namespace trace_event

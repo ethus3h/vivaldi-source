@@ -7,13 +7,7 @@
 
 namespace switches {
 
-// Overrides the device scale factor for the browser UI and the contents.
-const char kForceDeviceScaleFactor[] = "force-device-scale-factor";
-
 #if defined(OS_WIN)
-// Disables the DirectWrite font rendering system on windows.
-const char kDisableDirectWrite[] = "disable-direct-write";
-
 // Disables DirectWrite font rendering for general UI elements.
 const char kDisableDirectWriteForUI[] = "disable-directwrite-for-ui";
 #endif
@@ -23,5 +17,8 @@ const char kDisableDirectWriteForUI[] = "disable-directwrite-for-ui";
 // text editing; this enables it for everything else).
 const char kEnableHarfBuzzRenderText[] = "enable-harfbuzz-rendertext";
 #endif
+
+// Run in headless mode, i.e., without a UI or display server dependencies.
+const char kHeadless[] = "headless";
 
 }  // namespace switches

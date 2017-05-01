@@ -9,18 +9,20 @@ import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.support.test.filters.SmallTest;
 import android.test.InstrumentationTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
 
 import org.chromium.base.FileUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.AdvancedMockContext;
+import org.chromium.base.test.util.Feature;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 
 import java.io.File;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.Callable;
 
 /**
  * Tests that directories for WebappActivities are managed correctly.
@@ -90,6 +92,7 @@ public class WebappDirectoryManagerTest extends InstrumentationTestCase {
     }
 
     @SmallTest
+    @Feature({"Webapps"})
     public void testDeletesOwnDirectory() throws Exception {
         File webappDirectory = new File(
                 mWebappDirectoryManager.getBaseWebappDirectory(mMockContext), WEBAPP_ID_1);
@@ -106,6 +109,7 @@ public class WebappDirectoryManagerTest extends InstrumentationTestCase {
      * apps that no longer correspond to tasks in Recents.
      */
     @SmallTest
+    @Feature({"Webapps"})
     public void testDeletesDirectoriesForDeadTasks() throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
 
@@ -135,6 +139,7 @@ public class WebappDirectoryManagerTest extends InstrumentationTestCase {
     }
 
     @SmallTest
+    @Feature({"Webapps"})
     public void testDeletesObsoleteDirectories() throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
 
@@ -157,11 +162,12 @@ public class WebappDirectoryManagerTest extends InstrumentationTestCase {
     private void runCleanup() throws Exception {
         final AsyncTask task =
                 mWebappDirectoryManager.cleanUpDirectories(mMockContext, WEBAPP_ID_1);
-        CriteriaHelper.pollForCriteria(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return task.getStatus() == AsyncTask.Status.FINISHED;
-            }
-        });
+        CriteriaHelper.pollInstrumentationThread(
+                Criteria.equals(AsyncTask.Status.FINISHED, new Callable<AsyncTask.Status>() {
+                    @Override
+                    public AsyncTask.Status call() {
+                        return task.getStatus();
+                    }
+                }));
     }
 }

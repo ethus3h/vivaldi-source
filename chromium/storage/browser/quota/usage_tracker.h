@@ -8,12 +8,12 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/non_thread_safe.h"
 #include "storage/browser/quota/quota_callbacks.h"
 #include "storage/browser/quota/quota_client.h"
@@ -67,8 +67,6 @@ class STORAGE_EXPORT UsageTracker : public QuotaTaskObserver {
     int64_t unlimited_usage;
   };
 
-  typedef std::map<QuotaClient::ID, ClientUsageTracker*> ClientTrackerMap;
-
   typedef CallbackQueue<UsageCallback, int64_t> UsageCallbackQueue;
   typedef CallbackQueue<GlobalUsageCallback, int64_t, int64_t>
       GlobalUsageCallbackQueue;
@@ -86,7 +84,8 @@ class STORAGE_EXPORT UsageTracker : public QuotaTaskObserver {
                                  int64_t usage);
 
   const StorageType type_;
-  ClientTrackerMap client_tracker_map_;
+  std::map<QuotaClient::ID, std::unique_ptr<ClientUsageTracker>>
+      client_tracker_map_;
 
   UsageCallbackQueue global_limited_usage_callbacks_;
   GlobalUsageCallbackQueue global_usage_callbacks_;

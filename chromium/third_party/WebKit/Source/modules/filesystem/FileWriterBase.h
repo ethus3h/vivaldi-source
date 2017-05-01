@@ -32,55 +32,45 @@
 #define FileWriterBase_h
 
 #include "platform/heap/Handle.h"
-#include "wtf/OwnPtr.h"
-#include "wtf/PassOwnPtr.h"
+#include <memory>
 
 namespace blink {
 
 class WebFileWriter;
 
-class FileWriterBase : public RefCountedGarbageCollectedWillBeNoBase<FileWriterBase>, public WillBeGarbageCollectedMixin {
-public:
-    virtual ~FileWriterBase();
-    void initialize(PassOwnPtr<WebFileWriter>, long long length);
+class FileWriterBase : public GarbageCollectedMixin {
+  USING_PRE_FINALIZER(FileWriterBase, dispose);
 
-    long long position() const
-    {
-        return m_position;
-    }
-    long long length() const
-    {
-        return m_length;
-    }
+ public:
+  virtual ~FileWriterBase();
+  void initialize(std::unique_ptr<WebFileWriter>, long long length);
 
-    DEFINE_INLINE_VIRTUAL_TRACE() { }
+  long long position() const { return m_position; }
+  long long length() const { return m_length; }
 
-protected:
-    FileWriterBase();
+  DEFINE_INLINE_VIRTUAL_TRACE() {}
 
-    WebFileWriter* writer()
-    {
-        return m_writer.get();
-    }
+ protected:
+  FileWriterBase();
 
-    void setPosition(long long position)
-    {
-        m_position = position;
-    }
+  WebFileWriter* writer() { return m_writer.get(); }
 
-    void setLength(long long length)
-    {
-        m_length = length;
-    }
+  void setPosition(long long position) { m_position = position; }
 
-    void seekInternal(long long position);
+  void setLength(long long length) { m_length = length; }
 
-private:
-    OwnPtr<WebFileWriter> m_writer;
-    long long m_position;
-    long long m_length;
+  void seekInternal(long long position);
+
+  void resetWriter();
+
+ private:
+  void dispose();
+
+  std::unique_ptr<WebFileWriter> m_writer;
+  long long m_position;
+  long long m_length;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // FileWriterBase_h
+#endif  // FileWriterBase_h

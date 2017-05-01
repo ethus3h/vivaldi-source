@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_UI_VIEWS_HUNG_RENDERER_VIEW_H_
 
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "components/favicon/content/content_favicon_driver.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_unresponsive_state.h"
 #include "ui/base/models/table_model.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/table/table_grouper.h"
@@ -84,8 +85,7 @@ class HungPagesTableModel : public ui::TableModel, public views::TableGrouper {
   // notifies the observer and delegate.
   void TabDestroyed(WebContentsObserverImpl* tab);
 
-  typedef ScopedVector<WebContentsObserverImpl> TabObservers;
-  TabObservers tab_observers_;
+  std::vector<std::unique_ptr<WebContentsObserverImpl>> tab_observers_;
 
   ui::TableModelObserver* observer_;
   Delegate* delegate_;
@@ -107,17 +107,17 @@ class HungRendererDialogView : public views::DialogDelegateView,
   static HungRendererDialogView* GetInstance();
 
   // Shows or hides the hung renderer dialog for the given WebContents.
-  static void Show(content::WebContents* contents);
+  static void Show(
+      content::WebContents* contents,
+      const content::WebContentsUnresponsiveState& unresponsive_state);
   static void Hide(content::WebContents* contents);
-
-  // Platform specific function to kill the renderer process identified by the
-  // render process host passed in.
-  static void KillRendererProcess(content::RenderProcessHost* rph);
 
   // Returns true if the frame is in the foreground.
   static bool IsFrameActive(content::WebContents* contents);
 
-  virtual void ShowForWebContents(content::WebContents* contents);
+  virtual void ShowForWebContents(
+      content::WebContents* contents,
+      const content::WebContentsUnresponsiveState& unresponsive_state);
   virtual void EndForWebContents(content::WebContents* contents);
 
   // views::DialogDelegateView overrides:
@@ -126,8 +126,8 @@ class HungRendererDialogView : public views::DialogDelegateView,
   int GetDialogButtons() const override;
   base::string16 GetDialogButtonLabel(ui::DialogButton button) const override;
   views::View* CreateExtraView() override;
-  bool Accept(bool window_closing) override;
-  bool UseNewStyleForThisDialog() const override;
+  bool Cancel() override;
+  bool ShouldUseCustomFrame() const override;
 
   // views::ButtonListener overrides:
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
@@ -165,10 +165,16 @@ class HungRendererDialogView : public views::DialogDelegateView,
 
   // The model that provides the contents of the table that shows a list of
   // pages affected by the hang.
-  scoped_ptr<HungPagesTableModel> hung_pages_table_model_;
+  std::unique_ptr<HungPagesTableModel> hung_pages_table_model_;
 
   // Whether or not we've created controls for ourself.
   bool initialized_;
+
+  bool kill_button_clicked_;
+
+  // A copy of the unresponsive state which ShowForWebContents was
+  // called with.
+  content::WebContentsUnresponsiveState unresponsive_state_;
 
   DISALLOW_COPY_AND_ASSIGN(HungRendererDialogView);
 };

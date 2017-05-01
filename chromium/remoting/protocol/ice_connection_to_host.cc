@@ -10,6 +10,7 @@
 #include "base/callback.h"
 #include "base/location.h"
 #include "remoting/base/constants.h"
+#include "remoting/protocol/audio_decode_scheduler.h"
 #include "remoting/protocol/audio_reader.h"
 #include "remoting/protocol/audio_stub.h"
 #include "remoting/protocol/auth_util.h"
@@ -30,7 +31,7 @@ IceConnectionToHost::IceConnectionToHost() {}
 IceConnectionToHost::~IceConnectionToHost() {}
 
 void IceConnectionToHost::Connect(
-    scoped_ptr<Session> session,
+    std::unique_ptr<Session> session,
     scoped_refptr<TransportContext> transport_context,
     HostEventCallback* event_callback) {
   DCHECK(client_stub_);
@@ -79,8 +80,11 @@ void IceConnectionToHost::set_video_renderer(VideoRenderer* video_renderer) {
   video_renderer_ = video_renderer;
 }
 
-void IceConnectionToHost::set_audio_stub(AudioStub* audio_stub) {
-  audio_stub_ = audio_stub;
+void IceConnectionToHost::InitializeAudio(
+    scoped_refptr<base::SingleThreadTaskRunner> audio_decode_task_runner,
+    base::WeakPtr<AudioStub> audio_stub) {
+  audio_decode_scheduler_.reset(
+      new AudioDecodeScheduler(audio_decode_task_runner, audio_stub));
 }
 
 void IceConnectionToHost::OnSessionStateChange(Session::State state) {
@@ -119,13 +123,14 @@ void IceConnectionToHost::OnSessionStateChange(Session::State state) {
           base::Bind(&IceConnectionToHost::OnVideoChannelStatus,
                      base::Unretained(this))));
       video_dispatcher_.reset(
-          new ClientVideoDispatcher(monitored_video_stub_.get()));
-      video_dispatcher_->Init(transport_->GetStreamChannelFactory(), this);
+          new ClientVideoDispatcher(monitored_video_stub_.get(), client_stub_));
+      video_dispatcher_->Init(transport_->GetChannelFactory(), this);
 
       // Configure audio pipeline if necessary.
       if (session_->config().is_audio_enabled()) {
-        audio_reader_.reset(new AudioReader(audio_stub_));
+        audio_reader_.reset(new AudioReader(audio_decode_scheduler_.get()));
         audio_reader_->Init(transport_->GetMultiplexedChannelFactory(), this);
+        audio_decode_scheduler_->Initialize(session_->config());
       }
       break;
 
@@ -143,11 +148,11 @@ void IceConnectionToHost::OnSessionStateChange(Session::State state) {
       // would be hard to add it because client plugin and webapp
       // versions may not be in sync. It should be easy to do after we
       // are finished moving the client plugin to NaCl.
+      CloseChannels();
       if (state_ == CONNECTED && session_->error() == SIGNALING_TIMEOUT) {
-        CloseChannels();
         SetState(CLOSED, OK);
       } else {
-        CloseOnError(session_->error());
+        SetState(FAILED, session_->error());
       }
       break;
   }
@@ -168,12 +173,10 @@ void IceConnectionToHost::OnChannelInitialized(
   NotifyIfChannelsReady();
 }
 
-void IceConnectionToHost::OnChannelError(
-    ChannelDispatcherBase* channel_dispatcher,
-    ErrorCode error) {
-  LOG(ERROR) << "Failed to connect channel "
-             << channel_dispatcher->channel_name();
-  CloseOnError(CHANNEL_CONNECTION_ERROR);
+void IceConnectionToHost::OnChannelClosed(
+    ChannelDispatcherBase* channel_dispatcher) {
+  // ICE transport doesn't close channels dynamically.
+  NOTREACHED();
 }
 
 void IceConnectionToHost::OnVideoChannelStatus(bool active) {
@@ -202,11 +205,6 @@ void IceConnectionToHost::NotifyIfChannelsReady() {
   clipboard_forwarder_.set_clipboard_stub(control_dispatcher_.get());
   event_forwarder_.set_input_stub(event_dispatcher_.get());
   SetState(CONNECTED, OK);
-}
-
-void IceConnectionToHost::CloseOnError(ErrorCode error) {
-  CloseChannels();
-  SetState(FAILED, error);
 }
 
 void IceConnectionToHost::CloseChannels() {

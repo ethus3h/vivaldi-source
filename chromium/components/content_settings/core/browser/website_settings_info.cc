@@ -7,10 +7,10 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/prefs/pref_registry.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry.h"
 
 namespace {
 
@@ -30,10 +30,11 @@ namespace content_settings {
 WebsiteSettingsInfo::WebsiteSettingsInfo(
     ContentSettingsType type,
     const std::string& name,
-    scoped_ptr<base::Value> initial_default_value,
+    std::unique_ptr<base::Value> initial_default_value,
     SyncStatus sync_status,
     LossyStatus lossy_status,
-    ScopingType scoping_type)
+    ScopingType scoping_type,
+    IncognitoBehavior incognito_behavior)
     : type_(type),
       name_(name),
       pref_name_(GetPrefName(name, kPrefPrefix)),
@@ -41,12 +42,13 @@ WebsiteSettingsInfo::WebsiteSettingsInfo(
       initial_default_value_(std::move(initial_default_value)),
       sync_status_(sync_status),
       lossy_status_(lossy_status),
-      scoping_type_(scoping_type) {
+      scoping_type_(scoping_type),
+      incognito_behavior_(incognito_behavior) {
   // For legacy reasons the default value is currently restricted to be an int.
   // TODO(raymes): We should migrate the underlying pref to be a dictionary
   // rather than an int.
   DCHECK(!initial_default_value_ ||
-         initial_default_value_->IsType(base::Value::TYPE_INTEGER));
+         initial_default_value_->IsType(base::Value::Type::INTEGER));
 }
 
 WebsiteSettingsInfo::~WebsiteSettingsInfo() {}

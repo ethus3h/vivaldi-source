@@ -6,12 +6,17 @@
 
 #include <stddef.h>
 
+#include <memory>
+#include <utility>
+
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/values.h"
 #include "content/public/browser/resource_request_info.h"
+#include "content/public/common/previews_state.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_condition.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
 #include "net/base/request_priority.h"
@@ -25,7 +30,6 @@ using base::FundamentalValue;
 using base::ListValue;
 using base::StringValue;
 using base::Value;
-using content::ResourceType;
 
 namespace extensions {
 
@@ -48,7 +52,7 @@ TEST(WebRequestConditionAttributeTest, CreateConditionAttribute) {
   scoped_refptr<const WebRequestConditionAttribute> result;
   base::StringValue string_value("main_frame");
   base::ListValue resource_types;
-  resource_types.Append(new base::StringValue("main_frame"));
+  resource_types.AppendString("main_frame");
 
   // Test wrong condition name passed.
   error.clear();
@@ -89,7 +93,7 @@ TEST(WebRequestConditionAttributeTest, ResourceType) {
   base::ListValue resource_types;
   // The 'sub_frame' value is chosen arbitrarily, so as the corresponding
   // content::ResourceType is not 0, the default value.
-  resource_types.Append(new base::StringValue("sub_frame"));
+  resource_types.AppendString("sub_frame");
 
   scoped_refptr<const WebRequestConditionAttribute> attribute =
       WebRequestConditionAttribute::Create(
@@ -99,35 +103,35 @@ TEST(WebRequestConditionAttributeTest, ResourceType) {
   EXPECT_EQ(std::string(keys::kResourceTypeKey), attribute->GetName());
 
   net::TestURLRequestContext context;
-  scoped_ptr<net::URLRequest> url_request_ok(context.CreateRequest(
+  std::unique_ptr<net::URLRequest> url_request_ok(context.CreateRequest(
       GURL("http://www.example.com"), net::DEFAULT_PRIORITY, NULL));
   content::ResourceRequestInfo::AllocateForTesting(
       url_request_ok.get(), content::RESOURCE_TYPE_SUB_FRAME,
-      NULL,    // context
-      -1,      // render_process_id
-      -1,      // render_view_id
-      -1,      // render_frame_id
-      false,   // is_main_frame
-      false,   // parent_is_main_frame
-      true,    // allow_download
-      false,   // is_async
-      false);  // is_using_lofi
-  EXPECT_TRUE(attribute->IsFulfilled(WebRequestData(url_request_ok.get(),
-                                                    ON_BEFORE_REQUEST)));
+      NULL,   // context
+      -1,     // render_process_id
+      -1,     // render_view_id
+      -1,     // render_frame_id
+      false,  // is_main_frame
+      false,  // parent_is_main_frame
+      true,   // allow_download
+      false,  // is_async
+      content::PREVIEWS_OFF);
+  EXPECT_TRUE(attribute->IsFulfilled(
+      WebRequestData(url_request_ok.get(), ON_BEFORE_REQUEST)));
 
-  scoped_ptr<net::URLRequest> url_request_fail(context.CreateRequest(
+  std::unique_ptr<net::URLRequest> url_request_fail(context.CreateRequest(
       GURL("http://www.example.com"), net::DEFAULT_PRIORITY, NULL));
   content::ResourceRequestInfo::AllocateForTesting(
       url_request_fail.get(), content::RESOURCE_TYPE_MAIN_FRAME,
-      NULL,    // context
-      -1,      // render_process_id
-      -1,      // render_view_id
-      -1,      // render_frame_id
-      true,    // is_main_frame
-      false,   // parent_is_main_frame
-      true,    // allow_download
-      false,   // is_async
-      false);  // is_using_lofi
+      NULL,   // context
+      -1,     // render_process_id
+      -1,     // render_view_id
+      -1,     // render_frame_id
+      true,   // is_main_frame
+      false,  // parent_is_main_frame
+      true,   // allow_download
+      false,  // is_async
+      content::PREVIEWS_OFF);
   EXPECT_FALSE(attribute->IsFulfilled(WebRequestData(url_request_fail.get(),
                                                      ON_BEFORE_REQUEST)));
 }
@@ -146,23 +150,23 @@ TEST(WebRequestConditionAttributeTest, ContentType) {
 
   net::TestURLRequestContext context;
   net::TestDelegate delegate;
-  scoped_ptr<net::URLRequest> url_request(context.CreateRequest(
+  std::unique_ptr<net::URLRequest> url_request(context.CreateRequest(
       test_server.GetURL("/headers.html"), net::DEFAULT_PRIORITY, &delegate));
   url_request->Start();
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   base::ListValue content_types;
-  content_types.Append(new base::StringValue("text/plain"));
+  content_types.AppendString("text/plain");
   scoped_refptr<const WebRequestConditionAttribute> attribute_include =
       WebRequestConditionAttribute::Create(
           keys::kContentTypeKey, &content_types, &error);
   EXPECT_EQ("", error);
   ASSERT_TRUE(attribute_include.get());
   EXPECT_FALSE(attribute_include->IsFulfilled(
-      WebRequestData(url_request.get(), ON_BEFORE_REQUEST,
+      WebRequestData(url_request.get(), ON_BEFORE_REQUEST, nullptr,
                      url_request->response_headers())));
   EXPECT_TRUE(attribute_include->IsFulfilled(
-      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED,
+      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED, nullptr,
                      url_request->response_headers())));
   EXPECT_EQ(std::string(keys::kContentTypeKey), attribute_include->GetName());
 
@@ -172,18 +176,18 @@ TEST(WebRequestConditionAttributeTest, ContentType) {
   EXPECT_EQ("", error);
   ASSERT_TRUE(attribute_exclude.get());
   EXPECT_FALSE(attribute_exclude->IsFulfilled(
-      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED,
+      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED, nullptr,
                      url_request->response_headers())));
 
   content_types.Clear();
-  content_types.Append(new base::StringValue("something/invalid"));
+  content_types.AppendString("something/invalid");
   scoped_refptr<const WebRequestConditionAttribute> attribute_unincluded =
       WebRequestConditionAttribute::Create(
           keys::kContentTypeKey, &content_types, &error);
   EXPECT_EQ("", error);
   ASSERT_TRUE(attribute_unincluded.get());
   EXPECT_FALSE(attribute_unincluded->IsFulfilled(
-      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED,
+      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED, nullptr,
                      url_request->response_headers())));
 
   scoped_refptr<const WebRequestConditionAttribute> attribute_unexcluded =
@@ -192,7 +196,7 @@ TEST(WebRequestConditionAttributeTest, ContentType) {
   EXPECT_EQ("", error);
   ASSERT_TRUE(attribute_unexcluded.get());
   EXPECT_TRUE(attribute_unexcluded->IsFulfilled(
-      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED,
+      WebRequestData(url_request.get(), ON_HEADERS_RECEIVED, nullptr,
                      url_request->response_headers())));
   EXPECT_EQ(std::string(keys::kExcludeContentTypeKey),
             attribute_unexcluded->GetName());
@@ -230,7 +234,7 @@ TEST(WebRequestConditionAttributeTest, ThirdParty) {
   const GURL url_b("http://b.com");
   net::TestURLRequestContext context;
   net::TestDelegate delegate;
-  scoped_ptr<net::URLRequest> url_request(
+  std::unique_ptr<net::URLRequest> url_request(
       context.CreateRequest(url_a, net::DEFAULT_PRIORITY, &delegate));
 
   for (unsigned int i = 1; i <= kLastActiveStage; i <<= 1) {
@@ -321,7 +325,7 @@ TEST(WebRequestConditionAttributeTest, Stages) {
   const GURL url_empty;
   net::TestURLRequestContext context;
   net::TestDelegate delegate;
-  scoped_ptr<net::URLRequest> url_request(
+  std::unique_ptr<net::URLRequest> url_request(
       context.CreateRequest(url_empty, net::DEFAULT_PRIORITY, &delegate));
 
   for (size_t i = 0; i < arraysize(active_stages); ++i) {
@@ -366,38 +370,38 @@ void GetArrayAsVector(const std::string array[],
 
 // Builds a DictionaryValue from an array of the form {name1, value1, name2,
 // value2, ...}. Values for the same key are grouped in a ListValue.
-scoped_ptr<base::DictionaryValue> GetDictionaryFromArray(
+std::unique_ptr<base::DictionaryValue> GetDictionaryFromArray(
     const std::vector<const std::string*>& array) {
   const size_t length = array.size();
   CHECK(length % 2 == 0);
 
-  scoped_ptr<base::DictionaryValue> dictionary(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> dictionary(new base::DictionaryValue);
   for (size_t i = 0; i < length; i += 2) {
     const std::string* name = array[i];
     const std::string* value = array[i+1];
     if (dictionary->HasKey(*name)) {
       base::Value* entry = NULL;
-      scoped_ptr<base::Value> entry_owned;
+      std::unique_ptr<base::Value> entry_owned;
       base::ListValue* list = NULL;
       if (!dictionary->GetWithoutPathExpansion(*name, &entry))
-        return scoped_ptr<base::DictionaryValue>();
+        return std::unique_ptr<base::DictionaryValue>();
       switch (entry->GetType()) {
-        case base::Value::TYPE_STRING:
+        case base::Value::Type::STRING:
           // Replace the present string with a list.
           list = new base::ListValue;
           // Ignoring return value, we already verified the entry is there.
           dictionary->RemoveWithoutPathExpansion(*name, &entry_owned);
-          list->Append(entry_owned.release());
-          list->Append(new base::StringValue(*value));
-          dictionary->SetWithoutPathExpansion(*name, list);
+          list->Append(std::move(entry_owned));
+          list->AppendString(*value);
+          dictionary->SetWithoutPathExpansion(*name, base::WrapUnique(list));
           break;
-        case base::Value::TYPE_LIST:  // Just append to the list.
+        case base::Value::Type::LIST:  // Just append to the list.
           CHECK(entry->GetAsList(&list));
-          list->Append(new base::StringValue(*value));
+          list->AppendString(*value);
           break;
         default:
           NOTREACHED();  // We never put other Values here.
-          return scoped_ptr<base::DictionaryValue>();
+          return std::unique_ptr<base::DictionaryValue>();
       }
     } else {
       dictionary->SetString(*name, *value);
@@ -418,9 +422,10 @@ void MatchAndCheck(const std::vector< std::vector<const std::string*> >& tests,
                    bool* result) {
   base::ListValue contains_headers;
   for (size_t i = 0; i < tests.size(); ++i) {
-    scoped_ptr<base::DictionaryValue> temp(GetDictionaryFromArray(tests[i]));
+    std::unique_ptr<base::DictionaryValue> temp(
+        GetDictionaryFromArray(tests[i]));
     ASSERT_TRUE(temp.get());
-    contains_headers.Append(temp.release());
+    contains_headers.Append(std::move(temp));
   }
 
   std::string error;
@@ -431,7 +436,7 @@ void MatchAndCheck(const std::vector< std::vector<const std::string*> >& tests,
   EXPECT_EQ(key, attribute->GetName());
 
   *result = attribute->IsFulfilled(WebRequestData(
-      url_request, stage, url_request->response_headers()));
+      url_request, stage, nullptr, url_request->response_headers()));
 }
 
 }  // namespace
@@ -446,13 +451,13 @@ TEST(WebRequestConditionAttributeTest, RequestHeaders) {
 
   net::TestURLRequestContext context;
   net::TestDelegate delegate;
-  scoped_ptr<net::URLRequest> url_request(
+  std::unique_ptr<net::URLRequest> url_request(
       context.CreateRequest(GURL("http://example.com"),  // Dummy URL.
                             net::DEFAULT_PRIORITY, &delegate));
   url_request->SetExtraRequestHeaderByName(
       "Custom-header", "custom/value", true /* overwrite */);
   url_request->Start();
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   std::vector<std::vector<const std::string*> > tests;
   bool result = false;
@@ -534,10 +539,10 @@ TEST(WebRequestConditionAttributeTest, ResponseHeaders) {
 
   net::TestURLRequestContext context;
   net::TestDelegate delegate;
-  scoped_ptr<net::URLRequest> url_request(context.CreateRequest(
+  std::unique_ptr<net::URLRequest> url_request(context.CreateRequest(
       test_server.GetURL("/headers.html"), net::DEFAULT_PRIORITY, &delegate));
   url_request->Start();
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   // In all the tests below we assume that the server includes the headers
   // Custom-Header: custom/value

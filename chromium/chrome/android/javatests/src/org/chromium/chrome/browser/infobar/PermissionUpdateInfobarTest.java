@@ -5,7 +5,7 @@
 package org.chromium.chrome.browser.infobar;
 
 import android.Manifest;
-import android.test.suitebuilder.annotation.MediumTest;
+import android.support.test.filters.MediumTest;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.browser.preferences.website.ContentSetting;
@@ -13,11 +13,11 @@ import org.chromium.chrome.browser.preferences.website.GeolocationInfo;
 import org.chromium.chrome.test.ChromeTabbedActivityTestBase;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.InfoBarTestAnimationListener;
-import org.chromium.chrome.test.util.TestHttpServerClient;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.AndroidPermissionDelegate;
 import org.chromium.ui.base.WindowAndroid.PermissionCallback;
 
@@ -35,11 +35,12 @@ import java.util.concurrent.TimeoutException;
 public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
 
     private static final String GEOLOCATION_PAGE =
-            "chrome/test/data/geolocation/geolocation_on_load.html";
+            "/chrome/test/data/geolocation/geolocation_on_load.html";
     private static final String GEOLOCATION_IFRAME_PAGE =
-            "chrome/test/data/geolocation/geolocation_iframe_on_load.html";
+            "/chrome/test/data/geolocation/geolocation_iframe_on_load.html";
 
     private InfoBarTestAnimationListener mListener;
+    private EmbeddedTestServer mTestServer;
 
     @Override
     public void startMainActivity() throws InterruptedException {
@@ -49,17 +50,24 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        mTestServer = EmbeddedTestServer.createAndStartServer(getInstrumentation().getContext());
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        mTestServer.stopAndDestroyServer();
+        super.tearDown();
     }
 
     // Ensure destroying the permission update infobar does not crash when handling geolocation
     // permissions.
     @MediumTest
     public void testInfobarShutsDownCleanlyForGeolocation()
-            throws IllegalArgumentException, InterruptedException {
+            throws IllegalArgumentException, InterruptedException, TimeoutException {
         ChromeTabUtils.newTabFromMenu(getInstrumentation(), getActivity());
 
         // Register for animation notifications
-        CriteriaHelper.pollForCriteria(new Criteria() {
+        CriteriaHelper.pollInstrumentationThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 if (getActivity().getActivityTab() == null) return false;
@@ -71,7 +79,7 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
         mListener =  new InfoBarTestAnimationListener();
         container.setAnimationListener(mListener);
 
-        final String locationUrl = TestHttpServerClient.getUrl(GEOLOCATION_PAGE);
+        final String locationUrl = mTestServer.getURL(GEOLOCATION_PAGE);
         final GeolocationInfo geolocationSettings = ThreadUtils.runOnUiThreadBlockingNoException(
                 new Callable<GeolocationInfo>() {
                     @Override
@@ -95,8 +103,8 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
                 }
             });
 
-            loadUrl(TestHttpServerClient.getUrl(GEOLOCATION_PAGE));
-            assertTrue("InfoBar not added", mListener.addInfoBarAnimationFinished());
+            loadUrl(mTestServer.getURL(GEOLOCATION_PAGE));
+            mListener.addInfoBarAnimationFinished("InfoBar not added");
             assertEquals(1, getInfoBars().size());
 
             final WebContents webContents = ThreadUtils.runOnUiThreadBlockingNoException(
@@ -109,19 +117,19 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
             assertFalse(webContents.isDestroyed());
 
             ChromeTabUtils.closeCurrentTab(getInstrumentation(), getActivity());
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(new Criteria() {
                 @Override
                 public boolean isSatisfied() {
                     return webContents.isDestroyed();
                 }
             });
 
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(Criteria.equals(1, new Callable<Integer>() {
                 @Override
-                public boolean isSatisfied() {
-                    return getActivity().getTabModelSelector().getModel(false).getCount() == 1;
+                public Integer call() {
+                    return getActivity().getTabModelSelector().getModel(false).getCount();
                 }
-            });
+            }));
         } finally {
             ThreadUtils.runOnUiThreadBlocking(new Runnable() {
                 @Override
@@ -138,7 +146,7 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
         ChromeTabUtils.newTabFromMenu(getInstrumentation(), getActivity());
 
         // Register for animation notifications
-        CriteriaHelper.pollForCriteria(new Criteria() {
+        CriteriaHelper.pollInstrumentationThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 if (getActivity().getActivityTab() == null) return false;
@@ -150,7 +158,7 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
         mListener =  new InfoBarTestAnimationListener();
         container.setAnimationListener(mListener);
 
-        final String locationUrl = TestHttpServerClient.getUrl(GEOLOCATION_IFRAME_PAGE);
+        final String locationUrl = mTestServer.getURL(GEOLOCATION_IFRAME_PAGE);
         final GeolocationInfo geolocationSettings = ThreadUtils.runOnUiThreadBlockingNoException(
                 new Callable<GeolocationInfo>() {
                     @Override
@@ -174,8 +182,8 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
                 }
             });
 
-            loadUrl(TestHttpServerClient.getUrl(GEOLOCATION_IFRAME_PAGE));
-            assertTrue("InfoBar not added", mListener.addInfoBarAnimationFinished());
+            loadUrl(mTestServer.getURL(GEOLOCATION_IFRAME_PAGE));
+            mListener.addInfoBarAnimationFinished("InfoBar not added");
             assertEquals(1, getInfoBars().size());
 
             final WebContents webContents = ThreadUtils.runOnUiThreadBlockingNoException(
@@ -188,27 +196,27 @@ public class PermissionUpdateInfobarTest extends ChromeTabbedActivityTestBase {
             assertFalse(webContents.isDestroyed());
 
             runJavaScriptCodeInCurrentTab("document.querySelector('iframe').src = '';");
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(Criteria.equals(0, new Callable<Integer>() {
                 @Override
-                public boolean isSatisfied() {
-                    return getInfoBars().size() == 0;
+                public Integer call() {
+                    return getInfoBars().size();
                 }
-            });
+            }));
 
             ChromeTabUtils.closeCurrentTab(getInstrumentation(), getActivity());
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(new Criteria() {
                 @Override
                 public boolean isSatisfied() {
                     return webContents.isDestroyed();
                 }
             });
 
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+            CriteriaHelper.pollUiThread(Criteria.equals(1, new Callable<Integer>() {
                 @Override
-                public boolean isSatisfied() {
-                    return getActivity().getTabModelSelector().getModel(false).getCount() == 1;
+                public Integer call() {
+                    return getActivity().getTabModelSelector().getModel(false).getCount();
                 }
-            });
+            }));
         } finally {
             ThreadUtils.runOnUiThreadBlocking(new Runnable() {
                 @Override

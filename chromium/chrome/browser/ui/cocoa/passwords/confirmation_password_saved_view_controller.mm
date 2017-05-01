@@ -7,45 +7,44 @@
 #import "chrome/browser/ui/cocoa/passwords/confirmation_password_saved_view_controller.h"
 
 #include "base/strings/sys_string_conversions.h"
-#include "chrome/browser/ui/chrome_style.h"
+#include "chrome/browser/ui/cocoa/chrome_style.h"
 #import "chrome/browser/ui/cocoa/passwords/passwords_bubble_utils.h"
 #include "chrome/browser/ui/passwords/manage_passwords_bubble_model.h"
-#include "grit/components_strings.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "skia/ext/skia_utils_mac.h"
+#import "third_party/google_toolbox_for_mac/src/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #import "ui/base/cocoa/controls/hyperlink_text_view.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/font_list.h"
 
-@interface ManagePasswordsBubbleConfirmationViewController ()
+@interface ConfirmationPasswordSavedViewController ()
 - (void)onOKClicked:(id)sender;
 @end
 
-@implementation ManagePasswordsBubbleConfirmationViewController
-
-- (id)initWithModel:(ManagePasswordsBubbleModel*)model
-           delegate:(id<ManagePasswordsBubbleContentViewDelegate>)delegate {
-  if (([super initWithDelegate:delegate])) {
-    model_ = model;
-  }
-  return self;
-}
+@implementation ConfirmationPasswordSavedViewController
 
 - (NSButton*)defaultButton {
   return okButton_;
 }
 
+- (ManagePasswordsBubbleModel*)model {
+  return [self.delegate model];
+}
+
 - (void)onOKClicked:(id)sender {
-  model_->OnOKClicked();
-  [delegate_ viewShouldDismiss];
+  if (self.model)
+    self.model->OnOKClicked();
+  [self.delegate viewShouldDismiss];
 }
 
 - (BOOL)textView:(NSTextView*)textView
    clickedOnLink:(id)link
          atIndex:(NSUInteger)charIndex {
-  model_->OnManageLinkClicked();
-  [delegate_ viewShouldDismiss];
+  if (self.model)
+    self.model->OnManageLinkClicked();
+  [self.delegate viewShouldDismiss];
   return YES;
 }
 
@@ -64,8 +63,12 @@
 
   // Title.
   NSTextField* titleLabel =
-      [self addTitleLabel:base::SysUTF16ToNSString(model_->title())
+      [self addTitleLabel:base::SysUTF16ToNSString(self.model->title())
                    toView:view];
+  // Title should occupy the whole width to that it's aligned properly for RTL.
+  [titleLabel setFrameSize:NSMakeSize(kDesiredBubbleWidth - 2 * kFramePadding,
+                                      0)];
+  [GTMUILocalizerAndLayoutTweaker sizeToFitFixedWidthTextField:titleLabel];
 
   // Text.
   confirmationText_.reset([[HyperlinkTextView alloc] initWithFrame:NSZeroRect]);
@@ -74,14 +77,14 @@
       .GetPrimaryFont()
       .GetNativeFont();
   NSColor* textColor = [NSColor blackColor];
-  [confirmationText_
-        setMessage:base::SysUTF16ToNSString(model_->save_confirmation_text())
-          withFont:font
-      messageColor:textColor];
+  [confirmationText_ setMessage:base::SysUTF16ToNSString(
+                                    self.model->save_confirmation_text())
+                       withFont:font
+                   messageColor:textColor];
   NSColor* linkColor =
       skia::SkColorToCalibratedNSColor(chrome_style::GetLinkColor());
   [confirmationText_
-      addLinkRange:model_->save_confirmation_link_range().ToNSRange()
+      addLinkRange:self.model->save_confirmation_link_range().ToNSRange()
            withURL:nil
          linkColor:linkColor];
   [confirmationText_ setDelegate:self];
@@ -97,7 +100,7 @@
   NSTextStorage* text = [confirmationText_ textStorage];
   [text addAttribute:NSUnderlineStyleAttributeName
                value:[NSNumber numberWithInt:NSUnderlineStyleNone]
-               range:model_->save_confirmation_link_range().ToNSRange()];
+               range:self.model->save_confirmation_link_range().ToNSRange()];
   [view addSubview:confirmationText_];
 
   // OK button.
@@ -132,7 +135,7 @@
 
 @end
 
-@implementation ManagePasswordsBubbleConfirmationViewController (Testing)
+@implementation ConfirmationPasswordSavedViewController (Testing)
 
 - (HyperlinkTextView*)confirmationText {
   return confirmationText_.get();

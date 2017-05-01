@@ -4,17 +4,18 @@
 
 #import "ios/web/web_state/crw_pass_kit_downloader.h"
 
-#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+#include <memory>
 
 #import "base/mac/scoped_nsobject.h"
-#include "base/memory/scoped_ptr.h"
-#import "ios/web/test/web_test.h"
+#include "ios/web/public/test/web_test.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_test_util.h"
-#include "testing/gtest_mac.h"
+#import "testing/gtest_mac.h"
 #include "url/gurl.h"
 
 using net::HttpResponseHeaders;
@@ -63,7 +64,7 @@ class CRWPassKitDownloaderTest : public WebTest {
 
   // Test fetcher factory from which we access and control the URLFetcher
   // used in CRWPassKitDownloader.
-  scoped_ptr<net::TestURLFetcherFactory> fetcher_factory_;
+  std::unique_ptr<net::TestURLFetcherFactory> fetcher_factory_;
 
   // The CRWPassKitDownloader that is being tested.
   base::scoped_nsobject<CRWPassKitDownloader> downloader_;
@@ -79,9 +80,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitSuccess) {
   GURL test_url(kTestUrlString);
   [downloader_ downloadPassKitFileWithURL:test_url];
 
-  UIApplication* shared_app = [UIApplication sharedApplication];
-  EXPECT_TRUE([shared_app isNetworkActivityIndicatorVisible]);
-
   net::TestURLFetcher* fetcher = fetcher_factory_->GetFetcherByID(0);
   ASSERT_TRUE(fetcher);
   ASSERT_EQ(test_url, fetcher->GetOriginalURL());
@@ -89,7 +87,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitSuccess) {
   fetcher->SetResponseString(kExpectedString);
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 
-  EXPECT_FALSE([shared_app isNetworkActivityIndicatorVisible]);
   EXPECT_TRUE(completion_handler_success_);
 }
 
@@ -99,9 +96,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitBadErrorCodeFailure) {
   GURL test_url(kTestUrlString);
   [downloader_ downloadPassKitFileWithURL:test_url];
 
-  UIApplication* shared_app = [UIApplication sharedApplication];
-  EXPECT_TRUE([shared_app isNetworkActivityIndicatorVisible]);
-
   net::TestURLFetcher* fetcher = fetcher_factory_->GetFetcherByID(0);
   ASSERT_TRUE(fetcher);
   ASSERT_EQ(test_url, fetcher->GetOriginalURL());
@@ -109,7 +103,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitBadErrorCodeFailure) {
   fetcher->SetResponseString(kExpectedString);
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 
-  EXPECT_FALSE([shared_app isNetworkActivityIndicatorVisible]);
   EXPECT_FALSE(completion_handler_success_);
 }
 
@@ -119,9 +112,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitStatusFailedFailure) {
   GURL test_url(kTestUrlString);
   [downloader_ downloadPassKitFileWithURL:test_url];
 
-  UIApplication* shared_app = [UIApplication sharedApplication];
-  EXPECT_TRUE([shared_app isNetworkActivityIndicatorVisible]);
-
   net::TestURLFetcher* fetcher = fetcher_factory_->GetFetcherByID(0);
   ASSERT_TRUE(fetcher);
   ASSERT_EQ(test_url, fetcher->GetOriginalURL());
@@ -130,7 +120,6 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitStatusFailedFailure) {
   fetcher->SetResponseString(kExpectedString);
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 
-  EXPECT_FALSE([shared_app isNetworkActivityIndicatorVisible]);
   EXPECT_FALSE(completion_handler_success_);
 }
 
@@ -140,16 +129,12 @@ TEST_F(CRWPassKitDownloaderTest, TestDownloadPassKitNoResponseFailure) {
   GURL test_url(kTestUrlString);
   [downloader_ downloadPassKitFileWithURL:test_url];
 
-  UIApplication* shared_app = [UIApplication sharedApplication];
-  EXPECT_TRUE([shared_app isNetworkActivityIndicatorVisible]);
-
   net::TestURLFetcher* fetcher = fetcher_factory_->GetFetcherByID(0);
   ASSERT_TRUE(fetcher);
   ASSERT_EQ(test_url, fetcher->GetOriginalURL());
   SetUpFetcher(fetcher, URLRequestStatus(), 200, kPassKitMimeType);
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 
-  EXPECT_FALSE([shared_app isNetworkActivityIndicatorVisible]);
   EXPECT_FALSE(completion_handler_success_);
 }
 

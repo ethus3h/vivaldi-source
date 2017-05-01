@@ -53,6 +53,10 @@
             "type": "boolean",
             "description": "Does profile support search."
           },
+          "speeddial": {
+            "type": "boolean",
+            "description": "Does profile support Speed Dial."
+          },
           "notes": {
             "type": "boolean",
             "description": "Does profile support notes."
@@ -435,6 +439,23 @@
             "name": "item",
             "type": "string",
             "description": "Name of data type."
+          }
+        ]
+      },
+      {
+        "name": "onImportItemFailed",
+        "type": "function",
+        "description": "Fired when a import session for a data type has failed.",
+        "parameters": [
+          {
+            "name": "item",
+            "type": "string",
+            "description": "Name of data type."
+          },
+          {
+            "name": "error",
+            "type": "string",
+            "description": "Error message that can be shown to the user."
           }
         ]
       }

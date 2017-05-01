@@ -10,7 +10,6 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "ui/gfx/range/range.h"
 #include "url/gurl.h"
@@ -36,6 +35,7 @@ class LegalMessageLine {
   };
 
   LegalMessageLine();
+  LegalMessageLine(const LegalMessageLine& other);
   virtual ~LegalMessageLine();  // Overridden in TestLegalMessageLine.
 
   // Parses |legal_message|. Returns false on failure.
@@ -63,9 +63,7 @@ class LegalMessageLine {
   //    expand correctly.
   // 3. "${" anywhere in the template string is invalid.
   // 4. "\n" embedded anywhere in the template string, or an empty template
-  //    string, can be used to separate paragraphs. It is not possible to create
-  //    a completely blank line by using two consecutive newlines (they will be
-  //    treated as a single newline by views::StyledLabel).
+  //    string, can be used to separate paragraphs.
   static bool Parse(const base::DictionaryValue& legal_message,
                     LegalMessageLines* out);
 

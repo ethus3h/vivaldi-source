@@ -5,7 +5,7 @@
 #ifndef UI_BASE_ACCELERATORS_PLATFORM_ACCELERATOR_COCOA_H_
 #define UI_BASE_ACCELERATORS_PLATFORM_ACCELERATOR_COCOA_H_
 
-#include <Foundation/Foundation.h>
+#import <Foundation/Foundation.h>
 
 #include "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
@@ -21,7 +21,7 @@ class UI_BASE_EXPORT PlatformAcceleratorCocoa : public PlatformAccelerator {
   ~PlatformAcceleratorCocoa() override;
 
   // PlatformAccelerator:
-  scoped_ptr<PlatformAccelerator> CreateCopy() const override;
+  std::unique_ptr<PlatformAccelerator> CreateCopy() const override;
   bool Equals(const PlatformAccelerator& rhs) const override;
 
   // The keyEquivalent of the NSMenuItem associated with the accelerator.

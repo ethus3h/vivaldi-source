@@ -11,23 +11,22 @@
 #include "base/metrics/histogram.h"
 #include "base/profiler/scoped_tracker.h"
 #include "base/strings/string_util.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/app_list_model.h"
 #include "ui/app_list/app_list_switches.h"
 #include "ui/app_list/app_list_view_delegate.h"
 #include "ui/app_list/speech_ui_model.h"
-#include "ui/app_list/views/app_list_background.h"
 #include "ui/app_list/views/app_list_folder_view.h"
 #include "ui/app_list/views/app_list_main_view.h"
-#include "ui/app_list/views/app_list_view_observer.h"
 #include "ui/app_list/views/apps_container_view.h"
 #include "ui/app_list/views/contents_view.h"
 #include "ui/app_list/views/custom_launcher_page_view.h"
 #include "ui/app_list/views/search_box_view.h"
 #include "ui/app_list/views/speech_view.h"
 #include "ui/app_list/views/start_page_view.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_tree_host.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
@@ -39,23 +38,18 @@
 #include "ui/gfx/skia_util.h"
 #include "ui/resources/grit/ui_resources.h"
 #include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/bubble/bubble_window_targeter.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/views_delegate.h"
 #include "ui/views/widget/widget.h"
-
-#if defined(USE_AURA)
-#include "ui/aura/window.h"
-#include "ui/aura/window_tree_host.h"
-#include "ui/views/bubble/bubble_window_targeter.h"
 #include "ui/wm/core/masked_window_targeter.h"
+#include "ui/wm/core/shadow_types.h"
+
 #if defined(OS_WIN)
-#include "ui/base/win/shell.h"
+#include "base/win/windows_version.h"
 #endif
-#if !defined(OS_CHROMEOS)
-#include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
-#endif
-#endif  // defined(USE_AURA)
 
 namespace app_list {
 
@@ -66,25 +60,6 @@ const int kSpeechUIMargin = 12;
 
 // The vertical position for the appearing animation of the speech UI.
 const float kSpeechUIAppearingPosition = 12;
-
-// The distance between the arrow tip and edge of the anchor view.
-const int kArrowOffset = 10;
-
-// Determines whether the current environment supports shadows bubble borders.
-bool SupportsShadow() {
-#if defined(OS_WIN)
-  // Shadows are not supported on Windows without Aero Glass.
-  if (!ui::win::IsAeroGlassEnabled() ||
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          ::switches::kDisableDwmComposition)) {
-    return false;
-  }
-#elif defined(OS_LINUX) && !defined(OS_CHROMEOS)
-  // Shadows are not supported on (non-ChromeOS) Linux.
-  return false;
-#endif
-  return true;
-}
 
 // This view forwards the focus to the search box widget by providing it as a
 // FocusTraversable when a focus search is provided.
@@ -132,7 +107,6 @@ class AppListOverlayView : public views::View {
   DISALLOW_COPY_AND_ASSIGN(AppListOverlayView);
 };
 
-#if defined(USE_AURA)
 // An event targeter for the search box widget which will ignore events that
 // are on the search box's shadow.
 class SearchBoxWindowTargeter : public wm::MaskedWindowTargeter {
@@ -153,7 +127,6 @@ class SearchBoxWindowTargeter : public wm::MaskedWindowTargeter {
 
   DISALLOW_COPY_AND_ASSIGN(SearchBoxWindowTargeter);
 };
-#endif
 
 }  // namespace
 
@@ -211,45 +184,55 @@ AppListView::AppListView(AppListViewDelegate* delegate)
       animation_observer_(new HideViewAnimationObserver()) {
   CHECK(delegate);
 
-  delegate_->AddObserver(this);
   delegate_->GetSpeechUI()->AddObserver(this);
 }
 
 AppListView::~AppListView() {
   delegate_->GetSpeechUI()->RemoveObserver(this);
-  delegate_->RemoveObserver(this);
   animation_observer_.reset();
   // Remove child views first to ensure no remaining dependencies on delegate_.
   RemoveAllChildViews(true);
 }
 
-void AppListView::InitAsBubbleAttachedToAnchor(
-    gfx::NativeView parent,
-    int initial_apps_page,
-    views::View* anchor,
-    const gfx::Vector2d& anchor_offset,
-    views::BubbleBorder::Arrow arrow,
-    bool border_accepts_events) {
-  SetAnchorView(anchor);
-  InitAsBubbleInternal(
-      parent, initial_apps_page, arrow, border_accepts_events, anchor_offset);
-}
+void AppListView::InitAsBubble(gfx::NativeView parent, int initial_apps_page) {
+  base::Time start_time = base::Time::Now();
 
-void AppListView::InitAsBubbleAtFixedLocation(
-    gfx::NativeView parent,
-    int initial_apps_page,
-    const gfx::Point& anchor_point_in_screen,
-    views::BubbleBorder::Arrow arrow,
-    bool border_accepts_events) {
-  SetAnchorView(NULL);
-  SetAnchorRect(gfx::Rect(anchor_point_in_screen, gfx::Size()));
-  InitAsBubbleInternal(
-      parent, initial_apps_page, arrow, border_accepts_events, gfx::Vector2d());
+  InitContents(parent, initial_apps_page);
+
+  AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
+  set_margins(gfx::Insets());
+  set_parent_window(parent);
+  set_close_on_deactivate(false);
+  set_shadow(views::BubbleBorder::NO_ASSETS);
+  set_color(kContentsBackgroundColor);
+  // This creates the app list widget. (Before this, child widgets cannot be
+  // created.)
+  views::BubbleDialogDelegateView::CreateBubble(this);
+
+  SetBubbleArrow(views::BubbleBorder::FLOAT);
+  // We can now create the internal widgets.
+  InitChildWidgets();
+
+  aura::Window* window = GetWidget()->GetNativeWindow();
+  window->SetEventTargeter(base::MakeUnique<views::BubbleWindowTargeter>(this));
+
+  const int kOverlayCornerRadius =
+      GetBubbleFrameView()->bubble_border()->GetBorderCornerRadius();
+  overlay_view_ = new AppListOverlayView(kOverlayCornerRadius);
+  overlay_view_->SetBoundsRect(GetContentsBounds());
+  AddChildView(overlay_view_);
+
+  if (delegate_)
+    delegate_->ViewInitialized();
+
+  UMA_HISTOGRAM_TIMES("Apps.AppListCreationTime",
+                      base::Time::Now() - start_time);
 }
 
 void AppListView::InitAsFramelessWindow(gfx::NativeView parent,
                                         int initial_apps_page,
                                         gfx::Rect bounds) {
+  set_color(kContentsBackgroundColor);
   InitContents(parent, initial_apps_page);
   overlay_view_ = new AppListOverlayView(0 /* no corners */);
   AddChildView(overlay_view_);
@@ -261,11 +244,6 @@ void AppListView::InitAsFramelessWindow(gfx::NativeView parent,
   params.delegate = this;
   widget->Init(params);
   widget->SetBounds(bounds);
-  // This needs to be set *after* Widget::Init() because BubbleDelegateView sets
-  // its own background at OnNativeThemeChanged(), which is called in
-  // View::AddChildView() which is called at Widget::SetContentsView() to build
-  // the views hierarchy in the widget.
-  set_background(new AppListBackground(0));
 
   InitChildWidgets();
 }
@@ -289,7 +267,7 @@ void AppListView::ShowWhenReady() {
   app_list_main_view_->ShowAppListWhenReady();
 }
 
-void AppListView::Close() {
+void AppListView::CloseAppList() {
   app_list_main_view_->Close();
   delegate_->Dismiss();
 }
@@ -337,26 +315,16 @@ void AppListView::SetAppListOverlayVisible(bool visible) {
   }
 }
 
-bool AppListView::ShouldCenterWindow() const {
-  return delegate_->ShouldCenterWindow();
-}
-
 gfx::Size AppListView::GetPreferredSize() const {
   return app_list_main_view_->GetPreferredSize();
 }
 
 void AppListView::OnPaint(gfx::Canvas* canvas) {
-  views::BubbleDelegateView::OnPaint(canvas);
+  views::BubbleDialogDelegateView::OnPaint(canvas);
   if (!next_paint_callback_.is_null()) {
     next_paint_callback_.Run();
     next_paint_callback_.Reset();
   }
-}
-
-void AppListView::OnThemeChanged() {
-#if defined(OS_WIN)
-  GetWidget()->Close();
-#endif
 }
 
 bool AppListView::ShouldHandleSystemCommands() const {
@@ -375,48 +343,14 @@ bool AppListView::ShouldDescendIntoChildForEventHandling(
                 ->GetCollapsedLauncherPageBounds()
                 .Contains(location);
 
-  return views::BubbleDelegateView::ShouldDescendIntoChildForEventHandling(
-      child, location);
-}
-
-void AppListView::Prerender() {
-  app_list_main_view_->Prerender();
-}
-
-void AppListView::OnProfilesChanged() {
-  app_list_main_view_->search_box_view()->InvalidateMenu();
-}
-
-void AppListView::OnShutdown() {
-  // Nothing to do on views - the widget will soon be closed, which will tear
-  // everything down.
+  return views::BubbleDialogDelegateView::
+      ShouldDescendIntoChildForEventHandling(child, location);
 }
 
 void AppListView::SetProfileByPath(const base::FilePath& profile_path) {
   delegate_->SetProfileByPath(profile_path);
   app_list_main_view_->ModelChanged();
 }
-
-void AppListView::AddObserver(AppListViewObserver* observer) {
-  observers_.AddObserver(observer);
-}
-
-void AppListView::RemoveObserver(AppListViewObserver* observer) {
-  observers_.RemoveObserver(observer);
-}
-
-// static
-void AppListView::SetNextPaintCallback(const base::Closure& callback) {
-  next_paint_callback_ = callback;
-}
-
-#if defined(OS_WIN)
-HWND AppListView::GetHWND() const {
-  gfx::NativeWindow window =
-      GetWidget()->GetTopLevelWidget()->GetNativeWindow();
-  return window->GetHost()->GetAcceleratedWidget();
-}
-#endif
 
 PaginationModel* AppListView::GetAppsPaginationModel() {
   return app_list_main_view_->contents_view()
@@ -435,14 +369,14 @@ void AppListView::InitContents(gfx::NativeView parent, int initial_apps_page) {
   app_list_main_view_ = new AppListMainView(delegate_);
   AddChildView(app_list_main_view_);
   app_list_main_view_->SetPaintToLayer(true);
-  app_list_main_view_->SetFillsBoundsOpaquely(false);
+  app_list_main_view_->layer()->SetFillsBoundsOpaquely(false);
   app_list_main_view_->layer()->SetMasksToBounds(true);
 
   // This will be added to the |search_box_widget_| after the app list widget is
   // initialized.
   search_box_view_ = new SearchBoxView(app_list_main_view_, delegate_);
   search_box_view_->SetPaintToLayer(true);
-  search_box_view_->SetFillsBoundsOpaquely(false);
+  search_box_view_->layer()->SetFillsBoundsOpaquely(false);
   search_box_view_->layer()->SetMasksToBounds(true);
 
   // TODO(vadimt): Remove ScopedTracker below once crbug.com/440224 and
@@ -464,12 +398,10 @@ void AppListView::InitContents(gfx::NativeView parent, int initial_apps_page) {
     speech_view_ = new SpeechView(delegate_);
     speech_view_->SetVisible(false);
     speech_view_->SetPaintToLayer(true);
-    speech_view_->SetFillsBoundsOpaquely(false);
+    speech_view_->layer()->SetFillsBoundsOpaquely(false);
     speech_view_->layer()->SetOpacity(0.0f);
     AddChildView(speech_view_);
   }
-
-  OnProfilesChanged();
 }
 
 void AppListView::InitChildWidgets() {
@@ -498,125 +430,35 @@ void AppListView::InitChildWidgets() {
   search_box_widget_->SetFocusTraversableParent(
       GetWidget()->GetFocusTraversable());
 
-#if defined(USE_AURA)
   // Mouse events on the search box shadow should not be captured.
   aura::Window* window = search_box_widget_->GetNativeWindow();
-  window->SetEventTargeter(scoped_ptr<ui::EventTargeter>(
-      new SearchBoxWindowTargeter(search_box_view_)));
-#endif
+  window->SetEventTargeter(
+      base::MakeUnique<SearchBoxWindowTargeter>(search_box_view_));
 
   app_list_main_view_->contents_view()->Layout();
-}
-
-void AppListView::InitAsBubbleInternal(gfx::NativeView parent,
-                                       int initial_apps_page,
-                                       views::BubbleBorder::Arrow arrow,
-                                       bool border_accepts_events,
-                                       const gfx::Vector2d& anchor_offset) {
-  base::Time start_time = base::Time::Now();
-
-  InitContents(parent, initial_apps_page);
-
-  set_color(kContentsBackgroundColor);
-  set_margins(gfx::Insets());
-  set_parent_window(parent);
-  set_close_on_deactivate(false);
-  set_close_on_esc(false);
-  set_anchor_view_insets(gfx::Insets(kArrowOffset + anchor_offset.y(),
-                                     kArrowOffset + anchor_offset.x(),
-                                     kArrowOffset - anchor_offset.y(),
-                                     kArrowOffset - anchor_offset.x()));
-  set_border_accepts_events(border_accepts_events);
-  set_shadow(SupportsShadow() ? views::BubbleBorder::BIG_SHADOW
-                              : views::BubbleBorder::NO_SHADOW_OPAQUE_BORDER);
-
-  {
-    // TODO(tapted): Remove ScopedTracker below once crbug.com/431326 is fixed.
-    tracked_objects::ScopedTracker tracking_profile(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "431326 views::BubbleDelegateView::CreateBubble()"));
-
-    // This creates the app list widget. (Before this, child widgets cannot be
-    // created.)
-    views::BubbleDelegateView::CreateBubble(this);
-  }
-
-  SetBubbleArrow(arrow);
-
-  // We can now create the internal widgets.
-  InitChildWidgets();
-
-#if defined(USE_AURA)
-  aura::Window* window = GetWidget()->GetNativeWindow();
-  window->layer()->SetMasksToBounds(true);
-  GetBubbleFrameView()->set_background(new AppListBackground(
-      GetBubbleFrameView()->bubble_border()->GetBorderCornerRadius()));
-  set_background(NULL);
-  window->SetEventTargeter(scoped_ptr<ui::EventTargeter>(
-      new views::BubbleWindowTargeter(this)));
-#else
-  set_background(new AppListBackground(
-      GetBubbleFrameView()->bubble_border()->GetBorderCornerRadius()));
-
-  // On non-aura the bubble has two widgets, and it's possible for the border
-  // to be shown independently in odd situations. Explicitly hide the bubble
-  // widget to ensure that any WM_WINDOWPOSCHANGED messages triggered by the
-  // window manager do not have the SWP_SHOWWINDOW flag set which would cause
-  // the border to be shown. See http://crbug.com/231687 .
-  GetWidget()->Hide();
-#endif
-
-  // On platforms that don't support a shadow, the rounded border of the app
-  // list is constructed _inside_ the view, so a rectangular background goes
-  // over the border in the rounded corners. To fix this, give the background a
-  // corner radius 1px smaller than the outer border, so it just reaches but
-  // doesn't cover it.
-  const int kOverlayCornerRadius =
-      GetBubbleFrameView()->bubble_border()->GetBorderCornerRadius();
-  overlay_view_ =
-      new AppListOverlayView(kOverlayCornerRadius - (SupportsShadow() ? 0 : 1));
-  overlay_view_->SetBoundsRect(GetContentsBounds());
-  AddChildView(overlay_view_);
-
-  if (delegate_)
-    delegate_->ViewInitialized();
-
-  UMA_HISTOGRAM_TIMES("Apps.AppListCreationTime",
-                      base::Time::Now() - start_time);
 }
 
 void AppListView::OnBeforeBubbleWidgetInit(
     views::Widget::InitParams* params,
     views::Widget* widget) const {
-#if defined(USE_AURA) && !defined(OS_CHROMEOS)
-  if (delegate_ && delegate_->ForceNativeDesktop())
-    params->native_widget = new views::DesktopNativeWidgetAura(widget);
-#endif
-#if defined(OS_WIN)
-  // Windows 7 and higher offer pinning to the taskbar, but we need presence
-  // on the taskbar for the user to be able to pin us. So, show the window on
-  // the taskbar for these versions of Windows.
-  if (base::win::GetVersion() >= base::win::VERSION_WIN7)
-    params->force_show_in_taskbar = true;
-#elif defined(OS_LINUX)
-  // Set up a custom WM_CLASS for the app launcher window. This allows task
-  // switchers in X11 environments to distinguish it from main browser windows.
-  params->wm_class_name = kAppListWMClass;
-  // Show the window in the taskbar, even though it is a bubble, which would not
-  // normally be shown.
-  params->force_show_in_taskbar = true;
-#endif
+  if (!params->native_widget) {
+    views::ViewsDelegate* views_delegate = views::ViewsDelegate::GetInstance();
+    if (views_delegate && !views_delegate->native_widget_factory().is_null()) {
+      params->native_widget =
+          views_delegate->native_widget_factory().Run(*params, widget);
+    }
+  }
+  // Apply a WM-provided shadow (see ui/wm/core/).
+  params->shadow_type = views::Widget::InitParams::SHADOW_TYPE_DROP;
+  params->shadow_elevation = wm::ShadowElevation::LARGE;
+}
+
+int AppListView::GetDialogButtons() const {
+  return ui::DIALOG_BUTTON_NONE;
 }
 
 views::View* AppListView::GetInitiallyFocusedView() {
   return app_list_main_view_->search_box_view()->search_box();
-}
-
-gfx::ImageSkia AppListView::GetWindowIcon() {
-  if (delegate_)
-    return delegate_->GetWindowIcon();
-
-  return gfx::ImageSkia();
 }
 
 bool AppListView::WidgetHasHitTestMask() const {
@@ -632,36 +474,17 @@ void AppListView::GetWidgetHitTestMask(gfx::Path* mask) const {
 }
 
 bool AppListView::AcceleratorPressed(const ui::Accelerator& accelerator) {
-  // The accelerator is added by BubbleDelegateView.
-  if (accelerator.key_code() == ui::VKEY_ESCAPE) {
-    if (switches::IsExperimentalAppListEnabled()) {
-      // If the ContentsView does not handle the back action, then this is the
-      // top level, so we close the app list.
-      if (!app_list_main_view_->contents_view()->Back()) {
-        GetWidget()->Deactivate();
-        Close();
-      }
-      return true;
-    }
+  DCHECK_EQ(ui::VKEY_ESCAPE, accelerator.key_code());
 
-    if (app_list_main_view_->search_box_view()->HasSearch()) {
-      app_list_main_view_->search_box_view()->ClearSearch();
-    } else if (app_list_main_view_->contents_view()
-                   ->apps_container_view()
-                   ->IsInFolderView()) {
-      app_list_main_view_->contents_view()
-          ->apps_container_view()
-          ->app_list_folder_view()
-          ->CloseFolderPage();
-      return true;
-    } else {
-      GetWidget()->Deactivate();
-      Close();
-    }
-    return true;
+  // If the ContentsView does not handle the back action, then this is the
+  // top level, so we close the app list.
+  if (!app_list_main_view_->contents_view()->Back()) {
+    GetWidget()->Deactivate();
+    CloseAppList();
   }
 
-  return false;
+  // Don't let DialogClientView handle the accelerator.
+  return true;
 }
 
 void AppListView::Layout() {
@@ -688,29 +511,20 @@ void AppListView::Layout() {
 }
 
 void AppListView::SchedulePaintInRect(const gfx::Rect& rect) {
-  BubbleDelegateView::SchedulePaintInRect(rect);
+  BubbleDialogDelegateView::SchedulePaintInRect(rect);
   if (GetBubbleFrameView())
     GetBubbleFrameView()->SchedulePaint();
 }
 
 void AppListView::OnWidgetDestroying(views::Widget* widget) {
-  BubbleDelegateView::OnWidgetDestroying(widget);
+  BubbleDialogDelegateView::OnWidgetDestroying(widget);
   if (delegate_ && widget == GetWidget())
     delegate_->ViewClosing();
 }
 
-void AppListView::OnWidgetActivationChanged(views::Widget* widget,
-                                            bool active) {
-  // Do not called inherited function as the bubble delegate auto close
-  // functionality is not used.
-  if (widget == GetWidget())
-    FOR_EACH_OBSERVER(AppListViewObserver, observers_,
-                      OnActivationChanged(widget, active));
-}
-
 void AppListView::OnWidgetVisibilityChanged(views::Widget* widget,
                                             bool visible) {
-  BubbleDelegateView::OnWidgetVisibilityChanged(widget, visible);
+  BubbleDialogDelegateView::OnWidgetVisibilityChanged(widget, visible);
 
   if (widget != GetWidget())
     return;

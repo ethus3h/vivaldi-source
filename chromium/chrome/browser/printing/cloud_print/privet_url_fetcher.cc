@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 #include "base/bind.h"
 #include "base/debug/dump_without_crashing.h"
@@ -17,9 +18,10 @@
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/printing/cloud_print/privet_constants.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
@@ -149,6 +151,9 @@ void PrivetURLFetcher::Try() {
   if (tries_ <= max_retries_) {
     DVLOG(1) << "Attempt: " << tries_;
     url_fetcher_ = net::URLFetcher::Create(url_, request_type_, this);
+    data_use_measurement::DataUseUserData::AttachToFetcher(
+        url_fetcher_.get(), data_use_measurement::DataUseUserData::CLOUD_PRINT);
+
     // Privet requests are relevant to hosts on local network only.
     url_fetcher_->SetLoadFlags(
         url_fetcher_->GetLoadFlags() | net::LOAD_BYPASS_PROXY |
@@ -170,7 +175,7 @@ void PrivetURLFetcher::Try() {
 
     if (make_response_file_) {
       url_fetcher_->SaveResponseToTemporaryFile(
-          content::BrowserThread::GetMessageLoopProxyForThread(
+          content::BrowserThread::GetTaskRunnerForThread(
               content::BrowserThread::FILE));
     }
 
@@ -180,7 +185,7 @@ void PrivetURLFetcher::Try() {
         url_fetcher_->SetUploadFilePath(
             upload_content_type_, upload_file_path_, 0 /*offset*/,
             std::numeric_limits<uint64_t>::max() /*length*/,
-            content::BrowserThread::GetMessageLoopProxyForThread(
+            content::BrowserThread::GetTaskRunnerForThread(
                 content::BrowserThread::FILE));
       } else {
         url_fetcher_->SetUploadData(upload_content_type_, upload_data_);
@@ -309,7 +314,7 @@ void PrivetURLFetcher::OnURLFetchCompleteParseData(
   }
 
   base::JSONReader json_reader(base::JSON_ALLOW_TRAILING_COMMAS);
-  scoped_ptr<base::Value> value = json_reader.ReadToValue(response_str);
+  std::unique_ptr<base::Value> value = json_reader.ReadToValue(response_str);
   if (!value) {
     delegate_->OnError(this, JSON_PARSE_ERROR);
     return;

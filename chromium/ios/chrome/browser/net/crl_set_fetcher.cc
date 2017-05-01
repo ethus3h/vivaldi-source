@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
@@ -15,6 +16,7 @@
 #include "base/trace_event/trace_event.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/update_client/update_client.h"
+#include "components/update_client/utils.h"
 #include "ios/chrome/browser/chrome_constants.h"
 #include "ios/web/public/web_thread.h"
 #include "net/cert/crl_set.h"
@@ -35,7 +37,7 @@ base::FilePath CRLSetFetcher::GetCRLSetFilePath() const {
 
 void CRLSetFetcher::StartInitialLoad(ComponentUpdateService* cus,
                                      const base::FilePath& path) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+  DCHECK_CURRENTLY_ON(web::WebThread::UI);
   if (path.empty())
     return;
   SetCRLSetFilePath(path);
@@ -49,7 +51,7 @@ void CRLSetFetcher::StartInitialLoad(ComponentUpdateService* cus,
 }
 
 void CRLSetFetcher::DeleteFromDisk(const base::FilePath& path) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+  DCHECK_CURRENTLY_ON(web::WebThread::UI);
 
   if (path.empty())
     return;
@@ -62,7 +64,7 @@ void CRLSetFetcher::DeleteFromDisk(const base::FilePath& path) {
 }
 
 void CRLSetFetcher::DoInitialLoadFromDisk() {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::FILE);
+  DCHECK_CURRENTLY_ON(web::WebThread::FILE);
 
   LoadFromDisk(GetCRLSetFilePath(), &crl_set_);
 
@@ -83,7 +85,7 @@ void CRLSetFetcher::LoadFromDisk(base::FilePath path,
                                  scoped_refptr<net::CRLSet>* out_crl_set) {
   TRACE_EVENT0("CRLSetFetcher", "LoadFromDisk");
 
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::FILE);
+  DCHECK_CURRENTLY_ON(web::WebThread::FILE);
 
   std::string crl_set_bytes;
   {
@@ -107,7 +109,7 @@ void CRLSetFetcher::LoadFromDisk(base::FilePath path,
 }
 
 void CRLSetFetcher::SetCRLSetIfNewer(scoped_refptr<net::CRLSet> crl_set) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::IO);
+  DCHECK_CURRENTLY_ON(web::WebThread::IO);
 
   scoped_refptr<net::CRLSet> old_crl_set(net::SSLConfigService::GetCRLSet());
   if (old_crl_set.get() && old_crl_set->sequence() > crl_set->sequence()) {
@@ -128,18 +130,19 @@ static const uint8_t kPublicKeySHA256[32] = {
 };
 
 void CRLSetFetcher::RegisterComponent(uint32_t sequence_of_loaded_crl) {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+  DCHECK_CURRENTLY_ON(web::WebThread::UI);
 
   update_client::CrxComponent component;
   component.pk_hash.assign(kPublicKeySHA256,
                            kPublicKeySHA256 + sizeof(kPublicKeySHA256));
   component.installer = this;
   component.name = "CRLSet";
-  component.version = Version(base::UintToString(sequence_of_loaded_crl));
-  component.allow_background_download = false;
+  component.version = base::Version(base::UintToString(sequence_of_loaded_crl));
+  component.allows_background_download = false;
+  component.requires_network_encryption = false;
   if (!component.version.IsValid()) {
     NOTREACHED();
-    component.version = Version("0");
+    component.version = base::Version("0");
   }
 
   if (!cus_->RegisterComponent(component))
@@ -147,7 +150,7 @@ void CRLSetFetcher::RegisterComponent(uint32_t sequence_of_loaded_crl) {
 }
 
 void CRLSetFetcher::DoDeleteFromDisk() {
-  DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::FILE);
+  DCHECK_CURRENTLY_ON(web::WebThread::FILE);
 
   DeleteFile(GetCRLSetFilePath(), false /* not recursive */);
 }
@@ -157,8 +160,16 @@ void CRLSetFetcher::OnUpdateError(int error) {
                << " from component installer";
 }
 
-bool CRLSetFetcher::Install(const base::DictionaryValue& manifest,
-                            const base::FilePath& unpack_path) {
+update_client::CrxInstaller::Result CRLSetFetcher::Install(
+    const base::DictionaryValue& manifest,
+    const base::FilePath& unpack_path) {
+  return update_client::InstallFunctionWrapper(
+      base::Bind(&CRLSetFetcher::DoInstall, base::Unretained(this),
+                 base::ConstRef(manifest), base::ConstRef(unpack_path)));
+}
+
+bool CRLSetFetcher::DoInstall(const base::DictionaryValue& manifest,
+                              const base::FilePath& unpack_path) {
   base::FilePath crl_set_file_path =
       unpack_path.Append(FILE_PATH_LITERAL("crl-set"));
   base::FilePath save_to = GetCRLSetFilePath();

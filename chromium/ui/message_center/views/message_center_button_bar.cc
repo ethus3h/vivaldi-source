@@ -68,16 +68,15 @@ NotificationCenterButton::NotificationCenterButton(
     int text_id)
     : views::ToggleImageButton(listener), size_(kButtonSize, kButtonSize) {
   ui::ResourceBundle& resource_bundle = ui::ResourceBundle::GetSharedInstance();
-  SetImage(STATE_NORMAL, resource_bundle.GetImageSkiaNamed(normal_id));
-  SetImage(STATE_HOVERED, resource_bundle.GetImageSkiaNamed(hover_id));
-  SetImage(STATE_PRESSED, resource_bundle.GetImageSkiaNamed(pressed_id));
+  SetImage(STATE_NORMAL, *resource_bundle.GetImageSkiaNamed(normal_id));
+  SetImage(STATE_HOVERED, *resource_bundle.GetImageSkiaNamed(hover_id));
+  SetImage(STATE_PRESSED, *resource_bundle.GetImageSkiaNamed(pressed_id));
   SetImageAlignment(views::ImageButton::ALIGN_CENTER,
                     views::ImageButton::ALIGN_MIDDLE);
   if (text_id)
     SetTooltipText(resource_bundle.GetLocalizedString(text_id));
 
-  SetFocusable(true);
-  set_request_focus_on_press(false);
+  SetFocusForPlatform();
 
   SetFocusPainter(views::Painter::CreateSolidFocusPainter(
       kFocusBorderColor,
@@ -119,7 +118,7 @@ MessageCenterButtonBar::MessageCenterButtonBar(
   title_arrow_->set_size(gfx::Size(kButtonSize, kButtonSize));
 
   // Keyboardists can use the gear button to switch modes.
-  title_arrow_->SetFocusable(false);
+  title_arrow_->SetFocusBehavior(FocusBehavior::NEVER);
   AddChildView(title_arrow_);
 
   notification_label_ = new views::Label(title);
@@ -160,7 +159,7 @@ MessageCenterButtonBar::MessageCenterButtonBar(
                                    IDS_MESSAGE_CENTER_CLEAR_ALL);
   close_all_button_->SetImage(
       views::Button::STATE_DISABLED,
-      resource_bundle.GetImageSkiaNamed(IDR_NOTIFICATION_CLEAR_ALL_DISABLED));
+      *resource_bundle.GetImageSkiaNamed(IDR_NOTIFICATION_CLEAR_ALL_DISABLED));
   button_container_->AddChildView(close_all_button_);
 
   settings_button_ =
@@ -255,9 +254,8 @@ void MessageCenterButtonBar::ViewVisibilityChanged() {
 
 MessageCenterButtonBar::~MessageCenterButtonBar() {}
 
-void MessageCenterButtonBar::SetAllButtonsEnabled(bool enabled) {
-  if (close_all_button_)
-    close_all_button_->SetEnabled(enabled);
+void MessageCenterButtonBar::SetSettingsAndQuietModeButtonsEnabled(
+    bool enabled) {
   settings_button_->SetEnabled(enabled);
   quiet_mode_button_->SetEnabled(enabled);
 }
@@ -267,11 +265,19 @@ void MessageCenterButtonBar::SetCloseAllButtonEnabled(bool enabled) {
     close_all_button_->SetEnabled(enabled);
 }
 
+views::Button* MessageCenterButtonBar::GetCloseAllButtonForTest() const {
+  return close_all_button_;
+}
+
 void MessageCenterButtonBar::SetBackArrowVisible(bool visible) {
   if (title_arrow_)
     title_arrow_->SetVisible(visible);
   ViewVisibilityChanged();
   Layout();
+}
+
+void MessageCenterButtonBar::SetTitle(const base::string16& title) {
+  notification_label_->SetText(title);
 }
 
 void MessageCenterButtonBar::ChildVisibilityChanged(views::View* child) {
@@ -281,7 +287,7 @@ void MessageCenterButtonBar::ChildVisibilityChanged(views::View* child) {
 void MessageCenterButtonBar::ButtonPressed(views::Button* sender,
                                            const ui::Event& event) {
   if (sender == close_all_button_) {
-    message_center_view()->ClearAllNotifications();
+    message_center_view()->ClearAllClosableNotifications();
   } else if (sender == settings_button_ || sender == title_arrow_) {
     MessageCenterView* center_view = message_center_view();
     center_view->SetSettingsVisible(!center_view->settings_visible());

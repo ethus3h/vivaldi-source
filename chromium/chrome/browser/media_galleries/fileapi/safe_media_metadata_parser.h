@@ -7,15 +7,16 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/common/extensions/api/media_galleries.h"
+#include "chrome/common/extensions/media_parser.mojom.h"
 #include "chrome/common/media_galleries/metadata_types.h"
 #include "content/public/browser/utility_process_host.h"
 #include "content/public/browser/utility_process_host_client.h"
@@ -35,10 +36,10 @@ namespace metadata {
 class SafeMediaMetadataParser : public content::UtilityProcessHostClient {
  public:
   // |metadata_dictionary| is owned by the callback.
-  typedef base::Callback<
-      void(bool parse_success,
-           scoped_ptr<base::DictionaryValue> metadata_dictionary,
-           scoped_ptr<std::vector<AttachedImage> > attached_images)>
+  typedef base::Callback<void(
+      bool parse_success,
+      std::unique_ptr<base::DictionaryValue> metadata_dictionary,
+      std::unique_ptr<std::vector<AttachedImage>> attached_images)>
       DoneCallback;
 
   SafeMediaMetadataParser(Profile* profile,
@@ -63,10 +64,15 @@ class SafeMediaMetadataParser : public content::UtilityProcessHostClient {
   // Launches the utility process.  Must run on the IO thread.
   void StartWorkOnIOThread(const DoneCallback& callback);
 
-  // Notification from the utility process when it finishes parsing metadata.
+  // Mojo callback if the utility process or metadata parse requests fail.
   // Runs on the IO thread.
-  void OnParseMediaMetadataFinished(
-      bool parse_success, const base::DictionaryValue& metadata_dictionary,
+  void ParseMediaMetadataFailed();
+
+  // Mojo callback from utility process when it finishes parsing metadata.
+  // Runs on the IO thread.
+  void ParseMediaMetadataDone(
+      bool parse_success,
+      std::unique_ptr<base::DictionaryValue> metadata_dictionary,
       const std::vector<AttachedImage>& attached_images);
 
   // Sequence of functions that bounces from the IO thread to the UI thread to
@@ -78,13 +84,13 @@ class SafeMediaMetadataParser : public content::UtilityProcessHostClient {
                                  int64_t byte_start,
                                  int64_t length);
   void OnBlobReaderDoneOnUIThread(int64_t request_id,
-                                  scoped_ptr<std::string> data,
+                                  std::unique_ptr<std::string> data,
                                   int64_t /* blob_total_size */);
-  void FinishRequestBlobBytes(int64_t request_id, scoped_ptr<std::string> data);
+  void FinishRequestBlobBytes(int64_t request_id,
+                              std::unique_ptr<std::string> data);
 
   // UtilityProcessHostClient implementation.
   // Runs on the IO thread.
-  void OnProcessCrashed(int exit_code) override;
   bool OnMessageReceived(const IPC::Message& message) override;
 
   // All member variables are only accessed on the IO thread.
@@ -97,6 +103,8 @@ class SafeMediaMetadataParser : public content::UtilityProcessHostClient {
   DoneCallback callback_;
 
   base::WeakPtr<content::UtilityProcessHost> utility_process_host_;
+
+  extensions::mojom::MediaParserPtr interface_;
 
   // Verifies the messages from the utility process came at the right time.
   // Initialized on the UI thread, but only accessed on the IO thread.

@@ -8,7 +8,7 @@
 #include "base/callback.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/captive_portal/captive_portal_service.h"
 #include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "content/public/browser/interstitial_page.h"
@@ -220,7 +220,7 @@ void CaptivePortalTabReloader::SetState(State new_state) {
     default:
       NOTREACHED();
       break;
-  };
+  }
 
   state_ = new_state;
 
@@ -267,7 +267,7 @@ void CaptivePortalTabReloader::ReloadTabIfNeeded() {
 void CaptivePortalTabReloader::ReloadTab() {
   content::NavigationController* controller = &web_contents_->GetController();
   if (!controller->GetActiveEntry()->GetHasPostData())
-    controller->Reload(true);
+    controller->Reload(content::ReloadType::NORMAL, true);
 }
 
 void CaptivePortalTabReloader::MaybeOpenCaptivePortalLoginTab() {

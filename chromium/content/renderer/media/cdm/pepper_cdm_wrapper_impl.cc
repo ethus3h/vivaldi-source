@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#if defined(ENABLE_PEPPER_CDMS)
+#include "ppapi/features/features.h"
+
+#if BUILDFLAG(ENABLE_PEPPER_CDMS)
 #include "content/renderer/media/cdm/pepper_cdm_wrapper_impl.h"
 
 #include <utility>
 
 #include "content/renderer/pepper/pepper_plugin_instance_impl.h"
 #include "content/renderer/pepper/pepper_webplugin_impl.h"
+#include "third_party/WebKit/public/platform/URLConversion.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
 #include "third_party/WebKit/public/web/WebElement.h"
@@ -18,6 +21,7 @@
 #include "third_party/WebKit/public/web/WebPlugin.h"
 #include "third_party/WebKit/public/web/WebPluginContainer.h"
 #include "third_party/WebKit/public/web/WebView.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -25,7 +29,7 @@ void WebHelperPluginDeleter::operator()(blink::WebHelperPlugin* plugin) const {
   plugin->destroy();
 }
 
-scoped_ptr<PepperCdmWrapper> PepperCdmWrapperImpl::Create(
+std::unique_ptr<PepperCdmWrapper> PepperCdmWrapperImpl::Create(
     blink::WebLocalFrame* frame,
     const std::string& pluginType,
     const GURL& security_origin) {
@@ -36,16 +40,16 @@ scoped_ptr<PepperCdmWrapper> PepperCdmWrapperImpl::Create(
   // Note: The code will continue after navigation to the "same" origin, even
   // though the CDM is no longer necessary.
   // TODO: Consider avoiding this possibility entirely. http://crbug.com/575236
-  GURL frame_security_origin(frame->securityOrigin().toString());
+  GURL frame_security_origin(url::Origin(frame->getSecurityOrigin()).GetURL());
   if (frame_security_origin != security_origin) {
     LOG(ERROR) << "Frame has a different origin than the EME call.";
-    return scoped_ptr<PepperCdmWrapper>();
+    return std::unique_ptr<PepperCdmWrapper>();
   }
 
   ScopedHelperPlugin helper_plugin(blink::WebHelperPlugin::create(
       blink::WebString::fromUTF8(pluginType), frame));
   if (!helper_plugin)
-    return scoped_ptr<PepperCdmWrapper>();
+    return std::unique_ptr<PepperCdmWrapper>();
 
   blink::WebPlugin* plugin = helper_plugin->getPlugin();
   DCHECK(!plugin->isPlaceholder());  // Prevented by Blink.
@@ -55,17 +59,17 @@ scoped_ptr<PepperCdmWrapper> PepperCdmWrapperImpl::Create(
   scoped_refptr<PepperPluginInstanceImpl> plugin_instance =
       ppapi_plugin->instance();
   if (!plugin_instance.get())
-    return scoped_ptr<PepperCdmWrapper>();
+    return std::unique_ptr<PepperCdmWrapper>();
 
-  GURL plugin_url(plugin_instance->container()->element().document().url());
+  GURL plugin_url(plugin_instance->container()->document().url());
   GURL plugin_security_origin = plugin_url.GetOrigin();
   CHECK_EQ(security_origin, plugin_security_origin)
       << "Pepper instance has a different origin than the EME call.";
 
   if (!plugin_instance->GetContentDecryptorDelegate())
-    return scoped_ptr<PepperCdmWrapper>();
+    return std::unique_ptr<PepperCdmWrapper>();
 
-  return scoped_ptr<PepperCdmWrapper>(
+  return std::unique_ptr<PepperCdmWrapper>(
       new PepperCdmWrapperImpl(std::move(helper_plugin), plugin_instance));
 }
 
@@ -92,4 +96,4 @@ ContentDecryptorDelegate* PepperCdmWrapperImpl::GetCdmDelegate() {
 
 }  // namespace content
 
-#endif  // defined(ENABLE_PEPPER_CDMS)
+#endif  // BUILDFLAG(ENABLE_PEPPER_CDMS)

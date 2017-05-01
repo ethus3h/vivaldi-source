@@ -5,9 +5,10 @@
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_SCREENS_USER_IMAGE_SCREEN_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_SCREENS_USER_IMAGE_SCREEN_H_
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/camera_presence_notifier.h"
 #include "chrome/browser/chromeos/login/screens/base_screen.h"
@@ -15,8 +16,7 @@
 #include "chrome/browser/chromeos/login/users/avatar/user_image_sync_observer.h"
 #include "chrome/browser/image_decoder.h"
 #include "components/user_manager/user.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "components/user_manager/user_manager.h"
 
 namespace base {
 class Timer;
@@ -35,7 +35,7 @@ class UserImageView;
 
 class UserImageScreen : public UserImageModel,
                         public ImageDecoder::ImageRequest,
-                        public content::NotificationObserver,
+                        public user_manager::UserManager::Observer,
                         public UserImageSyncObserver::Observer,
                         public CameraPresenceNotifier::Observer {
  public:
@@ -46,7 +46,6 @@ class UserImageScreen : public UserImageModel,
   static UserImageScreen* Get(ScreenManager* manager);
 
   // BaseScreen implementation:
-  void PrepareToShow() override;
   void Show() override;
   void Hide() override;
 
@@ -59,10 +58,11 @@ class UserImageScreen : public UserImageModel,
   void OnImageAccepted() override;
   void OnViewDestroyed(UserImageView* view) override;
 
-  // content::NotificationObserver implementation:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // user_manager::UserManager::Observer implementation:
+  void OnUserImageChanged(const user_manager::User& user) override;
+  void OnUserProfileImageUpdateFailed(const user_manager::User& user) override;
+  void OnUserProfileImageUpdated(const user_manager::User& user,
+                                 const gfx::ImageSkia& profile_image) override;
 
   // ImageDecoder::ImageRequest implementation:
   void OnImageDecoded(const SkBitmap& decoded_image) override;
@@ -115,9 +115,7 @@ class UserImageScreen : public UserImageModel,
   // Reports sync duration and result to UMA.
   void ReportSyncResult(SyncResult timed_out) const;
 
-  content::NotificationRegistrar notification_registrar_;
-
-  scoped_ptr<policy::PolicyChangeRegistrar> policy_registrar_;
+  std::unique_ptr<policy::PolicyChangeRegistrar> policy_registrar_;
 
   UserImageView* view_;
 
@@ -133,7 +131,7 @@ class UserImageScreen : public UserImageModel,
   int selected_image_;
 
   // Timer used for waiting for user image sync.
-  scoped_ptr<base::Timer> sync_timer_;
+  std::unique_ptr<base::Timer> sync_timer_;
 
   // If screen ready to be shown.
   bool is_screen_ready_;

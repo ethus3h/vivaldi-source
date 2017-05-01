@@ -52,6 +52,9 @@ UDPSocketEventDispatcher::~UDPSocketEventDispatcher() {}
 
 UDPSocketEventDispatcher::ReceiveParams::ReceiveParams() {}
 
+UDPSocketEventDispatcher::ReceiveParams::ReceiveParams(
+    const ReceiveParams& other) = default;
+
 UDPSocketEventDispatcher::ReceiveParams::~ReceiveParams() {}
 
 void UDPSocketEventDispatcher::OnSocketBind(const std::string& extension_id,
@@ -101,6 +104,7 @@ void UDPSocketEventDispatcher::ReceiveCallback(
     const ReceiveParams& params,
     int bytes_read,
     scoped_refptr<net::IOBuffer> io_buffer,
+    bool socket_destroying,
     const std::string& address,
     uint16_t port) {
   DCHECK_CURRENTLY_ON(params.thread_id);
@@ -116,11 +120,11 @@ void UDPSocketEventDispatcher::ReceiveCallback(
     receive_info.data.assign(io_buffer->data(), io_buffer->data() + bytes_read);
     receive_info.remote_address = address;
     receive_info.remote_port = port;
-    scoped_ptr<base::ListValue> args =
+    std::unique_ptr<base::ListValue> args =
         sockets_udp::OnReceive::Create(receive_info);
-    scoped_ptr<Event> event(new Event(events::SOCKETS_UDP_ON_RECEIVE,
-                                      sockets_udp::OnReceive::kEventName,
-                                      std::move(args)));
+    std::unique_ptr<Event> event(new Event(events::SOCKETS_UDP_ON_RECEIVE,
+                                           sockets_udp::OnReceive::kEventName,
+                                           std::move(args)));
     PostEvent(params, std::move(event));
 
     // Post a task to delay the read until the socket is available, as
@@ -132,32 +136,37 @@ void UDPSocketEventDispatcher::ReceiveCallback(
   } else if (bytes_read == net::ERR_IO_PENDING) {
     // This happens when resuming a socket which already had an
     // active "recv" callback.
+  } else if (bytes_read == net::ERR_CONNECTION_CLOSED) {
+    // This happens when the socket closes, which is expected since we
+    // continually add a receive listener in the success block above.
   } else {
     // Dispatch "onReceiveError" event but don't start another read to avoid
     // potential infinite reads if we have a persistent network error.
     sockets_udp::ReceiveErrorInfo receive_error_info;
     receive_error_info.socket_id = params.socket_id;
     receive_error_info.result_code = bytes_read;
-    scoped_ptr<base::ListValue> args =
+    std::unique_ptr<base::ListValue> args =
         sockets_udp::OnReceiveError::Create(receive_error_info);
-    scoped_ptr<Event> event(new Event(events::SOCKETS_UDP_ON_RECEIVE_ERROR,
-                                      sockets_udp::OnReceiveError::kEventName,
-                                      std::move(args)));
+    std::unique_ptr<Event> event(
+        new Event(events::SOCKETS_UDP_ON_RECEIVE_ERROR,
+                  sockets_udp::OnReceiveError::kEventName, std::move(args)));
     PostEvent(params, std::move(event));
 
-    // Since we got an error, the socket is now "paused" until the application
-    // "resumes" it.
-    ResumableUDPSocket* socket =
-        params.sockets->Get(params.extension_id, params.socket_id);
-    if (socket) {
-      socket->set_paused(true);
+    // Do not try to access |socket| when we are destroying it.
+    if (!socket_destroying) {
+      // Since we got an error, the socket is now "paused" until the application
+      // "resumes" it.
+      ResumableUDPSocket* socket =
+          params.sockets->Get(params.extension_id, params.socket_id);
+      if (socket)
+        socket->set_paused(true);
     }
   }
 }
 
 /* static */
 void UDPSocketEventDispatcher::PostEvent(const ReceiveParams& params,
-                                         scoped_ptr<Event> event) {
+                                         std::unique_ptr<Event> event) {
   DCHECK_CURRENTLY_ON(params.thread_id);
 
   BrowserThread::PostTask(
@@ -169,7 +178,7 @@ void UDPSocketEventDispatcher::PostEvent(const ReceiveParams& params,
 /*static*/
 void UDPSocketEventDispatcher::DispatchEvent(void* browser_context_id,
                                              const std::string& extension_id,
-                                             scoped_ptr<Event> event) {
+                                             std::unique_ptr<Event> event) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   content::BrowserContext* context =

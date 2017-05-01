@@ -31,7 +31,8 @@ namespace test {
 namespace {
 
 void TestImageReaderChild(const base::string16& directory_modification) {
-  UUID done_uuid(UUID::InitializeWithNewTag{});
+  UUID done_uuid;
+  done_uuid.InitializeWithNew();
   ScopedKernelHANDLE done(
       CreateEvent(nullptr, true, false, done_uuid.ToString16().c_str()));
   ASSERT_TRUE(done.get());
@@ -54,7 +55,7 @@ void TestImageReaderChild(const base::string16& directory_modification) {
 
   ProcessSnapshotWin process_snapshot;
   ASSERT_TRUE(process_snapshot.Initialize(
-      child.process_handle(), ProcessSuspensionState::kSuspended, 0));
+      child.process_handle(), ProcessSuspensionState::kSuspended, 0, 0));
 
   ASSERT_GE(process_snapshot.Modules().size(), 2u);
 
@@ -84,6 +85,22 @@ void TestImageReaderChild(const base::string16& directory_modification) {
   EXPECT_EQ(
       0,
       pdbname.compare(pdbname.size() - suffix.size(), suffix.size(), suffix));
+
+  // Sum the size of the extra memory in all the threads and confirm it's near
+  // the limit that the child process set in its CrashpadInfo.
+  EXPECT_GE(process_snapshot.Threads().size(), 100u);
+
+  size_t extra_memory_total = 0;
+  for (const auto* thread : process_snapshot.Threads()) {
+    for (const auto* extra_memory : thread->ExtraMemory()) {
+      extra_memory_total += extra_memory->Size();
+    }
+  }
+
+  // We confirm we gathered less than 1M of extra data. The cap is set to only
+  // 100K, but there are other "extra memory" regions that aren't included in
+  // the cap. (Completely uncapped it would be > 10M.)
+  EXPECT_LT(extra_memory_total, 1000000u);
 
   // Tell the child it can terminate.
   SetEvent(done.get());

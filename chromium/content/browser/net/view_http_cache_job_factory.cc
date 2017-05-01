@@ -16,7 +16,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"
@@ -194,7 +194,7 @@ void ViewHttpCacheJob::Core::OnIOComplete(int result) {
 // Static.
 bool ViewHttpCacheJobFactory::IsSupportedURL(const GURL& url) {
   return url.SchemeIs(kChromeUIScheme) &&
-         url.host() == kChromeUINetworkViewCacheHost;
+         url.host_piece() == kChromeUINetworkViewCacheHost;
 }
 
 // Static.

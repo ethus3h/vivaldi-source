@@ -21,6 +21,7 @@
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/api/web_request/web_request_permissions.h"
+#include "extensions/browser/extension_navigation_ui_data.h"
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 #include "extensions/browser/info_map.h"
 #include "extensions/common/error_utils.h"
@@ -53,9 +54,9 @@ const char kEmptyDocumentUrl[] = "data:text/html,";
     } \
   } while (0)
 
-scoped_ptr<helpers::RequestCookie> ParseRequestCookie(
+std::unique_ptr<helpers::RequestCookie> ParseRequestCookie(
     const base::DictionaryValue* dict) {
-  scoped_ptr<helpers::RequestCookie> result(new helpers::RequestCookie);
+  std::unique_ptr<helpers::RequestCookie> result(new helpers::RequestCookie);
   std::string tmp;
   if (dict->GetString(keys::kNameKey, &tmp))
     result->name.reset(new std::string(tmp));
@@ -87,16 +88,16 @@ void ParseResponseCookieImpl(const base::DictionaryValue* dict,
     cookie->http_only.reset(new bool(bool_tmp));
 }
 
-scoped_ptr<helpers::ResponseCookie> ParseResponseCookie(
+std::unique_ptr<helpers::ResponseCookie> ParseResponseCookie(
     const base::DictionaryValue* dict) {
-  scoped_ptr<helpers::ResponseCookie> result(new helpers::ResponseCookie);
+  std::unique_ptr<helpers::ResponseCookie> result(new helpers::ResponseCookie);
   ParseResponseCookieImpl(dict, result.get());
   return result;
 }
 
-scoped_ptr<helpers::FilterResponseCookie> ParseFilterResponseCookie(
+std::unique_ptr<helpers::FilterResponseCookie> ParseFilterResponseCookie(
     const base::DictionaryValue* dict) {
-  scoped_ptr<helpers::FilterResponseCookie> result(
+  std::unique_ptr<helpers::FilterResponseCookie> result(
       new helpers::FilterResponseCookie);
   ParseResponseCookieImpl(dict, result.get());
 
@@ -153,7 +154,7 @@ scoped_refptr<const WebRequestAction> CreateRedirectRequestByRegExAction(
 
   RE2::Options options;
   options.set_case_sensitive(false);
-  scoped_ptr<RE2> from_pattern(new RE2(from, options));
+  std::unique_ptr<RE2> from_pattern(new RE2(from, options));
 
   if (!from_pattern->ok()) {
     *error = "Invalid pattern '" + from + "' -> '" + to + "'";
@@ -475,12 +476,16 @@ bool WebRequestAction::Equals(const WebRequestAction* other) const {
   return type() == other->type();
 }
 
-bool WebRequestAction::HasPermission(const InfoMap* extension_info_map,
-                                     const std::string& extension_id,
-                                     const net::URLRequest* request,
-                                     bool crosses_incognito) const {
-  if (WebRequestPermissions::HideRequest(extension_info_map, request))
+bool WebRequestAction::HasPermission(ApplyInfo* apply_info,
+                                     const std::string& extension_id) const {
+  const InfoMap* extension_info_map = apply_info->extension_info_map;
+  const net::URLRequest* request = apply_info->request_data.request;
+  ExtensionNavigationUIData* navigation_ui_data =
+      apply_info->request_data.navigation_ui_data;
+  if (WebRequestPermissions::HideRequest(extension_info_map, request,
+                                         navigation_ui_data)) {
     return false;
+  }
 
   // In unit tests we don't have an extension_info_map object here and skip host
   // permission checks.
@@ -492,7 +497,8 @@ bool WebRequestAction::HasPermission(const InfoMap* extension_info_map,
 
   // The embedder can always access all hosts from within a <webview>.
   // The same is not true of extensions.
-  if (WebViewRendererState::GetInstance()->IsGuest(process_id))
+  if (WebViewRendererState::GetInstance()->IsGuest(process_id) ||
+      (navigation_ui_data && navigation_ui_data->is_web_view()))
     return true;
 
   WebRequestPermissions::HostPermissionsCheck permission_check =
@@ -507,9 +513,11 @@ bool WebRequestAction::HasPermission(const InfoMap* extension_info_map,
       permission_check = WebRequestPermissions::REQUIRE_HOST_PERMISSION;
       break;
   }
+  // TODO(devlin): Pass in the real tab id here.
   return WebRequestPermissions::CanExtensionAccessURL(
-      extension_info_map, extension_id, request->url(), crosses_incognito,
-      permission_check);
+             extension_info_map, extension_id, request->url(), -1,
+             apply_info->crosses_incognito,
+             permission_check) == PermissionsData::ACCESS_ALLOWED;
 }
 
 // static
@@ -537,9 +545,7 @@ scoped_refptr<const WebRequestAction> WebRequestAction::Create(
 void WebRequestAction::Apply(const std::string& extension_id,
                              base::Time extension_install_time,
                              ApplyInfo* apply_info) const {
-  if (!HasPermission(apply_info->extension_info_map, extension_id,
-                     apply_info->request_data.request,
-                     apply_info->crosses_incognito))
+  if (!HasPermission(apply_info, extension_id))
     return;
   if (stages() & apply_info->request_data.stage) {
     LinkedPtrEventResponseDelta delta = CreateDelta(
@@ -693,7 +699,7 @@ WebRequestRedirectToEmptyDocumentAction::CreateDelta(
 //
 
 WebRequestRedirectByRegExAction::WebRequestRedirectByRegExAction(
-    scoped_ptr<RE2> from_pattern,
+    std::unique_ptr<RE2> from_pattern,
     const std::string& to_pattern)
     : WebRequestAction(ON_BEFORE_REQUEST | ON_HEADERS_RECEIVED,
                        ACTION_REDIRECT_BY_REGEX_DOCUMENT,
@@ -968,7 +974,7 @@ WebRequestRemoveResponseHeaderAction::CreateDelta(
 
   LinkedPtrEventResponseDelta result(
       new helpers::EventResponseDelta(extension_id, extension_install_time));
-  void* iter = NULL;
+  size_t iter = 0;
   std::string current_value;
   while (headers->EnumerateHeader(&iter, name_, &current_value)) {
     if (has_value_ && !base::EqualsCaseInsensitiveASCII(current_value, value_))

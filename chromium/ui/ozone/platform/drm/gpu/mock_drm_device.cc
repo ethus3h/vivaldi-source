@@ -102,6 +102,7 @@ bool MockDrmDevice::AddFramebuffer2(uint32_t width,
                                     uint32_t handles[4],
                                     uint32_t strides[4],
                                     uint32_t offsets[4],
+                                    uint64_t modifiers[4],
                                     uint32_t* framebuffer,
                                     uint32_t flags) {
   add_framebuffer_call_count_++;
@@ -185,8 +186,7 @@ bool MockDrmDevice::CreateDumbBuffer(const SkImageInfo& info,
   *handle = allocate_buffer_count_++;
   *stride = info.minRowBytes();
   void* pixels = new char[info.getSafeSize(*stride)];
-  buffers_.push_back(
-      skia::AdoptRef(SkSurface::NewRasterDirect(info, pixels, *stride)));
+  buffers_.push_back(SkSurface::MakeRasterDirect(info, pixels, *stride));
   buffers_[*handle]->getCanvas()->clear(SK_ColorBLACK);
 
   return true;
@@ -196,7 +196,7 @@ bool MockDrmDevice::DestroyDumbBuffer(uint32_t handle) {
   if (handle >= buffers_.size() || !buffers_[handle])
     return false;
 
-  buffers_[handle].clear();
+  buffers_[handle].reset();
   return true;
 }
 
@@ -204,7 +204,9 @@ bool MockDrmDevice::MapDumbBuffer(uint32_t handle, size_t size, void** pixels) {
   if (handle >= buffers_.size() || !buffers_[handle])
     return false;
 
-  *pixels = const_cast<void*>(buffers_[handle]->peekPixels(nullptr, nullptr));
+  SkPixmap pixmap;
+  buffers_[handle]->peekPixels(&pixmap);
+  *pixels = const_cast<void*>(pixmap.addr());
   return true;
 }
 
@@ -223,8 +225,11 @@ bool MockDrmDevice::CommitProperties(drmModeAtomicReq* properties,
   return false;
 }
 
-bool MockDrmDevice::SetGammaRamp(uint32_t crtc_id,
-                                 const std::vector<GammaRampRGBEntry>& lut) {
+bool MockDrmDevice::SetColorCorrection(
+    uint32_t crtc_id,
+    const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+    const std::vector<display::GammaRampRGBEntry>& gamma_lut,
+    const std::vector<float>& correction_matrix) {
   return true;
 }
 

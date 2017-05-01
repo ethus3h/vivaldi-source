@@ -8,10 +8,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "base/memory/scoped_ptr.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_config_service.h"
 #include "net/dns/dns_protocol.h"
@@ -158,18 +158,27 @@ class DnsClient;
 class MockTransactionFactory;
 
 struct MockDnsClientRule {
-  enum Result {
+  enum ResultType {
     FAIL,     // Fail asynchronously with ERR_NAME_NOT_RESOLVED.
     TIMEOUT,  // Fail asynchronously with ERR_DNS_TIMEOUT.
     EMPTY,    // Return an empty response.
-    OK,       // Return a response with loopback address.
+    OK,       // Return an IP address (the accompanying IP is an argument in the
+              // Result structure, or understood as localhost when unspecified).
+  };
+
+  struct Result {
+    explicit Result(const IPAddress& ip) : type(OK), ip(ip) {}
+    explicit Result(ResultType type) : type(type) {}
+
+    ResultType type;
+    IPAddress ip;
   };
 
   // If |delay| is true, matching transactions will be delayed until triggered
   // by the consumer.
   MockDnsClientRule(const std::string& prefix_arg,
                     uint16_t qtype_arg,
-                    Result result_arg,
+                    const Result& result_arg,
                     bool delay)
       : result(result_arg),
         prefix(prefix_arg),
@@ -195,14 +204,16 @@ class MockDnsClient : public DnsClient {
   const DnsConfig* GetConfig() const override;
   DnsTransactionFactory* GetTransactionFactory() override;
   AddressSorter* GetAddressSorter() override;
+  void ApplyPersistentData(const base::Value& data) override;
+  std::unique_ptr<const base::Value> GetPersistentData() const override;
 
   // Completes all DnsTransactions that were delayed by a rule.
   void CompleteDelayedTransactions();
 
  private:
   DnsConfig config_;
-  scoped_ptr<MockTransactionFactory> factory_;
-  scoped_ptr<AddressSorter> address_sorter_;
+  std::unique_ptr<MockTransactionFactory> factory_;
+  std::unique_ptr<AddressSorter> address_sorter_;
 };
 
 }  // namespace net

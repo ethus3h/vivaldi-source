@@ -8,7 +8,7 @@
 #include "base/json/json_reader.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_browsertest_util.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -36,11 +36,11 @@ class FakeDriveServiceFactory
       : change_observer_(change_observer) {}
   ~FakeDriveServiceFactory() override {}
 
-  scoped_ptr<drive::DriveServiceInterface> CreateDriveService(
+  std::unique_ptr<drive::DriveServiceInterface> CreateDriveService(
       OAuth2TokenService* oauth2_token_service,
       net::URLRequestContextGetter* url_request_context_getter,
       base::SequencedTaskRunner* blocking_task_runner) override {
-    scoped_ptr<drive::FakeDriveService> drive_service(
+    std::unique_ptr<drive::FakeDriveService> drive_service(
         new drive::FakeDriveService);
     drive_service->AddChangeObserver(change_observer_);
     return std::move(drive_service);
@@ -58,9 +58,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
                            public drive::FakeDriveService::ChangeObserver {
  public:
   SyncFileSystemTest()
-      : fake_drive_service_(NULL),
-        local_service_(NULL),
-        remote_service_(NULL) {
+      : remote_service_(NULL) {
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -86,6 +84,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
   }
 
   void SetUpOnMainThread() override {
+    extensions::PlatformAppBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(base_dir_.CreateUniqueTempDir());
 
     SyncFileSystemServiceFactory* factory =
@@ -95,7 +94,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
     ExtensionServiceInterface* extension_service =
         extensions::ExtensionSystem::Get(context)->extension_service();
 
-    scoped_ptr<drive_backend::SyncEngine::DriveServiceFactory>
+    std::unique_ptr<drive_backend::SyncEngine::DriveServiceFactory>
         drive_service_factory(new FakeDriveServiceFactory(this));
 
     fake_signin_manager_.reset(new FakeSigninManagerForTesting(
@@ -104,7 +103,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
     remote_service_ = new drive_backend::SyncEngine(
         base::ThreadTaskRunnerHandle::Get(),  // ui_task_runner
         MakeSequencedTaskRunner(), MakeSequencedTaskRunner(),
-        content::BrowserThread::GetBlockingPool(), base_dir_.path(),
+        content::BrowserThread::GetBlockingPool(), base_dir_.GetPath(),
         NULL,  // task_logger
         NULL,  // notification_manager
         extension_service,
@@ -114,7 +113,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
         std::move(drive_service_factory), in_memory_env_.get());
     remote_service_->SetSyncEnabled(true);
     factory->set_mock_remote_file_service(
-        scoped_ptr<RemoteFileSyncService>(remote_service_));
+        std::unique_ptr<RemoteFileSyncService>(remote_service_));
   }
 
   // drive::FakeDriveService::ChangeObserver override.
@@ -152,12 +151,10 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
 
  private:
   base::ScopedTempDir base_dir_;
-  scoped_ptr<leveldb::Env> in_memory_env_;
+  std::unique_ptr<leveldb::Env> in_memory_env_;
 
-  scoped_ptr<FakeSigninManagerForTesting> fake_signin_manager_;
+  std::unique_ptr<FakeSigninManagerForTesting> fake_signin_manager_;
 
-  drive::FakeDriveService* fake_drive_service_;
-  LocalFileSyncService* local_service_;
   drive_backend::SyncEngine* remote_service_;
 
   int64_t real_minimum_preserved_space_;

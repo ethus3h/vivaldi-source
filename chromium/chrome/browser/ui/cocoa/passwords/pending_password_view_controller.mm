@@ -8,17 +8,14 @@
 
 #include "base/mac/foundation_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "chrome/browser/ui/chrome_style.h"
+#include "chrome/browser/ui/cocoa/chrome_style.h"
 #import "chrome/browser/ui/cocoa/hover_close_button.h"
 #import "chrome/browser/ui/cocoa/passwords/passwords_bubble_utils.h"
 #include "chrome/browser/ui/passwords/manage_passwords_bubble_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
-#import "third_party/google_toolbox_for_mac/src/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #import "ui/base/cocoa/controls/hyperlink_text_view.h"
 #include "ui/base/l10n/l10n_util.h"
-
-const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
 
 @implementation PendingPasswordViewController
 
@@ -28,7 +25,7 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
   ManagePasswordsBubbleModel* model = [self model];
   if (model)
     model->OnBrandLinkClicked();
-  [delegate_ viewShouldDismiss];
+  [self.delegate viewShouldDismiss];
   return YES;
 }
 
@@ -38,7 +35,7 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
   base::scoped_nsobject<NSButton> button(
       [[WebUIHoverCloseButton alloc] initWithFrame:frame]);
   [button setAction:@selector(viewShouldDismiss)];
-  [button setTarget:delegate_];
+  [button setTarget:self.delegate];
   return button;
 }
 
@@ -46,10 +43,6 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
   // Empty implementation, it should be implemented in child class.
   NOTREACHED();
   return nil;
-}
-
-- (BOOL)shouldShowGoogleSmartLockWelcome {
-  return NO;
 }
 
 - (NSArray*)createButtonsAndAddThemToView:(NSView*)view {
@@ -84,36 +77,9 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
   [view addSubview:closeButton_];
 
   // Title.
-  base::scoped_nsobject<HyperlinkTextView> titleView(
-      [[HyperlinkTextView alloc] initWithFrame:NSZeroRect]);
-  NSColor* textColor = [NSColor blackColor];
-  NSFont* font = ResourceBundle::GetSharedInstance()
-                     .GetFontList(ResourceBundle::SmallFont)
-                     .GetPrimaryFont()
-                     .GetNativeFont();
   ManagePasswordsBubbleModel* model = [self model];
-  [titleView setMessage:base::SysUTF16ToNSString(model->title())
-               withFont:font
-           messageColor:textColor];
-  NSRange titleBrandLinkRange = model->title_brand_link_range().ToNSRange();
-  if (titleBrandLinkRange.length) {
-    NSColor* linkColor =
-        skia::SkColorToCalibratedNSColor(chrome_style::GetLinkColor());
-    [titleView addLinkRange:titleBrandLinkRange
-                    withURL:nil
-                  linkColor:linkColor];
-    [titleView.get() setDelegate:self];
-
-    // Create the link with no underlining.
-    [titleView setLinkTextAttributes:nil];
-    NSTextStorage* text = [titleView textStorage];
-    [text addAttribute:NSUnderlineStyleAttributeName
-                 value:@(NSUnderlineStyleNone)
-                 range:titleBrandLinkRange];
-  } else {
-    // TODO(vasilii): remove if crbug.com/515189 is fixed.
-    [titleView setRefusesFirstResponder:YES];
-  }
+  HyperlinkTextView* titleView = TitleBubbleLabelWithLink(
+      model->title(), model->title_brand_link_range(), self);
 
   // Force the text to wrap to fit in the bubble size.
   int titleRightPadding =
@@ -132,19 +98,6 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
   NSView* passwordRow = [self createPasswordView];
   if (passwordRow) {
     [view addSubview:passwordRow];
-  }
-
-  base::scoped_nsobject<NSTextField> warm_welcome;
-  if ([self shouldShowGoogleSmartLockWelcome]) {
-    NSString* label_text =
-        l10n_util::GetNSString(IDS_PASSWORD_MANAGER_SMART_LOCK_WELCOME);
-    warm_welcome.reset([[self addLabel:label_text
-                                toView:view] retain]);
-    [warm_welcome setFrameSize:NSMakeSize(kDesiredBubbleWidth - 2*kFramePadding,
-                                          MAXFLOAT)];
-    [GTMUILocalizerAndLayoutTweaker sizeToFitFixedWidthTextField:warm_welcome];
-    NSColor* color = skia::SkColorToCalibratedNSColor(kWarmWelcomeColor);
-    [warm_welcome setTextColor:color];
   }
 
   NSArray* buttons = [self createButtonsAndAddThemToView:view];
@@ -168,11 +121,6 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
 
   curX = kFramePadding;
   curY = NSMaxY([buttons.firstObject frame]) + kUnrelatedControlVerticalPadding;
-  // The Smart Lock warm welcome is placed above after some padding.
-  if (warm_welcome) {
-    [warm_welcome setFrameOrigin:NSMakePoint(curX, curY)];
-    curY = NSMaxY([warm_welcome frame]) + kUnrelatedControlVerticalPadding;
-  }
 
   if (passwordRow) {
     // Password item goes on the next row.
@@ -199,7 +147,7 @@ const SkColor kWarmWelcomeColor = SkColorSetRGB(0x64, 0x64, 0x64);
 }
 
 - (ManagePasswordsBubbleModel*)model {
-  return [delegate_ model];
+  return [self.delegate model];
 }
 
 @end

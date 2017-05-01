@@ -8,10 +8,13 @@
 #include "base/macros.h"
 #include "base/supports_user_data.h"
 #include "base/threading/thread_checker.h"
-#include "sync/api/syncable_service.h"
+#include "components/autofill/core/browser/autofill_profile.h"
+#include "components/autofill/core/browser/credit_card.h"
+#include "components/sync/model/syncable_service.h"
 
 namespace autofill {
 
+class AutofillTable;
 class AutofillWebDataBackend;
 class AutofillWebDataService;
 
@@ -27,8 +30,8 @@ class AutofillWalletSyncableService
   syncer::SyncMergeResult MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
-      scoped_ptr<syncer::SyncChangeProcessor> sync_processor,
-      scoped_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
+      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
+      std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
   void StopSyncing(syncer::ModelType type) override;
   syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
   syncer::SyncError ProcessSyncChanges(
@@ -58,13 +61,38 @@ class AutofillWalletSyncableService
       const std::string& app_locale);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(
+      AutofillWalletSyncableServiceTest,
+      CopyRelevantBillingAddressesFromDisk_KeepLocalAddresses);
+  FRIEND_TEST_ALL_PREFIXES(
+      AutofillWalletSyncableServiceTest,
+      CopyRelevantBillingAddressesFromDisk_OverwriteOtherAddresses);
+  FRIEND_TEST_ALL_PREFIXES(
+      AutofillWalletSyncableServiceTest,
+      PopulateWalletCardsAndAddresses_BillingAddressIdTransfer);
+
   syncer::SyncMergeResult SetSyncData(const syncer::SyncDataList& data_list);
+
+  // Populates the wallet cards and addresses from the sync data and uses the
+  // sync data to link the card to its billing address.
+  static void PopulateWalletCardsAndAddresses(
+      const syncer::SyncDataList& data_list,
+      std::vector<CreditCard>* wallet_cards,
+      std::vector<AutofillProfile>* wallet_addresses);
+
+  // Finds the copies of the same credit card from the server and on disk and
+  // overwrites the server version with the billing id saved on disk if it
+  // refers to a local autofill profile. The credit card's IDs do not change
+  // over time.
+  static void CopyRelevantBillingAddressesFromDisk(
+      const AutofillTable& table,
+      std::vector<CreditCard>* cards_from_server);
 
   base::ThreadChecker thread_checker_;
 
   AutofillWebDataBackend* webdata_backend_;  // Weak ref.
 
-  scoped_ptr<syncer::SyncChangeProcessor> sync_processor_;
+  std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
 
   syncer::SyncableService::StartSyncFlare flare_;
 

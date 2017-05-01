@@ -7,11 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/browser/download/download_request_core.h"
 #include "content/browser/loader/resource_handler.h"
 #include "content/public/browser/download_interrupt_reasons.h"
@@ -25,25 +25,29 @@ class URLRequest;
 
 namespace content {
 class ByteStreamReader;
-class ByteStreamWriter;
-class DownloadRequestHandle;
-class PowerSaveBlocker;
 struct DownloadCreateInfo;
 
 // Forwards data to the download thread.
 class CONTENT_EXPORT DownloadResourceHandler
     : public ResourceHandler,
+      public DownloadRequestCore::Delegate,
       public base::SupportsWeakPtr<DownloadResourceHandler> {
  public:
   struct DownloadTabInfo;
 
   // started_cb will be called exactly once on the UI thread.
   // |id| should be invalid if the id should be automatically assigned.
-  DownloadResourceHandler(
-      uint32_t id,
-      net::URLRequest* request,
-      const DownloadUrlParameters::OnStartedCallback& started_cb,
-      scoped_ptr<DownloadSaveInfo> save_info);
+  DownloadResourceHandler(net::URLRequest* request);
+
+  // static
+  // This function is passed into ResourceDispatcherHostImpl during its
+  // creation and is used to create instances of DownloadResourceHandler as
+  // needed.
+  // TODO(ananta)
+  // Find a better way to achieve this. Ideally we want to move the logic of
+  // creating DownloadResourceHandler instances out of
+  // ResourceDispatcherHostImpl.
+  static std::unique_ptr<ResourceHandler> Create(net::URLRequest* request);
 
   bool OnRequestRedirected(const net::RedirectInfo& redirect_info,
                            ResourceResponse* response,
@@ -58,9 +62,6 @@ class CONTENT_EXPORT DownloadResourceHandler
   // Pass-through implementation.
   bool OnWillStart(const GURL& url, bool* defer) override;
 
-  // Pass-through implementation.
-  bool OnBeforeNetworkStart(const GURL& url, bool* defer) override;
-
   // Create a new buffer, which will be handed to the download thread for file
   // writing and deletion.
   bool OnWillRead(scoped_refptr<net::IOBuffer>* buf,
@@ -70,7 +71,6 @@ class CONTENT_EXPORT DownloadResourceHandler
   bool OnReadCompleted(int bytes_read, bool* defer) override;
 
   void OnResponseCompleted(const net::URLRequestStatus& status,
-                           const std::string& security_info,
                            bool* defer) override;
 
   // N/A to this flavor of DownloadHandler.
@@ -87,26 +87,20 @@ class CONTENT_EXPORT DownloadResourceHandler
  private:
   ~DownloadResourceHandler() override;
 
-  // Arrange for started_cb_ to be called on the UI thread with the
-  // below values, nulling out started_cb_.  Should only be called
-  // on the IO thread.
-  void CallStartedCB(DownloadInterruptReason interrupt_reason);
-
-  void OnCoreReadyToRead();
-
-  uint32_t download_id_;
-
-  // This is read only on the IO thread, but may only
-  // be called on the UI thread.
-  DownloadUrlParameters::OnStartedCallback started_cb_;
+  // DownloadRequestCore::Delegate
+  void OnStart(
+      std::unique_ptr<DownloadCreateInfo> download_create_info,
+      std::unique_ptr<ByteStreamReader> stream_reader,
+      const DownloadUrlParameters::OnStartedCallback& callback) override;
+  void OnReadyToRead() override;
 
   // Stores information about the download that must be acquired on the UI
   // thread before StartOnUIThread is called.
   // Created on IO thread, but only accessed on UI thread. |tab_info_| holds
   // the pointer until we pass it off to StartOnUIThread or DeleteSoon.
-  // Marked as a scoped_ptr<> to indicate ownership of the structure, but
+  // Marked as a std::unique_ptr<> to indicate ownership of the structure, but
   // deletion must occur on the IO thread.
-  scoped_ptr<DownloadTabInfo> tab_info_;
+  std::unique_ptr<DownloadTabInfo> tab_info_;
 
   DownloadRequestCore core_;
   DISALLOW_COPY_AND_ASSIGN(DownloadResourceHandler);

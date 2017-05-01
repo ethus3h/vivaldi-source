@@ -7,23 +7,25 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/containers/hash_tables.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_split.h"
 #include "base/task_runner.h"
 #include "base/time/time.h"
 #include "net/base/cache_type.h"
+#include "net/base/net_export.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/simple/simple_entry_impl.h"
+#include "net/disk_cache/simple/simple_experiment.h"
 #include "net/disk_cache/simple/simple_index_delegate.h"
 
 namespace base {
@@ -108,7 +110,11 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   int DoomEntriesSince(base::Time initial_time,
                        const CompletionCallback& callback) override;
   int CalculateSizeOfAllEntries(const CompletionCallback& callback) override;
-  scoped_ptr<Iterator> CreateIterator() override;
+  int CalculateSizeOfEntriesBetween(
+      base::Time initial_time,
+      base::Time end_time,
+      const CompletionCallback& callback) override;
+  std::unique_ptr<Iterator> CreateIterator() override;
   void GetStats(base::StringPairs* stats) override;
   void OnExternalCacheHit(const std::string& key) override;
 
@@ -116,10 +122,10 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   class SimpleIterator;
   friend class SimpleIterator;
 
-  typedef base::hash_map<uint64_t, SimpleEntryImpl*> EntryMap;
+  using EntryMap = std::unordered_map<uint64_t, SimpleEntryImpl*>;
 
-  typedef base::Callback<void(base::Time mtime, uint64_t max_size, int result)>
-      InitializeIndexCallback;
+  using InitializeIndexCallback =
+      base::Callback<void(base::Time mtime, uint64_t max_size, int result)>;
 
   class ActiveEntryProxy;
   friend class ActiveEntryProxy;
@@ -146,10 +152,19 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   void IndexReadyForSizeCalculation(const CompletionCallback& callback,
                                     int result);
 
+  // Calculates the size all cache entries between |initial_time| and
+  // |end_time|. Invoked when the index is ready.
+  void IndexReadyForSizeBetweenCalculation(base::Time initial_time,
+                                           base::Time end_time,
+                                           const CompletionCallback& callback,
+                                           int result);
+
   // Try to create the directory if it doesn't exist. This must run on the IO
   // thread.
-  static DiskStatResult InitCacheStructureOnDisk(const base::FilePath& path,
-                                                 uint64_t suggested_max_size);
+  static DiskStatResult InitCacheStructureOnDisk(
+      const base::FilePath& path,
+      uint64_t suggested_max_size,
+      const SimpleExperiment& experiment);
 
   // Searches |active_entries_| for the entry corresponding to |key|. If found,
   // returns the found entry. Otherwise, creates a new entry and returns that.
@@ -191,13 +206,13 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
 
   // A callback thunk used by DoomEntries to clear the |entries_pending_doom_|
   // after a mass doom.
-  void DoomEntriesComplete(scoped_ptr<std::vector<uint64_t>> entry_hashes,
+  void DoomEntriesComplete(std::unique_ptr<std::vector<uint64_t>> entry_hashes,
                            const CompletionCallback& callback,
                            int result);
 
   const base::FilePath path_;
   const net::CacheType cache_type_;
-  scoped_ptr<SimpleIndex> index_;
+  std::unique_ptr<SimpleIndex> index_;
   const scoped_refptr<base::SingleThreadTaskRunner> cache_thread_;
   scoped_refptr<base::TaskRunner> worker_pool_;
 
@@ -210,7 +225,8 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   // these entries cannot have Doom/Create/Open operations run until the doom
   // is complete. The base::Closure map target is used to store deferred
   // operations to be run at the completion of the Doom.
-  base::hash_map<uint64_t, std::vector<base::Closure>> entries_pending_doom_;
+  std::unordered_map<uint64_t, std::vector<base::Closure>>
+      entries_pending_doom_;
 
   net::NetLog* const net_log_;
 };

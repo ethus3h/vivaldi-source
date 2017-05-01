@@ -24,15 +24,12 @@
 
 #ifdef VIVALDI_BUILD
 #include "extensions/api/guest_view/vivaldi_web_view_guest_top.inc"
+#include "third_party/WebKit/public/platform/WebSecurityStyle.h"
 #endif // VIVALDI_BUILD
 
 namespace blink {
 struct WebFindOptions;
-}  // nanespace blink
-
-namespace content {
-struct GlobalRequestID;
-}  // namespace content
+}  // namespace blink
 
 namespace extensions {
 
@@ -85,20 +82,21 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   double GetZoom() const;
 
   // Get the current zoom mode.
-  ui_zoom::ZoomController::ZoomMode GetZoomMode();
+  zoom::ZoomController::ZoomMode GetZoomMode();
 
   // Request navigating the guest to the provided |src| URL.
   // |wasTyped| will set transition to PAGE_TRANSITION_TYPED so it is remembered
   // in typed history.
-  void NavigateGuest(const std::string& src, bool force_navigation, bool wasTyped = false);
+  void NavigateGuest(const std::string& src,
+                     bool force_navigation,
+                     bool wasTyped = false,
+                     content::Referrer* referrer = nullptr,
+                     content::OpenURLParams* params = nullptr);
 
   // Shows the context menu for the guest.
-  // |items| acts as a filter. This restricts the current context's default
-  // menu items to contain only the items from |items|.
-  // |items| == NULL means no filtering will be applied.
-  void ShowContextMenu(
-      int request_id,
-      const WebViewGuestDelegate::MenuItemVector* items);
+  void ShowContextMenu(int request_id);
+
+  int rules_registry_id() const { return rules_registry_id_; }
 
   // Sets the frame name of the guest.
   void SetName(const std::string& name);
@@ -108,7 +106,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   void SetZoom(double zoom_factor);
 
   // Set the zoom mode.
-  void SetZoomMode(ui_zoom::ZoomController::ZoomMode zoom_mode);
+  void SetZoomMode(zoom::ZoomController::ZoomMode zoom_mode);
 
   void SetAllowScaling(bool allow);
   bool allow_scaling() const { return allow_scaling_; }
@@ -192,6 +190,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
                  const gfx::Rect& selection_rect,
                  int active_match_ordinal,
                  bool final_update) final;
+  bool ZoomPropagatesFromEmbedderToGuest() const final;
   const char* GetAPINamespace() const final;
   int GetTaskPrefix() const final;
   void GuestDestroyed() final;
@@ -213,11 +212,11 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
                const content::NotificationDetails& details) final;
 
   // WebContentsDelegate implementation.
-  bool AddMessageToConsole(content::WebContents* source,
-                           int32_t level,
-                           const base::string16& message,
-                           int32_t line_no,
-                           const base::string16& source_id) final;
+  bool DidAddMessageToConsole(content::WebContents* source,
+                              int32_t level,
+                              const base::string16& message,
+                              int32_t line_no,
+                              const base::string16& source_id) final;
   void CloseContents(content::WebContents* source) final;
   bool HandleContextMenu(const content::ContextMenuParams& params) final;
   void HandleKeyboardEvent(content::WebContents* source,
@@ -226,7 +225,9 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   bool PreHandleGestureEvent(content::WebContents* source,
                              const blink::WebGestureEvent& event) final;
   void RendererResponsive(content::WebContents* source) final;
-  void RendererUnresponsive(content::WebContents* source) final;
+  void RendererUnresponsive(
+      content::WebContents* source,
+      const content::WebContentsUnresponsiveState& unresponsive_state) final;
   void RequestMediaAccessPermission(
       content::WebContents* source,
       const content::MediaStreamRequest& request,
@@ -256,6 +257,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
       content::WebContents* source,
       const content::OpenURLParams& params) final;
   void WebContentsCreated(content::WebContents* source_contents,
+                          int opener_render_process_id,
                           int opener_render_frame_id,
                           const std::string& frame_name,
                           const GURL& target_url,
@@ -265,22 +267,18 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   void ExitFullscreenModeForTab(content::WebContents* web_contents) final;
   bool IsFullscreenForTabOrPending(
       const content::WebContents* web_contents) const final;
+  void RequestToLockMouse(content::WebContents* web_contents,
+                          bool user_gesture,
+                          bool last_unlocked_by_target) override;
+  blink::WebSecurityStyle GetSecurityStyle(
+      content::WebContents* web_contents,
+      content::SecurityStyleExplanations* security_style_explanations) override;
+  void ShowCertificateViewerInDevTools(content::WebContents* web_contents,
+                     scoped_refptr<net::X509Certificate> certificate) override;
 
   // WebContentsObserver implementation.
-  void DidCommitProvisionalLoadForFrame(
-      content::RenderFrameHost* render_frame_host,
-      const GURL& url,
-      ui::PageTransition transition_type) final;
-  void DidFailProvisionalLoad(content::RenderFrameHost* render_frame_host,
-                              const GURL& validated_url,
-                              int error_code,
-                              const base::string16& error_description,
-                              bool was_ignored_by_handler) final;
-  void DidStartProvisionalLoadForFrame(
-      content::RenderFrameHost* render_frame_host,
-      const GURL& validated_url,
-      bool is_error_page,
-      bool is_iframe_srcdoc) final;
+  void DidStartNavigation(content::NavigationHandle* navigation_handle) final;
+  void DidFinishNavigation(content::NavigationHandle* navigation_handle) final;
   void RenderProcessGone(base::TerminationStatus status) final;
   void UserAgentOverrideSet(const std::string& user_agent) final;
   void FrameNameChanged(content::RenderFrameHost* render_frame_host,
@@ -307,7 +305,8 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
       const GURL& url,
       const content::Referrer& referrer,
       ui::PageTransition transition_type,
-      bool force_navigation);
+      bool force_navigation,
+      const content::OpenURLParams* params = nullptr);
 
   void RequestNewWindowPermission(
       WindowOpenDisposition disposition,
@@ -320,10 +319,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
 
   // Notification that a load in the guest resulted in abort. Note that |url|
   // may be invalid.
-  void LoadAbort(bool is_top_level,
-                 const GURL& url,
-                 int error_code,
-                 const std::string& error_type);
+  void LoadAbort(bool is_top_level, const GURL& url, int error_code);
 
   // Creates a new guest window owned by this WebViewGuest.
   void CreateNewGuestWebViewWindow(const content::OpenURLParams& params);
@@ -342,7 +338,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   WebViewFindHelper find_helper_;
 
   base::ObserverList<ScriptExecutionObserver> script_observers_;
-  scoped_ptr<ScriptExecutor> script_executor_;
+  std::unique_ptr<ScriptExecutor> script_executor_;
 
   content::NotificationRegistrar notification_registrar_;
 
@@ -362,9 +358,9 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   JavaScriptDialogHelper javascript_dialog_helper_;
 
   // Handles permission requests.
-  scoped_ptr<WebViewPermissionHelper> web_view_permission_helper_;
+  std::unique_ptr<WebViewPermissionHelper> web_view_permission_helper_;
 
-  scoped_ptr<WebViewGuestDelegate> web_view_guest_delegate_;
+  std::unique_ptr<WebViewGuestDelegate> web_view_guest_delegate_;
 
   // Tracks the name, and target URL of the new window. Once the first
   // navigation commits, we no longer track this information.
@@ -372,10 +368,21 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
     GURL url;
     std::string name;
     bool changed;
+    content::Referrer *referrer;
+    content::OpenURLParams* params;
     NewWindowInfo(const GURL& url, const std::string& name) :
         url(url),
         name(name),
-        changed(false) {}
+        changed(false),
+        referrer(nullptr),
+        params(nullptr) {}
+    // NOTE(espen@vivaldi.com): We have to let the referrer member be a pointer
+    // (and thus have a destructor) to avoid breaking chromium style:
+    // "Complex constructor has an inlined body"
+    ~NewWindowInfo() {
+      delete referrer;
+      delete params;
+    };
   };
 
   using PendingWindowMap = std::map<WebViewGuest*, NewWindowInfo>;
@@ -390,6 +397,9 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest>,
   // Tracks whether the webview has a pending zoom from before the first
   // navigation. This will be equal to 0 when there is no pending zoom.
   double pending_zoom_factor_;
+
+  // Whether the GuestView set an explicit zoom level.
+  bool did_set_explicit_zoom_;
 
 #ifdef VIVALDI_BUILD
 #include "extensions/api/guest_view/vivaldi_web_view_guest_class.inc"

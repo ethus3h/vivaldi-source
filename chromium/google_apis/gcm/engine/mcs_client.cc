@@ -10,9 +10,9 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -27,7 +27,7 @@ namespace gcm {
 
 namespace {
 
-typedef scoped_ptr<google::protobuf::MessageLite> MCSProto;
+typedef std::unique_ptr<google::protobuf::MessageLite> MCSProto;
 
 // The category of messages intended for the GCM client itself from MCS.
 const char kMCSCategory[] = "com.google.android.gsf.gtalkservice";
@@ -155,10 +155,9 @@ std::string MCSClient::GetStateString() const {
       return "CONNECTING";
     case CONNECTED:
       return "CONNECTED";
-    default:
-      NOTREACHED();
-      return std::string();
   }
+  NOTREACHED();
+  return std::string();
 }
 
 MCSClient::MCSClient(const std::string& version_string,
@@ -189,7 +188,7 @@ void MCSClient::Initialize(
     const ErrorCallback& error_callback,
     const OnMessageReceivedCallback& message_received_callback,
     const OnMessageSentCallback& message_sent_callback,
-    scoped_ptr<GCMStore::LoadResult> load_result) {
+    std::unique_ptr<GCMStore::LoadResult> load_result) {
   DCHECK_EQ(state_, UNINITIALIZED);
 
   state_ = LOADED;
@@ -317,7 +316,7 @@ void MCSClient::SendMessage(const MCSMessage& message) {
     return;
   }
 
-  scoped_ptr<ReliablePacketInfo> packet_info(new ReliablePacketInfo());
+  std::unique_ptr<ReliablePacketInfo> packet_info(new ReliablePacketInfo());
   packet_info->tag = message.tag();
   packet_info->protobuf = message.CloneProtobuf();
 
@@ -378,7 +377,7 @@ void MCSClient::SendMessage(const MCSMessage& message) {
   MaybeSendMessage();
 }
 
-void MCSClient::UpdateHeartbeatTimer(scoped_ptr<base::Timer> timer) {
+void MCSClient::UpdateHeartbeatTimer(std::unique_ptr<base::Timer> timer) {
   heartbeat_manager_.UpdateHeartbeatTimer(std::move(timer));
 }
 
@@ -606,12 +605,12 @@ void MCSClient::SendPacketToWire(ReliablePacketInfo* packet_info) {
 }
 
 void MCSClient::HandleMCSDataMesssage(
-    scoped_ptr<google::protobuf::MessageLite> protobuf) {
+    std::unique_ptr<google::protobuf::MessageLite> protobuf) {
   mcs_proto::DataMessageStanza* data_message =
       reinterpret_cast<mcs_proto::DataMessageStanza*>(protobuf.get());
   // TODO(zea): implement a proper status manager rather than hardcoding these
   // values.
-  scoped_ptr<mcs_proto::DataMessageStanza> response(
+  std::unique_ptr<mcs_proto::DataMessageStanza> response(
       new mcs_proto::DataMessageStanza());
   response->set_from(kGCMFromField);
   response->set_sent(clock_->Now().ToInternalValue() /
@@ -637,7 +636,7 @@ void MCSClient::HandleMCSDataMesssage(
 }
 
 void MCSClient::HandlePacketFromWire(
-    scoped_ptr<google::protobuf::MessageLite> protobuf) {
+    std::unique_ptr<google::protobuf::MessageLite> protobuf) {
   if (!protobuf.get())
     return;
   uint8_t tag = GetMCSProtoTag(*protobuf);

@@ -11,34 +11,89 @@
 #include "chrome/common/render_messages.h"
 #include "components/search/search.h"
 #include "content/public/browser/navigation_details.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/associated_interface_provider.h"
+#include "content/public/common/child_process_host.h"
 
 namespace {
 
-bool IsProviderValid(const base::string16& provider) {
-  // Only allow string of 8 alphanumeric characters or less as providers.
-  // The empty string is considered valid and should be treated as if no
-  // provider were specified.
-  if (provider.length() > 8)
-    return false;
-  for (base::string16::const_iterator it = provider.begin();
-       it != provider.end(); ++it) {
-    if (!base::IsAsciiAlpha(*it) && !base::IsAsciiDigit(*it))
-      return false;
+bool IsRenderedInInstantProcess(content::WebContents* web_contents) {
+  // TODO(tibell): Instead of rejecting messages check at connection time if we
+  // want to talk to the render frame or not. Later, in an out-of-process iframe
+  // world, the IsRenderedInInstantProcess check will have to be done, as it's
+  // based on the RenderView.
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  return search::IsRenderedInInstantProcess(web_contents, profile);
+}
+
+class SearchBoxClientFactoryImpl
+    : public SearchIPCRouter::SearchBoxClientFactory {
+ public:
+  // The |web_contents| must outlive this object.
+  explicit SearchBoxClientFactoryImpl(content::WebContents* web_contents)
+      : web_contents_(web_contents),
+        last_connected_rfh_(
+            std::make_pair(content::ChildProcessHost::kInvalidUniqueID,
+                           MSG_ROUTING_NONE)) {}
+  chrome::mojom::SearchBox* GetSearchBox() override;
+
+ private:
+  void OnConnectionError();
+
+  content::WebContents* web_contents_;
+  chrome::mojom::SearchBoxAssociatedPtr search_box_;
+
+  // The proccess ID and routing ID of the last connected main frame. May be
+  // (ChildProcessHost::kInvalidUniqueID, MSG_ROUTING_NONE) if we haven't
+  // connected yet.
+  std::pair<int, int> last_connected_rfh_;
+
+  DISALLOW_COPY_AND_ASSIGN(SearchBoxClientFactoryImpl);
+};
+
+chrome::mojom::SearchBox* SearchBoxClientFactoryImpl::GetSearchBox() {
+  content::RenderFrameHost* frame = web_contents_->GetMainFrame();
+  auto id = std::make_pair(frame->GetProcess()->GetID(), frame->GetRoutingID());
+  // Avoid reconnecting repeatedly to the same RenderFrameHost for performance
+  // reasons.
+  if (id != last_connected_rfh_) {
+    if (IsRenderedInInstantProcess(web_contents_)) {
+      frame->GetRemoteAssociatedInterfaces()->GetInterface(&search_box_);
+      search_box_.set_connection_error_handler(
+          base::Bind(&SearchBoxClientFactoryImpl::OnConnectionError,
+                     base::Unretained(this)));
+    } else {
+      // Renderer is not an instant process. We'll create a connection that
+      // drops all messages.
+      mojo::GetIsolatedProxy(&search_box_);
+    }
+    last_connected_rfh_ = id;
   }
-  return true;
+  return search_box_.get();
+}
+
+void SearchBoxClientFactoryImpl::OnConnectionError() {
+  search_box_.reset();
+  last_connected_rfh_ = std::make_pair(
+      content::ChildProcessHost::kInvalidUniqueID,
+      MSG_ROUTING_NONE);
 }
 
 }  // namespace
 
 SearchIPCRouter::SearchIPCRouter(content::WebContents* web_contents,
                                  Delegate* delegate,
-                                 scoped_ptr<Policy> policy)
+                                 std::unique_ptr<Policy> policy)
     : WebContentsObserver(web_contents),
       delegate_(delegate),
       policy_(std::move(policy)),
       commit_counter_(0),
-      is_active_tab_(false) {
+      is_active_tab_(false),
+      bindings_(web_contents, this),
+      search_box_client_factory_(new SearchBoxClientFactoryImpl(web_contents)) {
   DCHECK(web_contents);
   DCHECK(delegate);
   DCHECK(policy_.get());
@@ -48,11 +103,11 @@ SearchIPCRouter::~SearchIPCRouter() {}
 
 void SearchIPCRouter::OnNavigationEntryCommitted() {
   ++commit_counter_;
-  Send(new ChromeViewMsg_SetPageSequenceNumber(routing_id(), commit_counter_));
+  search_box()->SetPageSequenceNumber(commit_counter_);
 }
 
 void SearchIPCRouter::DetermineIfPageSupportsInstant() {
-  Send(new ChromeViewMsg_DetermineIfPageSupportsInstant(routing_id()));
+  search_box()->DetermineIfPageSupportsInstant();
 }
 
 void SearchIPCRouter::SendChromeIdentityCheckResult(
@@ -61,35 +116,14 @@ void SearchIPCRouter::SendChromeIdentityCheckResult(
   if (!policy_->ShouldProcessChromeIdentityCheck())
     return;
 
-  Send(new ChromeViewMsg_ChromeIdentityCheckResult(routing_id(), identity,
-                                                   identity_match));
+  search_box()->ChromeIdentityCheckResult(identity, identity_match);
 }
 
 void SearchIPCRouter::SendHistorySyncCheckResult(bool sync_history) {
   if (!policy_->ShouldProcessHistorySyncCheck())
     return;
 
-  Send(new ChromeViewMsg_HistorySyncCheckResult(routing_id(), sync_history));
-}
-
-void SearchIPCRouter::SetPromoInformation(bool is_app_launcher_enabled) {
-  if (!policy_->ShouldSendSetPromoInformation())
-    return;
-
-  Send(new ChromeViewMsg_SearchBoxPromoInformation(routing_id(),
-                                                   is_app_launcher_enabled));
-}
-
-void SearchIPCRouter::SetDisplayInstantResults() {
-  if (!policy_->ShouldSendSetDisplayInstantResults())
-    return;
-
-  bool is_search_results_page = !search::GetSearchTerms(web_contents()).empty();
-  bool display_instant_results =
-      is_search_results_page ? search::ShouldPrefetchSearchResultsOnSRP()
-                             : search::ShouldPrefetchSearchResults();
-  Send(new ChromeViewMsg_SearchBoxSetDisplayInstantResults(
-       routing_id(), display_instant_results));
+  search_box()->HistorySyncCheckResult(sync_history);
 }
 
 void SearchIPCRouter::SetSuggestionToPrefetch(
@@ -97,16 +131,14 @@ void SearchIPCRouter::SetSuggestionToPrefetch(
   if (!policy_->ShouldSendSetSuggestionToPrefetch())
     return;
 
-  Send(new ChromeViewMsg_SearchBoxSetSuggestionToPrefetch(routing_id(),
-                                                          suggestion));
+  search_box()->SetSuggestionToPrefetch(suggestion);
 }
 
 void SearchIPCRouter::SetInputInProgress(bool input_in_progress) {
   if (!policy_->ShouldSendSetInputInProgress(is_active_tab_))
     return;
 
-  Send(new ChromeViewMsg_SearchBoxSetInputInProgress(routing_id(),
-                                                     input_in_progress));
+  search_box()->SetInputInProgress(input_in_progress);
 }
 
 void SearchIPCRouter::OmniboxFocusChanged(OmniboxFocusState state,
@@ -114,7 +146,7 @@ void SearchIPCRouter::OmniboxFocusChanged(OmniboxFocusState state,
   if (!policy_->ShouldSendOmniboxFocusChanged())
     return;
 
-  Send(new ChromeViewMsg_SearchBoxFocusChanged(routing_id(), state, reason));
+  search_box()->FocusChanged(state, reason);
 }
 
 void SearchIPCRouter::SendMostVisitedItems(
@@ -122,7 +154,7 @@ void SearchIPCRouter::SendMostVisitedItems(
   if (!policy_->ShouldSendMostVisitedItems())
     return;
 
-  Send(new ChromeViewMsg_SearchBoxMostVisitedItemsChanged(routing_id(), items));
+  search_box()->MostVisitedChanged(items);
 }
 
 void SearchIPCRouter::SendThemeBackgroundInfo(
@@ -130,7 +162,7 @@ void SearchIPCRouter::SendThemeBackgroundInfo(
   if (!policy_->ShouldSendThemeBackgroundInfo())
     return;
 
-  Send(new ChromeViewMsg_SearchBoxThemeChanged(routing_id(), theme_info));
+  search_box()->ThemeChanged(theme_info);
 }
 
 void SearchIPCRouter::Submit(const base::string16& text,
@@ -138,7 +170,7 @@ void SearchIPCRouter::Submit(const base::string16& text,
   if (!policy_->ShouldSubmitQuery())
     return;
 
-  Send(new ChromeViewMsg_SearchBoxSubmit(routing_id(), text, params));
+  search_box()->Submit(text, params);
 }
 
 void SearchIPCRouter::OnTabActivated() {
@@ -149,54 +181,19 @@ void SearchIPCRouter::OnTabDeactivated() {
   is_active_tab_ = false;
 }
 
-bool SearchIPCRouter::OnMessageReceived(const IPC::Message& message) {
-  if (IPC_MESSAGE_CLASS(message) != ChromeMsgStart)
-    return false;
-
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  if (!search::IsRenderedInInstantProcess(web_contents(), profile))
-    return false;
-
-  bool handled = true;
-  IPC_BEGIN_MESSAGE_MAP(SearchIPCRouter, message)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_InstantSupportDetermined,
-                        OnInstantSupportDetermined)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_FocusOmnibox, OnFocusOmnibox);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxNavigate,
-                        OnSearchBoxNavigate);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxDeleteMostVisitedItem,
-                        OnDeleteMostVisitedItem);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxUndoMostVisitedDeletion,
-                        OnUndoMostVisitedDeletion);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxUndoAllMostVisitedDeletions,
-                        OnUndoAllMostVisitedDeletions);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_LogEvent, OnLogEvent);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_LogMostVisitedImpression,
-                        OnLogMostVisitedImpression);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_LogMostVisitedNavigation,
-                        OnLogMostVisitedNavigation);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_PasteAndOpenDropdown,
-                        OnPasteAndOpenDropDown);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_HistorySyncCheck,
-                        OnHistorySyncCheck);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_ChromeIdentityCheck,
-                        OnChromeIdentityCheck);
-    IPC_MESSAGE_UNHANDLED(handled = false)
-  IPC_END_MESSAGE_MAP()
-  return handled;
-}
-
-void SearchIPCRouter::OnInstantSupportDetermined(int page_seq_no,
-                                                 bool instant_support) const {
+void SearchIPCRouter::InstantSupportDetermined(int page_seq_no,
+                                               bool instant_support) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
   delegate_->OnInstantSupportDetermined(instant_support);
 }
 
-void SearchIPCRouter::OnFocusOmnibox(int page_seq_no,
-                                     OmniboxFocusState state) const {
+void SearchIPCRouter::FocusOmnibox(int page_seq_no, OmniboxFocusState state) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -207,23 +204,10 @@ void SearchIPCRouter::OnFocusOmnibox(int page_seq_no,
   delegate_->FocusOmnibox(state);
 }
 
-void SearchIPCRouter::OnSearchBoxNavigate(
-    int page_seq_no,
-    const GURL& url,
-    WindowOpenDisposition disposition,
-    bool is_most_visited_item_url) const {
-  if (page_seq_no != commit_counter_)
+void SearchIPCRouter::SearchBoxDeleteMostVisitedItem(int page_seq_no,
+                                                     const GURL& url) {
+  if (!IsRenderedInInstantProcess(web_contents()))
     return;
-
-  delegate_->OnInstantSupportDetermined(true);
-  if (!policy_->ShouldProcessNavigateToURL(is_active_tab_))
-    return;
-
-  delegate_->NavigateToURL(url, disposition, is_most_visited_item_url);
-}
-
-void SearchIPCRouter::OnDeleteMostVisitedItem(int page_seq_no,
-                                              const GURL& url) const {
   if (page_seq_no != commit_counter_)
     return;
 
@@ -234,8 +218,10 @@ void SearchIPCRouter::OnDeleteMostVisitedItem(int page_seq_no,
   delegate_->OnDeleteMostVisitedItem(url);
 }
 
-void SearchIPCRouter::OnUndoMostVisitedDeletion(int page_seq_no,
-                                                const GURL& url) const {
+void SearchIPCRouter::SearchBoxUndoMostVisitedDeletion(int page_seq_no,
+                                                       const GURL& url) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -246,7 +232,9 @@ void SearchIPCRouter::OnUndoMostVisitedDeletion(int page_seq_no,
   delegate_->OnUndoMostVisitedDeletion(url);
 }
 
-void SearchIPCRouter::OnUndoAllMostVisitedDeletions(int page_seq_no) const {
+void SearchIPCRouter::SearchBoxUndoAllMostVisitedDeletions(int page_seq_no) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -257,9 +245,11 @@ void SearchIPCRouter::OnUndoAllMostVisitedDeletions(int page_seq_no) const {
   delegate_->OnUndoAllMostVisitedDeletions();
 }
 
-void SearchIPCRouter::OnLogEvent(int page_seq_no,
-                                 NTPLoggingEventType event,
-                                 base::TimeDelta time) const {
+void SearchIPCRouter::LogEvent(int page_seq_no,
+                               NTPLoggingEventType event,
+                               base::TimeDelta time) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -270,9 +260,13 @@ void SearchIPCRouter::OnLogEvent(int page_seq_no,
   delegate_->OnLogEvent(event, time);
 }
 
-void SearchIPCRouter::OnLogMostVisitedImpression(
-    int page_seq_no, int position, const base::string16& provider) const {
-  if (page_seq_no != commit_counter_ || !IsProviderValid(provider))
+void SearchIPCRouter::LogMostVisitedImpression(
+    int page_seq_no,
+    int position,
+    ntp_tiles::NTPTileSource tile_source) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
+  if (page_seq_no != commit_counter_)
     return;
 
   delegate_->OnInstantSupportDetermined(true);
@@ -280,12 +274,16 @@ void SearchIPCRouter::OnLogMostVisitedImpression(
   if (!policy_->ShouldProcessLogEvent())
     return;
 
-  delegate_->OnLogMostVisitedImpression(position, provider);
+  delegate_->OnLogMostVisitedImpression(position, tile_source);
 }
 
-void SearchIPCRouter::OnLogMostVisitedNavigation(
-    int page_seq_no, int position, const base::string16& provider) const {
-  if (page_seq_no != commit_counter_ || !IsProviderValid(provider))
+void SearchIPCRouter::LogMostVisitedNavigation(
+    int page_seq_no,
+    int position,
+    ntp_tiles::NTPTileSource tile_source) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
+  if (page_seq_no != commit_counter_)
     return;
 
   delegate_->OnInstantSupportDetermined(true);
@@ -293,11 +291,13 @@ void SearchIPCRouter::OnLogMostVisitedNavigation(
   if (!policy_->ShouldProcessLogEvent())
     return;
 
-  delegate_->OnLogMostVisitedNavigation(position, provider);
+  delegate_->OnLogMostVisitedNavigation(position, tile_source);
 }
 
-void SearchIPCRouter::OnPasteAndOpenDropDown(int page_seq_no,
-                                             const base::string16& text) const {
+void SearchIPCRouter::PasteAndOpenDropdown(int page_seq_no,
+                                           const base::string16& text) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -308,9 +308,10 @@ void SearchIPCRouter::OnPasteAndOpenDropDown(int page_seq_no,
   delegate_->PasteIntoOmnibox(text);
 }
 
-void SearchIPCRouter::OnChromeIdentityCheck(
-    int page_seq_no,
-    const base::string16& identity) const {
+void SearchIPCRouter::ChromeIdentityCheck(int page_seq_no,
+                                          const base::string16& identity) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -321,7 +322,9 @@ void SearchIPCRouter::OnChromeIdentityCheck(
   delegate_->OnChromeIdentityCheck(identity);
 }
 
-void SearchIPCRouter::OnHistorySyncCheck(int page_seq_no) const {
+void SearchIPCRouter::HistorySyncCheck(int page_seq_no) {
+  if (!IsRenderedInInstantProcess(web_contents()))
+    return;
   if (page_seq_no != commit_counter_)
     return;
 
@@ -337,7 +340,7 @@ void SearchIPCRouter::set_delegate_for_testing(Delegate* delegate) {
   delegate_ = delegate;
 }
 
-void SearchIPCRouter::set_policy_for_testing(scoped_ptr<Policy> policy) {
-  DCHECK(policy.get());
-  policy_.reset(policy.release());
+void SearchIPCRouter::set_policy_for_testing(std::unique_ptr<Policy> policy) {
+  DCHECK(policy);
+  policy_ = std::move(policy);
 }

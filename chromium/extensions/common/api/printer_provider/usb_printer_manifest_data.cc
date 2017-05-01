@@ -4,6 +4,7 @@
 
 #include "extensions/common/api/printer_provider/usb_printer_manifest_data.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "device/usb/usb_device.h"
 #include "device/usb/usb_device_filter.h"
@@ -28,37 +29,38 @@ const UsbPrinterManifestData* UsbPrinterManifestData::Get(
 }
 
 // static
-scoped_ptr<UsbPrinterManifestData> UsbPrinterManifestData::FromValue(
+std::unique_ptr<UsbPrinterManifestData> UsbPrinterManifestData::FromValue(
     const base::Value& value,
     base::string16* error) {
-  scoped_ptr<api::extensions_manifest_types::UsbPrinters> usb_printers =
+  std::unique_ptr<api::extensions_manifest_types::UsbPrinters> usb_printers =
       api::extensions_manifest_types::UsbPrinters::FromValue(value, error);
   if (!usb_printers) {
     return nullptr;
   }
 
-  scoped_ptr<UsbPrinterManifestData> result(new UsbPrinterManifestData());
+  auto result = base::MakeUnique<UsbPrinterManifestData>();
   for (const auto& input : usb_printers->filters) {
-    DCHECK(input.get());
-    UsbDeviceFilter output;
-    output.SetVendorId(input->vendor_id);
-    if (input->product_id && input->interface_class) {
+    if (input.product_id && input.interface_class) {
       *error = base::ASCIIToUTF16(
           "Only one of productId or interfaceClass may be specified.");
       return nullptr;
     }
-    if (input->product_id) {
-      output.SetProductId(*input->product_id);
-    }
-    if (input->interface_class) {
-      output.SetInterfaceClass(*input->interface_class);
-      if (input->interface_subclass) {
-        output.SetInterfaceSubclass(*input->interface_subclass);
-        if (input->interface_protocol) {
-          output.SetInterfaceProtocol(*input->interface_protocol);
-        }
+
+    UsbDeviceFilter output;
+    output.vendor_id = input.vendor_id;
+
+    if (input.product_id)
+      output.product_id = *input.product_id;
+
+    if (input.interface_class) {
+      output.interface_class = *input.interface_class;
+      if (input.interface_subclass) {
+        output.interface_subclass = *input.interface_subclass;
+        if (input.interface_protocol)
+          output.interface_protocol = *input.interface_protocol;
       }
     }
+
     result->filters_.push_back(output);
   }
   return result;
@@ -66,7 +68,12 @@ scoped_ptr<UsbPrinterManifestData> UsbPrinterManifestData::FromValue(
 
 bool UsbPrinterManifestData::SupportsDevice(
     const scoped_refptr<device::UsbDevice>& device) const {
-  return UsbDeviceFilter::MatchesAny(device, filters_);
+  for (const auto& filter : filters_) {
+    if (filter.Matches(device))
+      return true;
+  }
+
+  return false;
 }
 
 }  // namespace extensions

@@ -22,7 +22,7 @@
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/support/TargetSelect.h"
+#include "llvm/Support/TargetSelect.h"
 
 using namespace clang::ast_matchers;
 using clang::tooling::CommonOptionsParser;
@@ -167,7 +167,9 @@ class GetRewriterCallback : public MatchFinder::MatchCallback {
 void GetRewriterCallback::run(const MatchFinder::MatchResult& result) {
   const clang::Expr* arg = result.Nodes.getNodeAs<clang::Expr>("arg");
   assert(arg && "Unexpected match! No Expr captured!");
-  replacements_->insert(RewriteImplicitToExplicitConversion(result, arg));
+  auto err =
+      replacements_->add(RewriteImplicitToExplicitConversion(result, arg));
+  assert(!err);
 }
 
 class VarRewriterCallback : public MatchFinder::MatchCallback {
@@ -199,8 +201,9 @@ void VarRewriterCallback::run(const MatchFinder::MatchResult& result) {
   // In this case, it will only rewrite the .cc definition. Oh well. This should
   // be rare enough that these cases can be manually handled, since the style
   // guide prohibits globals of non-POD type.
-  replacements_->insert(RewriteRawPtrToScopedRefptr(
+  auto err = replacements_->add(RewriteRawPtrToScopedRefptr(
       result, tsi->getTypeLoc().getBeginLoc(), tsi->getTypeLoc().getEndLoc()));
+  assert(!err);
 }
 
 class FunctionRewriterCallback : public MatchFinder::MatchCallback {
@@ -230,8 +233,9 @@ void FunctionRewriterCallback::run(const MatchFinder::MatchResult& result) {
 
   for (clang::FunctionDecl* f : function_decl->redecls()) {
     clang::SourceRange range = f->getReturnTypeSourceRange();
-    replacements_->insert(
+    auto err = replacements_->add(
         RewriteRawPtrToScopedRefptr(result, range.getBegin(), range.getEnd()));
+    assert(!err);
   }
 }
 
@@ -248,7 +252,9 @@ class MacroRewriterCallback : public MatchFinder::MatchCallback {
 void MacroRewriterCallback::run(const MatchFinder::MatchResult& result) {
   const clang::Expr* const expr = result.Nodes.getNodeAs<clang::Expr>("expr");
   assert(expr && "Unexpected match! No Expr captured!");
-  replacements_->insert(RewriteImplicitToExplicitConversion(result, expr));
+  auto err =
+      replacements_->add(RewriteImplicitToExplicitConversion(result, expr));
+  assert(!err);
 }
 
 }  // namespace
@@ -268,14 +274,14 @@ int main(int argc, const char* argv[]) {
   MatchFinder match_finder;
   Replacements replacements;
 
-  auto is_scoped_refptr = recordDecl(isSameOrDerivedFrom("::scoped_refptr"),
-                                     isTemplateInstantiation());
+  auto is_scoped_refptr = cxxRecordDecl(isSameOrDerivedFrom("::scoped_refptr"),
+                                        isTemplateInstantiation());
 
   // Finds all calls to conversion operator member function. This catches calls
   // to "operator T*", "operator Testable", and "operator bool" equally.
-  auto base_matcher = memberCallExpr(thisPointerType(is_scoped_refptr),
-                                     callee(conversionDecl()),
-                                     on(id("arg", expr())));
+  auto base_matcher =
+      cxxMemberCallExpr(thisPointerType(is_scoped_refptr),
+                        callee(conversionDecl()), on(id("arg", expr())));
 
   // The heuristic for whether or not converting a temporary is 'unsafe'. An
   // unsafe conversion is one where a temporary scoped_refptr<T> is converted to
@@ -285,7 +291,7 @@ int main(int argc, const char* argv[]) {
   // retains the necessary reference, since this is a common idiom to see in
   // loop bodies.
   auto is_unsafe_temporary_conversion =
-      on(bindTemporaryExpr(unless(has(operatorCallExpr()))));
+      on(cxxBindTemporaryExpr(unless(has(cxxOperatorCallExpr()))));
 
   // Returning a scoped_refptr<T> as a T* is considered unsafe if either are
   // true:
@@ -322,12 +328,13 @@ int main(int argc, const char* argv[]) {
   auto is_logging_helper =
       functionDecl(anyOf(hasName("CheckEQImpl"), hasName("CheckNEImpl")));
   auto is_gtest_helper = functionDecl(
-      anyOf(methodDecl(ofClass(recordDecl(isSameOrDerivedFrom(
-                           hasName("::testing::internal::EqHelper")))),
-                       hasName("Compare")),
+      anyOf(cxxMethodDecl(ofClass(cxxRecordDecl(isSameOrDerivedFrom(
+                              hasName("::testing::internal::EqHelper")))),
+                          hasName("Compare")),
             hasName("::testing::internal::CmpHelperNE")));
-  auto is_gtest_assertion_result_ctor = constructorDecl(ofClass(
-      recordDecl(isSameOrDerivedFrom(hasName("::testing::AssertionResult")))));
+  auto is_gtest_assertion_result_ctor =
+      cxxConstructorDecl(ofClass(cxxRecordDecl(
+          isSameOrDerivedFrom(hasName("::testing::AssertionResult")))));
 
   // Find all calls to an operator overload that are 'safe'.
   //
@@ -336,7 +343,7 @@ int main(int argc, const char* argv[]) {
   // the call ambiguous.
   GetRewriterCallback get_callback(&replacements);
   match_finder.addMatcher(
-      memberCallExpr(
+      cxxMemberCallExpr(
           base_matcher,
           // Excluded since the conversion may be unsafe.
           unless(anyOf(is_unsafe_temporary_conversion, is_unsafe_return)),
@@ -345,21 +352,20 @@ int main(int argc, const char* argv[]) {
           // result in an incorrect replacement that changes the helper function
           // itself. Instead, the right replacement is to rewrite the macro's
           // arguments.
-          unless(hasAncestor(decl(anyOf(is_logging_helper,
-                                        is_gtest_helper,
+          unless(hasAncestor(decl(anyOf(is_logging_helper, is_gtest_helper,
                                         is_gtest_assertion_result_ctor))))),
       &get_callback);
 
   // Find temporary scoped_refptr<T>'s being unsafely assigned to a T*.
   VarRewriterCallback var_callback(&replacements);
-  auto initialized_with_temporary = ignoringImpCasts(exprWithCleanups(
-      has(memberCallExpr(base_matcher, is_unsafe_temporary_conversion))));
-  match_finder.addMatcher(id("var",
-                             varDecl(hasInitializer(initialized_with_temporary),
-                                     hasType(pointerType()))),
-                          &var_callback);
+  auto initialized_with_temporary = has(ignoringImpCasts(
+      cxxMemberCallExpr(base_matcher, is_unsafe_temporary_conversion)));
   match_finder.addMatcher(
-      constructorDecl(forEachConstructorInitializer(
+      id("var", varDecl(hasInitializer(initialized_with_temporary),
+                        hasType(pointerType()))),
+      &var_callback);
+  match_finder.addMatcher(
+      cxxConstructorDecl(forEachConstructorInitializer(
           allOf(withInitializer(initialized_with_temporary),
                 forField(id("var", fieldDecl(hasType(pointerType()))))))),
       &var_callback);
@@ -367,7 +373,7 @@ int main(int argc, const char* argv[]) {
   // Rewrite functions that unsafely turn a scoped_refptr<T> into a T* when
   // returning a value.
   FunctionRewriterCallback fn_callback(&replacements);
-  match_finder.addMatcher(memberCallExpr(base_matcher, is_unsafe_return),
+  match_finder.addMatcher(cxxMemberCallExpr(base_matcher, is_unsafe_return),
                           &fn_callback);
 
   // Rewrite logging / gtest expressions that result in an implicit conversion.
@@ -380,10 +386,10 @@ int main(int argc, const char* argv[]) {
   MacroRewriterCallback macro_callback(&replacements);
   // CHECK_EQ/CHECK_NE helpers.
   match_finder.addMatcher(
-      callExpr(callee(is_logging_helper),
-               argumentCountIs(3),
-               hasAnyArgument(id("expr", expr(hasType(is_scoped_refptr)))),
-               hasAnyArgument(hasType(pointerType())),
+      callExpr(callee(is_logging_helper), argumentCountIs(3),
+               hasAnyArgument(ignoringParenImpCasts(
+                   id("expr", expr(hasType(is_scoped_refptr))))),
+               hasAnyArgument(ignoringParenImpCasts(hasType(pointerType()))),
                hasArgument(2, stringLiteral())),
       &macro_callback);
   // ASSERT_EQ/ASSERT_NE/EXPECT_EQ/EXPECT_EQ, which use the same underlying
@@ -407,7 +413,7 @@ int main(int argc, const char* argv[]) {
   // However, the tool does need to handle the _TRUE counterparts, since the
   // conversion occurs inside the constructor in those cases.
   match_finder.addMatcher(
-      constructExpr(
+      cxxConstructExpr(
           argumentCountIs(2),
           hasArgument(0, id("expr", expr(hasType(is_scoped_refptr)))),
           hasDeclaration(is_gtest_assertion_result_ctor)),

@@ -12,6 +12,7 @@ import("//remoting/tools/build/remoting_localize.gni")
 generate_jni("jni_headers") {
   sources = [
     "java/src/org/chromium/chromoting/jni/Client.java",
+    "java/src/org/chromium/chromoting/jni/GlDisplay.java",
     "java/src/org/chromium/chromoting/jni/JniInterface.java",
     "java/src/org/chromium/chromoting/jni/TouchEventData.java",
   ]
@@ -20,31 +21,44 @@ generate_jni("jni_headers") {
 
 shared_library("remoting_client_jni") {
   deps = [
-    "//google_apis",
     "//remoting/android:jni_headers",
     "//remoting/base",
     "//remoting/client",
+    "//remoting/client/display",
     "//remoting/protocol",
     "//ui/events:dom_keycode_converter",
     "//ui/gfx",
   ]
   sources = [
+    "//remoting/client/audio_player_android.cc",
+    "//remoting/client/audio_player_android.h",
     "//remoting/client/jni/android_keymap.cc",
     "//remoting/client/jni/android_keymap.h",
     "//remoting/client/jni/chromoting_jni_instance.cc",
     "//remoting/client/jni/chromoting_jni_instance.h",
     "//remoting/client/jni/chromoting_jni_runtime.cc",
     "//remoting/client/jni/chromoting_jni_runtime.h",
+    "//remoting/client/jni/display_updater_factory.h",
+    "//remoting/client/jni/egl_thread_context.cc",
+    "//remoting/client/jni/egl_thread_context.h",
     "//remoting/client/jni/jni_client.cc",
     "//remoting/client/jni/jni_client.h",
-    "//remoting/client/jni/jni_frame_consumer.cc",
-    "//remoting/client/jni/jni_frame_consumer.h",
+    "//remoting/client/jni/jni_gl_display_handler.cc",
+    "//remoting/client/jni/jni_gl_display_handler.h",
+    "//remoting/client/jni/jni_pairing_secret_fetcher.cc",
+    "//remoting/client/jni/jni_pairing_secret_fetcher.h",
     "//remoting/client/jni/jni_touch_event_data.cc",
     "//remoting/client/jni/jni_touch_event_data.h",
     "//remoting/client/jni/remoting_jni_onload.cc",
     "//remoting/client/jni/remoting_jni_registrar.cc",
     "//remoting/client/jni/remoting_jni_registrar.h",
   ]
+  libs = [
+    "android",
+    "OpenSLES",
+    "EGL",
+  ]
+  configs += [ "//remoting/build/config:enable_webrtc_remoting_client" ]
 }
 
 _raw_resources_base_dir = "$target_gen_dir/remoting_android_raw_resources/res"
@@ -70,8 +84,7 @@ remoting_localize("remoting_apk_manifest") {
     "java/AndroidManifest.xml.jinja2",
   ]
   locales = [ "en" ]
-  defines = [ "ENABLE_CARDBOARD=$enable_cardboard" ]
-  variables = [ branding_path ]
+  variables = [ rebase_path(branding_path) ]
   output = "$root_gen_dir/remoting/android/{{source_name_part}}"
 }
 
@@ -85,7 +98,7 @@ android_resources("remoting_android_client_java_resources") {
   deps = [
     ":remoting_android_raw_resources",
     "//remoting/resources:strings_java",
-    "//third_party/android_tools:android_support_v7_appcompat_resources",
+    "//third_party/android_tools:android_support_v7_appcompat_java",
   ]
 }
 
@@ -93,29 +106,13 @@ remoting_android_client_java_tmpl("remoting_android_client_java") {
   remoting_google_play_services_library = google_play_services_library
 }
 
-action("remoting_cardboard_extract_native_lib") {
-  script = "//remoting/tools/extract_android_native_lib.py"
-  sources = [
-    "//third_party/cardboard-java/src/CardboardSample/libs/cardboard.jar",
-  ]
-  outputs = [
-    "$root_out_dir/libvrtoolkit.so",
-  ]
-  args = [ android_app_abi ]
-  args += rebase_path(sources, root_build_dir)
-  args += rebase_path(outputs, root_build_dir)
-}
-
 remoting_apk_tmpl("remoting_apk") {
   apk_name = "Chromoting"
-
-  DEPRECATED_java_in_dir = "//remoting/android/apk/src"
-
+  java_files = [ "//remoting/android/apk/src/org/chromium/chromoting/RemotingApplication.java" ]
   deps = [
     ":remoting_android_client_java",
     "//base:base_java",
     "//net/android:net_java",
-    google_play_services_resources,
   ]
 }
 
@@ -124,19 +121,29 @@ remoting_localize("remoting_test_apk_manifest") {
     "javatests/AndroidManifest.xml.jinja2",
   ]
   locales = [ "en" ]
-  variables = [ branding_path ]
+  variables = [ rebase_path(branding_path) ]
   output = "$root_gen_dir/remoting/android_test/{{source_name_part}}"
 }
 
 instrumentation_test_apk("remoting_test_apk") {
   android_manifest = "$root_gen_dir/remoting/android_test/AndroidManifest.xml"
+  android_manifest_dep = ":remoting_test_apk_manifest"
   apk_name = "ChromotingTest"
   apk_under_test = ":remoting_apk"
-  DEPRECATED_java_in_dir = "javatests/src"
+  java_files = [
+    "javatests/src/org/chromium/chromoting/EventTest.java",
+    "javatests/src/org/chromium/chromoting/MockInputStub.java",
+    "javatests/src/org/chromium/chromoting/SwipePinchDetectorTest.java",
+    "javatests/src/org/chromium/chromoting/TapGestureDetectorTest.java",
+    "javatests/src/org/chromium/chromoting/TouchEventBuilder.java",
+    "javatests/src/org/chromium/chromoting/TouchEventGenerator.java",
+    "javatests/src/org/chromium/chromoting/TouchInputStrategyTest.java",
+    "javatests/src/org/chromium/chromoting/test/util/MutableReference.java",
+  ]
   deps = [
     ":remoting_android_client_java",
-    ":remoting_test_apk_manifest",
     "//base:base_java",
     "//base:base_java_test_support",
+    "//third_party/android_support_test_runner:runner_java",
   ]
 }

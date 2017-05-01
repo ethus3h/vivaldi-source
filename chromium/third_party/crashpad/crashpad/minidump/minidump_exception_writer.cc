@@ -21,6 +21,7 @@
 #include "minidump/minidump_context_writer.h"
 #include "snapshot/exception_snapshot.h"
 #include "util/file/file_writer.h"
+#include "util/misc/arraysize_unsafe.h"
 
 namespace crashpad {
 
@@ -46,13 +47,13 @@ void MinidumpExceptionWriter::InitializeFromSnapshot(
   SetExceptionAddress(exception_snapshot->ExceptionAddress());
   SetExceptionInformation(exception_snapshot->Codes());
 
-  scoped_ptr<MinidumpContextWriter> context =
+  std::unique_ptr<MinidumpContextWriter> context =
       MinidumpContextWriter::CreateFromSnapshot(exception_snapshot->Context());
   SetContext(std::move(context));
 }
 
 void MinidumpExceptionWriter::SetContext(
-    scoped_ptr<MinidumpContextWriter> context) {
+    std::unique_ptr<MinidumpContextWriter> context) {
   DCHECK_EQ(state(), kStateMutable);
 
   context_ = std::move(context);
@@ -64,7 +65,7 @@ void MinidumpExceptionWriter::SetExceptionInformation(
 
   const size_t parameters = exception_information.size();
   const size_t kMaxParameters =
-      arraysize(exception_.ExceptionRecord.ExceptionInformation);
+      ARRAYSIZE_UNSAFE(exception_.ExceptionRecord.ExceptionInformation);
   CHECK_LE(parameters, kMaxParameters);
 
   exception_.ExceptionRecord.NumberParameters =

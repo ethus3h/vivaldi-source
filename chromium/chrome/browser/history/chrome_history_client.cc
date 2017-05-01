@@ -7,13 +7,15 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/history/chrome_history_backend_client.h"
 #include "chrome/browser/history/history_utils.h"
+#include "chrome/browser/profiles/sql_init_error_message_ids.h"
 #include "chrome/browser/ui/profile_error_dialog.h"
-#include "chrome/grit/chromium_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/history/core/browser/history_service.h"
+
+#include "app/vivaldi_constants.h"
 
 ChromeHistoryClient::ChromeHistoryClient(
     bookmarks::BookmarkModel* bookmark_model)
@@ -59,19 +61,19 @@ void ChromeHistoryClient::Shutdown() {
 }
 
 bool ChromeHistoryClient::CanAddURL(const GURL& url) {
-  return CanAddURLToHistory(url);
+  return CanAddURLToHistory(url)
+    && url.GetOrigin() != GURL(vivaldi::kVivaldiAppURLDomain);
 }
 
-void ChromeHistoryClient::NotifyProfileError(sql::InitStatus init_status) {
-  ShowProfileErrorDialog(
-      PROFILE_ERROR_HISTORY,
-      (init_status == sql::INIT_FAILURE) ?
-      IDS_COULDNT_OPEN_PROFILE_ERROR : IDS_PROFILE_TOO_NEW_ERROR);
+void ChromeHistoryClient::NotifyProfileError(sql::InitStatus init_status,
+                                             const std::string& diagnostics) {
+  ShowProfileErrorDialog(ProfileErrorType::HISTORY,
+                         SqlInitStatusToMessageId(init_status), diagnostics);
 }
 
-scoped_ptr<history::HistoryBackendClient>
+std::unique_ptr<history::HistoryBackendClient>
 ChromeHistoryClient::CreateBackendClient() {
-  return make_scoped_ptr(new ChromeHistoryBackendClient(bookmark_model_));
+  return base::MakeUnique<ChromeHistoryBackendClient>(bookmark_model_);
 }
 
 void ChromeHistoryClient::BookmarkModelChanged() {

@@ -4,56 +4,37 @@
 
 #include "components/arc/clipboard/arc_clipboard_bridge.h"
 
-#include <utility>
-
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_checker.h"
+#include "components/arc/arc_bridge_service.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_types.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 
-namespace {
-
-static base::string16 ConvertMojoStringToString16(const mojo::String& input) {
-  return base::UTF8ToUTF16(input.get());
-}
-
-static mojo::String ConvertString16ToMojoString(const base::string16& input) {
-  return mojo::String(base::UTF16ToUTF8(input));
-}
-
-}  // namespace
-
 namespace arc {
 
 ArcClipboardBridge::ArcClipboardBridge(ArcBridgeService* bridge_service)
-    : bridge_service_(bridge_service), binding_(this) {
-  bridge_service_->AddObserver(this);
+    : ArcService(bridge_service), binding_(this) {
+  arc_bridge_service()->clipboard()->AddObserver(this);
 }
 
 ArcClipboardBridge::~ArcClipboardBridge() {
   DCHECK(CalledOnValidThread());
-  bridge_service_->RemoveObserver(this);
+  arc_bridge_service()->clipboard()->RemoveObserver(this);
 }
 
-void ArcClipboardBridge::OnClipboardInstanceReady() {
-  ClipboardInstance* clipboard_instance = bridge_service_->clipboard_instance();
-  if (!clipboard_instance) {
-    LOG(ERROR) << "OnClipboardInstanceReady called, "
-               << "but no clipboard instance found";
-    return;
-  }
-
-  ClipboardHostPtr host;
-  binding_.Bind(mojo::GetProxy(&host));
-  clipboard_instance->Init(std::move(host));
+void ArcClipboardBridge::OnInstanceReady() {
+  mojom::ClipboardInstance* clipboard_instance =
+      ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service()->clipboard(), Init);
+  DCHECK(clipboard_instance);
+  clipboard_instance->Init(binding_.CreateInterfacePtrAndBind());
 }
 
-void ArcClipboardBridge::SetTextContent(const mojo::String& text) {
+void ArcClipboardBridge::SetTextContent(const std::string& text) {
   DCHECK(CalledOnValidThread());
   ui::ScopedClipboardWriter writer(ui::CLIPBOARD_TYPE_COPY_PASTE);
-  writer.WriteText(ConvertMojoStringToString16(text));
+  writer.WriteText(base::UTF8ToUTF16(text));
 }
 
 void ArcClipboardBridge::GetTextContent() {
@@ -63,8 +44,11 @@ void ArcClipboardBridge::GetTextContent() {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   clipboard->ReadText(ui::CLIPBOARD_TYPE_COPY_PASTE, &text);
 
-  ClipboardInstance* clipboard_instance = bridge_service_->clipboard_instance();
-  clipboard_instance->OnGetTextContent(ConvertString16ToMojoString(text));
+  mojom::ClipboardInstance* clipboard_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_bridge_service()->clipboard(), OnGetTextContent);
+  if (!clipboard_instance)
+    return;
+  clipboard_instance->OnGetTextContent(base::UTF16ToUTF8(text));
 }
 
 bool ArcClipboardBridge::CalledOnValidThread() {

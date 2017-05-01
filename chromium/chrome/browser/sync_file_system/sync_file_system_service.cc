@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <string>
 #include <utility>
 
@@ -13,11 +14,12 @@
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/api/sync_file_system/extension_sync_event_observer.h"
 #include "chrome/browser/extensions/api/sync_file_system/sync_file_system_api_helpers.h"
 #include "chrome/browser/profiles/profile.h"
@@ -31,7 +33,7 @@
 #include "chrome/browser/sync_file_system/sync_status_code.h"
 #include "chrome/browser/sync_file_system/syncable_file_system_util.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/sync_driver/sync_service.h"
+#include "components/sync/driver/sync_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/extension_prefs.h"
@@ -265,7 +267,7 @@ void SyncFileSystemService::Shutdown() {
 
   remote_service_.reset();
 
-  sync_driver::SyncService* profile_sync_service =
+  syncer::SyncService* profile_sync_service =
       ProfileSyncServiceFactory::GetSyncServiceForBrowserContext(profile_);
   if (profile_sync_service)
     profile_sync_service->RemoveObserver(this);
@@ -448,8 +450,8 @@ SyncFileSystemService::SyncFileSystemService(Profile* profile)
 }
 
 void SyncFileSystemService::Initialize(
-    scoped_ptr<LocalFileSyncService> local_service,
-    scoped_ptr<RemoteFileSyncService> remote_service) {
+    std::unique_ptr<LocalFileSyncService> local_service,
+    std::unique_ptr<RemoteFileSyncService> remote_service) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(local_service);
   DCHECK(remote_service);
@@ -458,9 +460,9 @@ void SyncFileSystemService::Initialize(
   local_service_ = std::move(local_service);
   remote_service_ = std::move(remote_service);
 
-  scoped_ptr<LocalSyncRunner> local_syncer(
+  std::unique_ptr<LocalSyncRunner> local_syncer(
       new LocalSyncRunner(kLocalSyncName, this));
-  scoped_ptr<RemoteSyncRunner> remote_syncer(
+  std::unique_ptr<RemoteSyncRunner> remote_syncer(
       new RemoteSyncRunner(kRemoteSyncName, this, remote_service_.get()));
 
   local_service_->AddChangeObserver(local_syncer.get());
@@ -474,7 +476,7 @@ void SyncFileSystemService::Initialize(
   local_sync_runners_.push_back(local_syncer.release());
   remote_sync_runners_.push_back(remote_syncer.release());
 
-  sync_driver::SyncService* profile_sync_service =
+  syncer::SyncService* profile_sync_service =
       ProfileSyncServiceFactory::GetSyncServiceForBrowserContext(profile_);
   if (profile_sync_service) {
     UpdateSyncEnabledStatus(profile_sync_service);
@@ -572,7 +574,7 @@ void SyncFileSystemService::DidInitializeFileSystemForDump(
 void SyncFileSystemService::DidDumpFiles(
     const GURL& origin,
     const DumpFilesCallback& callback,
-    scoped_ptr<base::ListValue> dump_files) {
+    std::unique_ptr<base::ListValue> dump_files) {
   if (!dump_files || !dump_files->GetSize() ||
       !local_service_ || !remote_service_) {
     callback.Run(base::ListValue());
@@ -606,18 +608,19 @@ void SyncFileSystemService::DidDumpFiles(
   }
 }
 
-void SyncFileSystemService::DidDumpDatabase(const DumpFilesCallback& callback,
-                                            scoped_ptr<base::ListValue> list) {
+void SyncFileSystemService::DidDumpDatabase(
+    const DumpFilesCallback& callback,
+    std::unique_ptr<base::ListValue> list) {
   if (!list)
-    list = make_scoped_ptr(new base::ListValue);
+    list = base::WrapUnique(new base::ListValue);
   callback.Run(*list);
 }
 
 void SyncFileSystemService::DidGetExtensionStatusMap(
     const ExtensionStatusMapCallback& callback,
-    scoped_ptr<RemoteFileSyncService::OriginStatusMap> status_map) {
+    std::unique_ptr<RemoteFileSyncService::OriginStatusMap> status_map) {
   if (!status_map)
-    status_map = make_scoped_ptr(new RemoteFileSyncService::OriginStatusMap);
+    status_map = base::WrapUnique(new RemoteFileSyncService::OriginStatusMap);
   callback.Run(*status_map);
 }
 
@@ -643,11 +646,10 @@ void SyncFileSystemService::OnRemoteServiceStateUpdated(
   util::Log(logging::LOG_VERBOSE, FROM_HERE,
             "OnRemoteServiceStateChanged: %d %s", state, description.c_str());
 
-  FOR_EACH_OBSERVER(
-      SyncEventObserver, observers_,
-      OnSyncStateUpdated(GURL(),
-                         RemoteStateToSyncServiceState(state),
-                         description));
+  for (auto& observer : observers_) {
+    observer.OnSyncStateUpdated(GURL(), RemoteStateToSyncServiceState(state),
+                                description);
+  }
 
   RunForEachSyncRunners(&SyncProcessRunner::Schedule);
 }
@@ -727,7 +729,7 @@ void SyncFileSystemService::OnExtensionLoaded(
 }
 
 void SyncFileSystemService::OnStateChanged() {
-  sync_driver::SyncService* profile_sync_service =
+  syncer::SyncService* profile_sync_service =
       ProfileSyncServiceFactory::GetSyncServiceForBrowserContext(profile_);
   if (profile_sync_service)
     UpdateSyncEnabledStatus(profile_sync_service);
@@ -739,14 +741,13 @@ void SyncFileSystemService::OnFileStatusChanged(
     SyncFileStatus sync_status,
     SyncAction action_taken,
     SyncDirection direction) {
-  FOR_EACH_OBSERVER(
-      SyncEventObserver, observers_,
-      OnFileSynced(url, file_type, sync_status, action_taken, direction));
+  for (auto& observer : observers_)
+    observer.OnFileSynced(url, file_type, sync_status, action_taken, direction);
 }
 
 void SyncFileSystemService::UpdateSyncEnabledStatus(
-    sync_driver::SyncService* profile_sync_service) {
-  if (!profile_sync_service->HasSyncSetupCompleted())
+    syncer::SyncService* profile_sync_service) {
+  if (!profile_sync_service->IsFirstSetupComplete())
     return;
   bool old_sync_enabled = sync_enabled_;
   sync_enabled_ = profile_sync_service->GetActiveDataTypes().Has(

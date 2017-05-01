@@ -30,7 +30,7 @@ class BookmarkMenuDelegateTest : public BrowserWithTestWindowTest {
 
     profile()->CreateBookmarkModel(true);
 
-    model_ = BookmarkModelFactory::GetForProfile(profile());
+    model_ = BookmarkModelFactory::GetForBrowserContext(profile());
     bookmarks::test::WaitForBookmarkModelToLoad(model_);
 
     AddTestData();
@@ -88,7 +88,7 @@ class BookmarkMenuDelegateTest : public BrowserWithTestWindowTest {
 
   BookmarkModel* model_;
 
-  scoped_ptr<BookmarkMenuDelegate> bookmark_menu_delegate_;
+  std::unique_ptr<BookmarkMenuDelegate> bookmark_menu_delegate_;
 
  private:
   void LoadAllMenus(views::MenuItemView* menu) {

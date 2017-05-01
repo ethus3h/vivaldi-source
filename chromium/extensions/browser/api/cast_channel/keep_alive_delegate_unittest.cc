@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_clock.h"
@@ -17,6 +18,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
+using testing::Sequence;
 
 namespace extensions {
 namespace api {
@@ -54,18 +56,18 @@ class KeepAliveDelegateTest : public testing::Test {
  protected:
   void SetUp() override {
     inner_delegate_ = new MockCastTransportDelegate;
-    logger_ = new Logger(scoped_ptr<base::Clock>(new base::SimpleTestClock),
-                         base::Time());
+    logger_ = new Logger(
+        std::unique_ptr<base::Clock>(new base::SimpleTestClock), base::Time());
     keep_alive_.reset(new KeepAliveDelegate(
-        &socket_, logger_, make_scoped_ptr(inner_delegate_),
+        &socket_, logger_, base::WrapUnique(inner_delegate_),
         base::TimeDelta::FromMilliseconds(kTestPingTimeoutMillis),
         base::TimeDelta::FromMilliseconds(kTestLivenessTimeoutMillis)));
     liveness_timer_ = new MockTimerWithMonitoredReset(true, false);
     ping_timer_ = new MockTimerWithMonitoredReset(true, false);
     EXPECT_CALL(*liveness_timer_, Stop()).Times(0);
     EXPECT_CALL(*ping_timer_, Stop()).Times(0);
-    keep_alive_->SetTimersForTest(make_scoped_ptr(ping_timer_),
-                                  make_scoped_ptr(liveness_timer_));
+    keep_alive_->SetTimersForTest(base::WrapUnique(ping_timer_),
+                                  base::WrapUnique(liveness_timer_));
   }
 
   // Runs all pending tasks in the message loop.
@@ -76,7 +78,7 @@ class KeepAliveDelegateTest : public testing::Test {
 
   base::MessageLoop message_loop_;
   MockCastSocket socket_;
-  scoped_ptr<KeepAliveDelegate> keep_alive_;
+  std::unique_ptr<KeepAliveDelegate> keep_alive_;
   scoped_refptr<Logger> logger_;
   MockCastTransportDelegate* inner_delegate_;
   MockTimerWithMonitoredReset* liveness_timer_;
@@ -160,6 +162,54 @@ TEST_F(KeepAliveDelegateTest, TestResetTimersAndPassthroughAllOtherTraffic) {
 
   keep_alive_->Start();
   keep_alive_->OnMessage(other_message);
+  RunPendingTasks();
+}
+
+TEST_F(KeepAliveDelegateTest, TestPassthroughMessagesAfterError) {
+  CastMessage message =
+      KeepAliveDelegate::CreateKeepAliveMessage("NEITHER_PING_NOR_PONG");
+  CastMessage message_after_error =
+      KeepAliveDelegate::CreateKeepAliveMessage("ANOTHER_NOT_PING_NOR_PONG");
+  CastMessage late_ping_message = KeepAliveDelegate::CreateKeepAliveMessage(
+      KeepAliveDelegate::kHeartbeatPingType);
+
+  EXPECT_CALL(*inner_delegate_, Start()).Times(1);
+  EXPECT_CALL(*ping_timer_, ResetTriggered()).Times(2);
+  EXPECT_CALL(*liveness_timer_, ResetTriggered()).Times(2);
+  EXPECT_CALL(*liveness_timer_, Stop()).Times(1);
+  EXPECT_CALL(*ping_timer_, Stop()).Times(1);
+
+  Sequence message_and_error_sequence;
+  EXPECT_CALL(*inner_delegate_, OnMessage(EqualsProto(message)))
+      .Times(1)
+      .InSequence(message_and_error_sequence)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*inner_delegate_, OnError(CHANNEL_ERROR_INVALID_MESSAGE))
+      .Times(1)
+      .InSequence(message_and_error_sequence);
+  EXPECT_CALL(*inner_delegate_, OnMessage(EqualsProto(message_after_error)))
+      .Times(1)
+      .InSequence(message_and_error_sequence)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*inner_delegate_, OnMessage(EqualsProto(late_ping_message)))
+      .Times(0)
+      .InSequence(message_and_error_sequence)
+      .RetiresOnSaturation();
+
+  // Start, process one message, then error-out. KeepAliveDelegate will
+  // automatically stop itself.
+  keep_alive_->Start();
+  keep_alive_->OnMessage(message);
+  RunPendingTasks();
+  keep_alive_->OnError(CHANNEL_ERROR_INVALID_MESSAGE);
+  RunPendingTasks();
+
+  // Process a non-PING/PONG message and expect it to pass through.
+  keep_alive_->OnMessage(message_after_error);
+  RunPendingTasks();
+
+  // Process a late-arriving PING/PONG message, which should have no effect.
+  keep_alive_->OnMessage(late_ping_message);
   RunPendingTasks();
 }
 

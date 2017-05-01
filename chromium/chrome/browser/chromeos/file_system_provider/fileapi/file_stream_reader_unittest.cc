@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,6 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/numerics/safe_math.h"
 #include "base/run_loop.h"
@@ -118,7 +118,7 @@ class FileSystemProviderFileStreamReader : public testing::Test {
 
   content::TestBrowserThreadBundle thread_bundle_;
   base::ScopedTempDir data_dir_;
-  scoped_ptr<TestingProfileManager> profile_manager_;
+  std::unique_ptr<TestingProfileManager> profile_manager_;
   TestingProfile* profile_;     // Owned by TestingProfileManager.
   const FakeEntry* fake_file_;  // Owned by FakePRovidedFileSystem.
   storage::FileSystemURL file_url_;
@@ -132,7 +132,7 @@ TEST_F(FileSystemProviderFileStreamReader, Read_AllAtOnce) {
   FileStreamReader reader(NULL, file_url_, initial_offset,
                           *fake_file_->metadata->modification_time);
   scoped_refptr<net::IOBuffer> io_buffer(new net::IOBuffer(
-      base::CheckedNumeric<size_t>(*fake_file_->metadata->size).ValueOrDie()));
+      base::checked_cast<size_t>(*fake_file_->metadata->size)));
 
   const int result =
       reader.Read(io_buffer.get(), *fake_file_->metadata->size,
@@ -155,7 +155,7 @@ TEST_F(FileSystemProviderFileStreamReader, Read_WrongFile) {
   FileStreamReader reader(NULL, wrong_file_url_, initial_offset,
                           *fake_file_->metadata->modification_time);
   scoped_refptr<net::IOBuffer> io_buffer(new net::IOBuffer(
-      base::CheckedNumeric<size_t>(*fake_file_->metadata->size).ValueOrDie()));
+      base::checked_cast<size_t>(*fake_file_->metadata->size)));
 
   const int result =
       reader.Read(io_buffer.get(), *fake_file_->metadata->size,
@@ -250,7 +250,7 @@ TEST_F(FileSystemProviderFileStreamReader, Read_ModifiedFile) {
   FileStreamReader reader(NULL, file_url_, initial_offset, base::Time::Max());
 
   scoped_refptr<net::IOBuffer> io_buffer(new net::IOBuffer(
-      base::CheckedNumeric<size_t>(*fake_file_->metadata->size).ValueOrDie()));
+      base::checked_cast<size_t>(*fake_file_->metadata->size)));
   const int result =
       reader.Read(io_buffer.get(), *fake_file_->metadata->size,
                   base::Bind(&EventLogger::OnRead, logger.GetWeakPtr()));
@@ -269,7 +269,7 @@ TEST_F(FileSystemProviderFileStreamReader, Read_ExpectedModificationTimeNull) {
   FileStreamReader reader(NULL, file_url_, initial_offset, base::Time());
 
   scoped_refptr<net::IOBuffer> io_buffer(new net::IOBuffer(
-      base::CheckedNumeric<size_t>(*fake_file_->metadata->size).ValueOrDie()));
+      base::checked_cast<size_t>(*fake_file_->metadata->size)));
   const int result =
       reader.Read(io_buffer.get(), *fake_file_->metadata->size,
                   base::Bind(&EventLogger::OnRead, logger.GetWeakPtr()));

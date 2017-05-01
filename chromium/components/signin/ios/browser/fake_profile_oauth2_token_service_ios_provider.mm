@@ -4,7 +4,7 @@
 
 #include "components/signin/ios/browser/fake_profile_oauth2_token_service_ios_provider.h"
 
-#include <Foundation/Foundation.h>
+#import <Foundation/Foundation.h>
 
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
@@ -29,26 +29,6 @@ void FakeProfileOAuth2TokenServiceIOSProvider::GetAccessToken(
 std::vector<ProfileOAuth2TokenServiceIOSProvider::AccountInfo>
 FakeProfileOAuth2TokenServiceIOSProvider::GetAllAccounts() const {
   return accounts_;
-}
-
-ProfileOAuth2TokenServiceIOSProvider::AccountInfo
-FakeProfileOAuth2TokenServiceIOSProvider::GetAccountInfoForEmail(
-    const std::string& email) const {
-  for (const auto& account : accounts_) {
-    if (account.email == email)
-      return account;
-  }
-  return ProfileOAuth2TokenServiceIOSProvider::AccountInfo();
-}
-
-ProfileOAuth2TokenServiceIOSProvider::AccountInfo
-FakeProfileOAuth2TokenServiceIOSProvider::GetAccountInfoForGaia(
-    const std::string& gaia) const {
-  for (const auto& account : accounts_) {
-    if (account.gaia == gaia)
-      return account;
-  }
-  return ProfileOAuth2TokenServiceIOSProvider::AccountInfo();
 }
 
 ProfileOAuth2TokenServiceIOSProvider::AccountInfo
@@ -93,6 +73,7 @@ void FakeProfileOAuth2TokenServiceIOSProvider::
 
 AuthenticationErrorCategory
 FakeProfileOAuth2TokenServiceIOSProvider::GetAuthenticationErrorCategory(
+    const std::string& gaia_id,
     NSError* error) const {
   DCHECK(error);
   return kAuthenticationErrorCategoryAuthorizationErrors;

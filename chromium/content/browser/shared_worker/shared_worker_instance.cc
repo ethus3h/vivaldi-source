@@ -13,6 +13,7 @@ SharedWorkerInstance::SharedWorkerInstance(
     const base::string16& name,
     const base::string16& content_security_policy,
     blink::WebContentSecurityPolicyType security_policy_type,
+    blink::WebAddressSpace creation_address_space,
     ResourceContext* resource_context,
     const WorkerStoragePartitionId& partition_id,
     blink::WebSharedWorkerCreationContextType creation_context_type)
@@ -20,6 +21,7 @@ SharedWorkerInstance::SharedWorkerInstance(
       name_(name),
       content_security_policy_(content_security_policy),
       security_policy_type_(security_policy_type),
+      creation_address_space_(creation_address_space),
       resource_context_(resource_context),
       partition_id_(partition_id),
       creation_context_type_(creation_context_type) {
@@ -31,6 +33,7 @@ SharedWorkerInstance::SharedWorkerInstance(const SharedWorkerInstance& other)
       name_(other.name_),
       content_security_policy_(other.content_security_policy_),
       security_policy_type_(other.security_policy_type_),
+      creation_address_space_(other.creation_address_space_),
       resource_context_(other.resource_context_),
       partition_id_(other.partition_id_),
       creation_context_type_(other.creation_context_type_) {}
@@ -54,10 +57,9 @@ bool SharedWorkerInstance::Matches(const GURL& match_url,
   if (url_.GetOrigin() != match_url.GetOrigin())
     return false;
 
-  if (name_.empty() && match_name.empty())
-    return url_ == match_url;
-
-  return name_ == match_name;
+  if (name_ != match_name || url_ != match_url)
+    return false;
+  return true;
 }
 
 bool SharedWorkerInstance::Matches(const SharedWorkerInstance& other) const {

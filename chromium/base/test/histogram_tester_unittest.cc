@@ -4,7 +4,8 @@
 
 #include "base/test/histogram_tester.h"
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -40,7 +41,7 @@ TEST_F(HistogramTesterTest, Scope) {
   UMA_HISTOGRAM_BOOLEAN(kHistogram1, true);
 
   // Verify that one histogram is recorded.
-  scoped_ptr<HistogramSamples> samples(
+  std::unique_ptr<HistogramSamples> samples(
       tester.GetHistogramSamplesSinceCreation(kHistogram1));
   EXPECT_TRUE(samples);
   EXPECT_EQ(1, samples->TotalCount());
@@ -54,7 +55,7 @@ TEST_F(HistogramTesterTest, GetHistogramSamplesSinceCreationNotNull) {
   HistogramTester tester;
 
   // Verify that the returned samples are empty but not null.
-  scoped_ptr<HistogramSamples> samples(
+  std::unique_ptr<HistogramSamples> samples(
       tester.GetHistogramSamplesSinceCreation(kHistogram1));
   EXPECT_TRUE(samples);
   tester.ExpectTotalCount(kHistogram, 0);
@@ -114,6 +115,16 @@ TEST_F(HistogramTesterTest, TestGetAllSamples) {
 TEST_F(HistogramTesterTest, TestGetAllSamples_NoSamples) {
   HistogramTester tester;
   EXPECT_THAT(tester.GetAllSamples(kHistogram5), IsEmpty());
+}
+
+TEST_F(HistogramTesterTest, TestGetTotalCountsForPrefix) {
+  HistogramTester tester;
+  UMA_HISTOGRAM_ENUMERATION("Test1.Test2.Test3", 2, 5);
+
+  // Regression check for bug https://crbug.com/659977.
+  EXPECT_TRUE(tester.GetTotalCountsForPrefix("Test2.").empty());
+
+  EXPECT_EQ(1u, tester.GetTotalCountsForPrefix("Test1.").size());
 }
 
 }  // namespace base

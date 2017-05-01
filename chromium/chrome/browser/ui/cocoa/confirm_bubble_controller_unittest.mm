@@ -9,8 +9,8 @@
 #include "base/compiler_specific.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/ui/cocoa/confirm_bubble_cocoa.h"
+#include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "chrome/browser/ui/confirm_bubble_model.h"
 #import "testing/gtest_mac.h"
 #import "ui/gfx/geometry/point.h"
@@ -127,7 +127,7 @@ class ConfirmBubbleControllerTest : public CocoaTest {
 
  private:
   ConfirmBubbleController* controller_;  // weak; owns self
-  scoped_ptr<TestConfirmBubbleModel> model_;
+  std::unique_ptr<TestConfirmBubbleModel> model_;
   bool model_deleted_;
   bool accept_clicked_;
   bool cancel_clicked_;

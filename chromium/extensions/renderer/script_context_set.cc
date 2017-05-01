@@ -4,11 +4,13 @@
 
 #include "extensions/renderer/script_context_set.h"
 
-#include "base/message_loop/message_loop.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/extension.h"
-#include "extensions/renderer/extension_groups.h"
+#include "extensions/renderer/extensions_renderer_client.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_injection.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
@@ -35,7 +37,6 @@ ScriptContextSet::~ScriptContextSet() {
 ScriptContext* ScriptContextSet::Register(
     blink::WebLocalFrame* frame,
     const v8::Local<v8::Context>& v8_context,
-    int extension_group,
     int world_id) {
   const Extension* extension =
       GetExtensionFromFrameAndWorld(frame, world_id, false);
@@ -43,13 +44,12 @@ ScriptContext* ScriptContextSet::Register(
       GetExtensionFromFrameAndWorld(frame, world_id, true);
 
   GURL frame_url = ScriptContext::GetDataSourceURLForFrame(frame);
-  Feature::Context context_type =
-      ClassifyJavaScriptContext(extension, extension_group, frame_url,
-                                frame->document().securityOrigin());
+  Feature::Context context_type = ClassifyJavaScriptContext(
+      extension, world_id, frame_url, frame->document().getSecurityOrigin());
   Feature::Context effective_context_type = ClassifyJavaScriptContext(
-      effective_extension, extension_group,
+      effective_extension, world_id,
       ScriptContext::GetEffectiveDocumentURL(frame, frame_url, true),
-      frame->document().securityOrigin());
+      frame->document().getSecurityOrigin());
 
   ScriptContext* context =
       new ScriptContext(v8_context, frame, extension, context_type,
@@ -61,7 +61,7 @@ ScriptContext* ScriptContextSet::Register(
 void ScriptContextSet::Remove(ScriptContext* context) {
   if (contexts_.erase(context)) {
     context->Invalidate();
-    base::MessageLoop::current()->DeleteSoon(FROM_HERE, context);
+    base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, context);
   }
 }
 
@@ -78,6 +78,11 @@ ScriptContext* ScriptContextSet::GetByV8Context(
       return script_context;
   }
   return nullptr;
+}
+
+ScriptContext* ScriptContextSet::GetContextByObject(
+    const v8::Local<v8::Object>& object) {
+  return GetContextByV8Context(object->CreationContext());
 }
 
 ScriptContext* ScriptContextSet::GetContextByV8Context(
@@ -124,6 +129,10 @@ std::set<ScriptContext*> ScriptContextSet::OnExtensionUnloaded(
   return removed;
 }
 
+void ScriptContextSet::AddForTesting(std::unique_ptr<ScriptContext> context) {
+  contexts_.insert(context.release());  // Takes ownership
+}
+
 const Extension* ScriptContextSet::GetExtensionFromFrameAndWorld(
     const blink::WebLocalFrame* frame,
     int world_id,
@@ -132,10 +141,15 @@ const Extension* ScriptContextSet::GetExtensionFromFrameAndWorld(
   if (world_id != 0) {
     // Isolated worlds (content script).
     extension_id = ScriptInjection::GetHostIdForIsolatedWorld(world_id);
-  } else if (!frame->document().securityOrigin().isUnique()) {
-    // TODO(kalman): Delete the above check.
-    // Extension pages (chrome-extension:// URLs).
-    GURL frame_url = ScriptContext::GetDataSourceURLForFrame(frame);
+  } else {
+    // For looking up the extension associated with this frame, we either want
+    // to use the current url or possibly the data source url (which this frame
+    // may be navigating to shortly), depending on the security origin of the
+    // frame. We don't always want to use the data source url because some
+    // frames (eg iframes and windows created via window.open) briefly contain
+    // an about:blank script context that is scriptable by their parent/opener
+    // before they finish navigating.
+    GURL frame_url = ScriptContext::GetAccessCheckedFrameURL(frame);
     frame_url = ScriptContext::GetEffectiveDocumentURL(frame, frame_url,
                                                        use_effective_url);
     extension_id =
@@ -155,14 +169,17 @@ const Extension* ScriptContextSet::GetExtensionFromFrameAndWorld(
 
 Feature::Context ScriptContextSet::ClassifyJavaScriptContext(
     const Extension* extension,
-    int extension_group,
+    int world_id,
     const GURL& url,
     const blink::WebSecurityOrigin& origin) {
   // WARNING: This logic must match ProcessMap::GetContextType, as much as
   // possible.
 
-  DCHECK_GE(extension_group, 0);
-  if (extension_group == EXTENSION_GROUP_CONTENT_SCRIPTS) {
+  // Worlds not within this range are not for content scripts, so ignore them.
+  // TODO(devlin): Isolated worlds with a non-zero id could belong to
+  // chrome-internal pieces, like dom distiller and translate. Do we need any
+  // bindings (even those for basic web pages) for those?
+  if (world_id >= ExtensionsRendererClient::Get()->GetLowestIsolatedWorldId()) {
     return extension ?  // TODO(kalman): when does this happen?
                Feature::CONTENT_SCRIPT_CONTEXT
                      : Feature::UNSPECIFIED_CONTEXT;

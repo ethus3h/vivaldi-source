@@ -4,8 +4,7 @@
 
 #include "chromeos/binder/writable_transaction_data.h"
 
-#include <linux/android/binder.h>
-
+#include "chromeos/binder/binder_driver_api.h"
 #include "chromeos/binder/constants.h"
 #include "chromeos/binder/local_object.h"
 #include "chromeos/binder/object.h"
@@ -53,7 +52,7 @@ size_t WritableTransactionData::GetDataSize() const {
   return data_.size();
 }
 
-const uintptr_t* WritableTransactionData::GetObjectOffsets() const {
+const binder_uintptr_t* WritableTransactionData::GetObjectOffsets() const {
   return object_offsets_.data();
 }
 
@@ -150,6 +149,17 @@ void WritableTransactionData::WriteObject(scoped_refptr<Object> object) {
       break;
     }
   }
+  object_offsets_.push_back(data_.size());
+  WriteData(&flat, sizeof(flat));
+}
+
+void WritableTransactionData::WriteFileDescriptor(base::ScopedFD fd) {
+  files_.push_back(std::move(fd));
+
+  flat_binder_object flat = {};
+  flat.type = BINDER_TYPE_FD;
+  flat.flags = 0x7f | FLAT_BINDER_FLAG_ACCEPTS_FDS;
+  flat.handle = files_.back().get();
   object_offsets_.push_back(data_.size());
   WriteData(&flat, sizeof(flat));
 }

@@ -4,23 +4,29 @@
 
 #include "content/browser/devtools/protocol/inspector_handler.h"
 
+#include "content/browser/devtools/devtools_session.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 
 namespace content {
-namespace devtools {
-namespace inspector {
-
-using Response = DevToolsProtocolClient::Response;
+namespace protocol {
 
 InspectorHandler::InspectorHandler()
-    : host_(nullptr) {
+    : DevToolsDomainHandler(Inspector::Metainfo::domainName),
+      host_(nullptr) {
 }
 
 InspectorHandler::~InspectorHandler() {
 }
 
-void InspectorHandler::SetClient(scoped_ptr<Client> client) {
-  client_.swap(client);
+// static
+InspectorHandler* InspectorHandler::FromSession(DevToolsSession* session) {
+  return static_cast<InspectorHandler*>(
+      session->GetHandlerByName(Inspector::Metainfo::domainName));
+}
+
+void InspectorHandler::Wire(UberDispatcher* dispatcher) {
+  frontend_.reset(new Inspector::Frontend(dispatcher->channel()));
+  Inspector::Dispatcher::wire(dispatcher, this);
 }
 
 void InspectorHandler::SetRenderFrameHost(RenderFrameHostImpl* host) {
@@ -28,20 +34,22 @@ void InspectorHandler::SetRenderFrameHost(RenderFrameHostImpl* host) {
 }
 
 void InspectorHandler::TargetCrashed() {
-  client_->TargetCrashed(TargetCrashedParams::Create());
+  frontend_->TargetCrashed();
 }
 
 void InspectorHandler::TargetDetached(const std::string& reason) {
-  client_->Detached(DetachedParams::Create()->set_reason(reason));
+  frontend_->Detached(reason);
 }
 
 Response InspectorHandler::Enable() {
   if (host_ && !host_->IsRenderFrameLive())
-    client_->TargetCrashed(TargetCrashedParams::Create());
-  return Response::FallThrough();
+    frontend_->TargetCrashed();
+  return Response::OK();
 }
 
+Response InspectorHandler::Disable() {
+  return Response::OK();
+}
 
-}  // namespace inspector
-}  // namespace devtools
+}  // namespace protocol
 }  // namespace content

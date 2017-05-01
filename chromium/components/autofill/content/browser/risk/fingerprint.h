@@ -14,13 +14,11 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/callback_forward.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/autofill/core/browser/autofill_client.h"
-
-class PrefService;
 
 namespace base {
 class Time;
@@ -57,7 +55,7 @@ void GetFingerprint(
     const base::Time& install_time,
     const std::string& app_locale,
     const std::string& user_agent,
-    const base::Callback<void(scoped_ptr<Fingerprint>)>& callback);
+    const base::Callback<void(std::unique_ptr<Fingerprint>)>& callback);
 
 }  // namespace risk
 }  // namespace autofill

@@ -4,6 +4,7 @@
 
 #include "ash/rotator/window_rotation.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/rect.h"
@@ -37,8 +38,7 @@ WindowRotation::WindowRotation(int degrees, ui::Layer* layer)
   InitTransform(layer);
 }
 
-WindowRotation::~WindowRotation() {
-}
+WindowRotation::~WindowRotation() {}
 
 void WindowRotation::InitTransform(ui::Layer* layer) {
   // No rotation required, use the identity transform.
@@ -77,33 +77,33 @@ void WindowRotation::InitTransform(ui::Layer* layer) {
   current_transform.TransformPoint(&new_pivot);
   current_transform.TransformPoint(&new_origin_);
 
-  scoped_ptr<ui::InterpolatedTransform> rotation(
-      new ui::InterpolatedTransformAboutPivot(
-          old_pivot, new ui::InterpolatedRotation(0, degrees_)));
+  std::unique_ptr<ui::InterpolatedTransform> rotation =
+      base::MakeUnique<ui::InterpolatedTransformAboutPivot>(
+          old_pivot, base::MakeUnique<ui::InterpolatedRotation>(0, degrees_));
 
-  scoped_ptr<ui::InterpolatedTransform> translation(
-      new ui::InterpolatedTranslation(
+  std::unique_ptr<ui::InterpolatedTransform> translation =
+      base::MakeUnique<ui::InterpolatedTranslation>(
           gfx::PointF(), gfx::PointF(new_pivot.x() - old_pivot.x(),
-                                     new_pivot.y() - old_pivot.y())));
+                                     new_pivot.y() - old_pivot.y()));
 
   float scale_factor = 0.9f;
-  scoped_ptr<ui::InterpolatedTransform> scale_down(
-      new ui::InterpolatedScale(1.0f, scale_factor, 0.0f, 0.5f));
+  std::unique_ptr<ui::InterpolatedTransform> scale_down =
+      base::MakeUnique<ui::InterpolatedScale>(1.0f, scale_factor, 0.0f, 0.5f);
 
-  scoped_ptr<ui::InterpolatedTransform> scale_up(
-      new ui::InterpolatedScale(1.0f, 1.0f / scale_factor, 0.5f, 1.0f));
+  std::unique_ptr<ui::InterpolatedTransform> scale_up =
+      base::MakeUnique<ui::InterpolatedScale>(1.0f, 1.0f / scale_factor, 0.5f,
+                                              1.0f);
 
   interpolated_transform_.reset(
       new ui::InterpolatedConstantTransform(current_transform));
 
-  scale_up->SetChild(scale_down.release());
-  translation->SetChild(scale_up.release());
-  rotation->SetChild(translation.release());
-  interpolated_transform_->SetChild(rotation.release());
+  scale_up->SetChild(std::move(scale_down));
+  translation->SetChild(std::move(scale_up));
+  rotation->SetChild(std::move(translation));
+  interpolated_transform_->SetChild(std::move(rotation));
 }
 
-void WindowRotation::OnStart(ui::LayerAnimationDelegate* delegate) {
-}
+void WindowRotation::OnStart(ui::LayerAnimationDelegate* delegate) {}
 
 bool WindowRotation::OnProgress(double t,
                                 ui::LayerAnimationDelegate* delegate) {
@@ -115,7 +115,6 @@ void WindowRotation::OnGetTarget(TargetValue* target) const {
   target->transform = interpolated_transform_->Interpolate(1.0);
 }
 
-void WindowRotation::OnAbort(ui::LayerAnimationDelegate* delegate) {
-}
+void WindowRotation::OnAbort(ui::LayerAnimationDelegate* delegate) {}
 
 }  // namespace ash

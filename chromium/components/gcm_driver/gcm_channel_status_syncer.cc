@@ -10,15 +10,17 @@
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/pref_service.h"
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/gcm_driver/gcm_channel_status_request.h"
 #include "components/gcm_driver/gcm_driver.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+
+#include "app/vivaldi_apptools.h"
 
 namespace gcm {
 
@@ -131,6 +133,10 @@ GCMChannelStatusSyncer::~GCMChannelStatusSyncer() {
 }
 
 void GCMChannelStatusSyncer::EnsureStarted() {
+#if defined(VIVALDI_BUILD)
+  if (vivaldi::IsVivaldiRunning())
+    return;
+#endif
   // Bail out if the request is already scheduled or started.
   if (started_)
     return;

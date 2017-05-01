@@ -13,6 +13,7 @@
 #include <cstring>
 #include <functional>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
@@ -22,6 +23,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_writer.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string16.h"
@@ -38,7 +40,7 @@
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
-#include "components/policy/core/common/preg_parser_win.h"
+#include "components/policy/core/common/preg_parser.h"
 #include "components/policy/core/common/schema_map.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -55,7 +57,6 @@ const wchar_t kPathSep[] = L"\\";
 const wchar_t kThirdParty[] = L"3rdparty";
 const wchar_t kMandatory[] = L"policy";
 const wchar_t kRecommended[] = L"recommended";
-const char kSchema[] = "schema";
 const wchar_t kTestPolicyKey[] = L"chrome.policy.key";
 
 // Installs |value| in the given registry |path| and |hive|, under the key
@@ -71,24 +72,24 @@ bool InstallValue(const base::Value& value,
   RegKey key(hive, path.c_str(), KEY_ALL_ACCESS);
   EXPECT_TRUE(key.Valid());
   switch (value.GetType()) {
-    case base::Value::TYPE_NULL:
+    case base::Value::Type::NONE:
       return key.WriteValue(name.c_str(), L"") == ERROR_SUCCESS;
 
-    case base::Value::TYPE_BOOLEAN: {
+    case base::Value::Type::BOOLEAN: {
       bool bool_value;
       if (!value.GetAsBoolean(&bool_value))
         return false;
       return key.WriteValue(name.c_str(), bool_value ? 1 : 0) == ERROR_SUCCESS;
     }
 
-    case base::Value::TYPE_INTEGER: {
+    case base::Value::Type::INTEGER: {
       int int_value;
       if (!value.GetAsInteger(&int_value))
         return false;
       return key.WriteValue(name.c_str(), int_value) == ERROR_SUCCESS;
     }
 
-    case base::Value::TYPE_DOUBLE: {
+    case base::Value::Type::DOUBLE: {
       double double_value;
       if (!value.GetAsDouble(&double_value))
         return false;
@@ -97,14 +98,14 @@ bool InstallValue(const base::Value& value,
       return key.WriteValue(name.c_str(), str_value.c_str()) == ERROR_SUCCESS;
     }
 
-    case base::Value::TYPE_STRING: {
+    case base::Value::Type::STRING: {
       base::string16 str_value;
       if (!value.GetAsString(&str_value))
         return false;
       return key.WriteValue(name.c_str(), str_value.c_str()) == ERROR_SUCCESS;
     }
 
-    case base::Value::TYPE_DICTIONARY: {
+    case base::Value::Type::DICTIONARY: {
       const base::DictionaryValue* sub_dict = NULL;
       if (!value.GetAsDictionary(&sub_dict))
         return false;
@@ -118,7 +119,7 @@ bool InstallValue(const base::Value& value,
       return true;
     }
 
-    case base::Value::TYPE_LIST: {
+    case base::Value::Type::LIST: {
       const base::ListValue* list = NULL;
       if (!value.GetAsList(&list))
         return false;
@@ -134,7 +135,7 @@ bool InstallValue(const base::Value& value,
       return true;
     }
 
-    case base::Value::TYPE_BINARY:
+    case base::Value::Type::BINARY:
       return false;
   }
   NOTREACHED();
@@ -350,9 +351,9 @@ ConfigurationPolicyProvider* RegistryTestHarness::CreateProvider(
     SchemaRegistry* registry,
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
   base::win::SetDomainStateForTesting(true);
-  scoped_ptr<AsyncPolicyLoader> loader(
+  std::unique_ptr<AsyncPolicyLoader> loader(
       new PolicyLoaderWin(task_runner, kTestPolicyKey, this));
-  return new AsyncPolicyProvider(registry, loader.Pass());
+  return new AsyncPolicyProvider(registry, std::move(loader));
 }
 
 void RegistryTestHarness::InstallEmptyPolicy() {}
@@ -471,21 +472,22 @@ PRegTestHarness::~PRegTestHarness() {}
 void PRegTestHarness::SetUp() {
   base::win::SetDomainStateForTesting(false);
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-  preg_file_path_ = temp_dir_.path().Append(PolicyLoaderWin::kPRegFileName);
+  preg_file_path_ = temp_dir_.GetPath().Append(PolicyLoaderWin::kPRegFileName);
   ASSERT_TRUE(base::WriteFile(preg_file_path_,
                                    preg_parser::kPRegFileHeader,
                                    arraysize(preg_parser::kPRegFileHeader)));
 
   memset(&gpo_, 0, sizeof(GROUP_POLICY_OBJECT));
-  gpo_.lpFileSysPath = const_cast<wchar_t*>(temp_dir_.path().value().c_str());
+  gpo_.lpFileSysPath =
+      const_cast<wchar_t*>(temp_dir_.GetPath().value().c_str());
 }
 
 ConfigurationPolicyProvider* PRegTestHarness::CreateProvider(
     SchemaRegistry* registry,
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  scoped_ptr<AsyncPolicyLoader> loader(
+  std::unique_ptr<AsyncPolicyLoader> loader(
       new PolicyLoaderWin(task_runner, kTestPolicyKey, this));
-  return new AsyncPolicyProvider(registry, loader.Pass());
+  return new AsyncPolicyProvider(registry, std::move(loader));
 }
 
 void PRegTestHarness::InstallEmptyPolicy() {}
@@ -622,31 +624,31 @@ void PRegTestHarness::AppendPolicyToPRegFile(const base::string16& path,
                                              const std::string& key,
                                              const base::Value* value) {
   switch (value->GetType()) {
-    case base::Value::TYPE_BOOLEAN: {
+    case base::Value::Type::BOOLEAN: {
       bool boolean_value = false;
       ASSERT_TRUE(value->GetAsBoolean(&boolean_value));
       AppendDWORDToPRegFile(path, key, boolean_value);
       break;
     }
-    case base::Value::TYPE_INTEGER: {
+    case base::Value::Type::INTEGER: {
       int int_value = 0;
       ASSERT_TRUE(value->GetAsInteger(&int_value));
       AppendDWORDToPRegFile(path, key, int_value);
       break;
     }
-    case base::Value::TYPE_DOUBLE: {
+    case base::Value::Type::DOUBLE: {
       double double_value = 0;
       ASSERT_TRUE(value->GetAsDouble(&double_value));
       AppendStringToPRegFile(path, key, base::DoubleToString(double_value));
       break;
     }
-    case base::Value::TYPE_STRING: {
+    case base::Value::Type::STRING: {
       std::string string_value;
       ASSERT_TRUE(value->GetAsString(&string_value));
       AppendStringToPRegFile(path, key, string_value);
       break;
     }
-    case base::Value::TYPE_DICTIONARY: {
+    case base::Value::Type::DICTIONARY: {
       base::string16 subpath = path + kPathSep + UTF8ToUTF16(key);
       const base::DictionaryValue* dict = NULL;
       ASSERT_TRUE(value->GetAsDictionary(&dict));
@@ -656,7 +658,7 @@ void PRegTestHarness::AppendPolicyToPRegFile(const base::string16& path,
       }
       break;
     }
-    case base::Value::TYPE_LIST: {
+    case base::Value::Type::LIST: {
       base::string16 subpath = path + kPathSep + UTF8ToUTF16(key);
       const base::ListValue* list = NULL;
       ASSERT_TRUE(value->GetAsList(&list));
@@ -667,8 +669,8 @@ void PRegTestHarness::AppendPolicyToPRegFile(const base::string16& path,
       }
       break;
     }
-    case base::Value::TYPE_BINARY:
-    case base::Value::TYPE_NULL: {
+    case base::Value::Type::BINARY:
+    case base::Value::Type::NONE: {
       ADD_FAILURE();
       break;
     }
@@ -748,7 +750,7 @@ class PolicyLoaderWinTest : public PolicyTestBase,
   bool Matches(const PolicyBundle& expected) {
     PolicyLoaderWin loader(loop_.task_runner(), kTestPolicyKey,
                            gpo_list_provider_);
-    scoped_ptr<PolicyBundle> loaded(
+    std::unique_ptr<PolicyBundle> loaded(
         loader.InitialLoad(schema_registry_.schema_map()));
     return loaded->Equals(expected);
   }
@@ -776,7 +778,7 @@ class PolicyLoaderWinTest : public PolicyTestBase,
     expected_policy.SetBoolean(test_keys::kKeyBoolean, true);
     expected_policy.SetString(test_keys::kKeyString, "GPO");
     expected_policy.SetInteger(test_keys::kKeyInteger, 42);
-    scoped_ptr<base::ListValue> list(new base::ListValue());
+    std::unique_ptr<base::ListValue> list(new base::ListValue());
     list->AppendString("GPO 1");
     list->AppendString("GPO 2");
     expected_policy.Set(test_keys::kKeyStringList, list.release());
@@ -809,12 +811,9 @@ TEST_F(PolicyLoaderWinTest, HKLMOverHKCU) {
 
   PolicyBundle expected;
   expected.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
-      .Set(test_keys::kKeyString,
-           POLICY_LEVEL_MANDATORY,
-           POLICY_SCOPE_MACHINE,
-           POLICY_SOURCE_PLATFORM,
-           new base::StringValue("hklm"),
-           NULL);
+      .Set(test_keys::kKeyString, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+           POLICY_SOURCE_PLATFORM, base::MakeUnique<base::StringValue>("hklm"),
+           nullptr);
   EXPECT_TRUE(Matches(expected));
 }
 
@@ -864,30 +863,19 @@ TEST_F(PolicyLoaderWinTest, Merge3rdPartyPolicies) {
 
   PolicyBundle expected;
   PolicyMap& expected_policy = expected.Get(ns);
-  expected_policy.Set("a",
-                      POLICY_LEVEL_MANDATORY,
-                      POLICY_SCOPE_MACHINE,
+  expected_policy.Set(
+      "a", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE, POLICY_SOURCE_PLATFORM,
+      base::MakeUnique<base::StringValue>(kMachineMandatory), nullptr);
+  expected_policy.Set(
+      "b", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER, POLICY_SOURCE_PLATFORM,
+      base::MakeUnique<base::StringValue>(kUserMandatory), nullptr);
+  expected_policy.Set("c", POLICY_LEVEL_RECOMMENDED, POLICY_SCOPE_MACHINE,
                       POLICY_SOURCE_PLATFORM,
-                      new base::StringValue(kMachineMandatory),
-                      NULL);
-  expected_policy.Set("b",
-                      POLICY_LEVEL_MANDATORY,
-                      POLICY_SCOPE_USER,
-                      POLICY_SOURCE_PLATFORM,
-                      new base::StringValue(kUserMandatory),
-                      NULL);
-  expected_policy.Set("c",
-                      POLICY_LEVEL_RECOMMENDED,
-                      POLICY_SCOPE_MACHINE,
-                      POLICY_SOURCE_PLATFORM,
-                      new base::StringValue(kMachineRecommended),
-                      NULL);
-  expected_policy.Set("d",
-                      POLICY_LEVEL_RECOMMENDED,
-                      POLICY_SCOPE_USER,
-                      POLICY_SOURCE_PLATFORM,
-                      new base::StringValue(kUserRecommended),
-                      NULL);
+                      base::MakeUnique<base::StringValue>(kMachineRecommended),
+                      nullptr);
+  expected_policy.Set(
+      "d", POLICY_LEVEL_RECOMMENDED, POLICY_SCOPE_USER, POLICY_SOURCE_PLATFORM,
+      base::MakeUnique<base::StringValue>(kUserRecommended), nullptr);
   EXPECT_TRUE(Matches(expected));
 }
 
@@ -1200,45 +1188,6 @@ TEST_F(PolicyLoaderWinTest, LoadExtensionPolicyAlternativeSpelling) {
   expected_b.SetInteger("policy 1", 2);
   expected.Get(ns_b).LoadFrom(&expected_b, POLICY_LEVEL_MANDATORY,
                               POLICY_SCOPE_MACHINE, POLICY_SOURCE_PLATFORM);
-  EXPECT_TRUE(Matches(expected));
-}
-
-TEST_F(PolicyLoaderWinTest, LBSSupport) {
-  const PolicyNamespace ns(
-      POLICY_DOMAIN_EXTENSIONS, "heildphpnddilhkemkielfhnkaagiabh");
-  schema_registry_.RegisterComponent(ns, Schema());
-
-  const char kIncompleteSchema[] =
-      "{"
-       "  \"type\": \"object\","
-       "  \"properties\": {"
-       "    \"url_list\": { \"type\": \"array\" },"
-       "    \"url_greylist\": { \"type\": \"array\" }"
-       "  }"
-      "}";
-
-  const base::string16 kPathSuffix =
-      kTestPolicyKey + base::ASCIIToUTF16("\\3rdparty\\extensions");
-
-  base::ListValue list;
-  list.AppendString("youtube.com");
-  base::DictionaryValue policy;
-  policy.Set("url_list", list.DeepCopy());
-  policy.SetString("alternative_browser_path", "c:\\legacy\\browser.exe");
-  base::DictionaryValue root;
-  root.Set(base::UTF16ToUTF8(kMandatory), policy.DeepCopy());
-  root.SetString(kSchema, kIncompleteSchema);
-  EXPECT_TRUE(InstallValue(root, HKEY_LOCAL_MACHINE,
-                           kPathSuffix, base::ASCIIToUTF16(ns.component_id)));
-
-  PolicyBundle expected;
-  PolicyMap& expected_policy = expected.Get(ns);
-  expected_policy.Set("alternative_browser_path",
-                      POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
-                      POLICY_SOURCE_PLATFORM,
-                      new base::StringValue("c:\\legacy\\browser.exe"), NULL);
-  expected_policy.Set("url_list", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
-                      POLICY_SOURCE_PLATFORM, list.DeepCopy(), nullptr);
   EXPECT_TRUE(Matches(expected));
 }
 

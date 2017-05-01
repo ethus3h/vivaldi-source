@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_bar.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -24,10 +24,13 @@ namespace {
 int g_close_menu_delay = 300;
 }
 
-ExtensionToolbarMenuView::ExtensionToolbarMenuView(Browser* browser,
-                                                   AppMenu* app_menu)
+ExtensionToolbarMenuView::ExtensionToolbarMenuView(
+    Browser* browser,
+    AppMenu* app_menu,
+    views::MenuItemView* menu_item)
     : browser_(browser),
       app_menu_(app_menu),
+      menu_item_(menu_item),
       container_(nullptr),
       max_height_(0),
       toolbar_actions_bar_observer_(this),
@@ -36,11 +39,7 @@ ExtensionToolbarMenuView::ExtensionToolbarMenuView(Browser* browser,
       BrowserView::GetBrowserViewForBrowser(browser_)
           ->toolbar()->browser_actions();
   container_ = new BrowserActionsContainer(browser_, main);
-  container_->Init();
   SetContents(container_);
-  // We Layout() the container here so that we know the number of actions
-  // that will be visible in ShouldShow().
-  container_->Layout();
 
   // Listen for the drop to finish so we can close the app menu, if necessary.
   toolbar_actions_bar_observer_.Add(main->toolbar_actions_bar());
@@ -57,17 +56,12 @@ ExtensionToolbarMenuView::ExtensionToolbarMenuView(Browser* browser,
 ExtensionToolbarMenuView::~ExtensionToolbarMenuView() {
 }
 
-bool ExtensionToolbarMenuView::ShouldShow() {
-  return app_menu_->for_drop() ||
-         container_->VisibleBrowserActionsAfterAnimation();
-}
-
 gfx::Size ExtensionToolbarMenuView::GetPreferredSize() const {
   gfx::Size s = views::ScrollView::GetPreferredSize();
   // views::ScrollView::GetPreferredSize() includes the contents' size, but
   // not the scrollbar width. Add it in if necessary.
   if (container_->GetPreferredSize().height() > max_height_)
-    s.Enlarge(GetScrollBarWidth(), 0);
+    s.Enlarge(GetScrollBarLayoutWidth(), 0);
   return s;
 }
 
@@ -124,12 +118,12 @@ void ExtensionToolbarMenuView::CloseAppMenu() {
 void ExtensionToolbarMenuView::Redraw() {
   // In a case where the size of the container may have changed (e.g., by a row
   // being added or removed), we need to re-layout the menu in order to resize
-  // the view (calling Layout() on this is insufficient because other items may
-  // need to shift up or down).
-  parent()->parent()->Layout();
-  // The Menus layout code doesn't recursively call layout on its children like
-  // the default View code. Explicitly layout this view.
+  // the view. This may result in redrawing the window. Luckily, this happens
+  // only in the case of a row being aded or removed (very rare), and
+  // typically happens near menu initialization (rather than once the menu is
+  // fully open).
   Layout();
+  menu_item_->GetParentMenuItem()->ChildrenChanged();
 }
 
 int ExtensionToolbarMenuView::start_padding() const {

@@ -9,7 +9,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
-#include "grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -119,40 +118,34 @@ class SpaceSeparatedListFormatter : public ChromePermissionMessageFormatter {
   DISALLOW_COPY_AND_ASSIGN(SpaceSeparatedListFormatter);
 };
 
-// Creates a comma-separated list of permissions with the given PermissionID.
-// The list is inserted into the messages with the given IDs: one for each case
-// of 1-3 permissions, and the other for the case where there are 4 or more
-// permissions. In the case of 4 or more permissions, rather than insert the
-// list into the message, the permissions are displayed as submessages in the
-// resultant PermissionMessage.
-class CommaSeparatedListFormatter : public ChromePermissionMessageFormatter {
+// Creates a list of host permissions. If there are 1-3 hosts, they are inserted
+// directly into a message with a given ID. If there are more than 3, they are
+// displayed as list of submessages instead.
+class HostListFormatter : public ChromePermissionMessageFormatter {
  public:
-  CommaSeparatedListFormatter(int message_id_for_one_host,
-                              int message_id_for_two_hosts,
-                              int message_id_for_three_hosts,
-                              int message_id_for_many_hosts)
+  HostListFormatter(int message_id_for_one_host,
+                    int message_id_for_two_hosts,
+                    int message_id_for_three_hosts,
+                    int message_id_for_many_hosts)
       : message_id_for_one_host_(message_id_for_one_host),
         message_id_for_two_hosts_(message_id_for_two_hosts),
         message_id_for_three_hosts_(message_id_for_three_hosts),
         message_id_for_many_hosts_(message_id_for_many_hosts) {}
-  ~CommaSeparatedListFormatter() override {}
+  ~HostListFormatter() override {}
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
-    DCHECK(permissions.size() > 0);
+    DCHECK(!permissions.empty());
     std::vector<base::string16> hostnames =
-        permissions.GetAllPermissionParameters();
-    PermissionMessages messages;
-    if (hostnames.size() <= 3) {
+        GetHostMessages(permissions.GetAllPermissionParameters());
+    int message_id = message_id_for_hosts(hostnames.size());
+    if (hostnames.size() <= kMaxHostsInMainMessage) {
       return PermissionMessage(
-          l10n_util::GetStringFUTF16(message_id_for_hosts(hostnames.size()),
-                                     hostnames, NULL),
+          l10n_util::GetStringFUTF16(message_id, hostnames, nullptr),
           permissions);
     }
-
-    return PermissionMessage(
-        l10n_util::GetStringUTF16(message_id_for_many_hosts_), permissions,
-        hostnames);
+    return PermissionMessage(l10n_util::GetStringUTF16(message_id), permissions,
+                             hostnames);
   }
 
  private:
@@ -169,12 +162,29 @@ class CommaSeparatedListFormatter : public ChromePermissionMessageFormatter {
     }
   }
 
+  std::vector<base::string16> GetHostMessages(
+      const std::vector<base::string16>& hosts) const {
+    int msg_id = hosts.size() <= kMaxHostsInMainMessage
+                     ? IDS_EXTENSION_PROMPT_WARNING_HOST_AND_SUBDOMAIN
+                     : IDS_EXTENSION_PROMPT_WARNING_HOST_AND_SUBDOMAIN_LIST;
+    std::vector<base::string16> messages;
+    for (const base::string16& host : hosts) {
+      messages.push_back(
+          host[0] == '*' && host[1] == '.'
+              ? l10n_util::GetStringFUTF16(msg_id, host.substr(2))
+              : host);
+    }
+    return messages;
+  }
+
+  static const int kMaxHostsInMainMessage = 3;
+
   int message_id_for_one_host_;
   int message_id_for_two_hosts_;
   int message_id_for_three_hosts_;
   int message_id_for_many_hosts_;
 
-  DISALLOW_COPY_AND_ASSIGN(CommaSeparatedListFormatter);
+  DISALLOW_COPY_AND_ASSIGN(HostListFormatter);
 };
 
 class USBDevicesFormatter : public ChromePermissionMessageFormatter {
@@ -245,30 +255,10 @@ class USBDevicesFormatter : public ChromePermissionMessageFormatter {
 
 }  // namespace
 
-// Convenience constructors to allow inline initialization of the permission
-// ID sets.
-// TODO(treib): Once we're allowed to use uniform initialization (and
-// std::initializer_list), get rid of this helper.
-class ChromePermissionMessageRule::PermissionIDSetInitializer
-    : public std::set<APIPermission::ID> {
- public:
-  template <typename... IDs>
-  PermissionIDSetInitializer(IDs... ids) {
-    // This effectively calls insert() with each of the ids.
-    ExpandHelper(insert(ids)...);
-  }
-
-  virtual ~PermissionIDSetInitializer() {}
-
- private:
-  template <typename... Args>
-  void ExpandHelper(Args&&...) {}
-};
-
 ChromePermissionMessageRule::ChromePermissionMessageRule(
     int message_id,
-    const PermissionIDSetInitializer& required,
-    const PermissionIDSetInitializer& optional)
+    const std::initializer_list<APIPermission::ID>& required,
+    const std::initializer_list<APIPermission::ID>& optional)
     : ChromePermissionMessageRule(
           new DefaultPermissionMessageFormatter(message_id),
           required,
@@ -276,13 +266,16 @@ ChromePermissionMessageRule::ChromePermissionMessageRule(
 
 ChromePermissionMessageRule::ChromePermissionMessageRule(
     ChromePermissionMessageFormatter* formatter,
-    const PermissionIDSetInitializer& required,
-    const PermissionIDSetInitializer& optional)
+    const std::initializer_list<APIPermission::ID>& required,
+    const std::initializer_list<APIPermission::ID>& optional)
     : required_permissions_(required),
       optional_permissions_(optional),
       formatter_(formatter) {
   DCHECK(!required_permissions_.empty());
 }
+
+ChromePermissionMessageRule::ChromePermissionMessageRule(
+    const ChromePermissionMessageRule& other) = default;
 
 ChromePermissionMessageRule::~ChromePermissionMessageRule() {
 }
@@ -372,17 +365,16 @@ ChromePermissionMessageRule::GetAllRules() {
         APIPermission::kProcesses, APIPermission::kTab,
         APIPermission::kTopSites, APIPermission::kWebNavigation}},
 
-      {new CommaSeparatedListFormatter(IDS_EXTENSION_PROMPT_WARNING_1_HOST,
-                                       IDS_EXTENSION_PROMPT_WARNING_2_HOSTS,
-                                       IDS_EXTENSION_PROMPT_WARNING_3_HOSTS,
-                                       IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST),
+      {new HostListFormatter(IDS_EXTENSION_PROMPT_WARNING_1_HOST,
+                             IDS_EXTENSION_PROMPT_WARNING_2_HOSTS,
+                             IDS_EXTENSION_PROMPT_WARNING_3_HOSTS,
+                             IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST),
        {APIPermission::kHostReadWrite},
        {}},
-      {new CommaSeparatedListFormatter(
-           IDS_EXTENSION_PROMPT_WARNING_1_HOST_READ_ONLY,
-           IDS_EXTENSION_PROMPT_WARNING_2_HOSTS_READ_ONLY,
-           IDS_EXTENSION_PROMPT_WARNING_3_HOSTS_READ_ONLY,
-           IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST_READ_ONLY),
+      {new HostListFormatter(IDS_EXTENSION_PROMPT_WARNING_1_HOST_READ_ONLY,
+                             IDS_EXTENSION_PROMPT_WARNING_2_HOSTS_READ_ONLY,
+                             IDS_EXTENSION_PROMPT_WARNING_3_HOSTS_READ_ONLY,
+                             IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST_READ_ONLY),
        {APIPermission::kHostReadOnly},
        {}},
 
@@ -469,6 +461,10 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_U2F_DEVICES,
        {APIPermission::kU2fDevices},
        {}},
+      // Notifications.
+      {IDS_EXTENSION_PROMPT_WARNING_NOTIFICATIONS,
+       {APIPermission::kNotifications},
+       {}},
 
       // Accessibility features.
       {IDS_EXTENSION_PROMPT_WARNING_ACCESSIBILITY_FEATURES_READ_MODIFY,
@@ -524,6 +520,15 @@ ChromePermissionMessageRule::GetAllRules() {
 
       // Network-related permissions.
       {IDS_EXTENSION_PROMPT_WARNING_NETWORKING_PRIVATE,
+       {APIPermission::kNetworkingOnc},
+       // Adding networkingPrivate as an optional permission for this rule so
+       // the permission is removed from the available permission set when the
+       // next rule (for networkingPrivate permission) is considered - without
+       // this, IDS_EXTENSION_PROMPT_WARNING_NETWORK_PRIVATE would be duplicated
+       // for manifests that have both networking.onc and networkingPrivate
+       // permission.
+       {APIPermission::kNetworkingPrivate}},
+      {IDS_EXTENSION_PROMPT_WARNING_NETWORKING_PRIVATE,
        {APIPermission::kNetworkingPrivate},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_NETWORKING_CONFIG,
@@ -552,8 +557,14 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_BOOKMARKS,
        {APIPermission::kBookmark},
        {APIPermission::kOverrideBookmarksUI}},
+      {IDS_EXTENSION_PROMPT_WARNING_CLIPBOARD_READWRITE,
+       {APIPermission::kClipboardRead, APIPermission::kClipboardWrite},
+       {}},
       {IDS_EXTENSION_PROMPT_WARNING_CLIPBOARD,
        {APIPermission::kClipboardRead},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CLIPBOARD_WRITE,
+       {APIPermission::kClipboardWrite},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_DESKTOP_CAPTURE,
        {APIPermission::kDesktopCapture},
@@ -568,15 +579,9 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_GEOLOCATION,
        {APIPermission::kGeolocation},
        {}},
-      {IDS_EXTENSION_PROMPT_WARNING_GEOLOCATION,
-       {APIPermission::kLocation},
-       {}},
 
       {IDS_EXTENSION_PROMPT_WARNING_CONTENT_SETTINGS,
        {APIPermission::kContentSettings},
-       {}},
-      {IDS_EXTENSION_PROMPT_WARNING_COPRESENCE,
-       {APIPermission::kCopresence},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_DOCUMENT_SCAN,
        {APIPermission::kDocumentScan},
@@ -618,9 +623,6 @@ ChromePermissionMessageRule::GetAllRules() {
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_MUSIC_MANAGER_PRIVATE,
        {APIPermission::kMusicManagerPrivate},
-       {}},
-      {IDS_EXTENSION_PROMPT_WARNING_SEARCH_ENGINES_PRIVATE,
-       {APIPermission::kSearchEnginesPrivate},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_SETTINGS_PRIVATE,
        {APIPermission::kSettingsPrivate},

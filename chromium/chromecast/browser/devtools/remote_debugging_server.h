@@ -7,18 +7,13 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/prefs/pref_member.h"
+#include <memory>
 
-namespace devtools_http_handler {
-class DevToolsHttpHandler;
-}
+#include "base/macros.h"
+#include "components/prefs/pref_member.h"
 
 namespace chromecast {
 namespace shell {
-
-class CastDevToolsManagerDelegate;
 
 class RemoteDebuggingServer {
  public:
@@ -28,11 +23,9 @@ class RemoteDebuggingServer {
  private:
   // Called when pref_enabled_ is changed.
   void OnEnabledChanged();
-
-  scoped_ptr<devtools_http_handler::DevToolsHttpHandler> devtools_http_handler_;
-
   BooleanPrefMember pref_enabled_;
   uint16_t port_;
+  bool is_started_;
 
   DISALLOW_COPY_AND_ASSIGN(RemoteDebuggingServer);
 };

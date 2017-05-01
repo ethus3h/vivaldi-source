@@ -47,7 +47,8 @@ def _LogToFlakinessDashboard(results, test_type, test_package,
         assert test_package in ['ContentShellTest',
                                 'ChromePublicTest',
                                 'ChromeSyncShellTest',
-                                'AndroidWebViewTest']
+                                'AndroidWebViewTest',
+                                'SystemWebViewShellLayoutTest']
         dashboard_test_type = ('%s_instrumentation_tests' %
                                test_package.lower().rstrip('test'))
       # Downstream server.
@@ -84,7 +85,7 @@ def LogFull(results, test_type, test_package, annotation=None,
     test_package: Test package name (e.g. 'ipc_tests' for gtests,
                   'ContentShellTest' for instrumentation tests)
     annotation: If instrumenation test type, this is a list of annotations
-                (e.g. ['Smoke', 'SmallTest']).
+                (e.g. ['Feature', 'SmallTest']).
     flakiness_server: If provider, upload the results to flakiness dashboard
                       with this URL.
     """

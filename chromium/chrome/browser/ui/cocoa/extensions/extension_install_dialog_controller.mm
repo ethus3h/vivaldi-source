@@ -10,7 +10,7 @@
 #include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop/message_loop.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/api/experience_sampling_private/experience_sampling.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
 #include "chrome/browser/ui/browser.h"
@@ -20,6 +20,7 @@
 #import "chrome/browser/ui/cocoa/extensions/windowed_install_dialog_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/material_design/material_design_controller.h"
 
 using extensions::ExperienceSamplingEvent;
 
@@ -28,7 +29,7 @@ namespace {
 void ShowExtensionInstallDialogImpl(
     ExtensionInstallPromptShowParams* show_params,
     const ExtensionInstallPrompt::DoneCallback& done_callback,
-    scoped_ptr<ExtensionInstallPrompt::Prompt> prompt) {
+    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt) {
   // These objects will delete themselves when the dialog closes.
   if (!show_params->GetParentWebContents()) {
     new WindowedInstallDialogController(show_params, done_callback,
@@ -45,7 +46,7 @@ void ShowExtensionInstallDialogImpl(
 ExtensionInstallDialogController::ExtensionInstallDialogController(
     ExtensionInstallPromptShowParams* show_params,
     const ExtensionInstallPrompt::DoneCallback& done_callback,
-    scoped_ptr<ExtensionInstallPrompt::Prompt> prompt)
+    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt)
     : done_callback_(done_callback) {
   ExtensionInstallPrompt::PromptType promptType = prompt->type();
   view_controller_.reset([[ExtensionInstallViewController alloc]
@@ -60,8 +61,12 @@ ExtensionInstallDialogController::ExtensionInstallDialogController(
 
   base::scoped_nsobject<CustomConstrainedWindowSheet> sheet(
       [[CustomConstrainedWindowSheet alloc] initWithCustomWindow:window]);
-  constrained_window_.reset(new ConstrainedWindowMac(
-      this, show_params->GetParentWebContents(), sheet));
+  // The extension install dialog can cause window server crashes when using the
+  // complex animations provided by private APIs, so use simple animations. See
+  // https://crbug.com/548824.
+  [sheet setUseSimpleAnimations:YES];
+  constrained_window_ = CreateAndShowWebModalDialogMac(
+      this, show_params->GetParentWebContents(), sheet);
 
   std::string event_name = ExperienceSamplingEvent::kExtensionInstallDialog;
   event_name.append(
@@ -93,7 +98,7 @@ void ExtensionInstallDialogController::OnConstrainedWindowClosed(
     base::ResetAndReturn(&done_callback_).Run(
         ExtensionInstallPrompt::Result::ABORTED);
   }
-  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
 }
 
 void ExtensionInstallDialogController::OnPromptButtonClicked(
@@ -108,5 +113,7 @@ void ExtensionInstallDialogController::OnPromptButtonClicked(
 // static
 ExtensionInstallPrompt::ShowDialogCallback
 ExtensionInstallPrompt::GetDefaultShowDialogCallback() {
+  if (ui::MaterialDesignController::IsSecondaryUiMaterial())
+    return ExtensionInstallPrompt::GetViewsShowDialogCallback();
   return base::Bind(&ShowExtensionInstallDialogImpl);
 }

@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include <utility>
 #include <vector>
 
 #include "base/command_line.h"
@@ -46,7 +47,7 @@ void GetGalleryInfoCallback(
     FSInfoMap* results,
     const std::vector<MediaFileSystemInfo>& file_systems) {
   for (size_t i = 0; i < file_systems.size(); ++i) {
-    ASSERT_FALSE(ContainsKey(*results, file_systems[i].pref_id));
+    ASSERT_FALSE(base::ContainsKey(*results, file_systems[i].pref_id));
     (*results)[file_systems[i].pref_id] = file_systems[i];
   }
 }
@@ -85,12 +86,12 @@ void MTPDeviceDelegateImplWinTest::SetUp() {
       new TestPortableDeviceWatcherWin;
   TestVolumeMountWatcherWin* mount_watcher = new TestVolumeMountWatcherWin;
   portable_device_watcher->set_use_dummy_mtp_storage_info(true);
-  scoped_ptr<TestStorageMonitorWin> monitor(
+  std::unique_ptr<TestStorageMonitorWin> monitor(
       new TestStorageMonitorWin(mount_watcher, portable_device_watcher));
   TestingBrowserProcess* browser_process = TestingBrowserProcess::GetGlobal();
   DCHECK(browser_process);
   monitor_ = monitor.get();
-  StorageMonitor::SetStorageMonitorForTesting(monitor.Pass());
+  StorageMonitor::SetStorageMonitorForTesting(std::move(monitor));
 
   base::RunLoop runloop;
   browser_process->media_file_system_registry()->GetPreferences(profile())->

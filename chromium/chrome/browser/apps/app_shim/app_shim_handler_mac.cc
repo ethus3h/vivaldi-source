@@ -7,10 +7,12 @@
 #include <map>
 
 #include "base/bind.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/singleton.h"
-#include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/apps/app_window_registry_util.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -26,9 +28,7 @@ namespace {
 void TerminateIfNoAppWindows() {
   bool app_windows_left =
       AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0);
-  if (!app_windows_left &&
-      !AppListService::Get(chrome::HOST_DESKTOP_TYPE_NATIVE)
-           ->IsAppListVisible()) {
+  if (!app_windows_left && !AppListService::Get()->IsAppListVisible()) {
     chrome::AttemptExit();
   }
 }
@@ -66,7 +66,7 @@ class AppShimHandlerRegistry : public content::NotificationObserver {
     if (!browser_session_running_) {
       // Post this to give AppWindows a chance to remove themselves from the
       // registry.
-      base::MessageLoop::current()->PostTask(
+      base::ThreadTaskRunnerHandle::Get()->PostTask(
           FROM_HERE, base::Bind(&TerminateIfNoAppWindows));
     }
   }
@@ -96,7 +96,6 @@ class AppShimHandlerRegistry : public content::NotificationObserver {
   ~AppShimHandlerRegistry() override {}
 
   // content::NotificationObserver override:
-  // todo: tomas@vivaldi.com - add handling for main menu pref update
   void Observe(int type,
                const content::NotificationSource& source,
                const content::NotificationDetails& details) override {

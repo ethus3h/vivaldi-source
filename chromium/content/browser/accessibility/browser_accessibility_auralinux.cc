@@ -7,9 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_manager_auralinux.h"
 #include "content/common/accessibility_messages.h"
+#include "ui/accessibility/ax_text_utils.h"
 
 namespace content {
 
@@ -21,6 +23,18 @@ static BrowserAccessibilityAuraLinux* ToBrowserAccessibilityAuraLinux(
     return NULL;
 
   return atk_object->m_object;
+}
+
+const BrowserAccessibilityAuraLinux* ToBrowserAccessibilityAuraLinux(
+    const BrowserAccessibility* obj) {
+  DCHECK(!obj || obj->IsNative());
+  return static_cast<const BrowserAccessibilityAuraLinux*>(obj);
+}
+
+BrowserAccessibilityAuraLinux* ToBrowserAccessibilityAuraLinux(
+    BrowserAccessibility* obj) {
+  DCHECK(!obj || obj->IsNative());
+  return static_cast<BrowserAccessibilityAuraLinux*>(obj);
 }
 
 //
@@ -79,9 +93,14 @@ static const gchar* browser_accessibility_get_name(AtkAction* atk_action,
   BrowserAccessibilityAuraLinux* obj =
       ToBrowserAccessibilityAuraLinux(atk_action);
   if (!obj)
-    return 0;
+    return nullptr;
 
-  return obj->GetStringAttribute(ui::AX_ATTR_ACTION).c_str();
+  int action;
+  if (!obj->GetIntAttribute(ui::AX_ATTR_ACTION, &action))
+    return nullptr;
+  base::string16 action_verb =
+      ui::ActionToUnlocalizedString(static_cast<ui::AXSupportedAction>(action));
+  return base::UTF16ToUTF8(action_verb).c_str();
 }
 
 static const gchar* browser_accessibility_get_keybinding(AtkAction* atk_action,
@@ -132,15 +151,12 @@ static AtkObject* browser_accessibility_accessible_at_point(
     return NULL;
 
   gfx::Point point(x, y);
-  if (!obj->GetGlobalBoundsRect().Contains(point))
-    return NULL;
-
-  BrowserAccessibility* result = obj->BrowserAccessibilityForPoint(point);
+  BrowserAccessibility* result = obj->manager()->CachingAsyncHitTest(point);
   if (!result)
     return NULL;
 
   AtkObject* atk_result =
-      result->ToBrowserAccessibilityAuraLinux()->GetAtkObject();
+      ToBrowserAccessibilityAuraLinux(result)->GetAtkObject();
   g_object_ref(atk_result);
   return atk_result;
 }
@@ -158,7 +174,7 @@ static void browser_accessibility_get_extents(AtkComponent* atk_component,
   if (!obj)
     return;
 
-  gfx::Rect bounds = obj->GetGlobalBoundsRect();
+  gfx::Rect bounds = obj->GetScreenBoundsRect();
   if (x)
     *x = bounds.x();
   if (y)
@@ -177,7 +193,7 @@ static gboolean browser_accessibility_grab_focus(AtkComponent* atk_component) {
   if (!obj)
     return false;
 
-  obj->manager()->SetFocus(obj, true);
+  obj->manager()->SetFocus(*obj);
   return true;
 }
 
@@ -288,7 +304,7 @@ void GetImagePositionSize(BrowserAccessibilityAuraLinux* obj,
                           gint* y,
                           gint* width,
                           gint* height) {
-  gfx::Rect img_pos_size = obj->GetGlobalBoundsRect();
+  gfx::Rect img_pos_size = obj->GetScreenBoundsRect();
 
   if (x)
     *x = img_pos_size.x();
@@ -474,7 +490,7 @@ static AtkObject* browser_accessibility_get_parent(AtkObject* atk_object) {
   if (!obj)
     return NULL;
   if (obj->GetParent())
-    return obj->GetParent()->ToBrowserAccessibilityAuraLinux()->GetAtkObject();
+    return ToBrowserAccessibilityAuraLinux(obj->GetParent())->GetAtkObject();
 
   BrowserAccessibilityManagerAuraLinux* manager =
       static_cast<BrowserAccessibilityManagerAuraLinux*>(obj->manager());
@@ -500,9 +516,8 @@ static AtkObject* browser_accessibility_ref_child(AtkObject* atk_object,
   if (index < 0 || index >= static_cast<gint>(obj->PlatformChildCount()))
     return NULL;
 
-  AtkObject* result = obj->InternalGetChild(index)
-                          ->ToBrowserAccessibilityAuraLinux()
-                          ->GetAtkObject();
+  AtkObject* result = ToBrowserAccessibilityAuraLinux(
+      obj->InternalGetChild(index))->GetAtkObject();
   g_object_ref(result);
   return result;
 }
@@ -539,9 +554,9 @@ static AtkStateSet* browser_accessibility_ref_state_set(AtkObject* atk_object) {
 
   if (state & (1 << ui::AX_STATE_FOCUSABLE))
     atk_state_set_add_state(state_set, ATK_STATE_FOCUSABLE);
-  if (obj->manager()->GetFocus(NULL) == obj)
+  if (obj->manager()->GetFocus() == obj)
     atk_state_set_add_state(state_set, ATK_STATE_FOCUSED);
-  if (state & (1 << ui::AX_STATE_ENABLED))
+  if (!(state & (1 << ui::AX_STATE_DISABLED)))
     atk_state_set_add_state(state_set, ATK_STATE_ENABLED);
 
   return state_set;
@@ -735,16 +750,6 @@ BrowserAccessibility* BrowserAccessibility::Create() {
   return new BrowserAccessibilityAuraLinux();
 }
 
-const BrowserAccessibilityAuraLinux*
-BrowserAccessibility::ToBrowserAccessibilityAuraLinux() const {
-  return static_cast<const BrowserAccessibilityAuraLinux*>(this);
-}
-
-BrowserAccessibilityAuraLinux*
-BrowserAccessibility::ToBrowserAccessibilityAuraLinux() {
-  return static_cast<BrowserAccessibilityAuraLinux*>(this);
-}
-
 BrowserAccessibilityAuraLinux::BrowserAccessibilityAuraLinux()
     : atk_object_(NULL) {
 }
@@ -782,7 +787,7 @@ void BrowserAccessibilityAuraLinux::OnDataChanged() {
     if (this->GetParent()) {
       atk_object_set_parent(
           atk_object_,
-          this->GetParent()->ToBrowserAccessibilityAuraLinux()->GetAtkObject());
+          ToBrowserAccessibilityAuraLinux(this->GetParent())->GetAtkObject());
     }
   }
 }
@@ -807,6 +812,17 @@ void BrowserAccessibilityAuraLinux::InitRoleAndState() {
       break;
     case ui::AX_ROLE_BUTTON:
       atk_role_ = ATK_ROLE_PUSH_BUTTON;
+      break;
+    case ui::AX_ROLE_AUDIO:
+#if defined(ATK_CHECK_VERSION)
+#if ATK_CHECK_VERSION(2, 12, 0)
+      atk_role_ = ATK_ROLE_AUDIO;
+#else
+      atk_role_ = ATK_ROLE_SECTION;
+#endif
+#else
+      atk_role_ = ATK_ROLE_SECTION;
+#endif
       break;
     case ui::AX_ROLE_CANVAS:
       atk_role_ = ATK_ROLE_CANVAS;
@@ -932,6 +948,17 @@ void BrowserAccessibilityAuraLinux::InitRoleAndState() {
       break;
     case ui::AX_ROLE_TREE_ITEM:
       atk_role_ = ATK_ROLE_TREE_ITEM;
+      break;
+    case ui::AX_ROLE_VIDEO:
+#if defined(ATK_CHECK_VERSION)
+#if ATK_CHECK_VERSION(2, 12, 0)
+      atk_role_ = ATK_ROLE_VIDEO;
+#else
+      atk_role_ = ATK_ROLE_SECTION;
+#endif
+#else
+      atk_role_ = ATK_ROLE_SECTION;
+#endif
       break;
     default:
       atk_role_ = ATK_ROLE_UNKNOWN;

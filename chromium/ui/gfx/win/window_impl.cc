@@ -12,6 +12,7 @@
 #include "base/memory/singleton.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/lock.h"
+#include "base/win/win_util.h"
 #include "base/win/wrapped_window_proc.h"
 #include "ui/gfx/win/hwnd_util.h"
 
@@ -212,7 +213,6 @@ void WindowImpl::Init(HWND parent, const Rect& bounds) {
                              reinterpret_cast<wchar_t*>(atom), NULL,
                              window_style_, x, y, width, height,
                              parent, NULL, NULL, this);
-
   // First nccalcszie (during CreateWindow) for captioned windows is
   // deliberately ignored so force a second one here to get the right
   // non-client set up.
@@ -283,19 +283,20 @@ LRESULT CALLBACK WindowImpl::WndProc(HWND hwnd,
                                      UINT message,
                                      WPARAM w_param,
                                      LPARAM l_param) {
+  WindowImpl* window = nullptr;
   if (message == WM_NCCREATE) {
     CREATESTRUCT* cs = reinterpret_cast<CREATESTRUCT*>(l_param);
-    WindowImpl* window = reinterpret_cast<WindowImpl*>(cs->lpCreateParams);
+    window = reinterpret_cast<WindowImpl*>(cs->lpCreateParams);
     DCHECK(window);
     gfx::SetWindowUserData(hwnd, window);
     window->hwnd_ = hwnd;
     window->got_create_ = true;
     if (hwnd)
       window->got_valid_hwnd_ = true;
-    return TRUE;
+  } else {
+    window = reinterpret_cast<WindowImpl*>(GetWindowUserData(hwnd));
   }
 
-  WindowImpl* window = reinterpret_cast<WindowImpl*>(GetWindowUserData(hwnd));
   if (!window)
     return 0;
 

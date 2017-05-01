@@ -38,94 +38,82 @@
 
 namespace blink {
 
-SVGPoint::SVGPoint()
-{
+SVGPoint::SVGPoint() {}
+
+SVGPoint::SVGPoint(const FloatPoint& point) : m_value(point) {}
+
+SVGPoint* SVGPoint::clone() const {
+  return SVGPoint::create(m_value);
 }
 
-SVGPoint::SVGPoint(const FloatPoint& point)
-    : m_value(point)
-{
+template <typename CharType>
+SVGParsingError SVGPoint::parse(const CharType*& ptr, const CharType* end) {
+  float x = 0;
+  float y = 0;
+  if (!parseNumber(ptr, end, x) ||
+      !parseNumber(ptr, end, y, DisallowWhitespace))
+    return SVGParseStatus::ExpectedNumber;
+
+  if (skipOptionalSVGSpaces(ptr, end)) {
+    // Nothing should come after the second number.
+    return SVGParseStatus::TrailingGarbage;
+  }
+
+  m_value = FloatPoint(x, y);
+  return SVGParseStatus::NoError;
 }
 
-PassRefPtrWillBeRawPtr<SVGPoint> SVGPoint::clone() const
-{
-    return SVGPoint::create(m_value);
+FloatPoint SVGPoint::matrixTransform(const AffineTransform& transform) const {
+  double newX, newY;
+  transform.map(static_cast<double>(x()), static_cast<double>(y()), newX, newY);
+  return FloatPoint::narrowPrecision(newX, newY);
 }
 
-template<typename CharType>
-bool SVGPoint::parse(const CharType*& ptr, const CharType* end)
-{
-    skipOptionalSVGSpaces(ptr, end);
+SVGParsingError SVGPoint::setValueAsString(const String& string) {
+  if (string.isEmpty()) {
+    m_value = FloatPoint(0.0f, 0.0f);
+    return SVGParseStatus::NoError;
+  }
 
-    float x = 0.0f;
-    float y = 0.0f;
-    bool valid = parseNumber(ptr, end, x) && parseNumber(ptr, end, y, DisallowWhitespace);
-
-    if (!valid)
-        return false;
-
-    if (skipOptionalSVGSpaces(ptr, end)) {
-        // Nothing should come after the second number.
-        return false;
-    }
-
-    m_value = FloatPoint(x, y);
-    return true;
+  if (string.is8Bit()) {
+    const LChar* ptr = string.characters8();
+    const LChar* end = ptr + string.length();
+    return parse(ptr, end);
+  }
+  const UChar* ptr = string.characters16();
+  const UChar* end = ptr + string.length();
+  return parse(ptr, end);
 }
 
-FloatPoint SVGPoint::matrixTransform(const AffineTransform& transform) const
-{
-    double newX, newY;
-    transform.map(static_cast<double>(x()), static_cast<double>(y()), newX, newY);
-    return FloatPoint::narrowPrecision(newX, newY);
+String SVGPoint::valueAsString() const {
+  StringBuilder builder;
+  builder.appendNumber(x());
+  builder.append(' ');
+  builder.appendNumber(y());
+  return builder.toString();
 }
 
-SVGParsingError SVGPoint::setValueAsString(const String& string)
-{
-    if (string.isEmpty()) {
-        m_value = FloatPoint(0.0f, 0.0f);
-        return NoError;
-    }
-
-    bool valid;
-    if (string.is8Bit()) {
-        const LChar* ptr = string.characters8();
-        const LChar* end = ptr + string.length();
-        valid = parse(ptr, end);
-    } else {
-        const UChar* ptr = string.characters16();
-        const UChar* end = ptr + string.length();
-        valid = parse(ptr, end);
-    }
-    return valid ? NoError : ParsingAttributeFailedError;
+void SVGPoint::add(SVGPropertyBase* other, SVGElement*) {
+  // SVGPoint is not animated by itself
+  NOTREACHED();
 }
 
-String SVGPoint::valueAsString() const
-{
-    StringBuilder builder;
-    builder.appendNumber(x());
-    builder.append(' ');
-    builder.appendNumber(y());
-    return builder.toString();
+void SVGPoint::calculateAnimatedValue(SVGAnimationElement* animationElement,
+                                      float percentage,
+                                      unsigned repeatCount,
+                                      SVGPropertyBase* fromValue,
+                                      SVGPropertyBase* toValue,
+                                      SVGPropertyBase* toAtEndOfDurationValue,
+                                      SVGElement*) {
+  // SVGPoint is not animated by itself
+  NOTREACHED();
 }
 
-void SVGPoint::add(PassRefPtrWillBeRawPtr<SVGPropertyBase> other, SVGElement*)
-{
-    // SVGPoint is not animated by itself
-    ASSERT_NOT_REACHED();
+float SVGPoint::calculateDistance(SVGPropertyBase* to,
+                                  SVGElement* contextElement) {
+  // SVGPoint is not animated by itself
+  NOTREACHED();
+  return 0.0f;
 }
 
-void SVGPoint::calculateAnimatedValue(SVGAnimationElement* animationElement, float percentage, unsigned repeatCount, PassRefPtrWillBeRawPtr<SVGPropertyBase> fromValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toAtEndOfDurationValue, SVGElement*)
-{
-    // SVGPoint is not animated by itself
-    ASSERT_NOT_REACHED();
-}
-
-float SVGPoint::calculateDistance(PassRefPtrWillBeRawPtr<SVGPropertyBase> to, SVGElement* contextElement)
-{
-    // SVGPoint is not animated by itself
-    ASSERT_NOT_REACHED();
-    return 0.0f;
-}
-
-}
+}  // namespace blink

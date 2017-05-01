@@ -12,9 +12,9 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 
 namespace content {
 
@@ -99,7 +99,8 @@ void RtcDataChannelHandler::Observer::OnMessage(
     const webrtc::DataBuffer& buffer) {
   // TODO(tommi): Figure out a way to transfer ownership of the buffer without
   // having to create a copy.  See webrtc bug 3967.
-  scoped_ptr<webrtc::DataBuffer> new_buffer(new webrtc::DataBuffer(buffer));
+  std::unique_ptr<webrtc::DataBuffer> new_buffer(
+      new webrtc::DataBuffer(buffer));
   main_thread_->PostTask(FROM_HERE,
       base::Bind(&RtcDataChannelHandler::Observer::OnMessageImpl, this,
       base::Passed(&new_buffer)));
@@ -120,7 +121,7 @@ void RtcDataChannelHandler::Observer::OnBufferedAmountDecreaseImpl(
 }
 
 void RtcDataChannelHandler::Observer::OnMessageImpl(
-    scoped_ptr<webrtc::DataBuffer> buffer) {
+    std::unique_ptr<webrtc::DataBuffer> buffer) {
   DCHECK(main_thread_->BelongsToCurrentThread());
   if (handler_)
     handler_->OnMessage(std::move(buffer));
@@ -146,10 +147,10 @@ RtcDataChannelHandler::RtcDataChannelHandler(
     IncrementCounter(CHANNEL_NEGOTIATED);
 
   UMA_HISTOGRAM_CUSTOM_COUNTS("WebRTC.DataChannelMaxRetransmits",
-                              channel->maxRetransmits(), 0,
+                              channel->maxRetransmits(), 1,
                               std::numeric_limits<unsigned short>::max(), 50);
   UMA_HISTOGRAM_CUSTOM_COUNTS("WebRTC.DataChannelMaxRetransmitTime",
-                              channel->maxRetransmitTime(), 0,
+                              channel->maxRetransmitTime(), 1,
                               std::numeric_limits<unsigned short>::max(), 50);
 }
 
@@ -176,7 +177,7 @@ void RtcDataChannelHandler::setClient(
 
 blink::WebString RtcDataChannelHandler::label() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  return base::UTF8ToUTF16(channel()->label());
+  return blink::WebString::fromUTF8(channel()->label());
 }
 
 bool RtcDataChannelHandler::isReliable() {
@@ -201,7 +202,7 @@ unsigned short RtcDataChannelHandler::maxRetransmits() const {
 
 blink::WebString RtcDataChannelHandler::protocol() const {
   DCHECK(thread_checker_.CalledOnValidThread());
-  return base::UTF8ToUTF16(channel()->protocol());
+  return blink::WebString::fromUTF8(channel()->protocol());
 }
 
 bool RtcDataChannelHandler::negotiated() const {
@@ -253,16 +254,15 @@ unsigned long RtcDataChannelHandler::bufferedAmount() {
 
 bool RtcDataChannelHandler::sendStringData(const blink::WebString& data) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  std::string utf8_buffer = base::UTF16ToUTF8(base::StringPiece16(data));
-  rtc::Buffer buffer(utf8_buffer.c_str(), utf8_buffer.length());
-  webrtc::DataBuffer data_buffer(buffer, false);
+  std::string utf8_buffer = data.utf8();
+  webrtc::DataBuffer data_buffer(utf8_buffer);
   RecordMessageSent(data_buffer.size());
   return channel()->Send(data_buffer);
 }
 
 bool RtcDataChannelHandler::sendRawData(const char* data, size_t length) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  rtc::Buffer buffer(data, length);
+  rtc::CopyOnWriteBuffer buffer(data, length);
   webrtc::DataBuffer data_buffer(buffer, true);
   RecordMessageSent(data_buffer.size());
   return channel()->Send(data_buffer);
@@ -316,7 +316,8 @@ void RtcDataChannelHandler::OnBufferedAmountDecrease(
   webkit_client_->didDecreaseBufferedAmount(previous_amount);
 }
 
-void RtcDataChannelHandler::OnMessage(scoped_ptr<webrtc::DataBuffer> buffer) {
+void RtcDataChannelHandler::OnMessage(
+    std::unique_ptr<webrtc::DataBuffer> buffer) {
   DCHECK(thread_checker_.CalledOnValidThread());
   if (!webkit_client_) {
     // If this happens, the web application will not get notified of changes.
@@ -334,7 +335,7 @@ void RtcDataChannelHandler::OnMessage(scoped_ptr<webrtc::DataBuffer> buffer) {
       LOG(ERROR) << "Failed convert received data to UTF16";
       return;
     }
-    webkit_client_->didReceiveStringData(utf16);
+    webkit_client_->didReceiveStringData(blink::WebString::fromUTF16(utf16));
   }
 }
 

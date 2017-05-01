@@ -45,8 +45,8 @@ class UploadFileSystemFileElementReaderTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
-    file_system_context_ = CreateFileSystemContextForTesting(
-        NULL, temp_dir_.path());
+    file_system_context_ =
+        CreateFileSystemContextForTesting(NULL, temp_dir_.GetPath());
 
     file_system_context_->OpenFileSystem(
         GURL(kFileSystemURLOrigin),
@@ -123,7 +123,7 @@ class UploadFileSystemFileElementReaderTest : public testing::Test {
   std::vector<char> file_data_;
   GURL file_url_;
   base::Time file_modification_time_;
-  scoped_ptr<UploadFileSystemFileElementReader> reader_;
+  std::unique_ptr<UploadFileSystemFileElementReader> reader_;
 };
 
 TEST_F(UploadFileSystemFileElementReaderTest, ReadAll) {

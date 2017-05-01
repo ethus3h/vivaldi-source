@@ -7,16 +7,15 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/common/media_galleries/pmp_constants.h"
 
 namespace base {
 class File;
-class FilePath;
 }
 
 namespace picasa {
@@ -49,7 +48,7 @@ class PmpColumnReader {
   int64_t IndexStrings();
 
   // Source data
-  scoped_ptr<uint8_t[]> data_;
+  std::unique_ptr<uint8_t[]> data_;
   int64_t length_;
 
   // Header data

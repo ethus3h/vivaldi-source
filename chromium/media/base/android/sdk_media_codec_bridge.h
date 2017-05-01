@@ -29,16 +29,16 @@ class MEDIA_EXPORT SdkMediaCodecBridge : public MediaCodecBridge {
   ~SdkMediaCodecBridge() override;
 
   // MediaCodecBridge implementations.
-  MediaCodecStatus Reset() override;
   bool Start() override;
   void Stop() override;
-  void GetOutputFormat(int* width, int* height) override;
-  int GetOutputSamplingRate() override;
-  MediaCodecStatus QueueInputBuffer(
-      int index,
-      const uint8_t* data,
-      size_t data_size,
-      const base::TimeDelta& presentation_time) override;
+  MediaCodecStatus Flush() override;
+  MediaCodecStatus GetOutputSize(gfx::Size* size) override;
+  MediaCodecStatus GetOutputSamplingRate(int* sampling_rate) override;
+  MediaCodecStatus GetOutputChannelCount(int* channel_count) override;
+  MediaCodecStatus QueueInputBuffer(int index,
+                                    const uint8_t* data,
+                                    size_t data_size,
+                                    base::TimeDelta presentation_time) override;
   using MediaCodecBridge::QueueSecureInputBuffer;
   MediaCodecStatus QueueSecureInputBuffer(
       int index,
@@ -48,11 +48,12 @@ class MEDIA_EXPORT SdkMediaCodecBridge : public MediaCodecBridge {
       const std::vector<char>& iv,
       const SubsampleEntry* subsamples,
       int subsamples_size,
-      const base::TimeDelta& presentation_time) override;
+      const EncryptionScheme& encryption_scheme,
+      base::TimeDelta presentation_time) override;
   void QueueEOS(int input_buffer_index) override;
-  MediaCodecStatus DequeueInputBuffer(const base::TimeDelta& timeout,
+  MediaCodecStatus DequeueInputBuffer(base::TimeDelta timeout,
                                       int* index) override;
-  MediaCodecStatus DequeueOutputBuffer(const base::TimeDelta& timeout,
+  MediaCodecStatus DequeueOutputBuffer(base::TimeDelta timeout,
                                        int* index,
                                        size_t* offset,
                                        size_t* size,
@@ -60,27 +61,20 @@ class MEDIA_EXPORT SdkMediaCodecBridge : public MediaCodecBridge {
                                        bool* end_of_stream,
                                        bool* key_frame) override;
   void ReleaseOutputBuffer(int index, bool render) override;
-  int GetOutputBuffersCount() override;
-  size_t GetOutputBuffersCapacity() override;
-  void GetInputBuffer(int input_buffer_index,
-                      uint8_t** data,
-                      size_t* capacity) override;
-  bool CopyFromOutputBuffer(int index,
-                            size_t offset,
-                            void* dst,
-                            int dst_size) override;
-
-  static bool RegisterSdkMediaCodecBridge(JNIEnv* env);
+  MediaCodecStatus GetInputBuffer(int input_buffer_index,
+                                  uint8_t** data,
+                                  size_t* capacity) override;
+  MediaCodecStatus GetOutputBufferAddress(int index,
+                                          size_t offset,
+                                          const uint8_t** addr,
+                                          size_t* capacity) override;
+  std::string GetName() override;
 
  protected:
   SdkMediaCodecBridge(const std::string& mime,
                       bool is_secure,
-                      MediaCodecDirection direction);
-
-  // Called to get the buffer address given the output buffer index and offset.
-  // This function returns the size of the output and |addr| is the pointer to
-  // the address to read.
-  int GetOutputBufferAddress(int index, size_t offset, void** addr);
+                      MediaCodecDirection direction,
+                      bool require_software_codec);
 
   jobject media_codec() { return j_media_codec_.obj(); }
   MediaCodecDirection direction_;
@@ -104,7 +98,13 @@ class MEDIA_EXPORT AudioCodecBridge : public SdkMediaCodecBridge {
   // See MediaCodecUtil::IsKnownUnaccelerated().
   static bool IsKnownUnaccelerated(const AudioCodec& codec);
 
-  // Start the audio codec bridge.
+  // Starts the audio codec bridge.
+  bool ConfigureAndStart(const AudioDecoderConfig& config,
+                         jobject media_crypto);
+
+  // An overloaded variant used by AudioDecoderJob and AudioMediaCodecDecoder.
+  // TODO(timav): Modify the above mentioned classes to pass parameters as
+  // AudioDecoderConfig and remove this method.
   bool ConfigureAndStart(const AudioCodec& codec,
                          int sample_rate,
                          int channel_count,
@@ -112,24 +112,7 @@ class MEDIA_EXPORT AudioCodecBridge : public SdkMediaCodecBridge {
                          size_t extra_data_size,
                          int64_t codec_delay_ns,
                          int64_t seek_preroll_ns,
-                         bool play_audio,
                          jobject media_crypto) WARN_UNUSED_RESULT;
-
-  // Plays the output buffer right away or save for later playback if |postpone|
-  // is set to true. This call must be called after DequeueOutputBuffer() and
-  // before ReleaseOutputBuffer. The data is extracted from the output buffers
-  // using |index|, |size| and |offset|. Returns the playback head position
-  // expressed in frames.
-  // When |postpone| is set to true, the next PlayOutputBuffer() should have
-  // postpone == false, and it will play two buffers: the postponed one and
-  // the one identified by |index|.
-  int64_t PlayOutputBuffer(int index,
-                           size_t size,
-                           size_t offset,
-                           bool postpone = false);
-
-  // Set the volume of the audio output.
-  void SetVolume(double volume);
 
  private:
   explicit AudioCodecBridge(const std::string& mime);
@@ -154,11 +137,17 @@ class MEDIA_EXPORT VideoCodecBridge : public SdkMediaCodecBridge {
 
   // Create, start, and return a VideoCodecBridge decoder or NULL on failure.
   static VideoCodecBridge* CreateDecoder(
-      const VideoCodec& codec,  // e.g. media::kCodecVP8
-      bool is_secure,
+      const VideoCodec& codec,
+      bool is_secure,         // Will be used with encrypted content.
       const gfx::Size& size,  // Output frame size.
       jobject surface,        // Output surface, optional.
-      jobject media_crypto);  // MediaCrypto object, optional.
+      jobject media_crypto,   // MediaCrypto object, optional.
+      // Codec specific data. See MediaCodec docs.
+      const std::vector<uint8_t>& csd0,
+      const std::vector<uint8_t>& csd1,
+      // Should adaptive playback be allowed if supported.
+      bool allow_adaptive_playback = true,
+      bool require_software_codec = false);
 
   // Create, start, and return a VideoCodecBridge encoder or NULL on failure.
   static VideoCodecBridge* CreateEncoder(
@@ -169,12 +158,16 @@ class MEDIA_EXPORT VideoCodecBridge : public SdkMediaCodecBridge {
       int i_frame_interval,     // count
       int color_format);        // MediaCodecInfo.CodecCapabilities.
 
-  void SetVideoBitrate(int bps);
+  void SetVideoBitrate(int bps, int frame_rate);
   void RequestKeyFrameSoon();
 
   // Returns whether adaptive playback is supported for this object given
   // the new size.
   bool IsAdaptivePlaybackSupported(int width, int height);
+
+  // Changes the output surface for the MediaCodec. May only be used on API
+  // level 23 and higher (Marshmallow).
+  bool SetSurface(jobject surface);
 
   // Test-only method to set the return value of IsAdaptivePlaybackSupported().
   // Without this function, the return value of that function will be device
@@ -189,7 +182,8 @@ class MEDIA_EXPORT VideoCodecBridge : public SdkMediaCodecBridge {
  private:
   VideoCodecBridge(const std::string& mime,
                    bool is_secure,
-                   MediaCodecDirection direction);
+                   MediaCodecDirection direction,
+                   bool require_software_codec);
 
   int adaptive_playback_supported_for_testing_;
 };

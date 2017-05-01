@@ -7,25 +7,26 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "content/common/id_type.h"
+#include "gpu/command_buffer/common/id_type.h"
 #include "url/gurl.h"
 
 namespace content {
 
 class SavePackage;
-using SavePackageId = IdType32<SavePackage>;
+using SavePackageId = gpu::IdType32<SavePackage>;
 
 class SaveItem;
-using SaveItemId = IdType32<SaveItem>;
+using SaveItemId = gpu::IdType32<SaveItem>;
 
 // Map from save_item_id into final file path.
-using FinalNamesMap = std::map<SaveItemId, base::FilePath>;
+using FinalNamesMap =
+    std::unordered_map<SaveItemId, base::FilePath, SaveItemId::Hasher>;
 
 // This structure is used to handle and deliver some info
 // when processing each save item job.
@@ -38,9 +39,6 @@ struct SaveFileCreateInfo {
     // This type indicates the save item needs to be retrieved from serializing
     // DOM.
     SAVE_FILE_FROM_DOM,
-    // This type indicates the save item needs to be retrieved from local file
-    // system.
-    SAVE_FILE_FROM_FILE
   };
 
   // Constructor for SAVE_FILE_FROM_DOM and/or SAVE_FILE_FROM_FILE.
@@ -62,6 +60,8 @@ struct SaveFileCreateInfo {
                      int request_id,
                      const std::string& content_disposition,
                      int64_t total_bytes);
+
+  SaveFileCreateInfo(const SaveFileCreateInfo& other);
 
   ~SaveFileCreateInfo();
 

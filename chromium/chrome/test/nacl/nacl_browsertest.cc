@@ -18,7 +18,6 @@
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -26,6 +25,10 @@
 #include "components/nacl/browser/nacl_browser.h"
 #include "components/nacl/common/nacl_switches.h"
 #include "content/public/common/content_switches.h"
+
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif
 
 namespace {
 
@@ -152,8 +155,13 @@ NACL_BROWSER_TEST_F(NaClBrowserTest, MAYBE_CrashPPAPIOffMainThread, {
 IN_PROC_BROWSER_TEST_F(NaClBrowserTestNewlib, IrtManifestFile) {
   RunNaClIntegrationTest(FILE_PATH_LITERAL("irt_manifest_file_test.html"));
 }
-IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclNonSfi,
-                       MAYBE_PNACL_NONSFI(IrtManifestFile)) {
+#if defined(OS_LINUX)
+// http://crbug.com/579804
+#define MAYBE_IrtManifestFile DISABLED_IrtManifestFile
+#else
+#define MAYBE_IrtManifestFile MAYBE_PNACL_NONSFI(IrtManifestFile)
+#endif
+IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclNonSfi, MAYBE_IrtManifestFile) {
   RunNaClIntegrationTest(FILE_PATH_LITERAL("irt_manifest_file_test.html"));
 }
 
@@ -166,8 +174,13 @@ IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclNonSfi,
 IN_PROC_BROWSER_TEST_F(NaClBrowserTestNewlib, MAYBE_IrtException) {
   RunNaClIntegrationTest(FILE_PATH_LITERAL("irt_exception_test.html"));
 }
-IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclNonSfi,
-                       MAYBE_PNACL_NONSFI(IrtException)) {
+#if defined(OS_LINUX)
+// http://crbug.com/579804
+#define MAYBE_IrtException2 DISABLED_IrtException
+#else
+#define MAYBE_IrtException2 MAYBE_PNACL_NONSFI(IrtException)
+#endif
+IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclNonSfi, MAYBE_IrtException2) {
   RunNaClIntegrationTest(FILE_PATH_LITERAL("irt_exception_test.html"));
 }
 
@@ -182,7 +195,8 @@ base::FilePath::StringType NumberOfCoresAsFilePathString() {
   long nprocessors = sysconf(_SC_NPROCESSORS_ONLN);
 #if TELEMETRY
   fprintf(stderr, "browser says nprocessors = %ld\n", nprocessors);
-  fflush(NULL);
+  // crbug.com/597899
+  fflush(stderr);
 #endif
   snprintf(string_rep, sizeof string_rep, "%ld", nprocessors);
   return string_rep;
@@ -195,7 +209,8 @@ base::FilePath::StringType NumberOfCoresAsFilePathString() {
 #if TELEMETRY
   fprintf(stderr, "browser says nprocessors = %lu\n",
           system_info.dwNumberOfProcessors);
-  fflush(NULL);
+  // crbug.com/597899
+  fflush(stderr);
 #endif
   _snwprintf_s(string_rep, sizeof string_rep / sizeof string_rep[0], _TRUNCATE,
                L"%u", system_info.dwNumberOfProcessors);
@@ -206,11 +221,12 @@ base::FilePath::StringType NumberOfCoresAsFilePathString() {
 #if TELEMETRY
 static void PathTelemetry(base::FilePath::StringType const &path) {
 # if defined(OS_WIN)
-    fwprintf(stderr, L"path = %s\n", path.c_str());
+  fwprintf(stderr, L"path = %s\n", path.c_str());
 # else
-    fprintf(stderr, "path = %s\n", path.c_str());
+  fprintf(stderr, "path = %s\n", path.c_str());
 # endif
-    fflush(NULL);
+  // crbug.com/597899
+  fflush(stderr);
 }
 #else
 static void PathTelemetry(base::FilePath::StringType const &path) {
@@ -293,7 +309,7 @@ class NaClBrowserTestPnaclDebug : public NaClBrowserTestPnacl {
 
   void RunWithTestDebugger(const base::FilePath::StringType& test_url) {
     base::Process test_script;
-    scoped_ptr<base::Environment> env(base::Environment::Create());
+    std::unique_ptr<base::Environment> env(base::Environment::Create());
     nacl::NaClBrowser::GetInstance()->SetGdbDebugStubPortListener(
         base::Bind(&NaClBrowserTestPnaclDebug::StartTestScript,
                    base::Unretained(this), &test_script));

@@ -12,10 +12,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/win/scoped_handle.h"
-
-extern "C" {
-#include "third_party/lzma_sdk/Types.h"
-}
+#include "third_party/lzma_sdk/7zTypes.h"
 
 // File mapping memory management class which supports multiple allocations in
 // series, but not in parallel. It creates a unique temporary file within
@@ -29,6 +26,7 @@ class LzmaFileAllocator : public ISzAlloc {
  public:
   explicit LzmaFileAllocator(const base::FilePath& temp_directory);
   ~LzmaFileAllocator();
+  bool IsAddressMapped(uintptr_t address) const;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(LzmaFileAllocatorTest, ErrorAndFallbackTest);
@@ -48,6 +46,9 @@ class LzmaFileAllocator : public ISzAlloc {
   base::FilePath mapped_file_path_;
   base::File mapped_file_;
   base::win::ScopedHandle file_mapping_handle_;
+
+  uintptr_t mapped_start_address_ = 0;
+  size_t mapped_size_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(LzmaFileAllocator);
 };

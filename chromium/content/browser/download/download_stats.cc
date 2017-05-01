@@ -5,7 +5,7 @@
 #include "content/browser/download/download_stats.h"
 
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/strings/string_util.h"
 #include "content/browser/download/download_resource_handler.h"
@@ -70,9 +70,9 @@ void RecordContentDispositionCountFlag(
 }
 
 // Do not insert, delete, or reorder; this is being histogrammed. Append only.
-// All of the download_extensions.cc file types should be in this list.
-// TODO(asanka): This enum and the UMA metrics for dangerous/malicious downloads
-// should be moved to //chrome/browser/download.
+// All of the download_file_types.asciipb entries should be in this list.
+// TODO(asanka): Replace this enum with calls to FileTypePolicies and move the
+// UMA metrics for dangerous/malicious downloads to //chrome/browser/download.
 const base::FilePath::CharType* kDangerousFileTypes[] = {
   FILE_PATH_LITERAL(".ad"),
   FILE_PATH_LITERAL(".ade"),
@@ -320,6 +320,21 @@ const base::FilePath::CharType* kDangerousFileTypes[] = {
   FILE_PATH_LITERAL(".zip"),
   FILE_PATH_LITERAL(".zipx"),
   FILE_PATH_LITERAL(".zpaq"),
+  FILE_PATH_LITERAL(".cdr"),
+  FILE_PATH_LITERAL(".dart"),
+  FILE_PATH_LITERAL(".dc42"),
+  FILE_PATH_LITERAL(".diskcopy42"),
+  FILE_PATH_LITERAL(".dmg"),
+  FILE_PATH_LITERAL(".dmgpart"),
+  FILE_PATH_LITERAL(".dvdr"),
+  FILE_PATH_LITERAL(".img"),
+  FILE_PATH_LITERAL(".imgpart"),
+  FILE_PATH_LITERAL(".ndif"),
+  FILE_PATH_LITERAL(".smi"),
+  FILE_PATH_LITERAL(".sparsebundle"),
+  FILE_PATH_LITERAL(".sparseimage"),
+  FILE_PATH_LITERAL(".toast"),
+  FILE_PATH_LITERAL(".udif"),
 };
 
 // Maps extensions to their matching UMA histogram int value.
@@ -452,15 +467,6 @@ void RecordDangerousDownloadDiscard(DownloadDiscardReason reason,
     default:
       NOTREACHED();
   }
-}
-
-void RecordDownloadWriteSize(size_t data_len) {
-  int max = 1024 * 1024;  // One Megabyte.
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.WriteSize", data_len, 1, max, 256);
-}
-
-void RecordDownloadWriteLoopCount(int count) {
-  UMA_HISTOGRAM_ENUMERATION("Download.WriteLoopCount", count, 20);
 }
 
 void RecordAcceptsRanges(const std::string& accepts_ranges,
@@ -658,16 +664,6 @@ void RecordFileThreadReceiveBuffers(size_t num_buffers) {
       100, 100);
 }
 
-void RecordBandwidth(double actual_bandwidth, double potential_bandwidth) {
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
-      "Download.ActualBandwidth", actual_bandwidth, 1, 1000000000, 50);
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
-      "Download.PotentialBandwidth", potential_bandwidth, 1, 1000000000, 50);
-  UMA_HISTOGRAM_PERCENTAGE(
-      "Download.BandwidthUsed",
-      (int) ((actual_bandwidth * 100)/ potential_bandwidth));
-}
-
 void RecordOpen(const base::Time& end, bool first) {
   if (!end.is_null()) {
     UMA_HISTOGRAM_LONG_TIMES("Download.OpenTime", (base::Time::Now() - end));
@@ -678,18 +674,10 @@ void RecordOpen(const base::Time& end, bool first) {
   }
 }
 
-void RecordClearAllSize(int size) {
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.ClearAllSize",
-                              size,
-                              0/*min*/,
-                              (1 << 10)/*max*/,
-                              32/*num_buckets*/);
-}
-
 void RecordOpensOutstanding(int size) {
   UMA_HISTOGRAM_CUSTOM_COUNTS("Download.OpensOutstanding",
                               size,
-                              0/*min*/,
+                              1/*min*/,
                               (1 << 10)/*max*/,
                               64/*num_buckets*/);
 }
@@ -703,7 +691,7 @@ void RecordNetworkBlockage(base::TimeDelta resource_handler_lifetime,
                            base::TimeDelta resource_handler_blocked_time) {
   int percentage = 0;
   // Avoid division by zero errors.
-  if (resource_handler_blocked_time != base::TimeDelta()) {
+  if (!resource_handler_blocked_time.is_zero()) {
     percentage =
         resource_handler_blocked_time * 100 / resource_handler_lifetime;
   }
@@ -728,8 +716,6 @@ void RecordFileBandwidth(size_t length,
   UMA_HISTOGRAM_CUSTOM_COUNTS(
       "Download.BandwidthDiskBytesPerSecond",
       (1000 * length / disk_write_time_ms), 1, 50000000, 50);
-  UMA_HISTOGRAM_COUNTS_100("Download.DiskBandwidthUsedPercentage",
-                           disk_write_time_ms * 100 / elapsed_time_ms);
 }
 
 void RecordDownloadFileRenameResultAfterRetry(
@@ -758,6 +744,61 @@ void RecordOriginStateOnResumption(bool is_partial,
   else
     UMA_HISTOGRAM_ENUMERATION("Download.OriginStateOnFullResumption", state,
                               ORIGIN_STATE_ON_RESUMPTION_MAX);
+}
+
+namespace {
+
+// Enumeration for histogramming purposes.
+// DO NOT CHANGE THE ORDERING OF THESE VALUES.
+enum DownloadConnectionSecurity {
+  DOWNLOAD_SECURE,  // Final download url and its redirects all use https
+  DOWNLOAD_TARGET_INSECURE,  // Final download url uses http, redirects are all
+                             // https
+  DOWNLOAD_REDIRECT_INSECURE,  // Final download url uses https, but at least
+                               // one redirect uses http
+  DOWNLOAD_REDIRECT_TARGET_INSECURE,  // Final download url uses http, and at
+                                      // least one redirect uses http
+  DOWNLOAD_NONE_HTTPX,  // Final download url uses scheme other than http/https
+  DOWNLOAD_CONNECTION_SECURITY_MAX
+};
+
+}  // namespace
+
+void RecordDownloadConnectionSecurity(const GURL& download_url,
+                                      const std::vector<GURL>& url_chain) {
+  DownloadConnectionSecurity state =
+      DownloadConnectionSecurity::DOWNLOAD_NONE_HTTPX;
+  if (download_url.SchemeIsHTTPOrHTTPS()) {
+    bool is_final_download_secure = download_url.SchemeIsCryptographic();
+    bool is_redirect_chain_secure = true;
+    if (url_chain.size()>std::size_t(1)) {
+      for (std::size_t i = std::size_t(0); i < url_chain.size() - 1; i++) {
+        if (!url_chain[i].SchemeIsCryptographic()) {
+          is_redirect_chain_secure = false;
+          break;
+        }
+      }
+    }
+    state = is_final_download_secure
+                ? is_redirect_chain_secure ? DOWNLOAD_SECURE
+                                           : DOWNLOAD_REDIRECT_INSECURE
+                : is_redirect_chain_secure ? DOWNLOAD_TARGET_INSECURE
+                                           : DOWNLOAD_REDIRECT_TARGET_INSECURE;
+  }
+
+  UMA_HISTOGRAM_ENUMERATION("Download.TargetConnectionSecurity", state,
+                            DOWNLOAD_CONNECTION_SECURITY_MAX);
+}
+
+void RecordDownloadSourcePageTransitionType(
+    const base::Optional<ui::PageTransition>& page_transition) {
+  if (!page_transition)
+    return;
+
+  UMA_HISTOGRAM_ENUMERATION(
+      "Download.PageTransition",
+      ui::PageTransitionStripQualifier(page_transition.value()),
+      ui::PAGE_TRANSITION_LAST_CORE + 1);
 }
 
 }  // namespace content

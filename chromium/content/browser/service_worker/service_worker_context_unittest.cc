@@ -8,7 +8,9 @@
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/service_worker/embedded_worker_registry.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
@@ -18,6 +20,7 @@
 #include "content/browser/service_worker/service_worker_provider_host.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/service_worker/service_worker_storage.h"
+#include "content/browser/service_worker/service_worker_test_utils.h"
 #include "content/common/service_worker/embedded_worker_messages.h"
 #include "content/common/service_worker/service_worker_messages.h"
 #include "content/public/test/test_browser_thread_bundle.h"
@@ -58,7 +61,7 @@ void ExpectRegisteredWorkers(
     bool expect_waiting,
     bool expect_active,
     ServiceWorkerStatusCode status,
-    const scoped_refptr<ServiceWorkerRegistration>& registration) {
+    scoped_refptr<ServiceWorkerRegistration> registration) {
   ASSERT_EQ(expect_status, status);
   if (status != SERVICE_WORKER_OK) {
     EXPECT_FALSE(registration.get());
@@ -84,10 +87,9 @@ class RejectInstallTestHelper : public EmbeddedWorkerTestHelper {
 
   void OnInstallEvent(int embedded_worker_id,
                       int request_id) override {
-    SimulateSend(
-        new ServiceWorkerHostMsg_InstallEventFinished(
-            embedded_worker_id, request_id,
-            blink::WebServiceWorkerEventResultRejected));
+    SimulateSend(new ServiceWorkerHostMsg_InstallEventFinished(
+        embedded_worker_id, request_id,
+        blink::WebServiceWorkerEventResultRejected, true, base::Time::Now()));
   }
 };
 
@@ -96,10 +98,9 @@ class RejectActivateTestHelper : public EmbeddedWorkerTestHelper {
   RejectActivateTestHelper() : EmbeddedWorkerTestHelper(base::FilePath()) {}
 
   void OnActivateEvent(int embedded_worker_id, int request_id) override {
-    SimulateSend(
-        new ServiceWorkerHostMsg_ActivateEventFinished(
-            embedded_worker_id, request_id,
-            blink::WebServiceWorkerEventResultRejected));
+    SimulateSend(new ServiceWorkerHostMsg_ActivateEventFinished(
+        embedded_worker_id, request_id,
+        blink::WebServiceWorkerEventResultRejected, base::Time::Now()));
   }
 };
 
@@ -157,14 +158,50 @@ class ServiceWorkerContextTest : public ServiceWorkerContextObserver,
 
  protected:
   TestBrowserThreadBundle browser_thread_bundle_;
-  scoped_ptr<EmbeddedWorkerTestHelper> helper_;
+  std::unique_ptr<EmbeddedWorkerTestHelper> helper_;
   std::vector<NotificationLog> notifications_;
+};
+
+class RecordableEmbeddedWorkerInstanceClient
+    : public EmbeddedWorkerTestHelper::MockEmbeddedWorkerInstanceClient {
+ public:
+  enum class Message { StartWorker, StopWorker };
+
+  explicit RecordableEmbeddedWorkerInstanceClient(
+      base::WeakPtr<EmbeddedWorkerTestHelper> helper)
+      : EmbeddedWorkerTestHelper::MockEmbeddedWorkerInstanceClient(helper) {}
+
+  const std::vector<Message>& events() const { return events_; }
+
+ protected:
+  void StartWorker(
+      const EmbeddedWorkerStartParams& params,
+      mojom::ServiceWorkerEventDispatcherRequest request) override {
+    events_.push_back(Message::StartWorker);
+    EmbeddedWorkerTestHelper::MockEmbeddedWorkerInstanceClient::StartWorker(
+        params, std::move(request));
+  }
+
+  void StopWorker(const StopWorkerCallback& callback) override {
+    events_.push_back(Message::StopWorker);
+    EmbeddedWorkerTestHelper::MockEmbeddedWorkerInstanceClient::StopWorker(
+        std::move(callback));
+  }
+
+  std::vector<Message> events_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(RecordableEmbeddedWorkerInstanceClient);
 };
 
 // Make sure basic registration is working.
 TEST_F(ServiceWorkerContextTest, Register) {
   GURL pattern("http://www.example.com/");
   GURL script_url("http://www.example.com/service_worker.js");
+
+  RecordableEmbeddedWorkerInstanceClient* client = nullptr;
+  client = helper_->CreateAndRegisterMockInstanceClient<
+      RecordableEmbeddedWorkerInstanceClient>(helper_->AsWeakPtr());
 
   int64_t registration_id = kInvalidServiceWorkerRegistrationId;
   bool called = false;
@@ -178,15 +215,17 @@ TEST_F(ServiceWorkerContextTest, Register) {
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(called);
 
-  EXPECT_EQ(4UL, helper_->ipc_sink()->message_count());
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StartWorker::ID));
+  EXPECT_EQ(2UL, helper_->ipc_sink()->message_count());
+  ASSERT_EQ(2UL, client->events().size());
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StartWorker,
+            client->events()[0]);
   EXPECT_TRUE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_InstallEvent::ID));
   EXPECT_TRUE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_ActivateEvent::ID));
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StopWorker::ID));
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StopWorker,
+            client->events()[1]);
+
   EXPECT_NE(kInvalidServiceWorkerRegistrationId, registration_id);
 
   ASSERT_EQ(1u, notifications_.size());
@@ -214,6 +253,11 @@ TEST_F(ServiceWorkerContextTest, Register_RejectInstall) {
   helper_.reset();  // Make sure the process lookups stay overridden.
   helper_.reset(new RejectInstallTestHelper);
   helper_->context_wrapper()->AddObserver(this);
+
+  RecordableEmbeddedWorkerInstanceClient* client = nullptr;
+  client = helper_->CreateAndRegisterMockInstanceClient<
+      RecordableEmbeddedWorkerInstanceClient>(helper_->AsWeakPtr());
+
   int64_t registration_id = kInvalidServiceWorkerRegistrationId;
   bool called = false;
   context()->RegisterServiceWorker(
@@ -226,15 +270,17 @@ TEST_F(ServiceWorkerContextTest, Register_RejectInstall) {
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(called);
 
-  EXPECT_EQ(3UL, helper_->ipc_sink()->message_count());
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StartWorker::ID));
+  EXPECT_EQ(1UL, helper_->ipc_sink()->message_count());
+  ASSERT_EQ(2UL, client->events().size());
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StartWorker,
+            client->events()[0]);
   EXPECT_TRUE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_InstallEvent::ID));
   EXPECT_FALSE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_ActivateEvent::ID));
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StopWorker::ID));
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StopWorker,
+            client->events()[1]);
+
   EXPECT_NE(kInvalidServiceWorkerRegistrationId, registration_id);
 
   ASSERT_EQ(1u, notifications_.size());
@@ -261,6 +307,11 @@ TEST_F(ServiceWorkerContextTest, Register_RejectActivate) {
   helper_.reset();
   helper_.reset(new RejectActivateTestHelper);
   helper_->context_wrapper()->AddObserver(this);
+
+  RecordableEmbeddedWorkerInstanceClient* client = nullptr;
+  client = helper_->CreateAndRegisterMockInstanceClient<
+      RecordableEmbeddedWorkerInstanceClient>(helper_->AsWeakPtr());
+
   int64_t registration_id = kInvalidServiceWorkerRegistrationId;
   bool called = false;
   context()->RegisterServiceWorker(
@@ -271,15 +322,17 @@ TEST_F(ServiceWorkerContextTest, Register_RejectActivate) {
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(called);
 
-  EXPECT_EQ(4UL, helper_->ipc_sink()->message_count());
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StartWorker::ID));
+  EXPECT_EQ(2UL, helper_->ipc_sink()->message_count());
+  ASSERT_EQ(2UL, client->events().size());
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StartWorker,
+            client->events()[0]);
   EXPECT_TRUE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_InstallEvent::ID));
   EXPECT_TRUE(helper_->inner_ipc_sink()->GetUniqueMessageMatching(
       ServiceWorkerMsg_ActivateEvent::ID));
-  EXPECT_TRUE(helper_->ipc_sink()->GetUniqueMessageMatching(
-      EmbeddedWorkerMsg_StopWorker::ID));
+  EXPECT_EQ(RecordableEmbeddedWorkerInstanceClient::Message::StopWorker,
+            client->events()[1]);
+
   EXPECT_NE(kInvalidServiceWorkerRegistrationId, registration_id);
 
   ASSERT_EQ(1u, notifications_.size());
@@ -532,31 +585,39 @@ TEST_F(ServiceWorkerContextTest, ProviderHostIterator) {
   // Host1 (provider_id=1): process_id=1, origin1.
   ServiceWorkerProviderHost* host1(new ServiceWorkerProviderHost(
       kRenderProcessId1, MSG_ROUTING_NONE, provider_id++,
-      SERVICE_WORKER_PROVIDER_FOR_WINDOW, context()->AsWeakPtr(), nullptr));
+      SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+      ServiceWorkerProviderHost::FrameSecurityLevel::SECURE,
+      context()->AsWeakPtr(), nullptr));
   host1->SetDocumentUrl(kOrigin1);
 
   // Host2 (provider_id=2): process_id=2, origin2.
   ServiceWorkerProviderHost* host2(new ServiceWorkerProviderHost(
       kRenderProcessId2, MSG_ROUTING_NONE, provider_id++,
-      SERVICE_WORKER_PROVIDER_FOR_WINDOW, context()->AsWeakPtr(), nullptr));
+      SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+      ServiceWorkerProviderHost::FrameSecurityLevel::SECURE,
+      context()->AsWeakPtr(), nullptr));
   host2->SetDocumentUrl(kOrigin2);
 
   // Host3 (provider_id=3): process_id=2, origin1.
   ServiceWorkerProviderHost* host3(new ServiceWorkerProviderHost(
       kRenderProcessId2, MSG_ROUTING_NONE, provider_id++,
-      SERVICE_WORKER_PROVIDER_FOR_WINDOW, context()->AsWeakPtr(), nullptr));
+      SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+      ServiceWorkerProviderHost::FrameSecurityLevel::SECURE,
+      context()->AsWeakPtr(), nullptr));
   host3->SetDocumentUrl(kOrigin1);
 
   // Host4 (provider_id=4): process_id=2, origin2, for ServiceWorker.
   ServiceWorkerProviderHost* host4(new ServiceWorkerProviderHost(
       kRenderProcessId2, MSG_ROUTING_NONE, provider_id++,
-      SERVICE_WORKER_PROVIDER_FOR_CONTROLLER, context()->AsWeakPtr(), nullptr));
+      SERVICE_WORKER_PROVIDER_FOR_CONTROLLER,
+      ServiceWorkerProviderHost::FrameSecurityLevel::SECURE,
+      context()->AsWeakPtr(), nullptr));
   host4->SetDocumentUrl(kOrigin2);
 
-  context()->AddProviderHost(make_scoped_ptr(host1));
-  context()->AddProviderHost(make_scoped_ptr(host2));
-  context()->AddProviderHost(make_scoped_ptr(host3));
-  context()->AddProviderHost(make_scoped_ptr(host4));
+  context()->AddProviderHost(base::WrapUnique(host1));
+  context()->AddProviderHost(base::WrapUnique(host2));
+  context()->AddProviderHost(base::WrapUnique(host3));
+  context()->AddProviderHost(base::WrapUnique(host4));
 
   // Iterate over all provider hosts.
   std::set<ServiceWorkerProviderHost*> results;
@@ -602,22 +663,20 @@ class ServiceWorkerContextRecoveryTest
  public:
   ServiceWorkerContextRecoveryTest() {}
   virtual ~ServiceWorkerContextRecoveryTest() {}
-};
 
-INSTANTIATE_TEST_CASE_P(ServiceWorkerContextRecoveryTest,
-                        ServiceWorkerContextRecoveryTest,
-                        testing::Values(true, false));
+ protected:
+  bool is_storage_on_disk() const { return GetParam(); }
+};
 
 TEST_P(ServiceWorkerContextRecoveryTest, DeleteAndStartOver) {
   GURL pattern("http://www.example.com/");
   GURL script_url("http://www.example.com/service_worker.js");
 
-  bool is_storage_on_disk = GetParam();
-  if (is_storage_on_disk) {
+  if (is_storage_on_disk()) {
     // Reinitialize the helper to test on-disk storage.
     base::ScopedTempDir user_data_directory;
     ASSERT_TRUE(user_data_directory.CreateUniqueTempDir());
-    helper_.reset(new EmbeddedWorkerTestHelper(user_data_directory.path()));
+    helper_.reset(new EmbeddedWorkerTestHelper(user_data_directory.GetPath()));
     helper_->context_wrapper()->AddObserver(this);
   }
 
@@ -701,5 +760,8 @@ TEST_P(ServiceWorkerContextRecoveryTest, DeleteAndStartOver) {
   EXPECT_EQ(registration_id, notifications_[2].registration_id);
 }
 
+INSTANTIATE_TEST_CASE_P(ServiceWorkerContextRecoveryTest,
+                        ServiceWorkerContextRecoveryTest,
+                        testing::Bool());
 
 }  // namespace content

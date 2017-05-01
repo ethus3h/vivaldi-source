@@ -4,7 +4,6 @@
 
 #import "chrome/browser/web_applications/web_app_mac.h"
 
-#import <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
 #include <stdint.h>
 
@@ -15,13 +14,13 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/mac/foundation_util.h"
-#include "base/mac/launch_services_util.h"
+#import "base/mac/launch_services_util.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/metrics/sparse_histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string16.h"
@@ -38,12 +37,12 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/app_list/app_list_service.h"
-#include "chrome/browser/ui/cocoa/key_equivalent_constants.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #import "chrome/common/mac/app_mode_common.h"
+#include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/crx_file/id_util.h"
 #include "components/version_info/version_info.h"
@@ -51,13 +50,11 @@
 #include "content/public/common/content_switches.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
-#include "grit/chrome_unscaled_resources.h"
-#include "grit/components_strings.h"
 #import "skia/ext/skia_utils_mac.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/utils/mac/SkCGUtils.h"
 #include "ui/base/l10n/l10n_util.h"
-#import "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_family.h"
 
@@ -96,53 +93,33 @@ class Latch : public base::RefCountedThreadSafe<
   DISALLOW_COPY_AND_ASSIGN(Latch);
 };
 
-class ScopedCarbonHandle {
- public:
-  ScopedCarbonHandle(size_t initial_size) : handle_(NewHandle(initial_size)) {
-    DCHECK(handle_);
-    DCHECK_EQ(noErr, MemError());
+// Writes |icons| to |path| in .icns format.
+bool WriteIconsToFile(const std::vector<gfx::Image>& icons,
+                      const base::FilePath& path) {
+  base::scoped_nsobject<NSMutableData> data(
+      [[NSMutableData alloc] initWithCapacity:0]);
+  base::ScopedCFTypeRef<CGImageDestinationRef> image_destination(
+      CGImageDestinationCreateWithData(base::mac::NSToCFCast(data),
+                                       kUTTypeAppleICNS, icons.size(),
+                                       nullptr));
+  DCHECK(image_destination);
+  for (const gfx::Image& image : icons) {
+    base::ScopedCFTypeRef<CGImageRef> cg_image(SkCreateCGImageRefWithColorspace(
+        image.AsBitmap(), base::mac::GetSRGBColorSpace()));
+    CGImageDestinationAddImage(image_destination, cg_image, nullptr);
   }
-  ~ScopedCarbonHandle() { DisposeHandle(handle_); }
-
-  Handle Get() { return handle_; }
-  char* Data() { return *handle_; }
-  size_t HandleSize() const { return GetHandleSize(handle_); }
-
-  IconFamilyHandle GetAsIconFamilyHandle() {
-    return reinterpret_cast<IconFamilyHandle>(handle_);
+  if (!CGImageDestinationFinalize(image_destination)) {
+    NOTREACHED() << "CGImageDestinationFinalize failed.";
+    return false;
   }
-
-  bool WriteDataToFile(const base::FilePath& path) {
-    NSData* data = [NSData dataWithBytes:Data()
-                                  length:HandleSize()];
-    return [data writeToFile:base::mac::FilePathToNSString(path)
-                  atomically:NO];
-  }
-
- private:
-  Handle handle_;
-};
-
-void ConvertSkiaToARGB(const SkBitmap& bitmap, ScopedCarbonHandle* handle) {
-  CHECK_EQ(4u * bitmap.width() * bitmap.height(), handle->HandleSize());
-
-  char* argb = handle->Data();
-  SkAutoLockPixels lock(bitmap);
-  for (int y = 0; y < bitmap.height(); ++y) {
-    for (int x = 0; x < bitmap.width(); ++x) {
-      SkColor pixel = bitmap.getColor(x, y);
-      argb[0] = SkColorGetA(pixel);
-      argb[1] = SkColorGetR(pixel);
-      argb[2] = SkColorGetG(pixel);
-      argb[3] = SkColorGetB(pixel);
-      argb += 4;
-    }
-  }
+  return [data writeToFile:base::mac::FilePathToNSString(path) atomically:NO];
 }
 
-// Adds |image| to |icon_family|. Returns true on success, false on failure.
-bool AddGfxImageToIconFamily(IconFamilyHandle icon_family,
-                             const gfx::Image& image) {
+// Returns true if |image| can be used for an icon resource.
+bool IsImageValidForIcon(const gfx::Image& image) {
+  if (image.IsEmpty())
+    return false;
+
   // When called via ShowCreateChromeAppShortcutsDialog the ImageFamily will
   // have all the representations desired here for mac, from the kDesiredSizes
   // array in web_app.cc.
@@ -152,35 +129,16 @@ bool AddGfxImageToIconFamily(IconFamilyHandle icon_family,
     return false;
   }
 
-  OSType icon_type;
   switch (bitmap.width()) {
     case 512:
-      icon_type = kIconServices512PixelDataARGB;
-      break;
     case 256:
-      icon_type = kIconServices256PixelDataARGB;
-      break;
     case 128:
-      icon_type = kIconServices128PixelDataARGB;
-      break;
     case 48:
-      icon_type = kIconServices48PixelDataARGB;
-      break;
     case 32:
-      icon_type = kIconServices32PixelDataARGB;
-      break;
     case 16:
-      icon_type = kIconServices16PixelDataARGB;
-      break;
-    default:
-      return false;
+      return true;
   }
-
-  ScopedCarbonHandle raw_data(bitmap.getSize());
-  ConvertSkiaToARGB(bitmap, &raw_data);
-  OSErr result = SetIconFamilyData(icon_family, icon_type, raw_data.Get());
-  DCHECK_EQ(noErr, result);
-  return result == noErr;
+  return false;
 }
 
 bool AppShimsDisabledForTest() {
@@ -255,8 +213,9 @@ bool HasSameUserDataDir(const base::FilePath& bundle_path) {
       user_data_dir.value(), base::CompareCase::SENSITIVE);
 }
 
-void LaunchShimOnFileThread(scoped_ptr<web_app::ShortcutInfo> shortcut_info,
-                            bool launched_after_rebuild) {
+void LaunchShimOnFileThread(
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info,
+    bool launched_after_rebuild) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::FILE);
   base::FilePath shim_path = web_app::GetAppInstallPath(*shortcut_info);
 
@@ -279,9 +238,10 @@ void LaunchShimOnFileThread(scoped_ptr<web_app::ShortcutInfo> shortcut_info,
       base::IntToString(base::GetCurrentProcId()));
   if (launched_after_rebuild)
     command_line.AppendSwitch(app_mode::kLaunchedAfterRebuild);
-  // Launch without activating (kLSLaunchDontSwitch).
+  // Launch without activating (NSWorkspaceLaunchWithoutActivation).
   base::mac::OpenApplicationWithPath(
-      shim_path, command_line, kLSLaunchDefaults | kLSLaunchDontSwitch, NULL);
+      shim_path, command_line,
+      NSWorkspaceLaunchDefault | NSWorkspaceLaunchWithoutActivation);
 }
 
 base::FilePath GetAppLoaderPath() {
@@ -306,7 +266,7 @@ void UpdatePlatformShortcutsInternal(
 }
 
 void UpdateAndLaunchShimOnFileThread(
-    scoped_ptr<web_app::ShortcutInfo> shortcut_info,
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info,
     const extensions::FileHandlersInfo& file_handlers_info) {
   base::FilePath shortcut_data_dir = web_app::GetWebAppDataDirectory(
       shortcut_info->profile_path, shortcut_info->extension_id, GURL());
@@ -316,7 +276,7 @@ void UpdateAndLaunchShimOnFileThread(
 }
 
 void UpdateAndLaunchShim(
-    scoped_ptr<web_app::ShortcutInfo> shortcut_info,
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info,
     const extensions::FileHandlersInfo& file_handlers_info) {
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE, FROM_HERE,
@@ -324,11 +284,10 @@ void UpdateAndLaunchShim(
                  file_handlers_info));
 }
 
-void RebuildAppAndLaunch(scoped_ptr<web_app::ShortcutInfo> shortcut_info) {
+void RebuildAppAndLaunch(std::unique_ptr<web_app::ShortcutInfo> shortcut_info) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (shortcut_info->extension_id == app_mode::kAppListModeId) {
-    AppListService* app_list_service =
-        AppListService::Get(chrome::HOST_DESKTOP_TYPE_NATIVE);
+    AppListService* app_list_service = AppListService::Get();
     app_list_service->CreateShortcut();
     app_list_service->Show();
     return;
@@ -435,7 +394,8 @@ void UpdateAppShortcutsSubdirLocalizedName(
     return;
 
   base::FilePath directory_name = apps_directory.BaseName().RemoveExtension();
-  base::string16 localized_name = ShellIntegration::GetAppShortcutsSubdirName();
+  base::string16 localized_name =
+      shell_integration::GetAppShortcutsSubdirName();
   NSDictionary* strings_dict = @{
       base::mac::FilePathToNSString(directory_name) :
           base::SysUTF16ToNSString(localized_name)
@@ -520,11 +480,12 @@ std::vector<base::FilePath> GetAllAppBundlesInPath(
   return bundle_paths;
 }
 
-scoped_ptr<web_app::ShortcutInfo> BuildShortcutInfoFromBundle(
+std::unique_ptr<web_app::ShortcutInfo> BuildShortcutInfoFromBundle(
     const base::FilePath& bundle_path) {
   NSDictionary* plist = ReadPlist(GetPlistPath(bundle_path));
 
-  scoped_ptr<web_app::ShortcutInfo> shortcut_info(new web_app::ShortcutInfo);
+  std::unique_ptr<web_app::ShortcutInfo> shortcut_info(
+      new web_app::ShortcutInfo);
   shortcut_info->extension_id = base::SysNSStringToUTF8(
       [plist valueForKey:app_mode::kCrAppModeShortcutIDKey]);
   shortcut_info->is_platform_app = true;
@@ -549,7 +510,7 @@ scoped_ptr<web_app::ShortcutInfo> BuildShortcutInfoFromBundle(
   return shortcut_info;
 }
 
-scoped_ptr<web_app::ShortcutInfo> RecordAppShimErrorAndBuildShortcutInfo(
+std::unique_ptr<web_app::ShortcutInfo> RecordAppShimErrorAndBuildShortcutInfo(
     const base::FilePath& bundle_path) {
   NSDictionary* plist = ReadPlist(GetPlistPath(bundle_path));
   NSString* version_string = [plist valueForKey:app_mode::kCrBundleVersionKey];
@@ -567,51 +528,8 @@ scoped_ptr<web_app::ShortcutInfo> RecordAppShimErrorAndBuildShortcutInfo(
   return BuildShortcutInfoFromBundle(bundle_path);
 }
 
-void UpdateFileTypes(NSMutableDictionary* plist,
-                     const extensions::FileHandlersInfo& file_handlers_info) {
-  NSMutableArray* document_types =
-      [NSMutableArray arrayWithCapacity:file_handlers_info.size()];
-
-  for (extensions::FileHandlersInfo::const_iterator info_it =
-           file_handlers_info.begin();
-       info_it != file_handlers_info.end();
-       ++info_it) {
-    const extensions::FileHandlerInfo& info = *info_it;
-
-    NSMutableArray* file_extensions =
-        [NSMutableArray arrayWithCapacity:info.extensions.size()];
-    for (std::set<std::string>::iterator it = info.extensions.begin();
-         it != info.extensions.end();
-         ++it) {
-      [file_extensions addObject:base::SysUTF8ToNSString(*it)];
-    }
-
-    NSMutableArray* mime_types =
-        [NSMutableArray arrayWithCapacity:info.types.size()];
-    for (std::set<std::string>::iterator it = info.types.begin();
-         it != info.types.end();
-         ++it) {
-      [mime_types addObject:base::SysUTF8ToNSString(*it)];
-    }
-
-    NSDictionary* type_dictionary = @{
-      // TODO(jackhou): Add the type name and and icon file once the manifest
-      // supports these.
-      // app_mode::kCFBundleTypeNameKey : ,
-      // app_mode::kCFBundleTypeIconFileKey : ,
-      app_mode::kCFBundleTypeExtensionsKey : file_extensions,
-      app_mode::kCFBundleTypeMIMETypesKey : mime_types,
-      app_mode::kCFBundleTypeRoleKey : app_mode::kBundleTypeRoleViewer
-    };
-    [document_types addObject:type_dictionary];
-  }
-
-  [plist setObject:document_types
-            forKey:app_mode::kCFBundleDocumentTypesKey];
-}
-
 void RevealAppShimInFinderForAppOnFileThread(
-    scoped_ptr<web_app::ShortcutInfo> shortcut_info,
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info,
     const base::FilePath& app_path) {
   web_app::WebAppShortcutCreator shortcut_creator(
       app_path, shortcut_info.get(), extensions::FileHandlersInfo());
@@ -632,50 +550,6 @@ bool ShouldUpgradeShortcutFor(Profile* profile,
 }
 
 }  // namespace
-
-@interface CrCreateAppShortcutCheckboxObserver : NSObject {
- @private
-  NSButton* checkbox_;
-  NSButton* continueButton_;
-}
-
-- (id)initWithCheckbox:(NSButton*)checkbox
-        continueButton:(NSButton*)continueButton;
-- (void)startObserving;
-- (void)stopObserving;
-@end
-
-@implementation CrCreateAppShortcutCheckboxObserver
-
-- (id)initWithCheckbox:(NSButton*)checkbox
-        continueButton:(NSButton*)continueButton {
-  if ((self = [super init])) {
-    checkbox_ = checkbox;
-    continueButton_ = continueButton;
-  }
-  return self;
-}
-
-- (void)startObserving {
-  [checkbox_ addObserver:self
-              forKeyPath:@"cell.state"
-                 options:0
-                 context:nil];
-}
-
-- (void)stopObserving {
-  [checkbox_ removeObserver:self
-                 forKeyPath:@"cell.state"];
-}
-
-- (void)observeValueForKeyPath:(NSString*)keyPath
-                      ofObject:(id)object
-                        change:(NSDictionary*)change
-                       context:(void*)context {
-  [continueButton_ setEnabled:([checkbox_ state] == NSOnState)];
-}
-
-@end
 
 namespace web_app {
 
@@ -738,7 +612,7 @@ size_t WebAppShortcutCreator::CreateShortcutsIn(
     return 0;
 
   base::FilePath app_name = GetShortcutBasename();
-  base::FilePath staging_path = scoped_temp_dir.path().Append(app_name);
+  base::FilePath staging_path = scoped_temp_dir.GetPath().Append(app_name);
   if (!BuildShortcut(staging_path))
     return 0;
 
@@ -975,11 +849,6 @@ bool WebAppShortcutCreator::UpdatePlist(const base::FilePath& app_path) const {
   [plist setObject:base::mac::FilePathToNSString(app_name)
             forKey:base::mac::CFToNSCast(kCFBundleNameKey)];
 
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableAppsFileAssociations)) {
-    UpdateFileTypes(plist, file_handlers_info_);
-  }
-
   return [plist writeToFile:plist_path
                  atomically:YES];
 }
@@ -1020,29 +889,20 @@ bool WebAppShortcutCreator::UpdateIcon(const base::FilePath& app_path) const {
   if (info_->favicon.empty())
     return true;
 
-  ScopedCarbonHandle icon_family(0);
-  bool image_added = false;
+  std::vector<gfx::Image> valid_icons;
   for (gfx::ImageFamily::const_iterator it = info_->favicon.begin();
        it != info_->favicon.end(); ++it) {
-    if (it->IsEmpty())
-      continue;
-
-    // Missing an icon size is not fatal so don't fail if adding the bitmap
-    // doesn't work.
-    if (!AddGfxImageToIconFamily(icon_family.GetAsIconFamilyHandle(), *it))
-      continue;
-
-    image_added = true;
+    if (IsImageValidForIcon(*it))
+      valid_icons.push_back(*it);
   }
-
-  if (!image_added)
+  if (valid_icons.empty())
     return false;
 
   base::FilePath resources_path = GetResourcesPath(app_path);
   if (!base::CreateDirectory(resources_path))
     return false;
 
-  return icon_family.WriteDataToFile(resources_path.Append("app.icns"));
+  return WriteIconsToFile(valid_icons, resources_path.Append("app.icns"));
 }
 
 bool WebAppShortcutCreator::UpdateInternalBundleIdentifier() const {
@@ -1119,7 +979,7 @@ base::FilePath GetAppInstallPath(const ShortcutInfo& shortcut_info) {
   return shortcut_creator.GetApplicationsShortcutPath();
 }
 
-void MaybeLaunchShortcut(scoped_ptr<ShortcutInfo> shortcut_info) {
+void MaybeLaunchShortcut(std::unique_ptr<ShortcutInfo> shortcut_info) {
   if (AppShimsDisabledForTest() &&
       !g_app_shims_allow_update_and_launch_in_tests) {
     return;
@@ -1143,68 +1003,6 @@ bool MaybeRebuildShortcut(const base::CommandLine& command_line) {
   return true;
 }
 
-// Called when the app's ShortcutInfo (with icon) is loaded when creating app
-// shortcuts.
-void CreateAppShortcutInfoLoaded(
-    Profile* profile,
-    const extensions::Extension* app,
-    const base::Callback<void(bool)>& close_callback,
-    scoped_ptr<ShortcutInfo> shortcut_info) {
-  base::scoped_nsobject<NSAlert> alert([[NSAlert alloc] init]);
-
-  NSButton* continue_button = [alert
-      addButtonWithTitle:l10n_util::GetNSString(IDS_CREATE_SHORTCUTS_COMMIT)];
-  [continue_button setKeyEquivalent:kKeyEquivalentReturn];
-
-  NSButton* cancel_button =
-      [alert addButtonWithTitle:l10n_util::GetNSString(IDS_CANCEL)];
-  [cancel_button setKeyEquivalent:kKeyEquivalentEscape];
-
-  [alert setMessageText:l10n_util::GetNSString(IDS_CREATE_SHORTCUTS_LABEL)];
-  [alert setAlertStyle:NSInformationalAlertStyle];
-
-  base::scoped_nsobject<NSButton> application_folder_checkbox(
-      [[NSButton alloc] initWithFrame:NSZeroRect]);
-  [application_folder_checkbox setButtonType:NSSwitchButton];
-  [application_folder_checkbox
-      setTitle:l10n_util::GetNSString(IDS_CREATE_SHORTCUTS_APP_FOLDER_CHKBOX)];
-  [application_folder_checkbox setState:NSOnState];
-  [application_folder_checkbox sizeToFit];
-
-  base::scoped_nsobject<CrCreateAppShortcutCheckboxObserver> checkbox_observer(
-      [[CrCreateAppShortcutCheckboxObserver alloc]
-          initWithCheckbox:application_folder_checkbox
-            continueButton:continue_button]);
-  [checkbox_observer startObserving];
-
-  [alert setAccessoryView:application_folder_checkbox];
-
-  const int kIconPreviewSizePixels = 128;
-  const int kIconPreviewTargetSize = 64;
-  const gfx::Image* icon = shortcut_info->favicon.GetBest(
-      kIconPreviewSizePixels, kIconPreviewSizePixels);
-
-  if (icon && !icon->IsEmpty()) {
-    NSImage* icon_image = icon->ToNSImage();
-    [icon_image
-        setSize:NSMakeSize(kIconPreviewTargetSize, kIconPreviewTargetSize)];
-    [alert setIcon:icon_image];
-  }
-
-  bool dialog_accepted = false;
-  if ([alert runModal] == NSAlertFirstButtonReturn &&
-      [application_folder_checkbox state] == NSOnState) {
-    dialog_accepted = true;
-    CreateShortcuts(
-        SHORTCUT_CREATION_BY_USER, ShortcutLocations(), profile, app);
-  }
-
-  [checkbox_observer stopObserving];
-
-  if (!close_callback.is_null())
-    close_callback.Run(dialog_accepted);
-}
-
 void UpdateShortcutsForAllApps(Profile* profile,
                                const base::Closure& callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -1217,7 +1015,7 @@ void UpdateShortcutsForAllApps(Profile* profile,
   scoped_refptr<Latch> latch = new Latch(callback);
 
   // Update all apps.
-  scoped_ptr<extensions::ExtensionSet> candidates =
+  std::unique_ptr<extensions::ExtensionSet> candidates =
       registry->GenerateInstalledExtensionsSet();
   for (auto& extension_refptr : *candidates) {
     const extensions::Extension* extension = extension_refptr.get();
@@ -1230,7 +1028,7 @@ void UpdateShortcutsForAllApps(Profile* profile,
 
 void RevealAppShimInFinderForApp(Profile* profile,
                                  const extensions::Extension* app) {
-  scoped_ptr<web_app::ShortcutInfo> shortcut_info =
+  std::unique_ptr<web_app::ShortcutInfo> shortcut_info =
       ShortcutInfoForExtensionAndProfile(app, profile);
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE, FROM_HERE,
@@ -1242,7 +1040,7 @@ namespace internals {
 
 bool CreatePlatformShortcuts(
     const base::FilePath& app_data_path,
-    scoped_ptr<ShortcutInfo> shortcut_info,
+    std::unique_ptr<ShortcutInfo> shortcut_info,
     const extensions::FileHandlersInfo& file_handlers_info,
     const ShortcutLocations& creation_locations,
     ShortcutCreationReason creation_reason) {
@@ -1256,7 +1054,7 @@ bool CreatePlatformShortcuts(
 }
 
 void DeletePlatformShortcuts(const base::FilePath& app_data_path,
-                             scoped_ptr<ShortcutInfo> shortcut_info) {
+                             std::unique_ptr<ShortcutInfo> shortcut_info) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::FILE);
   WebAppShortcutCreator shortcut_creator(app_data_path, shortcut_info.get(),
                                          extensions::FileHandlersInfo());
@@ -1266,7 +1064,7 @@ void DeletePlatformShortcuts(const base::FilePath& app_data_path,
 void UpdatePlatformShortcuts(
     const base::FilePath& app_data_path,
     const base::string16& old_app_title,
-    scoped_ptr<ShortcutInfo> shortcut_info,
+    std::unique_ptr<ShortcutInfo> shortcut_info,
     const extensions::FileHandlersInfo& file_handlers_info) {
   UpdatePlatformShortcutsInternal(app_data_path, old_app_title, *shortcut_info,
                                   file_handlers_info);
@@ -1279,7 +1077,7 @@ void DeleteAllShortcutsForProfile(const base::FilePath& profile_path) {
 
   for (std::vector<base::FilePath>::const_iterator it = bundles.begin();
        it != bundles.end(); ++it) {
-    scoped_ptr<web_app::ShortcutInfo> shortcut_info =
+    std::unique_ptr<web_app::ShortcutInfo> shortcut_info =
         BuildShortcutInfoFromBundle(*it);
     WebAppShortcutCreator shortcut_creator(it->DirName(), shortcut_info.get(),
                                            extensions::FileHandlersInfo());
@@ -1290,21 +1088,3 @@ void DeleteAllShortcutsForProfile(const base::FilePath& profile_path) {
 }  // namespace internals
 
 }  // namespace web_app
-
-namespace chrome {
-
-void ShowCreateChromeAppShortcutsDialog(
-    gfx::NativeWindow /*parent_window*/,
-    Profile* profile,
-    const extensions::Extension* app,
-    const base::Callback<void(bool)>& close_callback) {
-  web_app::GetShortcutInfoForApp(
-      app,
-      profile,
-      base::Bind(&web_app::CreateAppShortcutInfoLoaded,
-                 profile,
-                 app,
-                 close_callback));
-}
-
-}  // namespace chrome

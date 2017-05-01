@@ -8,27 +8,34 @@
 #include <stdint.h>
 #include <winsock2.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/win/object_watcher.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_with_source.h"
+#include "net/socket/socket_performance_watcher.h"
 
 namespace net {
 
 class AddressList;
 class IOBuffer;
 class IPEndPoint;
+class NetLog;
+struct NetLogSource;
 
 class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
                                 public base::win::ObjectWatcher::Delegate  {
  public:
-  TCPSocketWin(NetLog* net_log, const NetLog::Source& source);
+  TCPSocketWin(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLog* net_log,
+      const NetLogSource& source);
   ~TCPSocketWin() override;
 
   int Open(AddressFamily family);
@@ -43,7 +50,7 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
   int Bind(const IPEndPoint& address);
 
   int Listen(int backlog);
-  int Accept(scoped_ptr<TCPSocketWin>* socket,
+  int Accept(std::unique_ptr<TCPSocketWin>* socket,
              IPEndPoint* address,
              const CompletionCallback& callback);
 
@@ -64,7 +71,6 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
   // - SetExclusiveAddrUse().
   int SetDefaultOptionsForServer();
   // The commonly used options for client sockets and accepted sockets:
-  // - Increase the socket buffer sizes for WinXP;
   // - SetNoDelay(true);
   // - SetKeepAlive(true, 45).
   void SetDefaultOptionsForClient();
@@ -81,9 +87,7 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
 
   void Close();
 
-  // Setter/Getter methods for TCP FastOpen socket option.
-  // NOOPs since TCP FastOpen is not implemented in Windows.
-  bool UsingTCPFastOpen() const { return false; }
+  // NOOP since TCP FastOpen is not implemented in Windows.
   void EnableTCPFastOpenIfSupported() {}
 
   bool IsValid() const { return socket_ != INVALID_SOCKET; }
@@ -97,16 +101,16 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
   //
   // TCPClientSocket may attempt to connect to multiple addresses until it
   // succeeds in establishing a connection. The corresponding log will have
-  // multiple NetLog::TYPE_TCP_CONNECT_ATTEMPT entries nested within a
-  // NetLog::TYPE_TCP_CONNECT. These methods set the start/end of
-  // NetLog::TYPE_TCP_CONNECT.
+  // multiple NetLogEventType::TCP_CONNECT_ATTEMPT entries nested within a
+  // NetLogEventType::TCP_CONNECT. These methods set the start/end of
+  // NetLogEventType::TCP_CONNECT.
   //
   // TODO(yzshen): Change logging format and let TCPClientSocket log the
   // start/end of a series of connect attempts itself.
   void StartLoggingMultipleConnectAttempts(const AddressList& addresses);
   void EndLoggingMultipleConnectAttempts(int net_error);
 
-  const BoundNetLog& net_log() const { return net_log_; }
+  const NetLogWithSource& net_log() const { return net_log_; }
 
  private:
   class Core;
@@ -114,7 +118,7 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
   // base::ObjectWatcher::Delegate implementation.
   void OnObjectSignaled(HANDLE object) override;
 
-  int AcceptInternal(scoped_ptr<TCPSocketWin>* socket,
+  int AcceptInternal(std::unique_ptr<TCPSocketWin>* socket,
                      IPEndPoint* address);
 
   int DoConnect();
@@ -130,10 +134,13 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
 
   SOCKET socket_;
 
+  // |socket_performance_watcher_| may be nullptr.
+  std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher_;
+
   HANDLE accept_event_;
   base::win::ObjectWatcher accept_watcher_;
 
-  scoped_ptr<TCPSocketWin>* accept_socket_;
+  std::unique_ptr<TCPSocketWin>* accept_socket_;
   IPEndPoint* accept_address_;
   CompletionCallback accept_callback_;
 
@@ -153,13 +160,13 @@ class NET_EXPORT TCPSocketWin : NON_EXPORTED_BASE(public base::NonThreadSafe),
   // External callback; called when write is complete.
   CompletionCallback write_callback_;
 
-  scoped_ptr<IPEndPoint> peer_address_;
+  std::unique_ptr<IPEndPoint> peer_address_;
   // The OS error that a connect attempt last completed with.
   int connect_os_error_;
 
   bool logging_multiple_connect_attempts_;
 
-  BoundNetLog net_log_;
+  NetLogWithSource net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPSocketWin);
 };

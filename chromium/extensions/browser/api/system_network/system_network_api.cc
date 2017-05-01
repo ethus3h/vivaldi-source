@@ -4,8 +4,6 @@
 
 #include "extensions/browser/api/system_network/system_network_api.h"
 
-#include "net/base/ip_address_number.h"
-
 namespace {
 const char kNetworkListError[] = "Network lookup failed or unsupported";
 }  // namespace
@@ -21,14 +19,15 @@ SystemNetworkGetNetworkInterfacesFunction::
     ~SystemNetworkGetNetworkInterfacesFunction() {
 }
 
-bool SystemNetworkGetNetworkInterfacesFunction::RunAsync() {
+ExtensionFunction::ResponseAction
+SystemNetworkGetNetworkInterfacesFunction::Run() {
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE,
       FROM_HERE,
       base::Bind(
           &SystemNetworkGetNetworkInterfacesFunction::GetListOnFileThread,
           this));
-  return true;
+  return RespondLater();
 }
 
 void SystemNetworkGetNetworkInterfacesFunction::GetListOnFileThread() {
@@ -54,30 +53,25 @@ void SystemNetworkGetNetworkInterfacesFunction::GetListOnFileThread() {
 
 void SystemNetworkGetNetworkInterfacesFunction::HandleGetListError() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  error_ = kNetworkListError;
-  SendResponse(false);
+  Respond(Error(kNetworkListError));
 }
 
 void SystemNetworkGetNetworkInterfacesFunction::SendResponseOnUIThread(
     const net::NetworkInterfaceList& interface_list) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  std::vector<linked_ptr<api::system_network::NetworkInterface>> create_arg;
+  std::vector<api::system_network::NetworkInterface> create_arg;
   create_arg.reserve(interface_list.size());
-  for (net::NetworkInterfaceList::const_iterator i = interface_list.begin();
-       i != interface_list.end();
-       ++i) {
-    linked_ptr<api::system_network::NetworkInterface> info =
-        make_linked_ptr(new api::system_network::NetworkInterface);
-    info->name = i->name;
-    info->address = net::IPAddressToString(i->address);
-    info->prefix_length = i->prefix_length;
-    create_arg.push_back(info);
+  for (const net::NetworkInterface& interface : interface_list) {
+    api::system_network::NetworkInterface info;
+    info.name = interface.name;
+    info.address = interface.address.ToString();
+    info.prefix_length = interface.prefix_length;
+    create_arg.push_back(std::move(info));
   }
 
-  results_ =
-      api::system_network::GetNetworkInterfaces::Results::Create(create_arg);
-  SendResponse(true);
+  Respond(ArgumentList(
+      api::system_network::GetNetworkInterfaces::Results::Create(create_arg)));
 }
 
 }  // namespace api

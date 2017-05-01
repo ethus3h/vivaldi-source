@@ -4,12 +4,13 @@
 
 #include "net/server/web_socket_encoder.h"
 
+#include <limits>
 #include <utility>
 #include <vector>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "net/base/io_buffer.h"
 #include "net/websockets/websocket_deflate_parameters.h"
 #include "net/websockets/websocket_extension.h"
@@ -95,9 +96,9 @@ WebSocket::ParseResult DecodeFrameHybi17(const base::StringPiece& frame,
   uint64_t payload_length64 = second_byte & kPayloadLengthMask;
   if (payload_length64 > kMaxSingleBytePayloadLength) {
     int extended_payload_length_size;
-    if (payload_length64 == kTwoBytePayloadLengthField)
+    if (payload_length64 == kTwoBytePayloadLengthField) {
       extended_payload_length_size = 2;
-    else {
+    } else {
       DCHECK(payload_length64 == kEightBytePayloadLengthField);
       extended_payload_length_size = 8;
     }
@@ -185,12 +186,12 @@ void EncodeFrameHybi17(const std::string& message,
 }  // anonymous namespace
 
 // static
-scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateServer() {
-  return make_scoped_ptr(new WebSocketEncoder(FOR_SERVER, nullptr, nullptr));
+std::unique_ptr<WebSocketEncoder> WebSocketEncoder::CreateServer() {
+  return base::WrapUnique(new WebSocketEncoder(FOR_SERVER, nullptr, nullptr));
 }
 
 // static
-scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateServer(
+std::unique_ptr<WebSocketEncoder> WebSocketEncoder::CreateServer(
     const std::string& extensions,
     WebSocketDeflateParameters* deflate_parameters) {
   WebSocketExtensionParser parser;
@@ -217,26 +218,26 @@ scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateServer(
     }
     DCHECK(response.IsValidAsResponse());
     DCHECK(offer.IsCompatibleWith(response));
-    auto deflater = make_scoped_ptr(
-        new WebSocketDeflater(response.server_context_take_over_mode()));
-    auto inflater = make_scoped_ptr(
-        new WebSocketInflater(kInflaterChunkSize, kInflaterChunkSize));
+    auto deflater = base::MakeUnique<WebSocketDeflater>(
+        response.server_context_take_over_mode());
+    auto inflater = base::MakeUnique<WebSocketInflater>(kInflaterChunkSize,
+                                                        kInflaterChunkSize);
     if (!deflater->Initialize(response.PermissiveServerMaxWindowBits()) ||
         !inflater->Initialize(response.PermissiveClientMaxWindowBits())) {
       // For some reason we cannot accept the parameters.
       continue;
     }
     *deflate_parameters = response;
-    return make_scoped_ptr(new WebSocketEncoder(FOR_SERVER, std::move(deflater),
-                                                std::move(inflater)));
+    return base::WrapUnique(new WebSocketEncoder(
+        FOR_SERVER, std::move(deflater), std::move(inflater)));
   }
 
   // We cannot find an acceptable offer.
-  return make_scoped_ptr(new WebSocketEncoder(FOR_SERVER, nullptr, nullptr));
+  return base::WrapUnique(new WebSocketEncoder(FOR_SERVER, nullptr, nullptr));
 }
 
 // static
-scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateClient(
+std::unique_ptr<WebSocketEncoder> WebSocketEncoder::CreateClient(
     const std::string& response_extensions) {
   // TODO(yhirano): Add a way to return an error.
 
@@ -247,12 +248,12 @@ scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateClient(
     // 2) There is a malformed Sec-WebSocketExtensions header.
     // We should return a deflate-disabled encoder for the former case and
     // fail the connection for the latter case.
-    return make_scoped_ptr(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
+    return base::WrapUnique(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
   }
   if (parser.extensions().size() != 1) {
     // Only permessage-deflate extension is supported.
     // TODO (yhirano): Fail the connection.
-    return make_scoped_ptr(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
+    return base::WrapUnique(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
   }
   const auto& extension = parser.extensions()[0];
   WebSocketDeflateParameters params;
@@ -260,26 +261,26 @@ scoped_ptr<WebSocketEncoder> WebSocketEncoder::CreateClient(
   if (!params.Initialize(extension, &failure_message) ||
       !params.IsValidAsResponse(&failure_message)) {
     // TODO (yhirano): Fail the connection.
-    return make_scoped_ptr(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
+    return base::WrapUnique(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
   }
 
-  auto deflater = make_scoped_ptr(
-      new WebSocketDeflater(params.client_context_take_over_mode()));
-  auto inflater = make_scoped_ptr(
-      new WebSocketInflater(kInflaterChunkSize, kInflaterChunkSize));
+  auto deflater = base::MakeUnique<WebSocketDeflater>(
+      params.client_context_take_over_mode());
+  auto inflater = base::MakeUnique<WebSocketInflater>(kInflaterChunkSize,
+                                                      kInflaterChunkSize);
   if (!deflater->Initialize(params.PermissiveClientMaxWindowBits()) ||
       !inflater->Initialize(params.PermissiveServerMaxWindowBits())) {
     // TODO (yhirano): Fail the connection.
-    return make_scoped_ptr(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
+    return base::WrapUnique(new WebSocketEncoder(FOR_CLIENT, nullptr, nullptr));
   }
 
-  return make_scoped_ptr(new WebSocketEncoder(FOR_CLIENT, std::move(deflater),
-                                              std::move(inflater)));
+  return base::WrapUnique(new WebSocketEncoder(FOR_CLIENT, std::move(deflater),
+                                               std::move(inflater)));
 }
 
 WebSocketEncoder::WebSocketEncoder(Type type,
-                                   scoped_ptr<WebSocketDeflater> deflater,
-                                   scoped_ptr<WebSocketInflater> inflater)
+                                   std::unique_ptr<WebSocketDeflater> deflater,
+                                   std::unique_ptr<WebSocketInflater> inflater)
     : type_(type),
       deflater_(std::move(deflater)),
       inflater_(std::move(inflater)) {}

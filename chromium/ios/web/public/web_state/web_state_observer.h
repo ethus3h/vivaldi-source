@@ -20,6 +20,7 @@ struct Credential;
 struct FaviconURL;
 struct LoadCommittedDetails;
 class WebState;
+class TestWebState;
 class WebStateImpl;
 
 enum class PageLoadCompletionStatus : bool { SUCCESS = 0, FAILURE = 1 };
@@ -28,10 +29,6 @@ enum class PageLoadCompletionStatus : bool { SUCCESS = 0, FAILURE = 1 };
 // load events from WebState.
 class WebStateObserver {
  public:
-  // Key code associated to form events for which the key code is missing or
-  // irrelevant.
-  static int kInvalidFormKeyCode;
-
   // Returns the web state associated with this observer.
   WebState* web_state() const { return web_state_; }
 
@@ -76,19 +73,21 @@ class WebStateObserver {
 
   // Called when the user is typing on a form field, with |error| indicating if
   // there is any error when parsing the form field information.
-  // |key_code| may be kInvalidFormKeyCode if there is no key code.
   virtual void FormActivityRegistered(const std::string& form_name,
                                       const std::string& field_name,
                                       const std::string& type,
                                       const std::string& value,
-                                      int key_code,
                                       bool input_missing) {}
 
   // Invoked when new favicon URL candidates are received.
   virtual void FaviconUrlUpdated(const std::vector<FaviconURL>& candidates) {}
 
+  // Called when the web process is terminated (usually by crashing, though
+  // possibly by other means).
+  virtual void RenderProcessGone() {}
+
   // Notifies the observer that the credential manager API was invoked from
-  // |source_url| to request a credential from the browser. If |suppress_ui|
+  // |source_url| to request a credential from the browser. If |unmediated|
   // is true, the browser MUST NOT show any UI to the user. If this means that
   // no credential will be returned to the page, so be it. Otherwise, the
   // browser may show the user any UI that is necessary to get a Credential and
@@ -98,7 +97,7 @@ class WebStateObserver {
   // provide the specified |request_id|.
   virtual void CredentialsRequested(int request_id,
                                     const GURL& source_url,
-                                    bool suppress_ui,
+                                    bool unmediated,
                                     const std::vector<std::string>& federations,
                                     bool is_user_initiated) {}
 
@@ -156,6 +155,7 @@ class WebStateObserver {
 
  private:
   friend class WebStateImpl;
+  friend class TestWebState;
 
   // Stops observing the current web state.
   void ResetWebState();

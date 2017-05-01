@@ -9,18 +9,18 @@
 
 #include "chrome/installer/util/browser_distribution.h"
 
+#include <utility>
+
 #include "base/atomicops.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
 #include "chrome/common/chrome_icon_resources_win.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/installer/util/app_registration_data.h"
-#include "chrome/installer/util/chrome_frame_distribution.h"
-#include "chrome/installer/util/chromium_binaries_distribution.h"
-#include "chrome/installer/util/google_chrome_binaries_distribution.h"
 #include "chrome/installer/util/google_chrome_distribution.h"
 #include "chrome/installer/util/google_chrome_sxs_distribution.h"
 #include "chrome/installer/util/install_util.h"
@@ -28,7 +28,10 @@
 #include "chrome/installer/util/l10n_string_util.h"
 #include "chrome/installer/util/master_preferences.h"
 #include "chrome/installer/util/non_updating_app_registration_data.h"
+
 #include "chrome/installer/util/util_constants.h"
+
+#include "installer/util/vivaldi_install_util.h"
 
 using installer::MasterPreferences;
 
@@ -42,30 +45,21 @@ const wchar_t kCommandExecuteImplUuid[] =
 
 // The BrowserDistribution objects are never freed.
 BrowserDistribution* g_browser_distribution = NULL;
-BrowserDistribution* g_chrome_frame_distribution = NULL;
-BrowserDistribution* g_binaries_distribution = NULL;
-
-BrowserDistribution::Type GetCurrentDistributionType() {
-  return BrowserDistribution::CHROME_BROWSER;
-}
 
 }  // namespace
 
 BrowserDistribution::BrowserDistribution()
-    : type_(CHROME_BROWSER),
-      app_reg_data_(make_scoped_ptr(
+    : app_reg_data_(base::MakeUnique<NonUpdatingAppRegistrationData>(
 #if defined(VIVALDI_BUILD)
-          new NonUpdatingAppRegistrationData(L"Software\\Vivaldi")
+          L"Software\\Vivaldi"
 #else
-          new NonUpdatingAppRegistrationData(L"Software\\Chromium")
+          L"Software\\Chromium"
 #endif
-          )) {
-}
+          )) {}
 
 BrowserDistribution::BrowserDistribution(
-    Type type, scoped_ptr<AppRegistrationData> app_reg_data)
-    : type_(type), app_reg_data_(app_reg_data.Pass()) {
-}
+    std::unique_ptr<AppRegistrationData> app_reg_data)
+    : app_reg_data_(std::move(app_reg_data)) {}
 
 BrowserDistribution::~BrowserDistribution() {}
 
@@ -83,48 +77,22 @@ BrowserDistribution* BrowserDistribution::GetOrCreateBrowserDistribution(
   return *dist;
 }
 
-BrowserDistribution* BrowserDistribution::GetDistribution() {
-  return GetSpecificDistribution(GetCurrentDistributionType());
-}
-
 // static
-BrowserDistribution* BrowserDistribution::GetSpecificDistribution(
-    BrowserDistribution::Type type) {
+BrowserDistribution* BrowserDistribution::GetDistribution() {
   BrowserDistribution* dist = NULL;
 
-  switch (type) {
-    case CHROME_BROWSER:
 #if defined(GOOGLE_CHROME_BUILD)
-      if (InstallUtil::IsChromeSxSProcess()) {
-        dist = GetOrCreateBrowserDistribution<GoogleChromeSxSDistribution>(
-            &g_browser_distribution);
-      } else {
-        dist = GetOrCreateBrowserDistribution<GoogleChromeDistribution>(
-            &g_browser_distribution);
-      }
-#else
-      dist = GetOrCreateBrowserDistribution<BrowserDistribution>(
-          &g_browser_distribution);
-#endif
-      break;
-
-#ifndef OMIT_CHROME_FRAME
-    case CHROME_FRAME:
-      dist = GetOrCreateBrowserDistribution<ChromeFrameDistribution>(
-          &g_chrome_frame_distribution);
-      break;
-#endif
-
-    default:
-      DCHECK_EQ(CHROME_BINARIES, type);
-#if defined(GOOGLE_CHROME_BUILD)
-      dist = GetOrCreateBrowserDistribution<GoogleChromeBinariesDistribution>(
-          &g_binaries_distribution);
-#else
-      dist = GetOrCreateBrowserDistribution<ChromiumBinariesDistribution>(
-          &g_binaries_distribution);
-#endif
+  if (InstallUtil::IsChromeSxSProcess()) {
+    dist = GetOrCreateBrowserDistribution<GoogleChromeSxSDistribution>(
+        &g_browser_distribution);
+  } else {
+    dist = GetOrCreateBrowserDistribution<GoogleChromeDistribution>(
+        &g_browser_distribution);
   }
+#else
+  dist = GetOrCreateBrowserDistribution<BrowserDistribution>(
+      &g_browser_distribution);
+#endif
 
   return dist;
 }
@@ -150,8 +118,11 @@ base::string16 BrowserDistribution::GetVersionKey() const {
 }
 
 void BrowserDistribution::DoPostUninstallOperations(
-    const Version& version, const base::FilePath& local_data_path,
+    const base::Version& version, const base::FilePath& local_data_path,
     const base::string16& distribution_data) {
+#if defined(VIVALDI_BUILD)
+  vivaldi::DoPostUninstallOperations(version);
+#endif
 }
 
 base::string16 BrowserDistribution::GetActiveSetupGuid() {
@@ -163,24 +134,14 @@ base::string16 BrowserDistribution::GetBaseAppName() {
 }
 
 base::string16 BrowserDistribution::GetDisplayName() {
-  return GetShortcutName(SHORTCUT_CHROME);
+  return GetShortcutName();
 }
 
-base::string16 BrowserDistribution::GetShortcutName(
-    ShortcutType shortcut_type) {
-  switch (shortcut_type) {
-    case SHORTCUT_APP_LAUNCHER:
-      return installer::GetLocalizedString(IDS_APP_LIST_SHORTCUT_NAME_BASE);
-    default:
-      DCHECK_EQ(SHORTCUT_CHROME, shortcut_type);
-      return GetBaseAppName();
-  }
+base::string16 BrowserDistribution::GetShortcutName() {
+  return GetBaseAppName();
 }
 
-int BrowserDistribution::GetIconIndex(ShortcutType shortcut_type) {
-  if (shortcut_type == SHORTCUT_APP_LAUNCHER)
-    return icon_resources::kAppLauncherIndex;
-  DCHECK_EQ(SHORTCUT_CHROME, shortcut_type);
+int BrowserDistribution::GetIconIndex() {
   return icon_resources::kApplicationIndex;
 }
 
@@ -195,7 +156,7 @@ base::string16 BrowserDistribution::GetStartMenuShortcutSubfolder(
       return installer::GetLocalizedString(IDS_APP_SHORTCUTS_SUBDIR_NAME_BASE);
     default:
       DCHECK_EQ(SUBFOLDER_CHROME, subfolder_type);
-      return GetShortcutName(SHORTCUT_CHROME);
+      return GetShortcutName();
   }
 }
 

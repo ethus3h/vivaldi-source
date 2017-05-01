@@ -6,7 +6,6 @@
 #define ASH_TEST_MIRROR_WINDOW_TEST_API_H_
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 
 namespace aura {
 class Window;
@@ -18,7 +17,6 @@ class Point;
 }
 
 namespace ash {
-class RootWindowTransformer;
 
 namespace test {
 

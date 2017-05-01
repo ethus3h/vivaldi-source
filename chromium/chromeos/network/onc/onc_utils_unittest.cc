@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/json/json_file_value_serializer.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
@@ -21,15 +22,15 @@ namespace chromeos {
 
 namespace {
 
-scoped_ptr<base::Value> ReadTestJson(const std::string& filename) {
+std::unique_ptr<base::Value> ReadTestJson(const std::string& filename) {
   base::FilePath path;
-  scoped_ptr<base::Value> result;
+  std::unique_ptr<base::Value> result;
   if (!test_utils::GetTestDataPath("network", filename, &path)) {
     NOTREACHED() << "Unable to get test file path for: " << filename;
     return result;
   }
-  JSONFileValueDeserializer deserializer(path);
-  deserializer.set_allow_trailing_comma(true);
+  JSONFileValueDeserializer deserializer(path,
+                                         base::JSON_ALLOW_TRAILING_COMMAS);
   std::string error_message;
   result = deserializer.Deserialize(nullptr, &error_message);
   CHECK(result != nullptr) << "Couldn't json-deserialize file: " << filename
@@ -42,34 +43,34 @@ scoped_ptr<base::Value> ReadTestJson(const std::string& filename) {
 namespace onc {
 
 TEST(ONCDecrypterTest, BrokenEncryptionIterations) {
-  scoped_ptr<base::DictionaryValue> encrypted_onc =
+  std::unique_ptr<base::DictionaryValue> encrypted_onc =
       test_utils::ReadTestDictionary("broken-encrypted-iterations.onc");
 
-  scoped_ptr<base::DictionaryValue> decrypted_onc =
+  std::unique_ptr<base::DictionaryValue> decrypted_onc =
       Decrypt("test0000", *encrypted_onc);
 
   EXPECT_EQ(NULL, decrypted_onc.get());
 }
 
 TEST(ONCDecrypterTest, BrokenEncryptionZeroIterations) {
-  scoped_ptr<base::DictionaryValue> encrypted_onc =
+  std::unique_ptr<base::DictionaryValue> encrypted_onc =
       test_utils::ReadTestDictionary("broken-encrypted-zero-iterations.onc");
 
   std::string error;
-  scoped_ptr<base::DictionaryValue> decrypted_onc =
+  std::unique_ptr<base::DictionaryValue> decrypted_onc =
       Decrypt("test0000", *encrypted_onc);
 
   EXPECT_EQ(NULL, decrypted_onc.get());
 }
 
 TEST(ONCDecrypterTest, LoadEncryptedOnc) {
-  scoped_ptr<base::DictionaryValue> encrypted_onc =
+  std::unique_ptr<base::DictionaryValue> encrypted_onc =
       test_utils::ReadTestDictionary("encrypted.onc");
-  scoped_ptr<base::DictionaryValue> expected_decrypted_onc =
+  std::unique_ptr<base::DictionaryValue> expected_decrypted_onc =
       test_utils::ReadTestDictionary("decrypted.onc");
 
   std::string error;
-  scoped_ptr<base::DictionaryValue> actual_decrypted_onc =
+  std::unique_ptr<base::DictionaryValue> actual_decrypted_onc =
       Decrypt("test0000", *encrypted_onc);
 
   base::DictionaryValue emptyDict;
@@ -102,7 +103,7 @@ class StringSubstitutionStub : public StringSubstitution {
 }  // namespace
 
 TEST(ONCStringExpansion, OpenVPN) {
-  scoped_ptr<base::DictionaryValue> vpn_onc =
+  std::unique_ptr<base::DictionaryValue> vpn_onc =
       test_utils::ReadTestDictionary("valid_openvpn.onc");
 
   StringSubstitutionStub substitution;
@@ -115,7 +116,7 @@ TEST(ONCStringExpansion, OpenVPN) {
 }
 
 TEST(ONCStringExpansion, WiFi_EAP) {
-  scoped_ptr<base::DictionaryValue> wifi_onc =
+  std::unique_ptr<base::DictionaryValue> wifi_onc =
       test_utils::ReadTestDictionary("wifi_clientcert_with_cert_pems.onc");
 
   StringSubstitutionStub substitution;
@@ -128,7 +129,7 @@ TEST(ONCStringExpansion, WiFi_EAP) {
 }
 
 TEST(ONCResolveServerCertRefs, ResolveServerCertRefs) {
-  scoped_ptr<base::DictionaryValue> test_cases =
+  std::unique_ptr<base::DictionaryValue> test_cases =
       test_utils::ReadTestDictionary(
           "network_configs_with_resolved_certs.json");
 
@@ -152,7 +153,7 @@ TEST(ONCResolveServerCertRefs, ResolveServerCertRefs) {
     bool expected_success = (networks_with_cert_refs->GetSize() ==
                              expected_resolved_onc->GetSize());
 
-    scoped_ptr<base::ListValue> actual_resolved_onc(
+    std::unique_ptr<base::ListValue> actual_resolved_onc(
         networks_with_cert_refs->DeepCopy());
 
     bool success = ResolveServerCertRefsInNetworks(certs,
@@ -164,19 +165,30 @@ TEST(ONCResolveServerCertRefs, ResolveServerCertRefs) {
 }
 
 TEST(ONCUtils, ProxySettingsToProxyConfig) {
-  scoped_ptr<base::Value> test_data(ReadTestJson("proxy_config.json"));
+  std::unique_ptr<base::Value> test_data(ReadTestJson("proxy_config.json"));
 
-  base::ListValue* list_of_tests;
-  test_data->GetAsList(&list_of_tests);
-  ASSERT_TRUE(list_of_tests);
+  base::ListValue* tests1;
+  test_data->GetAsList(&tests1);
+  ASSERT_TRUE(tests1);
+
+  std::unique_ptr<base::ListValue> list_of_tests = tests1->CreateDeepCopy();
+
+  // Additional ONC -> ProxyConfig test cases to test fixup.
+  test_data = ReadTestJson("proxy_config_from_onc.json");
+  base::ListValue* tests2;
+  test_data->GetAsList(&tests2);
+  ASSERT_TRUE(tests2);
+  for (auto iter1 = tests2->begin(); iter1 != tests2->end(); ++iter1)
+    list_of_tests->Append((*iter1)->CreateDeepCopy());
 
   int index = 0;
-  for (base::ListValue::iterator it = list_of_tests->begin();
-       it != list_of_tests->end(); ++it, ++index) {
+  for (auto iter2 = list_of_tests->begin(); iter2 != list_of_tests->end();
+       ++iter2, ++index) {
     SCOPED_TRACE("Test case #" + base::IntToString(index));
 
-    base::DictionaryValue* test_case;
-    (*it)->GetAsDictionary(&test_case);
+    base::DictionaryValue* test_case = nullptr;
+    (*iter2)->GetAsDictionary(&test_case);
+    ASSERT_TRUE(test_case);
 
     base::DictionaryValue* onc_proxy_settings;
     test_case->GetDictionary("ONC_ProxySettings", &onc_proxy_settings);
@@ -184,7 +196,7 @@ TEST(ONCUtils, ProxySettingsToProxyConfig) {
     base::DictionaryValue* expected_proxy_config;
     test_case->GetDictionary("ProxyConfig", &expected_proxy_config);
 
-    scoped_ptr<base::DictionaryValue> actual_proxy_config =
+    std::unique_ptr<base::DictionaryValue> actual_proxy_config =
         ConvertOncProxySettingsToProxyConfig(*onc_proxy_settings);
     EXPECT_TRUE(
         test_utils::Equals(expected_proxy_config, actual_proxy_config.get()));
@@ -192,7 +204,7 @@ TEST(ONCUtils, ProxySettingsToProxyConfig) {
 }
 
 TEST(ONCUtils, ProxyConfigToOncProxySettings) {
-  scoped_ptr<base::Value> test_data(ReadTestJson("proxy_config.json"));
+  std::unique_ptr<base::Value> test_data(ReadTestJson("proxy_config.json"));
 
   base::ListValue* list_of_tests;
   test_data->GetAsList(&list_of_tests);
@@ -212,7 +224,7 @@ TEST(ONCUtils, ProxyConfigToOncProxySettings) {
     base::DictionaryValue* onc_proxy_settings;
     test_case->GetDictionary("ONC_ProxySettings", &onc_proxy_settings);
 
-    scoped_ptr<base::DictionaryValue> actual_proxy_settings =
+    std::unique_ptr<base::DictionaryValue> actual_proxy_settings =
         ConvertProxyConfigToOncProxySettings(*shill_proxy_config);
     EXPECT_TRUE(
         test_utils::Equals(onc_proxy_settings, actual_proxy_settings.get()));

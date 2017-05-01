@@ -6,7 +6,8 @@
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/test/test_timeouts.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_api.h"
@@ -55,7 +56,7 @@ class TabCaptureApiTest : public ExtensionApiTest {
     content::SimulateMouseClick(
         browser()->tab_strip_model()->GetActiveWebContents(),
         0,
-        blink::WebMouseEvent::ButtonLeft);
+        blink::WebMouseEvent::Button::Left);
   }
 };
 
@@ -165,9 +166,15 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ApiTests) {
   ASSERT_TRUE(RunExtensionSubtest("tab_capture", "api_tests.html")) << message_;
 }
 
+#if defined(OS_MACOSX) && defined(ADDRESS_SANITIZER)
+// Flaky on ASAN on Mac. See https://crbug.com/674497.
+#define MAYBE_MaxOffscreenTabs DISABLED_MaxOffscreenTabs
+#else
+#define MAYBE_MaxOffscreenTabs MaxOffscreenTabs
+#endif
 // Tests that there is a maximum limitation to the number of simultaneous
 // off-screen tabs.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MaxOffscreenTabs) {
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_MaxOffscreenTabs) {
   AddExtensionToCommandLineWhitelist();
   ASSERT_TRUE(RunExtensionSubtest("tab_capture", "max_offscreen_tabs.html"))
       << message_;
@@ -239,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GetUserMediaTest) {
   EXPECT_TRUE(listener.WaitUntilSatisfied());
 
   content::OpenURLParams params(GURL("about:blank"), content::Referrer(),
-                                NEW_FOREGROUND_TAB,
+                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
                                 ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
 
@@ -275,7 +282,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ActiveTabPermission) {
   // Open a new tab and make sure capture is denied.
   EXPECT_TRUE(before_open_tab.WaitUntilSatisfied());
   content::OpenURLParams params(GURL("http://google.com"), content::Referrer(),
-                                NEW_FOREGROUND_TAB,
+                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
                                 ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
   before_open_tab.Reply("");
@@ -304,17 +311,12 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ActiveTabPermission) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-// http://crbug.com/177163
-#if defined(OS_WIN) && !defined(NDEBUG)
-#define MAYBE_FullscreenEvents DISABLED_FullscreenEvents
-#else
-#define MAYBE_FullscreenEvents FullscreenEvents
-#endif
+// Flaky: http://crbug.com/675851
 // Tests that fullscreen transitions during a tab capture session dispatch
 // events to the onStatusChange listener.  The test loads a page that toggles
 // fullscreen mode, using the Fullscreen Javascript API, in response to mouse
 // clicks.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_FullscreenEvents) {
   AddExtensionToCommandLineWhitelist();
 
   ExtensionTestMessageListener capture_started("tab_capture_started", false);
@@ -355,7 +357,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GrantForChromePages) {
 
   // Open a tab on a chrome:// page and make sure we can capture.
   content::OpenURLParams params(GURL("chrome://version"), content::Referrer(),
-                                NEW_FOREGROUND_TAB,
+                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
                                 ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
   const Extension* extension = ExtensionRegistry::Get(
@@ -403,14 +405,50 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_Constraints) {
 #if defined(OS_WIN) && !defined(NDEBUG)
 #define MAYBE_TabIndicator DISABLED_TabIndicator
 #else
-// Also flaky everywhere else: https://crbug.com/530657
-#define MAYBE_TabIndicator DISABLED_TabIndicator
+#define MAYBE_TabIndicator TabIndicator
 #endif
 // Tests that the tab indicator (in the tab strip) is shown during tab capture.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_TabIndicator) {
-  ASSERT_EQ(TAB_MEDIA_STATE_NONE,
-            chrome::GetTabMediaStateForContents(
+  ASSERT_EQ(TabAlertState::NONE,
+            chrome::GetTabAlertStateForContents(
                 browser()->tab_strip_model()->GetActiveWebContents()));
+
+  // A TabStripModelObserver that quits the MessageLoop whenever the UI's model
+  // is sent an event that changes the indicator status.
+  class IndicatorChangeObserver : public TabStripModelObserver {
+   public:
+    explicit IndicatorChangeObserver(Browser* browser)
+        : browser_(browser),
+          last_alert_state_(chrome::GetTabAlertStateForContents(
+              browser->tab_strip_model()->GetActiveWebContents())) {
+      browser_->tab_strip_model()->AddObserver(this);
+    }
+
+    ~IndicatorChangeObserver() override {
+      browser_->tab_strip_model()->RemoveObserver(this);
+    }
+
+    TabAlertState last_alert_state() const { return last_alert_state_; }
+
+    void TabChangedAt(content::WebContents* contents,
+                      int index,
+                      TabChangeType change_type) override {
+      const TabAlertState alert_state =
+          chrome::GetTabAlertStateForContents(contents);
+      if (alert_state != last_alert_state_) {
+        last_alert_state_ = alert_state;
+        base::ThreadTaskRunnerHandle::Get()->PostTask(
+            FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
+      }
+    }
+
+   private:
+    Browser* const browser_;
+    TabAlertState last_alert_state_;
+  };
+
+  IndicatorChangeObserver observer(browser());
+  ASSERT_EQ(TabAlertState::NONE, observer.last_alert_state());
 
   // Run an extension test that just turns on tab capture, which should cause
   // the indicator to turn on.
@@ -418,47 +456,16 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_TabIndicator) {
   ASSERT_TRUE(RunExtensionSubtest("tab_capture", "start_tab_capture.html"))
       << message_;
 
-  // A TabStripModelObserver that quits the MessageLoop whenever the UI's model
-  // is sent an event that changes the indicator status.
-  class IndicatorChangeObserver : public TabStripModelObserver {
-   public:
-    explicit IndicatorChangeObserver(Browser* browser)
-        : last_media_state_(chrome::GetTabMediaStateForContents(
-              browser->tab_strip_model()->GetActiveWebContents())) {}
-
-    TabMediaState last_media_state() const { return last_media_state_; }
-
-    void TabChangedAt(content::WebContents* contents,
-                      int index,
-                      TabChangeType change_type) override {
-      const TabMediaState media_state =
-          chrome::GetTabMediaStateForContents(contents);
-      const bool has_changed = media_state != last_media_state_;
-      last_media_state_ = media_state;
-      if (has_changed) {
-        base::ThreadTaskRunnerHandle::Get()->PostTask(
-            FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
-      }
-    }
-
-   private:
-    TabMediaState last_media_state_;
-  };
-
   // Run the browser until the indicator turns on.
-  IndicatorChangeObserver observer(browser());
-  browser()->tab_strip_model()->AddObserver(&observer);
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  while (observer.last_media_state() != TAB_MEDIA_STATE_CAPTURING) {
+  while (observer.last_alert_state() != TabAlertState::TAB_CAPTURING) {
     if (base::TimeTicks::Now() - start_time >
-            base::TimeDelta::FromSeconds(10)) {
-      EXPECT_EQ(TAB_MEDIA_STATE_CAPTURING, observer.last_media_state());
-      browser()->tab_strip_model()->RemoveObserver(&observer);
+            TestTimeouts::action_max_timeout()) {
+      EXPECT_EQ(TabAlertState::TAB_CAPTURING, observer.last_alert_state());
       return;
     }
     content::RunMessageLoop();
   }
-  browser()->tab_strip_model()->RemoveObserver(&observer);
 }
 
 }  // namespace

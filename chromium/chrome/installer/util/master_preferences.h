@@ -8,12 +8,12 @@
 #ifndef CHROME_INSTALLER_UTIL_MASTER_PREFERENCES_H_
 #define CHROME_INSTALLER_UTIL_MASTER_PREFERENCES_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 
 namespace base {
@@ -27,7 +27,6 @@ namespace installer {
 // This is the default name for the master preferences file used to pre-set
 // values in the user profile at first run.
 const char kDefaultMasterPrefs[] = "master_preferences";
-const wchar_t kDefaultLocalBookmarks[] = L"bookmarks_"; // default prefix name of localized preinstalled bookmarks file(s), i.e. bookmarks_en-us, bookmarks_fr etc.
 #endif
 
 // The master preferences is a JSON file with the same entries as the
@@ -171,14 +170,6 @@ class MasterPreferences {
     return preferences_read_from_file_;
   }
 
-  bool install_chrome() const {
-    return chrome_;
-  }
-
-  bool is_multi_install() const {
-    return multi_install_;
-  }
-
   // Returns a reference to this MasterPreferences' root dictionary of values.
   const base::DictionaryValue& master_dictionary() const {
     return *master_dictionary_.get();
@@ -198,8 +189,6 @@ class MasterPreferences {
   // string was successfully parsed.
   bool InitializeFromString(const std::string& json_data);
 
-  void InitializeProductFlags();
-
   // Enforces legacy preferences that should no longer be used, but could be
   // found in older master_preferences files.
   void EnforceLegacyPreferences();
@@ -209,11 +198,9 @@ class MasterPreferences {
   // copied over to profile preferences.
   std::string ExtractPrefString(const std::string& name) const;
 
-  scoped_ptr<base::DictionaryValue> master_dictionary_;
-  base::DictionaryValue* distribution_;
-  bool preferences_read_from_file_;
-  bool chrome_;
-  bool multi_install_;
+  std::unique_ptr<base::DictionaryValue> master_dictionary_;
+  base::DictionaryValue* distribution_ = nullptr;
+  bool preferences_read_from_file_ = false;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MasterPreferences);

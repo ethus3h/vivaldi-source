@@ -7,8 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/posix/eintr_wrapper.h"
 #include "dbus/object_path.h"
 #include "dbus/test_proto.pb.h"
@@ -19,7 +20,7 @@ namespace dbus {
 // Test that a byte can be properly written and read. We only have this
 // test for byte, as repeating this for other basic types is too redundant.
 TEST(MessageTest, AppendAndPopByte) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   writer.AppendByte(123);  // The input is 123.
 
@@ -43,7 +44,7 @@ TEST(MessageTest, AppendAndPopByte) {
 
 // Check all basic types can be properly written and read.
 TEST(MessageTest, AppendAndPopBasicDataTypes) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
 
   // Append 0, 1, 2, 3, 4, 5, 6, 7, 8, "string", "/object/path".
@@ -119,46 +120,37 @@ TEST(MessageTest, AppendAndPopFileDescriptor) {
     return;
   }
 
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
 
   // Append stdout.
-  FileDescriptor temp(1);
-  // Descriptor should not be valid until checked.
-  ASSERT_FALSE(temp.is_valid());
-  // NB: thread IO requirements not relevant for unit tests.
-  temp.CheckValidity();
-  ASSERT_TRUE(temp.is_valid());
-  writer.AppendFileDescriptor(temp);
+  const int fd_in = 1;
+  writer.AppendFileDescriptor(fd_in);
 
-  FileDescriptor fd_value;
+  base::ScopedFD fd_out;
 
   MessageReader reader(message.get());
   ASSERT_TRUE(reader.HasMoreData());
   ASSERT_EQ(Message::UNIX_FD, reader.GetDataType());
   ASSERT_EQ("h", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopFileDescriptor(&fd_value));
+  ASSERT_TRUE(reader.PopFileDescriptor(&fd_out));
   ASSERT_FALSE(reader.HasMoreData());
-  // Descriptor is not valid until explicitly checked.
-  ASSERT_FALSE(fd_value.is_valid());
-  fd_value.CheckValidity();
-  ASSERT_TRUE(fd_value.is_valid());
 
   // Stdout should be returned but we cannot check the descriptor
   // value because stdout will be dup'd.  Instead check st_rdev
   // which should be identical.
   struct stat sb_stdout;
-  int status_stdout = HANDLE_EINTR(fstat(1, &sb_stdout));
+  int status_stdout = HANDLE_EINTR(fstat(fd_in, &sb_stdout));
   ASSERT_GE(status_stdout, 0);
   struct stat sb_fd;
-  int status_fd = HANDLE_EINTR(fstat(fd_value.value(), &sb_fd));
+  int status_fd = HANDLE_EINTR(fstat(fd_out.get(), &sb_fd));
   ASSERT_GE(status_fd, 0);
   EXPECT_EQ(sb_stdout.st_rdev, sb_fd.st_rdev);
 }
 
 // Check all variant types can be properly written and read.
 TEST(MessageTest, AppendAndPopVariantDataTypes) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
 
   // Append 0, 1, 2, 3, 4, 5, 6, 7, 8, "string", "/object/path".
@@ -228,7 +220,7 @@ TEST(MessageTest, AppendAndPopVariantDataTypes) {
 }
 
 TEST(MessageTest, ArrayOfBytes) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   std::vector<uint8_t> bytes;
   bytes.push_back(1);
@@ -248,8 +240,29 @@ TEST(MessageTest, ArrayOfBytes) {
   EXPECT_EQ(3, output_bytes[2]);
 }
 
+TEST(MessageTest, ArrayOfDoubles) {
+  std::unique_ptr<Response> message(Response::CreateEmpty());
+  MessageWriter writer(message.get());
+  std::vector<double> doubles;
+  doubles.push_back(0.2);
+  doubles.push_back(0.5);
+  doubles.push_back(1);
+  writer.AppendArrayOfDoubles(doubles.data(), doubles.size());
+
+  MessageReader reader(message.get());
+  const double* output_doubles = NULL;
+  size_t length = 0;
+  ASSERT_EQ("ad", reader.GetDataSignature());
+  ASSERT_TRUE(reader.PopArrayOfDoubles(&output_doubles, &length));
+  ASSERT_FALSE(reader.HasMoreData());
+  ASSERT_EQ(3U, length);
+  EXPECT_EQ(0.2, output_doubles[0]);
+  EXPECT_EQ(0.5, output_doubles[1]);
+  EXPECT_EQ(1, output_doubles[2]);
+}
+
 TEST(MessageTest, ArrayOfBytes_Empty) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   std::vector<uint8_t> bytes;
   writer.AppendArrayOfBytes(bytes.data(), bytes.size());
@@ -265,7 +278,7 @@ TEST(MessageTest, ArrayOfBytes_Empty) {
 }
 
 TEST(MessageTest, ArrayOfStrings) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   std::vector<std::string> strings;
   strings.push_back("fee");
@@ -287,7 +300,7 @@ TEST(MessageTest, ArrayOfStrings) {
 }
 
 TEST(MessageTest, ArrayOfObjectPaths) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   std::vector<ObjectPath> object_paths;
   object_paths.push_back(ObjectPath("/object/path/1"));
@@ -307,7 +320,7 @@ TEST(MessageTest, ArrayOfObjectPaths) {
 }
 
 TEST(MessageTest, ProtoBuf) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   TestProto send_message;
   send_message.set_text("testing");
@@ -327,7 +340,7 @@ TEST(MessageTest, ProtoBuf) {
 // test for array, as repeating this for other container types is too
 // redundant.
 TEST(MessageTest, OpenArrayAndPopArray) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   MessageWriter array_writer(NULL);
   writer.OpenArray("s", &array_writer);  // Open an array of strings.
@@ -357,7 +370,7 @@ TEST(MessageTest, OpenArrayAndPopArray) {
 // Create a complex message using array, struct, variant, dict entry, and
 // make sure it can be read properly.
 TEST(MessageTest, CreateComplexMessageAndReadIt) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   {
     MessageWriter array_writer(NULL);
@@ -515,7 +528,8 @@ TEST(MessageTest, MethodCall_FromRawMessage) {
   dbus_message_set_interface(raw_message, "com.example.Interface");
   dbus_message_set_member(raw_message, "SomeMethod");
 
-  scoped_ptr<MethodCall> method_call(MethodCall::FromRawMessage(raw_message));
+  std::unique_ptr<MethodCall> method_call(
+      MethodCall::FromRawMessage(raw_message));
   EXPECT_EQ("com.example.Interface", method_call->GetInterface());
   EXPECT_EQ("SomeMethod", method_call->GetMember());
 }
@@ -545,13 +559,13 @@ TEST(MessageTest, Signal_FromRawMessage) {
   dbus_message_set_interface(raw_message, "com.example.Interface");
   dbus_message_set_member(raw_message, "SomeSignal");
 
-  scoped_ptr<Signal> signal(Signal::FromRawMessage(raw_message));
+  std::unique_ptr<Signal> signal(Signal::FromRawMessage(raw_message));
   EXPECT_EQ("com.example.Interface", signal->GetInterface());
   EXPECT_EQ("SomeSignal", signal->GetMember());
 }
 
 TEST(MessageTest, Response) {
-  scoped_ptr<Response> response(Response::CreateEmpty());
+  std::unique_ptr<Response> response(Response::CreateEmpty());
   EXPECT_TRUE(response->raw_message());
   EXPECT_EQ(Message::MESSAGE_METHOD_RETURN, response->GetMessageType());
   EXPECT_EQ("MESSAGE_METHOD_RETURN", response->GetMessageTypeAsString());
@@ -562,8 +576,7 @@ TEST(MessageTest, Response_FromMethodCall) {
   MethodCall method_call("com.example.Interface", "SomeMethod");
   method_call.SetSerial(kSerial);
 
-  scoped_ptr<Response> response(
-      Response::FromMethodCall(&method_call));
+  std::unique_ptr<Response> response(Response::FromMethodCall(&method_call));
   EXPECT_EQ(Message::MESSAGE_METHOD_RETURN, response->GetMessageType());
   EXPECT_EQ("MESSAGE_METHOD_RETURN", response->GetMessageTypeAsString());
   // The serial should be copied to the reply serial.
@@ -577,10 +590,8 @@ const char kErrorMessage[] = "error message";
   MethodCall method_call("com.example.Interface", "SomeMethod");
   method_call.SetSerial(kSerial);
 
-  scoped_ptr<ErrorResponse> error_response(
-      ErrorResponse::FromMethodCall(&method_call,
-                                    DBUS_ERROR_FAILED,
-                                    kErrorMessage));
+  std::unique_ptr<ErrorResponse> error_response(ErrorResponse::FromMethodCall(
+      &method_call, DBUS_ERROR_FAILED, kErrorMessage));
   EXPECT_EQ(Message::MESSAGE_ERROR, error_response->GetMessageType());
   EXPECT_EQ("MESSAGE_ERROR", error_response->GetMessageTypeAsString());
   // The serial should be copied to the reply serial.
@@ -594,7 +605,7 @@ const char kErrorMessage[] = "error message";
 }
 
 TEST(MessageTest, GetAndSetHeaders) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
 
   EXPECT_EQ("", message->GetDestination());
   EXPECT_EQ(ObjectPath(std::string()), message->GetPath());
@@ -625,7 +636,7 @@ TEST(MessageTest, GetAndSetHeaders) {
 }
 
 TEST(MessageTest, SetInvalidHeaders) {
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   EXPECT_EQ("", message->GetDestination());
   EXPECT_EQ(ObjectPath(std::string()), message->GetPath());
   EXPECT_EQ("", message->GetInterface());
@@ -657,7 +668,7 @@ TEST(MessageTest, SetInvalidHeaders) {
 TEST(MessageTest, ToString_LongString) {
   const std::string kLongString(1000, 'o');
 
-  scoped_ptr<Response> message(Response::CreateEmpty());
+  std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   writer.AppendString(kLongString);
 

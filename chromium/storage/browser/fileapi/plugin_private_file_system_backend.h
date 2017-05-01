@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 #include <string>
 
@@ -81,13 +82,13 @@ class STORAGE_EXPORT PluginPrivateFileSystemBackend
   bool SupportsStreaming(const FileSystemURL& url) const override;
   bool HasInplaceCopyImplementation(
       storage::FileSystemType type) const override;
-  scoped_ptr<storage::FileStreamReader> CreateFileStreamReader(
+  std::unique_ptr<storage::FileStreamReader> CreateFileStreamReader(
       const FileSystemURL& url,
       int64_t offset,
       int64_t max_bytes_to_read,
       const base::Time& expected_modification_time,
       FileSystemContext* context) const override;
-  scoped_ptr<FileStreamWriter> CreateFileStreamWriter(
+  std::unique_ptr<FileStreamWriter> CreateFileStreamWriter(
       const FileSystemURL& url,
       int64_t offset,
       FileSystemContext* context) const override;
@@ -117,6 +118,15 @@ class STORAGE_EXPORT PluginPrivateFileSystemBackend
       const GURL& origin_url,
       FileSystemType type) override;
 
+  // Get details on the files saved for the specified |origin_url|. Returns
+  // the total size and last modified time for the set of all files stored
+  // for the particular origin. |total_size| = 0 and |last_modified_time| =
+  // base::Time::UnixEpoch() if no files found.
+  void GetOriginDetailsOnFileTaskRunner(FileSystemContext* context,
+                                        const GURL& origin_url,
+                                        int64_t* total_size,
+                                        base::Time* last_modified_time);
+
  private:
   friend class content::PluginPrivateFileSystemBackendTest;
 
@@ -126,7 +136,7 @@ class STORAGE_EXPORT PluginPrivateFileSystemBackend
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
   const FileSystemOptions file_system_options_;
   const base::FilePath base_path_;
-  scoped_ptr<AsyncFileUtil> file_util_;
+  std::unique_ptr<AsyncFileUtil> file_util_;
   FileSystemIDToPluginMap* plugin_map_;  // Owned by file_util_.
   base::WeakPtrFactory<PluginPrivateFileSystemBackend> weak_factory_;
 

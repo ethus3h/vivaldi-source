@@ -11,7 +11,7 @@
 #include "base/location.h"
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/notifications/desktop_notification_profile_util.h"
 #include "chrome/browser/permissions/permission_request_id.h"
@@ -23,9 +23,6 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "url/gurl.h"
-#include "content/public/browser/browser_thread.h"
-#include "chrome/browser/permissions/permission_request_id.h"
-#include "content/public/browser/web_contents.h"
 
 namespace {
 
@@ -62,7 +59,7 @@ class VisibilityTimerTabHelper
   bool is_visible_;
 
   struct Task {
-    Task(const PermissionRequestID& id, scoped_ptr<base::Timer> timer)
+    Task(const PermissionRequestID& id, std::unique_ptr<base::Timer> timer)
         : id(id), timer(std::move(timer)) {}
 
     Task& operator=(Task&& other) {
@@ -72,7 +69,7 @@ class VisibilityTimerTabHelper
     }
 
     PermissionRequestID id;
-    scoped_ptr<base::Timer> timer;
+    std::unique_ptr<base::Timer> timer;
 
    private:
     DISALLOW_COPY_AND_ASSIGN(Task);
@@ -110,7 +107,7 @@ void VisibilityTimerTabHelper::PostTaskAfterVisibleDelay(
 
   // Safe to use Unretained, as destroying this will destroy task_queue_, hence
   // cancelling all timers.
-  scoped_ptr<base::Timer> timer(new base::Timer(
+  std::unique_ptr<base::Timer> timer(new base::Timer(
       from_here, visible_delay, base::Bind(&VisibilityTimerTabHelper::RunTask,
                                            base::Unretained(this), task),
       false /* is_repeating */));
@@ -162,20 +159,36 @@ void VisibilityTimerTabHelper::RunTask(const base::Closure& task) {
 
 DEFINE_WEB_CONTENTS_USER_DATA_KEY(VisibilityTimerTabHelper);
 
-NotificationPermissionContext::NotificationPermissionContext(Profile* profile)
+NotificationPermissionContext::NotificationPermissionContext(
+    Profile* profile,
+    content::PermissionType permission_type)
     : PermissionContextBase(profile,
-                            content::PermissionType::NOTIFICATIONS,
+                            permission_type,
                             CONTENT_SETTINGS_TYPE_NOTIFICATIONS),
-      extensions_context_(profile),
-      weak_factory_ui_thread_(this) {}
+      weak_factory_ui_thread_(this) {
+  DCHECK(permission_type == content::PermissionType::NOTIFICATIONS ||
+         permission_type == content::PermissionType::PUSH_MESSAGING);
+}
 
 NotificationPermissionContext::~NotificationPermissionContext() {}
+
+ContentSetting NotificationPermissionContext::GetPermissionStatusInternal(
+    const GURL& requesting_origin,
+    const GURL& embedding_origin) const {
+  // Push messaging is only allowed to be granted on top-level origins.
+  if (permission_type() == content::PermissionType::PUSH_MESSAGING &&
+      requesting_origin != embedding_origin) {
+    return CONTENT_SETTING_BLOCK;
+  }
+
+  return PermissionContextBase::GetPermissionStatusInternal(requesting_origin,
+                                                            embedding_origin);
+}
 
 void NotificationPermissionContext::ResetPermission(
     const GURL& requesting_origin,
     const GURL& embedder_origin) {
-  DesktopNotificationProfileUtil::ClearSetting(
-      profile(), ContentSettingsPattern::FromURLNoWildcard(requesting_origin));
+  DesktopNotificationProfileUtil::ClearSetting(profile(), requesting_origin);
 }
 
 void NotificationPermissionContext::CancelPermissionRequest(
@@ -201,7 +214,7 @@ void NotificationPermissionContext::DecidePermission(
   // from using that to detect whether incognito mode is active, we deny after a
   // random time delay, to simulate a user clicking a bubble/infobar. See also
   // ContentSettingsRegistry::Init, which marks notifications as
-  // INHERIT_IN_INCOGNITO_EXCEPT_ALLOW, and
+  // INHERIT_IF_LESS_PERMISSIVE, and
   // PermissionMenuModel::PermissionMenuModel which prevents users from manually
   // allowing the permission.
   if (profile()->IsOffTheRecord()) {
@@ -246,5 +259,5 @@ void NotificationPermissionContext::UpdateContentSetting(
 }
 
 bool NotificationPermissionContext::IsRestrictedToSecureOrigins() const {
-  return false;
+  return permission_type() == content::PermissionType::PUSH_MESSAGING;
 }

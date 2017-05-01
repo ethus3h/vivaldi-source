@@ -16,8 +16,8 @@
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_info.h"
 #include "base/third_party/icu/icu_utf.h"
+#include "chromeos/system/devicemode.h"
 #include "ui/base/ime/chromeos/ime_keyboard.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/composition_text.h"
@@ -57,52 +57,16 @@ InputMethodChromeOS::~InputMethodChromeOS() {
     ui::IMEBridge::Get()->SetInputContextHandler(NULL);
 }
 
-void InputMethodChromeOS::OnFocus() {
-  InputMethodBase::OnFocus();
-  OnTextInputTypeChanged(GetTextInputClient());
-}
-
-void InputMethodChromeOS::OnBlur() {
-  ConfirmCompositionText();
-  InputMethodBase::OnBlur();
-  OnTextInputTypeChanged(GetTextInputClient());
-}
-
-bool InputMethodChromeOS::OnUntranslatedIMEMessage(
-    const base::NativeEvent& event,
-    NativeEventResult* result) {
-  return false;
-}
-
-void InputMethodChromeOS::ProcessKeyEventDone(ui::KeyEvent* event,
-                                              bool is_handled) {
-  DCHECK(event);
-  if (event->type() == ET_KEY_PRESSED) {
-    if (is_handled) {
-      // IME event has a priority to be handled, so that character composer
-      // should be reset.
-      character_composer_.Reset();
-    } else {
-      // If IME does not handle key event, passes keyevent to character composer
-      // to be able to compose complex characters.
-      is_handled = ExecuteCharacterComposer(*event);
-    }
-  }
-
-  if (event->type() == ET_KEY_PRESSED || event->type() == ET_KEY_RELEASED)
-    ProcessKeyEventPostIME(event, is_handled);
-
-  handling_key_event_ = false;
-}
-
-void InputMethodChromeOS::DispatchKeyEvent(ui::KeyEvent* event) {
+void InputMethodChromeOS::DispatchKeyEvent(
+    ui::KeyEvent* event,
+    std::unique_ptr<AckCallback> ack_callback) {
   DCHECK(event->IsKeyEvent());
   DCHECK(!(event->flags() & ui::EF_IS_SYNTHESIZED));
 
   // For linux_chromeos, the ime keyboard cannot track the caps lock state by
   // itself, so need to call SetCapsLockEnabled() method to reflect the caps
   // lock state by the key event.
-  if (!base::SysInfo::IsRunningOnChromeOS()) {
+  if (!chromeos::IsRunningAsSystemCompositor()) {
     chromeos::input_method::InputMethodManager* manager =
         chromeos::input_method::InputMethodManager::Get();
     if (manager) {
@@ -125,26 +89,66 @@ void InputMethodChromeOS::DispatchKeyEvent(ui::KeyEvent* event) {
         // Treating as PostIME event if character composer handles key event and
         // generates some IME event,
         ProcessKeyEventPostIME(event, true);
+        if (ack_callback)
+          ack_callback->Run(true);
         return;
       }
       ProcessUnfilteredKeyPressEvent(event);
     } else {
       ignore_result(DispatchKeyEventPostIME(event));
     }
+    if (ack_callback)
+      ack_callback->Run(false);
     return;
   }
 
   handling_key_event_ = true;
   if (GetEngine()->IsInterestedInKeyEvent()) {
-    ui::IMEEngineHandlerInterface::KeyEventDoneCallback callback =
-        base::Bind(&InputMethodChromeOS::ProcessKeyEventDone,
-                   weak_ptr_factory_.GetWeakPtr(),
-                   // Pass the ownership of the new copied event.
-                   base::Owned(new ui::KeyEvent(*event)));
+    ui::IMEEngineHandlerInterface::KeyEventDoneCallback callback = base::Bind(
+        &InputMethodChromeOS::ProcessKeyEventDone,
+        weak_ptr_factory_.GetWeakPtr(),
+        // Pass the ownership of the new copied event.
+        base::Owned(new ui::KeyEvent(*event)), Passed(&ack_callback));
     GetEngine()->ProcessKeyEvent(*event, callback);
   } else {
-    ProcessKeyEventDone(event, false);
+    ProcessKeyEventDone(event, std::move(ack_callback), false);
   }
+}
+
+bool InputMethodChromeOS::OnUntranslatedIMEMessage(
+    const base::NativeEvent& event,
+    NativeEventResult* result) {
+  return false;
+}
+
+void InputMethodChromeOS::ProcessKeyEventDone(
+    ui::KeyEvent* event,
+    std::unique_ptr<AckCallback> ack_callback,
+    bool is_handled) {
+  DCHECK(event);
+  if (event->type() == ET_KEY_PRESSED) {
+    if (is_handled) {
+      // IME event has a priority to be handled, so that character composer
+      // should be reset.
+      character_composer_.Reset();
+    } else {
+      // If IME does not handle key event, passes keyevent to character composer
+      // to be able to compose complex characters.
+      is_handled = ExecuteCharacterComposer(*event);
+    }
+  }
+
+  if (ack_callback)
+    ack_callback->Run(is_handled);
+
+  if (event->type() == ET_KEY_PRESSED || event->type() == ET_KEY_RELEASED)
+    ProcessKeyEventPostIME(event, is_handled);
+
+  handling_key_event_ = false;
+}
+
+void InputMethodChromeOS::DispatchKeyEvent(ui::KeyEvent* event) {
+  DispatchKeyEvent(event, nullptr);
 }
 
 void InputMethodChromeOS::OnTextInputTypeChanged(
@@ -180,33 +184,25 @@ void InputMethodChromeOS::OnCaretBoundsChanged(const TextInputClient* client) {
   // The current text input type should not be NONE if |context_| is focused.
   DCHECK(client == GetTextInputClient());
   DCHECK(!IsTextInputTypeNone());
-  const gfx::Rect caret_rect = client->GetCaretBounds();
 
-  gfx::Rect composition_head;
-  std::vector<gfx::Rect> rects;
-  if (client->HasCompositionText()) {
-    uint32_t i = 0;
-    gfx::Rect rect;
-    while (client->GetCompositionCharacterBounds(i++, &rect))
-      rects.push_back(rect);
-  }
-
-  // Pepper don't support composition bounds, so fallback to caret bounds to
-  // avoid bad user experience (the IME window moved to upper left corner).
-  // For case of no composition at present, also use caret bounds which is
-  // required by the IME extension for certain features (e.g. physical keyboard
-  // autocorrect).
-  if (rects.empty())
-    rects.push_back(caret_rect);
-
-  composition_head = rects[0];
   if (GetEngine())
-    GetEngine()->SetCompositionBounds(rects);
+    GetEngine()->SetCompositionBounds(GetCompositionBounds(client));
 
   chromeos::IMECandidateWindowHandlerInterface* candidate_window =
       ui::IMEBridge::Get()->GetCandidateWindowHandler();
   if (!candidate_window)
     return;
+
+  const gfx::Rect caret_rect = client->GetCaretBounds();
+
+  gfx::Rect composition_head;
+  if (client->HasCompositionText())
+    client->GetCompositionCharacterBounds(0, &composition_head);
+
+  // Pepper doesn't support composition bounds, so fall back to caret bounds to
+  // avoid a bad user experience (the IME window moved to upper left corner).
+  if (composition_head.IsEmpty())
+    composition_head = caret_rect;
   candidate_window->SetCursorBounds(caret_rect, composition_head);
 
   gfx::Range text_range;
@@ -248,15 +244,6 @@ void InputMethodChromeOS::OnCaretBoundsChanged(const TextInputClient* client) {
 void InputMethodChromeOS::CancelComposition(const TextInputClient* client) {
   if (IsNonPasswordInputFieldFocused() && IsTextInputClientFocused(client))
     ResetContext();
-}
-
-void InputMethodChromeOS::OnInputLocaleChanged() {
-  // Not supported.
-}
-
-std::string InputMethodChromeOS::GetInputLocale() {
-  // Not supported.
-  return "";
 }
 
 bool InputMethodChromeOS::IsCandidatePopupOpen() const {
@@ -381,7 +368,10 @@ void InputMethodChromeOS::ProcessFilteredKeyPressEvent(ui::KeyEvent* event) {
   }
   ui::KeyEvent fabricated_event(ET_KEY_PRESSED,
                                 VKEY_PROCESSKEY,
-                                event->flags());
+                                event->code(),
+                                event->flags(),
+                                event->GetDomKey(),
+                                event->time_stamp());
   ignore_result(DispatchKeyEventPostIME(&fabricated_event));
   if (fabricated_event.stopped_propagation())
     event->StopPropagation();
@@ -459,14 +449,6 @@ bool InputMethodChromeOS::HasInputMethodResult() const {
   return result_text_.length() || composition_changed_;
 }
 
-bool InputMethodChromeOS::SendFakeProcessKeyEvent(bool pressed) const {
-  KeyEvent evt(pressed ? ET_KEY_PRESSED : ET_KEY_RELEASED,
-               pressed ? VKEY_PROCESSKEY : VKEY_UNKNOWN,
-               EF_IME_FABRICATED_KEY);
-  ignore_result(DispatchKeyEventPostIME(&evt));
-  return evt.stopped_propagation();
-}
-
 void InputMethodChromeOS::CommitText(const std::string& text) {
   if (text.empty())
     return;
@@ -480,6 +462,11 @@ void InputMethodChromeOS::CommitText(const std::string& text) {
   const base::string16 utf16_text = base::UTF8ToUTF16(text);
   if (utf16_text.empty())
     return;
+
+  if (!CanComposeInline()) {
+    // Hides the candidate window for preedit text.
+    UpdateCompositionText(CompositionText(), 0, false);
+  }
 
   // Append the text to the buffer, because commit signal might be fired
   // multiple times when processing a key event.

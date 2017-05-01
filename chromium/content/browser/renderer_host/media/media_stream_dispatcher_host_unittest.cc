@@ -5,6 +5,7 @@
 #include "content/browser/renderer_host/media/media_stream_dispatcher_host.h"
 
 #include <stddef.h>
+#include <memory>
 #include <queue>
 #include <string>
 #include <utility>
@@ -15,7 +16,8 @@
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/system_monitor/system_monitor.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/audio_input_device_manager.h"
@@ -32,12 +34,15 @@
 #include "content/test/test_content_browser_client.h"
 #include "content/test/test_content_client.h"
 #include "ipc/ipc_message_macros.h"
+#include "media/audio/audio_device_description.h"
 #include "media/audio/mock_audio_manager.h"
 #include "media/base/media_switches.h"
 #include "media/capture/video/fake_video_capture_device_factory.h"
 #include "net/url_request/url_request_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 #if defined(OS_CHROMEOS)
 #include "chromeos/audio/cras_audio_handler.h"
@@ -56,14 +61,27 @@ const int kPageRequestId = 7;
 
 namespace content {
 
+namespace {
+
+void AudioInputDevicesEnumerated(base::Closure quit_closure,
+                                 media::AudioDeviceDescriptions* out,
+                                 const MediaDeviceEnumeration& enumeration) {
+  for (const auto& info : enumeration[MEDIA_DEVICE_TYPE_AUDIO_INPUT]) {
+    out->emplace_back(info.label, info.device_id, info.group_id);
+  }
+  quit_closure.Run();
+}
+
+}  // namespace
+
 class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
                                       public TestContentBrowserClient {
  public:
   MockMediaStreamDispatcherHost(
-      const ResourceContext::SaltCallback salt_callback,
+      const std::string& salt,
       const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
       MediaStreamManager* manager)
-      : MediaStreamDispatcherHost(kProcessId, salt_callback, manager),
+      : MediaStreamDispatcherHost(kProcessId, salt, manager),
         task_runner_(task_runner),
         current_ipc_(NULL) {}
 
@@ -81,7 +99,7 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
   void OnGenerateStream(int render_frame_id,
                         int page_request_id,
                         const StreamControls& controls,
-                        const GURL& security_origin,
+                        const url::Origin& security_origin,
                         const base::Closure& quit_closure) {
     quit_closures_.push(quit_closure);
     MediaStreamDispatcherHost::OnGenerateStream(
@@ -97,28 +115,17 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
                     int page_request_id,
                     const std::string& device_id,
                     MediaStreamType type,
-                    const GURL& security_origin,
+                    const url::Origin& security_origin,
                     const base::Closure& quit_closure) {
     quit_closures_.push(quit_closure);
     MediaStreamDispatcherHost::OnOpenDevice(
         render_frame_id, page_request_id, device_id, type, security_origin);
   }
 
-  void OnEnumerateDevices(int render_frame_id,
-                          int page_request_id,
-                          MediaStreamType type,
-                          const GURL& security_origin,
-                          const base::Closure& quit_closure) {
-    quit_closures_.push(quit_closure);
-    MediaStreamDispatcherHost::OnEnumerateDevices(
-        render_frame_id, page_request_id, type, security_origin);
-  }
-
   std::string label_;
   StreamDeviceInfoArray audio_devices_;
   StreamDeviceInfoArray video_devices_;
   StreamDeviceInfo opened_device_;
-  StreamDeviceInfoArray enumerated_devices_;
 
  private:
   ~MockMediaStreamDispatcherHost() override {}
@@ -130,8 +137,8 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
     CHECK(message);
     current_ipc_ = message;
 
-    // In this method we dispatch the messages to the according handlers as if
-    // we are the renderer.
+    // In this method we dispatch the messages to the corresponding handlers as
+    // if we are the renderer.
     bool handled = true;
     IPC_BEGIN_MESSAGE_MAP(MockMediaStreamDispatcherHost, *message)
       IPC_MESSAGE_HANDLER(MediaStreamMsg_StreamGenerated,
@@ -140,7 +147,6 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
                           OnStreamGenerationFailedInternal)
       IPC_MESSAGE_HANDLER(MediaStreamMsg_DeviceStopped, OnDeviceStoppedInternal)
       IPC_MESSAGE_HANDLER(MediaStreamMsg_DeviceOpened, OnDeviceOpenedInternal)
-      IPC_MESSAGE_HANDLER(MediaStreamMsg_DevicesEnumerated, OnDevicesEnumerated)
       IPC_MESSAGE_UNHANDLED(handled = false)
     IPC_END_MESSAGE_MAP()
     EXPECT_TRUE(handled);
@@ -178,7 +184,7 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
       task_runner_->PostTask(FROM_HERE, base::ResetAndReturn(&quit_closure));
     }
 
-    label_= "";
+    label_ = "";
   }
 
   void OnDeviceStoppedInternal(const std::string& label,
@@ -201,14 +207,6 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
     opened_device_ = device;
   }
 
-  void OnDevicesEnumerated(int request_id,
-                           const StreamDeviceInfoArray& devices) {
-    base::Closure quit_closure = quit_closures_.front();
-    quit_closures_.pop();
-    task_runner_->PostTask(FROM_HERE, base::ResetAndReturn(&quit_closure));
-    enumerated_devices_ = devices;
-  }
-
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   IPC::Message* current_ipc_;
   std::queue<base::Closure> quit_closures_;
@@ -225,9 +223,9 @@ class MockMediaStreamUIProxy : public FakeMediaStreamUIProxy {
 class MediaStreamDispatcherHostTest : public testing::Test {
  public:
   MediaStreamDispatcherHostTest()
-      : old_browser_client_(NULL),
-        thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
-        origin_("https://test.com") {
+      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
+        old_browser_client_(NULL),
+        origin_(GURL("https://test.com")) {
     audio_manager_.reset(
         new media::MockAudioManager(base::ThreadTaskRunnerHandle::Get()));
     // Make sure we use fake devices to avoid long delays.
@@ -271,11 +269,19 @@ class MediaStreamDispatcherHostTest : public testing::Test {
   }
 
   void SetUp() override {
-    video_capture_device_factory_->GetDeviceNames(&physical_video_devices_);
+    video_capture_device_factory_->GetDeviceDescriptors(
+        &physical_video_devices_);
     ASSERT_GT(physical_video_devices_.size(), 0u);
 
-    media_stream_manager_->audio_input_device_manager()->GetFakeDeviceNames(
-        &physical_audio_devices_);
+    base::RunLoop run_loop;
+    MediaDevicesManager::BoolDeviceTypes devices_to_enumerate;
+    devices_to_enumerate[MEDIA_DEVICE_TYPE_AUDIO_INPUT] = true;
+    media_stream_manager_->media_devices_manager()->EnumerateDevices(
+        devices_to_enumerate,
+        base::Bind(&AudioInputDevicesEnumerated, run_loop.QuitClosure(),
+                   &physical_audio_devices_));
+    run_loop.Run();
+
     ASSERT_GT(physical_audio_devices_.size(), 0u);
   }
 
@@ -288,7 +294,7 @@ class MediaStreamDispatcherHostTest : public testing::Test {
       EXPECT_CALL(*stream_ui_, OnStarted(_, _));
     }
     media_stream_manager_->UseFakeUIForTests(
-      scoped_ptr<FakeMediaStreamUIProxy>(stream_ui_));
+        std::unique_ptr<FakeMediaStreamUIProxy>(stream_ui_));
   }
 
   void GenerateStreamAndWaitForResult(int render_frame_id,
@@ -339,30 +345,19 @@ class MediaStreamDispatcherHostTest : public testing::Test {
     EXPECT_TRUE(DoesEveryDeviceMapToRawId(host_->video_devices_, origin_));
   }
 
-  void EnumerateDevicesAndWaitForResult(int render_frame_id,
-                                        int page_request_id,
-                                        MediaStreamType type) {
-    base::RunLoop run_loop;
-    host_->OnEnumerateDevices(render_frame_id, page_request_id, type, origin_,
-                              run_loop.QuitClosure());
-    run_loop.Run();
-    ASSERT_FALSE(host_->enumerated_devices_.empty());
-    EXPECT_FALSE(DoesContainRawIds(host_->enumerated_devices_));
-    EXPECT_TRUE(DoesEveryDeviceMapToRawId(host_->enumerated_devices_, origin_));
-  }
-
   bool DoesContainRawIds(const StreamDeviceInfoArray& devices) {
     for (size_t i = 0; i < devices.size(); ++i) {
-      media::AudioDeviceNames::const_iterator audio_it =
-          physical_audio_devices_.begin();
-      for (; audio_it != physical_audio_devices_.end(); ++audio_it) {
-        if (audio_it->unique_id == devices[i].device.id)
-          return true;
+      if (devices[i].device.id !=
+              media::AudioDeviceDescription::kDefaultDeviceId &&
+          devices[i].device.id !=
+              media::AudioDeviceDescription::kCommunicationsDeviceId) {
+        for (const auto& audio_device : physical_audio_devices_) {
+          if (audio_device.unique_id == devices[i].device.id)
+            return true;
+        }
       }
-      media::VideoCaptureDevice::Names::const_iterator video_it =
-          physical_video_devices_.begin();
-      for (; video_it != physical_video_devices_.end(); ++video_it) {
-        if (video_it->id() == devices[i].device.id)
+      for (const auto& video_device : physical_video_devices_) {
+        if (video_device.device_id == devices[i].device.id)
           return true;
       }
     }
@@ -370,10 +365,10 @@ class MediaStreamDispatcherHostTest : public testing::Test {
   }
 
   bool DoesEveryDeviceMapToRawId(const StreamDeviceInfoArray& devices,
-                                 const GURL& origin) {
+                                 const url::Origin& origin) {
     for (size_t i = 0; i < devices.size(); ++i) {
       bool found_match = false;
-      media::AudioDeviceNames::const_iterator audio_it =
+      media::AudioDeviceDescriptions::const_iterator audio_it =
           physical_audio_devices_.begin();
       for (; audio_it != physical_audio_devices_.end(); ++audio_it) {
         if (content::DoesMediaDeviceIDMatchHMAC(
@@ -385,14 +380,12 @@ class MediaStreamDispatcherHostTest : public testing::Test {
           found_match = true;
         }
       }
-      media::VideoCaptureDevice::Names::const_iterator video_it =
+      media::VideoCaptureDeviceDescriptors::const_iterator video_it =
           physical_video_devices_.begin();
       for (; video_it != physical_video_devices_.end(); ++video_it) {
         if (content::DoesMediaDeviceIDMatchHMAC(
                 browser_context_.GetResourceContext()->GetMediaDeviceIDSalt(),
-                origin,
-                devices[i].device.id,
-                video_it->id())) {
+                origin, devices[i].device.id, video_it->device_id)) {
           EXPECT_FALSE(found_match);
           found_match = true;
         }
@@ -422,16 +415,17 @@ class MediaStreamDispatcherHostTest : public testing::Test {
   }
 
   scoped_refptr<MockMediaStreamDispatcherHost> host_;
-  scoped_ptr<media::AudioManager> audio_manager_;
-  scoped_ptr<MediaStreamManager> media_stream_manager_;
+  std::unique_ptr<MediaStreamManager> media_stream_manager_;
+  content::TestBrowserThreadBundle thread_bundle_;
+  std::unique_ptr<media::AudioManager, media::AudioManagerDeleter>
+      audio_manager_;
   MockMediaStreamUIProxy* stream_ui_;
   ContentBrowserClient* old_browser_client_;
-  scoped_ptr<ContentClient> content_client_;
-  content::TestBrowserThreadBundle thread_bundle_;
+  std::unique_ptr<ContentClient> content_client_;
   content::TestBrowserContext browser_context_;
-  media::AudioDeviceNames physical_audio_devices_;
-  media::VideoCaptureDevice::Names physical_video_devices_;
-  GURL origin_;
+  media::AudioDeviceDescriptions physical_audio_devices_;
+  media::VideoCaptureDeviceDescriptors physical_video_devices_;
+  url::Origin origin_;
   media::FakeVideoCaptureDeviceFactory* video_capture_device_factory_;
 };
 
@@ -593,13 +587,13 @@ TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithoutWaiting) {
   run_loop2.Run();
 }
 
-// Test that we can generate streams where a mandatory sourceId is specified in
+// Test that we can generate streams where a sourceId is specified in
 // the request.
-TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithMandatorySourceId) {
+TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithSourceId) {
   ASSERT_GE(physical_audio_devices_.size(), 1u);
   ASSERT_GE(physical_video_devices_.size(), 1u);
 
-  media::AudioDeviceNames::const_iterator audio_it =
+  media::AudioDeviceDescriptions::const_iterator audio_it =
       physical_audio_devices_.begin();
   for (; audio_it != physical_audio_devices_.end(); ++audio_it) {
     std::string source_id = content::GetHMACForMediaDeviceID(
@@ -608,23 +602,22 @@ TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithMandatorySourceId) {
         audio_it->unique_id);
     ASSERT_FALSE(source_id.empty());
     StreamControls controls(true, true);
-    controls.audio.device_ids.push_back(source_id);
+    controls.audio.device_id = source_id;
 
     SetupFakeUI(true);
     GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
     EXPECT_EQ(host_->audio_devices_[0].device.id, source_id);
   }
 
-  media::VideoCaptureDevice::Names::const_iterator video_it =
+  media::VideoCaptureDeviceDescriptors::const_iterator video_it =
       physical_video_devices_.begin();
   for (; video_it != physical_video_devices_.end(); ++video_it) {
     std::string source_id = content::GetHMACForMediaDeviceID(
-        browser_context_.GetResourceContext()->GetMediaDeviceIDSalt(),
-        origin_,
-        video_it->id());
+        browser_context_.GetResourceContext()->GetMediaDeviceIDSalt(), origin_,
+        video_it->device_id);
     ASSERT_FALSE(source_id.empty());
     StreamControls controls(true, true);
-    controls.video.device_ids.push_back(source_id);
+    controls.video.device_id = source_id;
 
     SetupFakeUI(true);
     GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
@@ -632,91 +625,28 @@ TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithMandatorySourceId) {
   }
 }
 
-// Test that we can generate streams where a optional sourceId is specified in
-// the request.
-TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithOptionalSourceId) {
-  ASSERT_GE(physical_audio_devices_.size(), 1u);
-  ASSERT_GE(physical_video_devices_.size(), 1u);
-
-  media::AudioDeviceNames::const_iterator audio_it =
-      physical_audio_devices_.begin();
-  for (; audio_it != physical_audio_devices_.end(); ++audio_it) {
-    std::string source_id = content::GetHMACForMediaDeviceID(
-        browser_context_.GetResourceContext()->GetMediaDeviceIDSalt(),
-        origin_,
-        audio_it->unique_id);
-    ASSERT_FALSE(source_id.empty());
-    StreamControls controls(true, true);
-    controls.audio.device_ids.push_back(source_id);
-
-    SetupFakeUI(true);
-    GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
-    EXPECT_EQ(host_->audio_devices_[0].device.id, source_id);
-  }
-
-  media::VideoCaptureDevice::Names::const_iterator video_it =
-      physical_video_devices_.begin();
-  for (; video_it != physical_video_devices_.end(); ++video_it) {
-    std::string source_id = content::GetHMACForMediaDeviceID(
-        browser_context_.GetResourceContext()->GetMediaDeviceIDSalt(),
-        origin_,
-        video_it->id());
-    ASSERT_FALSE(source_id.empty());
-    StreamControls controls(true, true);
-    controls.video.device_ids.push_back(source_id);
-
-    SetupFakeUI(true);
-    GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
-    EXPECT_EQ(host_->video_devices_[0].device.id, source_id);
-  }
-}
-
-// Test that generating a stream with an invalid mandatory video source id fail.
-TEST_F(MediaStreamDispatcherHostTest,
-       GenerateStreamsWithInvalidMandatoryVideoSourceId) {
+// Test that generating a stream with an invalid video source id fail.
+TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithInvalidVideoSourceId) {
   StreamControls controls(true, true);
-  controls.video.device_ids.push_back("invalid source id");
+  controls.video.device_id = "invalid source id";
 
   GenerateStreamAndWaitForFailure(kRenderId, kPageRequestId, controls,
                                   MEDIA_DEVICE_NO_HARDWARE);
 }
 
-// Test that generating a stream with an invalid mandatory audio source id fail.
-TEST_F(MediaStreamDispatcherHostTest,
-       GenerateStreamsWithInvalidMandatoryAudioSourceId) {
+// Test that generating a stream with an invalid audio source id fail.
+TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsWithInvalidAudioSourceId) {
   StreamControls controls(true, true);
-  controls.audio.device_ids.push_back("invalid source id");
+  controls.audio.device_id = "invalid source id";
 
   GenerateStreamAndWaitForFailure(kRenderId, kPageRequestId, controls,
                                   MEDIA_DEVICE_NO_HARDWARE);
-}
-
-// Test that generating a stream with an invalid optional video source id
-// succeed.
-TEST_F(MediaStreamDispatcherHostTest,
-       GenerateStreamsWithInvalidOptionalVideoSourceId) {
-  StreamControls controls(true, true);
-  controls.video.alternate_device_ids.push_back("invalid source id");
-
-  SetupFakeUI(true);
-  GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
-}
-
-// Test that generating a stream with an invalid optional audio source id
-// succeed.
-TEST_F(MediaStreamDispatcherHostTest,
-       GenerateStreamsWithInvalidOptionalAudioSourceId) {
-  StreamControls controls(true, true);
-  controls.video.alternate_device_ids.push_back("invalid source id");
-
-  SetupFakeUI(true);
-  GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, controls);
 }
 
 TEST_F(MediaStreamDispatcherHostTest, GenerateStreamsNoAvailableVideoDevice) {
   physical_video_devices_.clear();
   video_capture_device_factory_->set_number_of_devices(0);
-  video_capture_device_factory_->GetDeviceNames(&physical_video_devices_);
+  video_capture_device_factory_->GetDeviceDescriptors(&physical_video_devices_);
   StreamControls controls(true, true);
 
   SetupFakeUI(false);
@@ -846,7 +776,8 @@ TEST_F(MediaStreamDispatcherHostTest, CloseFromUI) {
   StreamControls controls(false, true);
 
   base::Closure close_callback;
-  scoped_ptr<MockMediaStreamUIProxy> stream_ui(new MockMediaStreamUIProxy());
+  std::unique_ptr<MockMediaStreamUIProxy> stream_ui(
+      new MockMediaStreamUIProxy());
   EXPECT_CALL(*stream_ui, OnStarted(_, _))
       .WillOnce(SaveArg<0>(&close_callback));
   media_stream_manager_->UseFakeUIForTests(std::move(stream_ui));
@@ -876,40 +807,10 @@ TEST_F(MediaStreamDispatcherHostTest, VideoDeviceUnplugged) {
   base::RunLoop run_loop;
   EXPECT_CALL(*host_.get(), OnDeviceStopped(kRenderId))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
-  media_stream_manager_->OnDevicesChanged(
+  media_stream_manager_->media_devices_manager()->OnDevicesChanged(
       base::SystemMonitor::DEVTYPE_VIDEO_CAPTURE);
 
   run_loop.Run();
-}
-
-TEST_F(MediaStreamDispatcherHostTest, EnumerateAudioDevices) {
-  SetupFakeUI(false);
-  EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
-                                   MEDIA_DEVICE_AUDIO_CAPTURE);
-  EXPECT_TRUE(DoesContainLabels(host_->enumerated_devices_));
-}
-
-TEST_F(MediaStreamDispatcherHostTest, EnumerateVideoDevices) {
-  SetupFakeUI(false);
-  EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
-                                   MEDIA_DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(DoesContainLabels(host_->enumerated_devices_));
-}
-
-TEST_F(MediaStreamDispatcherHostTest, EnumerateAudioDevicesNoAccess) {
-  SetupFakeUI(false);
-  stream_ui_->SetMicAccess(false);
-  EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
-                                   MEDIA_DEVICE_AUDIO_CAPTURE);
-  EXPECT_TRUE(DoesNotContainLabels(host_->enumerated_devices_));
-}
-
-TEST_F(MediaStreamDispatcherHostTest, EnumerateVideoDevicesNoAccess) {
-  SetupFakeUI(false);
-  stream_ui_->SetCameraAccess(false);
-  EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
-                                   MEDIA_DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(DoesNotContainLabels(host_->enumerated_devices_));
 }
 
 };  // namespace content

@@ -4,6 +4,7 @@
 
 #include "content/browser/service_worker/service_worker_info.h"
 
+#include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "content/public/common/child_process_host.h"
 #include "ipc/ipc_message.h"
@@ -25,8 +26,10 @@ ServiceWorkerVersionInfo::ClientInfo::~ClientInfo() {
 }
 
 ServiceWorkerVersionInfo::ServiceWorkerVersionInfo()
-    : running_status(ServiceWorkerVersion::STOPPED),
+    : running_status(EmbeddedWorkerStatus::STOPPED),
       status(ServiceWorkerVersion::NEW),
+      fetch_handler_existence(
+          ServiceWorkerVersion::FetchHandlerExistence::UNKNOWN),
       registration_id(kInvalidServiceWorkerRegistrationId),
       version_id(kInvalidServiceWorkerVersionId),
       process_id(ChildProcessHost::kInvalidUniqueID),
@@ -34,8 +37,9 @@ ServiceWorkerVersionInfo::ServiceWorkerVersionInfo()
       devtools_agent_route_id(MSG_ROUTING_NONE) {}
 
 ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
-    ServiceWorkerVersion::RunningStatus running_status,
+    EmbeddedWorkerStatus running_status,
     ServiceWorkerVersion::Status status,
+    ServiceWorkerVersion::FetchHandlerExistence fetch_handler_existence,
     const GURL& script_url,
     int64_t registration_id,
     int64_t version_id,
@@ -44,6 +48,7 @@ ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
     int devtools_agent_route_id)
     : running_status(running_status),
       status(status),
+      fetch_handler_existence(fetch_handler_existence),
       script_url(script_url),
       registration_id(registration_id),
       version_id(version_id),
@@ -51,12 +56,14 @@ ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
       thread_id(thread_id),
       devtools_agent_route_id(devtools_agent_route_id) {}
 
+ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
+    const ServiceWorkerVersionInfo& other) = default;
+
 ServiceWorkerVersionInfo::~ServiceWorkerVersionInfo() {}
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo()
     : registration_id(kInvalidServiceWorkerRegistrationId),
       delete_flag(IS_NOT_DELETED),
-      force_update_on_page_load(IS_NOT_FORCED),
       stored_version_size_bytes(0) {}
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
@@ -66,14 +73,12 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     : pattern(pattern),
       registration_id(registration_id),
       delete_flag(delete_flag),
-      force_update_on_page_load(IS_NOT_FORCED),
       stored_version_size_bytes(0) {}
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     const GURL& pattern,
     int64_t registration_id,
     DeleteFlag delete_flag,
-    ForceUpdateOnPageLoad force_update_on_page_load,
     const ServiceWorkerVersionInfo& active_version,
     const ServiceWorkerVersionInfo& waiting_version,
     const ServiceWorkerVersionInfo& installing_version,
@@ -81,11 +86,13 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     : pattern(pattern),
       registration_id(registration_id),
       delete_flag(delete_flag),
-      force_update_on_page_load(force_update_on_page_load),
       active_version(active_version),
       waiting_version(waiting_version),
       installing_version(installing_version),
       stored_version_size_bytes(stored_version_size_bytes) {}
+
+ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
+    const ServiceWorkerRegistrationInfo& other) = default;
 
 ServiceWorkerRegistrationInfo::~ServiceWorkerRegistrationInfo() {}
 

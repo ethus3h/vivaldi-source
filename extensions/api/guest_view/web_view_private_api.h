@@ -16,7 +16,7 @@ namespace extensions {
 namespace vivaldi {
 
 class WebViewPrivateSetVisibleFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("webViewPrivate.setVisible",
                              WEBVIEWINTERNAL_SETVISIBLE);
@@ -32,22 +32,16 @@ class WebViewPrivateSetVisibleFunction
 };
 
 class WebViewInternalThumbnailFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   WebViewInternalThumbnailFunction();
 
  protected:
   ~WebViewInternalThumbnailFunction() override;
   virtual void SendResultFromBitmap(const SkBitmap& screen_capture);
-  bool EncodeBitmap(const SkBitmap& screen_capture,
-                    std::vector<unsigned char>* data,
-                    std::string& mime_type);
   bool InternalRunAsyncSafe(
       WebViewGuest* guest,
-      scoped_ptr<web_view_private::ThumbnailParams>& params);
-
-  // The default quality setting used when encoding jpegs.
-  static const int kDefaultQuality;
+      std::unique_ptr<web_view_private::ThumbnailParams>& params);
 
   // Quality setting to use when encoding jpegs.  Set in RunImpl().
   int image_quality_;
@@ -131,7 +125,7 @@ class WebViewPrivateAddToThumbnailServiceFunction
 };
 
 class WebViewPrivateShowPageInfoFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("webViewPrivate.showPageInfo",
                              WEBVIEWINTERNAL_SHOWPAGEINFO);
@@ -148,7 +142,7 @@ class WebViewPrivateShowPageInfoFunction
 };
 
 class WebViewPrivateSetIsFullscreenFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("webViewPrivate.setIsFullscreen",
                              WEBVIEWINTERNAL_SETISFULLSCREEN);
@@ -165,7 +159,7 @@ class WebViewPrivateSetIsFullscreenFunction
 };
 
 class WebViewPrivateGetPageHistoryFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("webViewPrivate.getPageHistory",
                              WEBVIEWINTERNAL_GETPAGEHISTORY);
@@ -181,25 +175,8 @@ class WebViewPrivateGetPageHistoryFunction
   DISALLOW_COPY_AND_ASSIGN(WebViewPrivateGetPageHistoryFunction);
 };
 
-class WebViewPrivateDiscardPageFunction
-    : public WebViewInternalExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("webViewPrivate.discardPage",
-                             WEBVIEWINTERNAL_DISCARDPAGE);
-
-  WebViewPrivateDiscardPageFunction();
-
- protected:
-  ~WebViewPrivateDiscardPageFunction() override;
-
- private:
-  bool RunAsyncSafe(WebViewGuest* guest) override;
-
-  DISALLOW_COPY_AND_ASSIGN(WebViewPrivateDiscardPageFunction);
-};
-
 class WebViewPrivateSetExtensionHostFunction
-    : public WebViewInternalExtensionFunction {
+    : public LegacyWebViewInternalExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("webViewPrivate.setExtensionHost",
                              WEBVIEWINTERNAL_SETEXTENSIONHOST);
@@ -215,21 +192,53 @@ class WebViewPrivateSetExtensionHostFunction
   DISALLOW_COPY_AND_ASSIGN(WebViewPrivateSetExtensionHostFunction);
 };
 
-class WebViewPrivateIsFocusedElementEditableFunction
-    : public WebViewInternalExtensionFunction {
- public:
-    DECLARE_EXTENSION_FUNCTION("webViewPrivate.isFocusedElementEditable",
-                               WEBVIEWINTERNAL_ISFOCUSEDELEMENTEDITABLE)
-    WebViewPrivateIsFocusedElementEditableFunction();
+class WebViewPrivateAllowBlockedInsecureContentFunction
+    : public LegacyWebViewInternalExtensionFunction {
+public:
+    DECLARE_EXTENSION_FUNCTION("webViewPrivate.allowBlockedInsecureContent",
+                               WEBVIEWINTERNAL_ALLOWBLOCKEDINSECURECONTENT)
+    WebViewPrivateAllowBlockedInsecureContentFunction();
 
- protected:
-    ~WebViewPrivateIsFocusedElementEditableFunction() override;
+protected:
+    ~WebViewPrivateAllowBlockedInsecureContentFunction() override;
 
- private:
-  // ExtensionFunction:
-  bool RunAsyncSafe(WebViewGuest* guest) override;
+private:
+    bool RunAsyncSafe(WebViewGuest* guest) override;
 
-  DISALLOW_COPY_AND_ASSIGN(WebViewPrivateIsFocusedElementEditableFunction);
+    DISALLOW_COPY_AND_ASSIGN(WebViewPrivateAllowBlockedInsecureContentFunction);
+};
+
+class WebViewPrivateGetFocusedElementInfoFunction
+    : public LegacyWebViewInternalExtensionFunction {
+  public:
+   DECLARE_EXTENSION_FUNCTION("webViewPrivate.getFocusedElementInfo",
+                              WEBVIEWINTERNAL_GETFOCUSEDELEMENTINFO)
+   WebViewPrivateGetFocusedElementInfoFunction();
+
+  protected:
+   ~WebViewPrivateGetFocusedElementInfoFunction() override;
+
+  private:
+   bool RunAsyncSafe(WebViewGuest* guest) override;
+
+   DISALLOW_COPY_AND_ASSIGN(WebViewPrivateGetFocusedElementInfoFunction);
+};
+
+
+class WebViewPrivateResetGestureStateFunction
+    : public LegacyWebViewInternalExtensionFunction {
+public:
+    DECLARE_EXTENSION_FUNCTION("webViewPrivate.resetGestureState",
+                               WEBVIEWINTERNAL_RESETGESTURESTATE)
+    WebViewPrivateResetGestureStateFunction();
+
+protected:
+    ~WebViewPrivateResetGestureStateFunction() override;
+
+private:
+    bool RunAsyncSafe(WebViewGuest* guest) override;
+
+    DISALLOW_COPY_AND_ASSIGN(WebViewPrivateResetGestureStateFunction);
 };
 
 }  // namespace vivaldi

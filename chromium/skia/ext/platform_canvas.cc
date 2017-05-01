@@ -5,9 +5,8 @@
 #include "skia/ext/platform_canvas.h"
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
-#include "skia/ext/bitmap_platform_device.h"
-#include "skia/ext/platform_device.h"
 #include "third_party/skia/include/core/SkMetaData.h"
 #include "third_party/skia/include/core/SkTypes.h"
 
@@ -34,10 +33,6 @@ bool GetBoolMetaData(const SkCanvas& canvas, const char* key) {
 
 namespace skia {
 
-SkBaseDevice* GetTopDevice(const SkCanvas& canvas) {
-  return canvas.getTopDevice(true);
-}
-
 SkBitmap ReadPixels(SkCanvas* canvas) {
   SkBitmap bitmap;
   bitmap.setInfo(canvas->imageInfo());
@@ -62,55 +57,12 @@ bool GetWritablePixels(SkCanvas* canvas, SkPixmap* result) {
   return true;
 }
 
-bool SupportsPlatformPaint(const SkCanvas* canvas) {
-  PlatformDevice* platform_device = GetPlatformDevice(GetTopDevice(*canvas));
-  return platform_device && platform_device->SupportsPlatformPaint();
-}
-
-PlatformSurface BeginPlatformPaint(SkCanvas* canvas) {
-  PlatformDevice* platform_device = GetPlatformDevice(GetTopDevice(*canvas));
-  if (platform_device)
-    return platform_device->BeginPlatformPaint();
-
-  return 0;
-}
-
-void EndPlatformPaint(SkCanvas* canvas) {
-  PlatformDevice* platform_device = GetPlatformDevice(GetTopDevice(*canvas));
-  if (platform_device)
-    platform_device->EndPlatformPaint();
-}
-
-void MakeOpaque(SkCanvas* canvas, int x, int y, int width, int height) {
-  if (width <= 0 || height <= 0)
-    return;
-
-  SkRect rect;
-  rect.setXYWH(SkIntToScalar(x), SkIntToScalar(y),
-               SkIntToScalar(width), SkIntToScalar(height));
-  SkPaint paint;
-  paint.setColor(SK_ColorBLACK);
-  paint.setXfermodeMode(SkXfermode::kDstATop_Mode);
-  canvas->drawRect(rect, paint);
-}
-
 size_t PlatformCanvasStrideForWidth(unsigned width) {
   return 4 * width;
 }
 
-SkCanvas* CreateCanvas(const skia::RefPtr<SkBaseDevice>& device, OnFailureType failureType) {
-  if (!device) {
-    if (CRASH_ON_FAILURE == failureType)
-      SK_CRASH();
-    return nullptr;
-  }
-  return new SkCanvas(device.get());
-}
-
 SkMetaData& GetMetaData(const SkCanvas& canvas) {
-  SkBaseDevice* device = canvas.getDevice();
-  DCHECK(device != nullptr);
-  return device->getMetaData();
+  return const_cast<SkCanvas&>(canvas).getMetaData();
 }
 
 #if defined(OS_MACOSX)
@@ -121,15 +73,39 @@ void SetIsPreviewMetafile(const SkCanvas& canvas, bool is_preview) {
 bool IsPreviewMetafile(const SkCanvas& canvas) {
   return GetBoolMetaData(canvas, kIsPreviewMetafileKey);
 }
+#endif
 
-CGContextRef GetBitmapContext(const SkCanvas& canvas) {
-  SkBaseDevice* device = GetTopDevice(canvas);
-  PlatformDevice* platform_device = GetPlatformDevice(device);
-  return platform_device ?  platform_device->GetBitmapContext() :
-      nullptr;
+#if !defined(WIN32)
+
+std::unique_ptr<SkCanvas> CreatePlatformCanvasWithPixels(
+    int width,
+    int height,
+    bool is_opaque,
+    uint8_t* data,
+    OnFailureType failureType) {
+
+  SkBitmap bitmap;
+  bitmap.setInfo(SkImageInfo::MakeN32(width, height,
+      is_opaque ? kOpaque_SkAlphaType : kPremul_SkAlphaType));
+
+  if (data) {
+    bitmap.setPixels(data);
+  } else {
+      if (!bitmap.tryAllocPixels()) {
+        if (CRASH_ON_FAILURE == failureType)
+          SK_CRASH();
+        return nullptr;
+      }
+
+      // Follow the logic in SkCanvas::createDevice(), initialize the bitmap if
+      // it is not opaque.
+      if (!is_opaque)
+        bitmap.eraseARGB(0, 0, 0, 0);
+  }
+
+  return base::MakeUnique<SkCanvas>(bitmap);
 }
 
 #endif
-
 
 }  // namespace skia

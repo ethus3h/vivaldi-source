@@ -17,6 +17,7 @@
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_store.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
 #include "jni/DataReductionProxySettings_jni.h"
 #include "net/proxy/proxy_server.h"
@@ -24,6 +25,7 @@
 
 
 using base::android::ConvertUTF8ToJavaString;
+using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
 using data_reduction_proxy::DataReductionProxySettings;
 
@@ -33,22 +35,10 @@ DataReductionProxySettingsAndroid::DataReductionProxySettingsAndroid() {
 DataReductionProxySettingsAndroid::~DataReductionProxySettingsAndroid() {
 }
 
-jboolean DataReductionProxySettingsAndroid::IsDataReductionProxyAllowed(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  return Settings()->Allowed();
-}
-
 jboolean DataReductionProxySettingsAndroid::IsDataReductionProxyPromoAllowed(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
   return Settings()->PromoAllowed();
-}
-
-jboolean DataReductionProxySettingsAndroid::IsIncludedInAltFieldTrial(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  return false;
 }
 
 jboolean DataReductionProxySettingsAndroid::IsDataReductionProxyEnabled(
@@ -89,18 +79,6 @@ jboolean DataReductionProxySettingsAndroid::IsDataReductionProxyManaged(
   return Settings()->IsDataReductionProxyManaged();
 }
 
-void DataReductionProxySettingsAndroid::IncrementLoFiSnackbarShown(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  Settings()->IncrementLoFiSnackbarShown();
-}
-
-void DataReductionProxySettingsAndroid::IncrementLoFiUserRequestsForImages(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  Settings()->IncrementLoFiUserRequestsForImages();
-}
-
 void DataReductionProxySettingsAndroid::SetDataReductionProxyEnabled(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj,
@@ -132,6 +110,12 @@ DataReductionProxySettingsAndroid::GetContentLengths(
                                     received_content_length);
 }
 
+jlong DataReductionProxySettingsAndroid::GetTotalHttpContentLengthSaved(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& obj) {
+  return Settings()->GetTotalHttpContentLengthSaved();
+}
+
 ScopedJavaLocalRef<jlongArray>
 DataReductionProxySettingsAndroid::GetDailyOriginalContentLengths(
     JNIEnv* env,
@@ -152,6 +136,14 @@ jboolean DataReductionProxySettingsAndroid::IsDataReductionProxyUnreachable(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
   return Settings()->IsDataReductionProxyUnreachable();
+}
+
+jboolean DataReductionProxySettingsAndroid::AreLoFiPreviewsEnabled(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& obj) {
+  return data_reduction_proxy::params::IsIncludedInLitePageFieldTrial() ||
+      (data_reduction_proxy::params::IsLoFiOnViaFlags() &&
+          data_reduction_proxy::params::AreLitePagesEnabledViaFlags());
 }
 
 // static
@@ -186,18 +178,6 @@ ScopedJavaLocalRef<jstring> DataReductionProxySettingsAndroid::GetHttpProxyList(
     return ConvertUTF8ToJavaString(env, std::string());
 
   return ConvertUTF8ToJavaString(env, event_store->GetHttpProxyList());
-}
-
-ScopedJavaLocalRef<jstring>
-DataReductionProxySettingsAndroid::GetHttpsProxyList(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  data_reduction_proxy::DataReductionProxyEventStore* event_store =
-      Settings()->GetEventStore();
-  if (!event_store)
-    return ConvertUTF8ToJavaString(env, std::string());
-
-  return ConvertUTF8ToJavaString(env, event_store->GetHttpsProxyList());
 }
 
 DataReductionProxySettings* DataReductionProxySettingsAndroid::Settings() {

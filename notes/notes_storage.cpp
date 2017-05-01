@@ -1,4 +1,4 @@
-// Copyright (c) 2014 Vivaldi Technologies AS. All rights reserved
+// Copyright (c) 2013-2017 Vivaldi Technologies AS. All rights reserved
 // Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -9,7 +9,7 @@
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_string_value_serializer.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
@@ -18,6 +18,7 @@
 #include "notes/notes_attachment.h"
 #include "notes/notes_model.h"
 #include "notes/notes_storage.h"
+#include "notes/notes_codec.h"
 
 using base::TimeTicks;
 using content::BrowserThread;
@@ -32,50 +33,53 @@ const base::FilePath::CharType kBackupExtension[] = FILE_PATH_LITERAL("bak");
 // How often we save.
 const int kSaveDelayMS = 2500;
 
-// Traverse the nodes in the tree and sets node ids and returns maximum
-void SetIdsAndGetMax(Notes_Node* node, int64_t& max) {
-  max += 1;
-  node->set_id(max);
-  for (int i = 0; i < node->child_count(); i++)
-    SetIdsAndGetMax(node->GetChild(i), max);
-}
-
-
 void BackupCallback(const base::FilePath& path) {
   base::FilePath backup_path = path.ReplaceExtension(kBackupExtension);
   base::CopyFile(path, backup_path);
 }
 
 void LoadCallback(const base::FilePath& path,
-  vivaldi::NotesStorage* storage,
-  vivaldi::NotesLoadDetails* details) {
+    const base::WeakPtr<vivaldi::NotesStorage> storage,
+    std::unique_ptr<NotesLoadDetails> details) {
   bool notes_file_exists = base::PathExists(path);
   if (notes_file_exists) {
     JSONFileValueDeserializer serializer(path);
-    scoped_ptr<base::Value> root(serializer.Deserialize(NULL, NULL));
+    std::unique_ptr<base::Value> root(serializer.Deserialize(NULL, NULL));
 
     if (root.get()) {
       // Building the index can take a while, so we do it on the background
       // thread.
       int64_t max_node_id = 0;
+      NotesCodec codec;
       TimeTicks start_time = TimeTicks::Now();
-      details->notes_node()->ReadJSON(
-          *static_cast<base::DictionaryValue *>(root.get()));
-      UMA_HISTOGRAM_TIMES("Notes.DecodeTime", TimeTicks::Now() - start_time);
-      SetIdsAndGetMax(details->notes_node(), max_node_id);
+      codec.Decode(details->notes_node(), details->other_notes_node(),
+          details->trash_notes_node(), &max_node_id, *root.get());
       details->update_highest_id(max_node_id);
+      details->set_computed_checksum(codec.computed_checksum());
+      details->set_stored_checksum(codec.stored_checksum());
+      details->set_ids_reassigned(codec.ids_reassigned());
+      UMA_HISTOGRAM_TIMES("Notes.DecodeTime",
+      TimeTicks::Now() - start_time);
     }
   }
 
   BrowserThread::PostTask(
     BrowserThread::UI, FROM_HERE,
-    base::Bind(&vivaldi::NotesStorage::OnLoadFinished, storage));
+    base::Bind(&NotesStorage::OnLoadFinished, storage, base::Passed(&details)));
 }
 
 // NotesLoadDetails ---------------------------------------------------------
-
-NotesLoadDetails::NotesLoadDetails(Notes_Node *notes_node)
-    : notes_node_(notes_node), highest_id_found_(0) {}
+NotesLoadDetails::NotesLoadDetails(
+    Notes_Node* notes_node,
+    Notes_Node* other_notes_node,
+    Notes_Node* trash_notes_node,
+    int64_t max_id)
+  : notes_node_(notes_node),
+  other_notes_node_(other_notes_node),
+  trash_notes_node_(trash_notes_node),
+  highest_id_found_(max_id),
+  ids_reassigned_(false) {
+}
 
 NotesLoadDetails::~NotesLoadDetails() {
 }
@@ -89,7 +93,8 @@ NotesStorage::NotesStorage(
   : model_(model),
     writer_(context->GetPath().Append(kNotesFileName),
             sequenced_task_runner,
-            base::TimeDelta::FromMilliseconds(kSaveDelayMS)) {
+            base::TimeDelta::FromMilliseconds(kSaveDelayMS)),
+    weak_factory_(this){
   sequenced_task_runner_ = sequenced_task_runner;
   sequenced_task_runner_->PostTask(FROM_HERE,
     base::Bind(&BackupCallback, writer_.path()));
@@ -100,17 +105,16 @@ NotesStorage::~NotesStorage() {
     writer_.DoScheduledWrite();
 }
 
-void NotesStorage::LoadNotes(NotesLoadDetails* details) {
-  DCHECK(!details_.get());
+void NotesStorage::LoadNotes(std::unique_ptr<NotesLoadDetails> details) {
   DCHECK(details);
-  details_.reset(details);
   sequenced_task_runner_->PostTask(
     FROM_HERE,
-    base::Bind(&LoadCallback, writer_.path(), make_scoped_refptr(this),
-    details_.get()));
+    base::Bind(&LoadCallback,
+        writer_.path(), weak_factory_.GetWeakPtr(), base::Passed(&details)));
 }
 
 void NotesStorage::ScheduleSave() {
+  DCHECK(model_);
   writer_.ScheduleWrite(this);
 }
 
@@ -120,24 +124,22 @@ void NotesStorage::NotesModelDeleted() {
   if (writer_.HasPendingWrite())
     SaveNow();
 
-  if (model_ && details_.get() && model_->root() == details_->notes_node())
-    details_->release_notes_node();
-
   model_ = NULL;
 }
 
 bool NotesStorage::SerializeData(std::string* output) {
-  scoped_ptr<base::Value> value(model_->root()->WriteJSON());
+  NotesCodec codec;
+  std::unique_ptr<base::Value> value(codec.Encode(model_));
   JSONStringValueSerializer serializer(output);
   serializer.set_pretty_print(true);
   return serializer.Serialize(*(value.get()));
 }
 
-void NotesStorage::OnLoadFinished() {
+void NotesStorage::OnLoadFinished(std::unique_ptr<NotesLoadDetails> details) {
   if (!model_)
     return;
 
-  model_->DoneLoading(details_.release());
+  model_->DoneLoading(std::move(details));
 }
 
 bool NotesStorage::SaveNow() {
@@ -148,7 +150,7 @@ bool NotesStorage::SaveNow() {
     return false;
   }
 
-  scoped_ptr<std::string> data(new std::string);
+  std::unique_ptr<std::string> data(new std::string);
   if (!SerializeData(data.get()))
     return false;
   writer_.WriteNow(std::move(data));

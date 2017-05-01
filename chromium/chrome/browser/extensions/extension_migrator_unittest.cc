@@ -6,6 +6,7 @@
 
 #include "base/files/file_util.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
@@ -24,8 +25,8 @@ const char kNewId[] = "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn";
 
 scoped_refptr<Extension> CreateExtension(const std::string& id) {
   return ExtensionBuilder()
-      .SetManifest(std::move(
-          DictionaryBuilder().Set("name", "test").Set("version", "0.1")))
+      .SetManifest(
+          DictionaryBuilder().Set("name", "test").Set("version", "0.1").Build())
       .SetID(id)
       .Build();
 }
@@ -51,12 +52,9 @@ class ExtensionMigratorTest : public ExtensionServiceTestBase {
   }
 
   void AddMigratorProvider() {
-    service()->AddProviderForTesting(new ExternalProviderImpl(
-        service(),
-        new ExtensionMigrator(profile(), kOldId, kNewId),
-        profile(),
-        Manifest::EXTERNAL_PREF,
-        Manifest::EXTERNAL_PREF_DOWNLOAD,
+    service()->AddProviderForTesting(base::MakeUnique<ExternalProviderImpl>(
+        service(), new ExtensionMigrator(profile(), kOldId, kNewId), profile(),
+        Manifest::EXTERNAL_PREF, Manifest::EXTERNAL_PREF_DOWNLOAD,
         Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
   }
 

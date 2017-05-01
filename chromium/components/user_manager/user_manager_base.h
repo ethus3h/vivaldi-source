@@ -6,6 +6,7 @@
 #define COMPONENTS_USER_MANAGER_USER_MANAGER_BASE_H_
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -21,11 +22,9 @@
 #include "components/user_manager/user_manager_export.h"
 #include "components/user_manager/user_type.h"
 
-class PrefService;
 class PrefRegistrySimple;
 
 namespace base {
-class DictionaryValue;
 class ListValue;
 class TaskRunner;
 }
@@ -56,15 +55,13 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
                     bool browser_restart) override;
   void SwitchActiveUser(const AccountId& account_id) override;
   void SwitchToLastActiveUser() override;
-  void SessionStarted() override;
+  void OnSessionStarted() override;
   void RemoveUser(const AccountId& account_id,
                   RemoveUserDelegate* delegate) override;
   void RemoveUserFromList(const AccountId& account_id) override;
   bool IsKnownUser(const AccountId& account_id) const override;
   const User* FindUser(const AccountId& account_id) const override;
   User* FindUserAndModify(const AccountId& account_id) override;
-  const User* GetLoggedInUser() const override;
-  User* GetLoggedInUser() override;
   const User* GetActiveUser() const override;
   User* GetActiveUser() override;
   const User* GetPrimaryUser() const override;
@@ -85,6 +82,7 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   bool IsCurrentUserOwner() const override;
   bool IsCurrentUserNew() const override;
   bool IsCurrentUserNonCryptohomeDataEphemeral() const override;
+  bool IsCurrentUserCryptohomeDataEphemeral() const override;
   bool CanCurrentUserLock() const override;
   bool IsUserLoggedIn() const override;
   bool IsLoggedInAsUserWithGaiaAccount() const override;
@@ -93,9 +91,11 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   bool IsLoggedInAsGuest() const override;
   bool IsLoggedInAsSupervisedUser() const override;
   bool IsLoggedInAsKioskApp() const override;
+  bool IsLoggedInAsArcKioskApp() const override;
   bool IsLoggedInAsStub() const override;
-  bool IsSessionStarted() const override;
   bool IsUserNonCryptohomeDataEphemeral(
+      const AccountId& account_id) const override;
+  bool IsUserCryptohomeDataEphemeral(
       const AccountId& account_id) const override;
   void AddObserver(UserManager::Observer* obs) override;
   void RemoveObserver(UserManager::Observer* obs) override;
@@ -104,6 +104,11 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   void RemoveSessionStateObserver(
       UserManager::UserSessionStateObserver* obs) override;
   void NotifyLocalStateChanged() override;
+  void NotifyUserImageChanged(const User& user) override;
+  void NotifyUserProfileImageUpdateFailed(const User& user) override;
+  void NotifyUserProfileImageUpdated(
+      const User& user,
+      const gfx::ImageSkia& profile_image) override;
   void ChangeUserChildStatus(User* user, bool is_child) override;
   void Initialize() override;
 
@@ -153,12 +158,10 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   // Returns true if device is enterprise managed.
   virtual bool IsEnterpriseManaged() const = 0;
 
-  // Helper function that copies users from |users_list| to |users_vector| and
-  // |users_set|. Duplicates and users already present in |existing_users| are
-  // skipped.
-  // Loads public accounts from the Local state and fills in
-  // |public_sessions_set|.
-  virtual void LoadPublicAccounts(std::set<AccountId>* public_sessions_set) = 0;
+  // Loads device local accounts from the Local state and fills in
+  // |device_local_accounts_set|.
+  virtual void LoadDeviceLocalAccounts(
+      std::set<AccountId>* device_local_accounts_set) = 0;
 
   // Notifies that user has logged in.
   virtual void NotifyOnLogin();
@@ -206,12 +209,9 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   // Returns true if |account_id| represents demo app.
   virtual bool IsDemoApp(const AccountId& account_id) const = 0;
 
-  // Returns true if |account_id| represents kiosk app.
-  virtual bool IsKioskApp(const AccountId& account_id) const = 0;
-
-  // Returns true if |account_id| represents public account that has been marked
-  // for deletion.
-  virtual bool IsPublicAccountMarkedForRemoval(
+  // Returns true if |account_id| represents a device local account that has
+  // been marked for deletion.
+  virtual bool IsDeviceLocalAccountMarkedForRemoval(
       const AccountId& account_id) const = 0;
 
   // These methods are called when corresponding user type has signed in.
@@ -223,7 +223,10 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   virtual void GuestUserLoggedIn();
 
   // Indicates that a kiosk app robot just logged in.
-  virtual void KioskAppLoggedIn(const AccountId& kiosk_app_account_id) = 0;
+  virtual void KioskAppLoggedIn(User* user) = 0;
+
+  // Indicates that an ARC kiosk app robot just logged in.
+  virtual void ArcKioskAppLoggedIn(User* user) = 0;
 
   // Indicates that a user just logged into a public session.
   virtual void PublicAccountUserLoggedIn(User* user) = 0;
@@ -268,8 +271,8 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   User* primary_user_ = nullptr;
 
   // List of all known users. User instances are owned by |this|. Regular users
-  // are removed by |RemoveUserFromList|, public accounts by
-  // |UpdateAndCleanUpPublicAccounts|.
+  // are removed by |RemoveUserFromList|, device local accounts by
+  // |UpdateAndCleanUpDeviceLocalAccounts|.
   UserList users_;
 
   // List of all users that are logged in current session. These point to User
@@ -332,13 +335,10 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
 
   // Updates user account after locale was resolved.
   void DoUpdateAccountLocale(const AccountId& account_id,
-                             scoped_ptr<std::string> resolved_locale);
+                             std::unique_ptr<std::string> resolved_locale);
 
   // Indicates stage of loading user from prefs.
   UserLoadStage user_loading_stage_ = STAGE_NOT_LOADED;
-
-  // True if SessionStarted() has been called.
-  bool session_started_ = false;
 
   // Cached flag of whether currently logged-in user is owner or not.
   // May be accessed on different threads, requires locking.

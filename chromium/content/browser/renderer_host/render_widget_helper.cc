@@ -11,6 +11,7 @@
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
+#include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -82,76 +83,82 @@ void RenderWidgetHelper::ResumeDeferredNavigation(
                  request_id));
 }
 
-void RenderWidgetHelper::ResumeRequestsForView(int route_id) {
-  // We only need to resume blocked requests if we used a valid route_id.
-  // See CreateNewWindow.
-  if (route_id != MSG_ROUTING_NONE) {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::Bind(&RenderWidgetHelper::OnResumeRequestsForView,
-            this, route_id));
-  }
-}
-
 void RenderWidgetHelper::OnResumeDeferredNavigation(
     const GlobalRequestID& request_id) {
   resource_dispatcher_host_->ResumeDeferredNavigation(request_id);
 }
 
 void RenderWidgetHelper::CreateNewWindow(
-    const ViewHostMsg_CreateWindow_Params& params,
+    mojom::CreateNewWindowParamsPtr params,
     bool no_javascript_access,
-    base::ProcessHandle render_process,
-    int32_t* route_id,
+    int32_t* render_view_route_id,
     int32_t* main_frame_route_id,
     int32_t* main_frame_widget_route_id,
     SessionStorageNamespace* session_storage_namespace) {
-  if (params.opener_suppressed || no_javascript_access) {
+  if (params->opener_suppressed || no_javascript_access) {
     // If the opener is supppressed or script access is disallowed, we should
     // open the window in a new BrowsingInstance, and thus a new process. That
     // means the current renderer process will not be able to route messages to
     // it. Because of this, we will immediately show and navigate the window
-    // in OnCreateWindowOnUI, using the params provided here.
-    *route_id = MSG_ROUTING_NONE;
+    // in OnCreateNewWindowOnUI, using the params provided here.
+    *render_view_route_id = MSG_ROUTING_NONE;
     *main_frame_route_id = MSG_ROUTING_NONE;
     *main_frame_widget_route_id = MSG_ROUTING_NONE;
   } else {
-    *route_id = GetNextRoutingID();
+    *render_view_route_id = GetNextRoutingID();
     *main_frame_route_id = GetNextRoutingID();
     // TODO(avi): When RenderViewHostImpl has-a RenderWidgetHostImpl, this
     // should be updated to give the widget a distinct routing ID.
     // https://crbug.com/545684
-    *main_frame_widget_route_id = *route_id;
-    // Block resource requests until the view is created, since the HWND might
-    // be needed if a response ends up creating a plugin.
+    *main_frame_widget_route_id = *render_view_route_id;
+    // Block resource requests until the frame is created, since the HWND might
+    // be needed if a response ends up creating a plugin. We'll only have a
+    // single frame at this point. These requests will be resumed either in
+    // WebContentsImpl::CreateNewWindow or RenderFrameHost::Init.
     resource_dispatcher_host_->BlockRequestsForRoute(
-        render_process_id_, *route_id);
+        GlobalFrameRoutingId(render_process_id_, *main_frame_route_id));
   }
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(&RenderWidgetHelper::OnCreateWindowOnUI, this, params,
-                 *route_id, *main_frame_route_id, *main_frame_widget_route_id,
-                 make_scoped_refptr(session_storage_namespace)));
+      base::Bind(&RenderWidgetHelper::OnCreateNewWindowOnUI, this,
+                 base::Passed(&params), *render_view_route_id,
+                 *main_frame_route_id, *main_frame_widget_route_id,
+                 base::RetainedRef(session_storage_namespace)));
 }
 
-void RenderWidgetHelper::OnCreateWindowOnUI(
-    const ViewHostMsg_CreateWindow_Params& params,
-    int32_t route_id,
+void RenderWidgetHelper::OnCreateNewWindowOnUI(
+    mojom::CreateNewWindowParamsPtr params,
+    int32_t render_view_route_id,
     int32_t main_frame_route_id,
     int32_t main_frame_widget_route_id,
     SessionStorageNamespace* session_storage_namespace) {
-  RenderViewHostImpl* host =
-      RenderViewHostImpl::FromID(render_process_id_, params.opener_id);
-  if (host)
-    host->CreateNewWindow(route_id, main_frame_route_id,
-                          main_frame_widget_route_id, params,
-                          session_storage_namespace);
-}
+  RenderFrameHostImpl* opener = RenderFrameHostImpl::FromID(
+      render_process_id_, params->opener_render_frame_id);
+  if (opener && opener->IsRenderFrameLive()) {
+    opener->OnCreateNewWindow(render_view_route_id, main_frame_route_id,
+                              main_frame_widget_route_id, *params,
+                              session_storage_namespace);
+  }
 
-void RenderWidgetHelper::OnResumeRequestsForView(int route_id) {
-  resource_dispatcher_host_->ResumeBlockedRequestsForRoute(
-      render_process_id_, route_id);
+  // If we did not create a WebContents to host the renderer-created
+  // RenderFrame/RenderView/RenderWidget objects, destroy them.
+  RenderProcessHost* rph = RenderProcessHost::FromID(render_process_id_);
+  if (main_frame_route_id != MSG_ROUTING_NONE && rph != nullptr) {
+    bool succeeded =
+        RenderWidgetHost::FromID(render_process_id_,
+                                 main_frame_widget_route_id) != nullptr;
+    if (!succeeded) {
+      DCHECK(!RenderFrameHost::FromID(render_process_id_, main_frame_route_id));
+      DCHECK(!RenderViewHost::FromID(render_process_id_, render_view_route_id));
+
+      rph->Send(new ViewMsg_Close(render_view_route_id));
+    } else {
+      // If a RWH was created, there should also be an RFH and RVH.
+      DCHECK(RenderFrameHost::FromID(render_process_id_, main_frame_route_id));
+      DCHECK(RenderViewHost::FromID(render_process_id_, render_view_route_id));
+    }
+  }
 }
 
 void RenderWidgetHelper::CreateNewWidget(int opener_id,

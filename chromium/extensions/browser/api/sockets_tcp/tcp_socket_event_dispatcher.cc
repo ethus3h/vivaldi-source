@@ -57,6 +57,9 @@ TCPSocketEventDispatcher::~TCPSocketEventDispatcher() {}
 
 TCPSocketEventDispatcher::ReadParams::ReadParams() {}
 
+TCPSocketEventDispatcher::ReadParams::ReadParams(const ReadParams& other) =
+    default;
+
 TCPSocketEventDispatcher::ReadParams::~ReadParams() {}
 
 void TCPSocketEventDispatcher::OnSocketConnect(const std::string& extension_id,
@@ -115,7 +118,8 @@ void TCPSocketEventDispatcher::StartRead(const ReadParams& params) {
 void TCPSocketEventDispatcher::ReadCallback(
     const ReadParams& params,
     int bytes_read,
-    scoped_refptr<net::IOBuffer> io_buffer) {
+    scoped_refptr<net::IOBuffer> io_buffer,
+    bool socket_destroying) {
   DCHECK_CURRENTLY_ON(params.thread_id);
 
   // If |bytes_read| == 0, the connection has been closed by the peer.
@@ -131,11 +135,11 @@ void TCPSocketEventDispatcher::ReadCallback(
     sockets_tcp::ReceiveInfo receive_info;
     receive_info.socket_id = params.socket_id;
     receive_info.data.assign(io_buffer->data(), io_buffer->data() + bytes_read);
-    scoped_ptr<base::ListValue> args =
+    std::unique_ptr<base::ListValue> args =
         sockets_tcp::OnReceive::Create(receive_info);
-    scoped_ptr<Event> event(new Event(events::SOCKETS_TCP_ON_RECEIVE,
-                                      sockets_tcp::OnReceive::kEventName,
-                                      std::move(args)));
+    std::unique_ptr<Event> event(new Event(events::SOCKETS_TCP_ON_RECEIVE,
+                                           sockets_tcp::OnReceive::kEventName,
+                                           std::move(args)));
     PostEvent(params, std::move(event));
 
     // Post a task to delay the read until the socket is available, as
@@ -153,26 +157,28 @@ void TCPSocketEventDispatcher::ReadCallback(
     sockets_tcp::ReceiveErrorInfo receive_error_info;
     receive_error_info.socket_id = params.socket_id;
     receive_error_info.result_code = bytes_read;
-    scoped_ptr<base::ListValue> args =
+    std::unique_ptr<base::ListValue> args =
         sockets_tcp::OnReceiveError::Create(receive_error_info);
-    scoped_ptr<Event> event(new Event(events::SOCKETS_TCP_ON_RECEIVE_ERROR,
-                                      sockets_tcp::OnReceiveError::kEventName,
-                                      std::move(args)));
+    std::unique_ptr<Event> event(
+        new Event(events::SOCKETS_TCP_ON_RECEIVE_ERROR,
+                  sockets_tcp::OnReceiveError::kEventName, std::move(args)));
     PostEvent(params, std::move(event));
 
-    // Since we got an error, the socket is now "paused" until the application
-    // "resumes" it.
-    ResumableTCPSocket* socket =
-        params.sockets->Get(params.extension_id, params.socket_id);
-    if (socket) {
-      socket->set_paused(true);
+    // Do not try to access |socket| when we are destroying it.
+    if (!socket_destroying) {
+      // Since we got an error, the socket is now "paused" until the application
+      // "resumes" it.
+      ResumableTCPSocket* socket =
+          params.sockets->Get(params.extension_id, params.socket_id);
+      if (socket)
+        socket->set_paused(true);
     }
   }
 }
 
 // static
 void TCPSocketEventDispatcher::PostEvent(const ReadParams& params,
-                                         scoped_ptr<Event> event) {
+                                         std::unique_ptr<Event> event) {
   DCHECK_CURRENTLY_ON(params.thread_id);
 
   BrowserThread::PostTask(
@@ -184,7 +190,7 @@ void TCPSocketEventDispatcher::PostEvent(const ReadParams& params,
 // static
 void TCPSocketEventDispatcher::DispatchEvent(void* browser_context_id,
                                              const std::string& extension_id,
-                                             scoped_ptr<Event> event) {
+                                             std::unique_ptr<Event> event) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   content::BrowserContext* context =

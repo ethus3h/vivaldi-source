@@ -110,9 +110,9 @@ public class OmahaClient extends IntentService {
     // Static fields
     private static boolean sEnableCommunication = true;
     private static boolean sEnableUpdateDetection = true;
-    private static VersionNumberGetter sVersionNumberGetter = null;
-    private static MarketURLGetter sMarketURLGetter = null;
-    private static Boolean sIsFreshInstallOrDataCleared = null;
+    private static VersionNumberGetter sVersionNumberGetter;
+    private static MarketURLGetter sMarketURLGetter;
+    private static Boolean sIsFreshInstallOrDataCleared;
 
     // Member fields not persisted to disk.
     private boolean mStateHasBeenRestored;
@@ -195,6 +195,10 @@ public class OmahaClient extends IntentService {
 
         if (!sEnableCommunication) {
             Log.v(TAG, "Disabled.  Ignoring intent.");
+            return;
+        }
+
+        if (getRequestGenerator() == null) {
             return;
         }
 
@@ -603,6 +607,18 @@ public class OmahaClient extends IntentService {
         }
 
         return currentVersionNumber.isSmallerThan(latestVersionNumber);
+    }
+
+    /**
+     * Retrieves the latest version we know about from disk.
+     * This function incurs I/O, so make sure you don't use it from the main thread.
+     *
+     * @return A string representing the latest version.
+     */
+    static String getLatestVersionNumberString(Context context) {
+        assert Looper.myLooper() != Looper.getMainLooper();
+        VersionNumberGetter getter = getVersionNumberGetter();
+        return getter.getLatestKnownVersion(context, PREF_PACKAGE, PREF_LATEST_VERSION);
     }
 
     /**

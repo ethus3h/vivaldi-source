@@ -16,6 +16,32 @@
           "name": {
             "type": "string",
             "description": "Session display name created from the filename"
+          },
+          "createDateJS": {
+            "type": "number",
+            "description": "Session save date in JS format."
+          }
+        }
+      },
+      {
+        "id": "SessionOpenOptions",
+        "type": "object",
+        "description": "Options for opening the session.",
+        "properties": {
+          "openInNewWindow": {
+            "type": "boolean",
+            "description": "The session will open in a new window."
+          }
+        }
+      },
+      {
+        "id": "SessionSaveOptions",
+        "type": "object",
+        "description": "Options for saving the session.",
+        "properties": {
+          "saveOnlyWindowId": {
+            "type": "integer",
+            "description": "Save only the given window."
           }
         }
       }
@@ -52,6 +78,11 @@
             "description": "Name of the session to save to."
           },
           {
+            "name": "options",
+            "description": "Session save options.",
+            "$ref": "SessionSaveOptions"
+          },
+          {
             "type": "function",
             "name": "callback",
             "parameters": [
@@ -75,8 +106,15 @@
             "description": "Name of the session to open."
           },
           {
+            "name": "options",
+            "optional": true,
+            "description": "Session open options.",
+            "$ref": "SessionOpenOptions"
+          },
+          {
             "type": "function",
             "name": "callback",
+            "optional": true,
             "parameters": [
               {
                 "name": "status",

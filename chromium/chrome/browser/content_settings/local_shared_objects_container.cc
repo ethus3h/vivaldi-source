@@ -4,12 +4,14 @@
 
 #include "chrome/browser/content_settings/local_shared_objects_container.h"
 
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/browsing_data/browsing_data_appcache_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_cache_storage_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_channel_id_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_cookie_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_database_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_flash_lso_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_service_worker_helper.h"
@@ -85,13 +87,10 @@ size_t LocalSharedObjectsContainer::GetObjectCountForDomain(
   for (OriginCookieSetMap::const_iterator it = origin_cookies_set_map.begin();
        it != origin_cookies_set_map.end();
        ++it) {
-    const canonical_cookie::CookieHashSet* cookie_list = it->second;
-    for (canonical_cookie::CookieHashSet::const_iterator cookie =
-             cookie_list->begin();
-         cookie != cookie_list->end();
-         ++cookie) {
+    const canonical_cookie::CookieHashSet* cookie_list = it->second.get();
+    for (const auto& cookie : *cookie_list) {
       // Strip leading '.'s.
-      std::string cookie_domain = cookie->Domain();
+      std::string cookie_domain = cookie.Domain();
       if (cookie_domain[0] == '.')
         cookie_domain = cookie_domain.substr(1);
       // The |domain_url| is only created in order to use the
@@ -216,12 +215,12 @@ void LocalSharedObjectsContainer::Reset() {
   session_storages_->Reset();
 }
 
-scoped_ptr<CookiesTreeModel>
+std::unique_ptr<CookiesTreeModel>
 LocalSharedObjectsContainer::CreateCookiesTreeModel() const {
   LocalDataContainer* container = new LocalDataContainer(
-      cookies(), databases(), local_storages(), session_storages(), appcaches(),
-      indexed_dbs(), file_systems(), NULL, channel_ids(), service_workers(),
-      cache_storages(), NULL);
+      cookies_, databases_, local_storages_, session_storages_, appcaches_,
+      indexed_dbs_, file_systems_, nullptr, channel_ids_, service_workers_,
+      cache_storages_, nullptr, nullptr);
 
-  return make_scoped_ptr(new CookiesTreeModel(container, NULL, true));
+  return base::MakeUnique<CookiesTreeModel>(container, nullptr);
 }

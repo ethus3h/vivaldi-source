@@ -10,19 +10,20 @@
 #include <map>
 
 #include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "media/base/cdm_context.h"
-#include "media/base/media_export.h"
+#include "media/mojo/services/media_mojo_export.h"
 
 namespace media {
 
+class ContentDecryptionModule;
 class MojoCdmService;
 
 // A class that creates, owns and manages all MojoCdmService instances.
-class MojoCdmServiceContext : public CdmContextProvider {
+class MEDIA_MOJO_EXPORT MojoCdmServiceContext {
  public:
   MojoCdmServiceContext();
-  ~MojoCdmServiceContext() override;
+  ~MojoCdmServiceContext();
 
   base::WeakPtr<MojoCdmServiceContext> GetWeakPtr();
 
@@ -32,12 +33,8 @@ class MojoCdmServiceContext : public CdmContextProvider {
   // Unregisters the CDM. Must be called before the CDM is destroyed.
   void UnregisterCdm(int cdm_id);
 
-  // CdmContextProvider implementation.
-  // The returned CdmContext can be destroyed at any time if the pipe is
-  // disconnected.
-  // TODO(xhwang): When implementing SetCdm(), make sure we never dereference
-  // garbage. For example, use media::PlayerTracker.
-  CdmContext* GetCdmContext(int32_t cdm_id) override;
+  // Returns the CDM associated with |cdm_id|.
+  scoped_refptr<ContentDecryptionModule> GetCdm(int cdm_id);
 
  private:
   // A map between CDM ID and MojoCdmService.

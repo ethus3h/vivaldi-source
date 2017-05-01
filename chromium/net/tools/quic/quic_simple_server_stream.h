@@ -10,13 +10,14 @@
 #include <string>
 
 #include "base/macros.h"
-#include "net/quic/quic_protocol.h"
-#include "net/quic/quic_spdy_stream.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/core/quic_spdy_stream.h"
 #include "net/spdy/spdy_framer.h"
+#include "net/tools/quic/quic_http_response_cache.h"
+#include "net/tools/quic/quic_spdy_server_stream_base.h"
 
 namespace net {
 
-namespace tools {
 
 namespace test {
 class QuicSimpleServerStreamPeer;
@@ -24,16 +25,22 @@ class QuicSimpleServerStreamPeer;
 
 // All this does right now is aggregate data, and on fin, send an HTTP
 // response.
-class QuicSimpleServerStream : public QuicSpdyStream {
+class QuicSimpleServerStream : public QuicSpdyServerStreamBase {
  public:
-  QuicSimpleServerStream(QuicStreamId id, QuicSpdySession* session);
+  QuicSimpleServerStream(QuicStreamId id,
+                         QuicSpdySession* session,
+                         QuicHttpResponseCache* response_cache);
   ~QuicSimpleServerStream() override;
 
   // QuicSpdyStream
-  void OnInitialHeadersComplete(bool fin, size_t frame_len) override;
-  void OnTrailingHeadersComplete(bool fin, size_t frame_len) override;
+  void OnInitialHeadersComplete(bool fin,
+                                size_t frame_len,
+                                const QuicHeaderList& header_list) override;
+  void OnTrailingHeadersComplete(bool fin,
+                                 size_t frame_len,
+                                 const QuicHeaderList& header_list) override;
 
-  // ReliableQuicStream implementation called by the sequencer when there is
+  // QuicStream implementation called by the sequencer when there is
   // data (or a FIN) to be read.
   void OnDataAvailable() override;
 
@@ -44,6 +51,7 @@ class QuicSimpleServerStream : public QuicSpdyStream {
 
   // The response body of error responses.
   static const char* const kErrorResponseBody;
+  static const char* const kNotFoundResponseBody;
 
  protected:
   // Sends a basic 200 response using SendHeaders for the headers and WriteData
@@ -51,14 +59,18 @@ class QuicSimpleServerStream : public QuicSpdyStream {
   virtual void SendResponse();
 
   // Sends a basic 500 response using SendHeaders for the headers and WriteData
-  // for the body
+  // for the body.
   virtual void SendErrorResponse();
 
-  void SendHeadersAndBody(const SpdyHeaderBlock& response_headers,
+  // Sends a basic 404 response using SendHeaders for the headers and WriteData
+  // for the body.
+  void SendNotFoundResponse();
+
+  void SendHeadersAndBody(SpdyHeaderBlock response_headers,
                           base::StringPiece body);
-  void SendHeadersAndBodyAndTrailers(const SpdyHeaderBlock& response_headers,
+  void SendHeadersAndBodyAndTrailers(SpdyHeaderBlock response_headers,
                                      base::StringPiece body,
-                                     const SpdyHeaderBlock& response_trailers);
+                                     SpdyHeaderBlock response_trailers);
 
   SpdyHeaderBlock* request_headers() { return &request_headers_; }
 
@@ -69,13 +81,14 @@ class QuicSimpleServerStream : public QuicSpdyStream {
 
   // The parsed headers received from the client.
   SpdyHeaderBlock request_headers_;
-  int content_length_;
+  int64_t content_length_;
   std::string body_;
+
+  QuicHttpResponseCache* response_cache_;  // Not owned.
 
   DISALLOW_COPY_AND_ASSIGN(QuicSimpleServerStream);
 };
 
-}  // namespace tools
 }  // namespace net
 
 #endif  // NET_TOOLS_QUIC_QUIC_SIMPLE_SERVER_STREAM_H_

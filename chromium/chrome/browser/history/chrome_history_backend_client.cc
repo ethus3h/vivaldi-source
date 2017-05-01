@@ -6,24 +6,24 @@
 
 #include "build/build_config.h"
 #include "chrome/common/channel_info.h"
-#include "chrome/common/features.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/version_info/version_info.h"
+#include "content/public/browser/child_process_security_policy.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ANDROID_JAVA_UI)
+#if defined(OS_ANDROID)
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "chrome/browser/history/android/android_provider_backend.h"
 #include "components/history/core/browser/history_backend.h"
 #endif
 
-#if BUILDFLAG(ANDROID_JAVA_UI)
+#if defined(OS_ANDROID)
 namespace {
 const base::FilePath::CharType kAndroidCacheFilename[] =
     FILE_PATH_LITERAL("AndroidCache");
 }
-#endif  // defined(OS_IOS)
+#endif
 
 ChromeHistoryBackendClient::ChromeHistoryBackendClient(
     bookmarks::BookmarkModel* bookmark_model)
@@ -72,7 +72,12 @@ bool ChromeHistoryBackendClient::ShouldReportDatabaseError() {
          channel != version_info::Channel::BETA;
 }
 
-#if BUILDFLAG(ANDROID_JAVA_UI)
+bool ChromeHistoryBackendClient::IsWebSafe(const GURL& url) {
+  return content::ChildProcessSecurityPolicy::GetInstance()->IsWebSafeScheme(
+      url.scheme());
+}
+
+#if defined(OS_ANDROID)
 void ChromeHistoryBackendClient::OnHistoryBackendInitialized(
     history::HistoryBackend* history_backend,
     history::HistoryDatabase* history_database,
@@ -93,4 +98,4 @@ void ChromeHistoryBackendClient::OnHistoryBackendDestroyed(
     const base::FilePath& history_dir) {
   sql::Connection::Delete(history_dir.Append(kAndroidCacheFilename));
 }
-#endif  // BUILDFLAG(ANDROID_JAVA_UI)
+#endif  // defined(OS_ANDROID)

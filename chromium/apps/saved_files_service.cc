@@ -5,12 +5,14 @@
 #include "apps/saved_files_service.h"
 
 #include <stdint.h>
+
 #include <algorithm>
 #include <map>
+#include <unordered_map>
 #include <utility>
 
 #include "apps/saved_files_service_factory.h"
-#include "base/containers/scoped_ptr_hash_map.h"
+#include "base/memory/ptr_util.h"
 #include "base/value_conversions.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
@@ -64,12 +66,14 @@ void AddSavedFileEntry(ExtensionPrefs* prefs,
     file_entries = update.Create();
   DCHECK(!file_entries->GetDictionaryWithoutPathExpansion(file_entry.id, NULL));
 
-  base::DictionaryValue* file_entry_dict = new base::DictionaryValue();
+  std::unique_ptr<base::DictionaryValue> file_entry_dict =
+      base::MakeUnique<base::DictionaryValue>();
   file_entry_dict->Set(kFileEntryPath, CreateFilePathValue(file_entry.path));
   file_entry_dict->SetBoolean(kFileEntryIsDirectory, file_entry.is_directory);
   file_entry_dict->SetInteger(kFileEntrySequenceNumber,
                               file_entry.sequence_number);
-  file_entries->SetWithoutPathExpansion(file_entry.id, file_entry_dict);
+  file_entries->SetWithoutPathExpansion(file_entry.id,
+                                        std::move(file_entry_dict));
 }
 
 // Updates the sequence_number of a SavedFileEntry persisted in ExtensionPrefs.
@@ -176,9 +180,8 @@ class SavedFilesService::SavedFiles {
   Profile* profile_;
   const std::string extension_id_;
 
-  // Contains all file entries that have been registered, keyed by ID. Owns
-  // values.
-  base::ScopedPtrHashMap<std::string, scoped_ptr<SavedFileEntry>>
+  // Contains all file entries that have been registered, keyed by ID.
+  std::unordered_map<std::string, std::unique_ptr<SavedFileEntry>>
       registered_file_entries_;
 
   // The queue of file entries that have been retained, keyed by
@@ -287,7 +290,7 @@ SavedFilesService::SavedFiles* SavedFilesService::GetOrInsert(
   if (saved_files)
     return saved_files;
 
-  scoped_ptr<SavedFiles> scoped_saved_files(
+  std::unique_ptr<SavedFiles> scoped_saved_files(
       new SavedFiles(profile_, extension_id));
   saved_files = scoped_saved_files.get();
   extension_id_to_saved_files_.insert(
@@ -311,18 +314,19 @@ void SavedFilesService::SavedFiles::RegisterFileEntry(
     const std::string& id,
     const base::FilePath& file_path,
     bool is_directory) {
-  if (ContainsKey(registered_file_entries_, id))
+  auto it = registered_file_entries_.find(id);
+  if (it != registered_file_entries_.end())
     return;
 
-  registered_file_entries_.add(
-      id, make_scoped_ptr(new SavedFileEntry(id, file_path, is_directory, 0)));
+  registered_file_entries_[id] =
+      base::MakeUnique<SavedFileEntry>(id, file_path, is_directory, 0);
 }
 
 void SavedFilesService::SavedFiles::EnqueueFileEntry(const std::string& id) {
   auto it = registered_file_entries_.find(id);
   DCHECK(it != registered_file_entries_.end());
 
-  SavedFileEntry* file_entry = it->second;
+  SavedFileEntry* file_entry = it->second.get();
   int old_sequence_number = file_entry->sequence_number;
   if (!saved_file_lru_.empty()) {
     // Get the sequence number after the last file entry in the LRU.
@@ -355,7 +359,8 @@ void SavedFilesService::SavedFiles::EnqueueFileEntry(const std::string& id) {
 }
 
 bool SavedFilesService::SavedFiles::IsRegistered(const std::string& id) const {
-  return ContainsKey(registered_file_entries_, id);
+  auto it = registered_file_entries_.find(id);
+  return it != registered_file_entries_.end();
 }
 
 const SavedFileEntry* SavedFilesService::SavedFiles::GetFileEntry(
@@ -364,7 +369,7 @@ const SavedFileEntry* SavedFilesService::SavedFiles::GetFileEntry(
   if (it == registered_file_entries_.end())
     return NULL;
 
-  return it->second;
+  return it->second.get();
 }
 
 std::vector<SavedFileEntry> SavedFilesService::SavedFiles::GetAllFileEntries()
@@ -372,7 +377,7 @@ std::vector<SavedFileEntry> SavedFilesService::SavedFiles::GetAllFileEntries()
   std::vector<SavedFileEntry> result;
   for (auto it = registered_file_entries_.begin();
        it != registered_file_entries_.end(); ++it) {
-    result.push_back(*it->second);
+    result.push_back(*it->second.get());
   }
   return result;
 }
@@ -419,11 +424,11 @@ void SavedFilesService::SavedFiles::LoadSavedFileEntriesFromPreferences() {
   for (std::vector<SavedFileEntry>::iterator it = saved_entries.begin();
        it != saved_entries.end();
        ++it) {
-    scoped_ptr<SavedFileEntry> file_entry(new SavedFileEntry(*it));
+    std::unique_ptr<SavedFileEntry> file_entry(new SavedFileEntry(*it));
     const std::string& id = file_entry->id;
     saved_file_lru_.insert(
         std::make_pair(file_entry->sequence_number, file_entry.get()));
-    registered_file_entries_.add(id, std::move(file_entry));
+    registered_file_entries_[id] = std::move(file_entry);
   }
 }
 

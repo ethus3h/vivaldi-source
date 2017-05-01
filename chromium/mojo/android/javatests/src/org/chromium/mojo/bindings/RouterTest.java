@@ -4,8 +4,9 @@
 
 package org.chromium.mojo.bindings;
 
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
+import org.chromium.base.annotations.SuppressFBWarnings;
 import org.chromium.mojo.MojoTestCase;
 import org.chromium.mojo.bindings.BindingsTestUtils.CapturingErrorHandler;
 import org.chromium.mojo.bindings.BindingsTestUtils.RecordingMessageReceiverWithResponder;
@@ -155,6 +156,7 @@ public class RouterTest extends MojoTestCase {
     private void clearAllMessageReceivers() {
         Thread myFinalizerThread = new Thread() {
             @Override
+            @SuppressFBWarnings("FI_EXPLICIT_INVOCATION")
             public void run() {
                 for (Pair<Message, MessageReceiver> receivedMessage :
                         mReceiver.messagesWithReceivers) {

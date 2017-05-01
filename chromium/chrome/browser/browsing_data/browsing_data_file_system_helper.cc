@@ -4,15 +4,16 @@
 
 #include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
 
+#include <memory>
 #include <set>
 
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/sequenced_task_runner.h"
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/features/features.h"
 #include "storage/browser/fileapi/file_system_context.h"
 #include "storage/browser/fileapi/file_system_quota_util.h"
 #include "storage/common/fileapi/file_system_types.h"
@@ -99,7 +100,7 @@ void BrowsingDataFileSystemHelperImpl::FetchFileSystemInfoInFileThread(
   const storage::FileSystemType types[] = {
     storage::kFileSystemTypeTemporary,
     storage::kFileSystemTypePersistent,
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
     storage::kFileSystemTypeSyncable,
 #endif
   };
@@ -143,6 +144,9 @@ void BrowsingDataFileSystemHelperImpl::DeleteFileSystemOriginInFileThread(
 
 BrowsingDataFileSystemHelper::FileSystemInfo::FileSystemInfo(
     const GURL& origin) : origin(origin) {}
+
+BrowsingDataFileSystemHelper::FileSystemInfo::FileSystemInfo(
+    const FileSystemInfo& other) = default;
 
 BrowsingDataFileSystemHelper::FileSystemInfo::~FileSystemInfo() {}
 

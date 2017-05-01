@@ -4,6 +4,7 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
@@ -25,6 +26,7 @@ const char kLoggingLevelSwitchName[] = "verbosity";
 const char kPinSwitchName[] = "pin";
 const char kRefreshTokenPathSwitchName[] = "refresh-token-path";
 const char kSingleProcessTestsSwitchName[] = "single-process-tests";
+const char kTestEnvironmentSwitchName[] = "use-test-env";
 const char kUserNameSwitchName[] = "username";
 }
 
@@ -74,6 +76,10 @@ void PrintUsage() {
          switches::kRefreshTokenPathSwitchName);
   printf("  %s: Specifies the optional logging level of the tool (0-3)."
          " [default: off]\n", switches::kLoggingLevelSwitchName);
+  printf(
+      "  %s: Specifies that the test environment APIs should be used."
+      " [default: false]\n",
+      switches::kTestEnvironmentSwitchName);
 }
 
 void PrintAuthCodeInfo() {
@@ -138,6 +144,7 @@ void PrintJsonFileInfo() {
 int main(int argc, char* argv[]) {
   base::TestSuite test_suite(argc, argv);
   base::MessageLoopForIO message_loop;
+  base::FeatureList::InitializeInstance(std::string(), std::string());
 
   if (!base::CommandLine::InitializedForCurrentProcess()) {
     if (!base::CommandLine::Init(argc, argv)) {
@@ -164,9 +171,15 @@ int main(int argc, char* argv[]) {
     PrintUsage();
     PrintJsonFileInfo();
     PrintAuthCodeInfo();
+#if defined(OS_IOS)
+    return base::LaunchUnitTests(
+        argc, argv,
+        base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#else
     return base::LaunchUnitTestsSerially(
         argc, argv,
         base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#endif
   }
 
   // Update the logging verbosity level if user specified one.
@@ -207,28 +220,34 @@ int main(int argc, char* argv[]) {
     LOG(ERROR) << "No hostname passed in, connect to host requires hostname!";
     return -1;
   }
+  VLOG(1) << "host_name: '" << options.host_name << "'";
 
   options.host_jid =
       command_line->GetSwitchValueASCII(switches::kHostJidSwitchName);
-
-  VLOG(1) << "Chromoting tests will connect to: " << options.host_name;
+  VLOG(1) << "host_jid: '" << options.host_jid << "'";
 
   options.pin = command_line->GetSwitchValueASCII(switches::kPinSwitchName);
+
+  options.use_test_environment =
+      command_line->HasSwitch(switches::kTestEnvironmentSwitchName);
 
   // Create and register our global test data object. It will handle
   // retrieving an access token or host list for the user. The GTest framework
   // will own the lifetime of this object once it is registered below.
-  scoped_ptr<remoting::test::ChromotingTestDriverEnvironment> shared_data(
+  std::unique_ptr<remoting::test::ChromotingTestDriverEnvironment> shared_data(
       new remoting::test::ChromotingTestDriverEnvironment(options));
 
   if (!shared_data->Initialize(auth_code)) {
+    VLOG(1) << "Failed to initialize ChromotingTestDriverEnvironment instance.";
     // If we failed to initialize our shared data object, then bail.
     return -1;
   }
 
-  if (!options.host_jid.empty() &&
-      !shared_data->WaitForHostOnline(options.host_jid, options.host_name)) {
-    // Host with expected JID is not online. No point running further tests.
+  // This method is necessary as there are occasional propagation delays in the
+  // backend and we don't want the test to fail because of that.
+  if (!shared_data->WaitForHostOnline(options.host_jid, options.host_name)) {
+    VLOG(1) << "The expected host was not available for connections.";
+    // Host is not online. No point running further tests.
     return -1;
   }
 
@@ -239,7 +258,13 @@ int main(int argc, char* argv[]) {
 
   // Running the tests serially will avoid clients from connecting to the same
   // host.
+#if defined(OS_IOS)
+  return base::LaunchUnitTests(
+      argc, argv,
+      base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#else
   return base::LaunchUnitTestsSerially(
       argc, argv,
       base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#endif
 }

@@ -8,6 +8,8 @@
 #include <GLES2/gl2extchromium.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process_handle.h"
@@ -86,6 +88,12 @@ void SetRow(gfx::BufferFormat format,
       for (int i = 0; i < width; ++i)
         buffer[i] = pixel[0];
       return;
+    case gfx::BufferFormat::BGR_565:
+      for (int i = 0; i < width * 2; i += 2) {
+        *reinterpret_cast<uint16_t*>(&buffer[i]) =
+            ((pixel[2] >> 3) << 11) | ((pixel[1] >> 2) << 5) | (pixel[0] >> 3);
+      }
+      return;
     case gfx::BufferFormat::RGBA_4444:
       for (int i = 0; i < width * 2; i += 2) {
         buffer[i + 0] = (pixel[1] << 4) | (pixel[0] & 0xf);
@@ -114,9 +122,10 @@ void SetRow(gfx::BufferFormat format,
     case gfx::BufferFormat::DXT1:
     case gfx::BufferFormat::DXT5:
     case gfx::BufferFormat::ETC1:
+    case gfx::BufferFormat::RG_88:
     case gfx::BufferFormat::RGBX_8888:
     case gfx::BufferFormat::UYVY_422:
-    case gfx::BufferFormat::YUV_420:
+    case gfx::BufferFormat::YVU_420:
     case gfx::BufferFormat::YUV_420_BIPLANAR:
       NOTREACHED();
       return;
@@ -129,6 +138,10 @@ GLenum InternalFormat(gfx::BufferFormat format) {
   switch (format) {
     case gfx::BufferFormat::R_8:
       return GL_RED;
+    case gfx::BufferFormat::RG_88:
+      return GL_RG;
+    case gfx::BufferFormat::BGR_565:
+      return GL_RGB;
     case gfx::BufferFormat::RGBA_4444:
     case gfx::BufferFormat::RGBA_8888:
       return GL_RGBA;
@@ -142,7 +155,7 @@ GLenum InternalFormat(gfx::BufferFormat format) {
     case gfx::BufferFormat::ETC1:
     case gfx::BufferFormat::RGBX_8888:
     case gfx::BufferFormat::UYVY_422:
-    case gfx::BufferFormat::YUV_420:
+    case gfx::BufferFormat::YVU_420:
     case gfx::BufferFormat::YUV_420_BIPLANAR:
       NOTREACHED();
       return 0;
@@ -172,7 +185,7 @@ TEST_P(GpuMemoryBufferTest, Lifecycle) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
   // Create the gpu memory buffer.
-  scoped_ptr<gfx::GpuMemoryBuffer> buffer(gl_.CreateGpuMemoryBuffer(
+  std::unique_ptr<gfx::GpuMemoryBuffer> buffer(gl_.CreateGpuMemoryBuffer(
       gfx::Size(kImageWidth, kImageHeight), GetParam()));
 
   // Map buffer for writing.
@@ -221,7 +234,7 @@ TEST_P(GpuMemoryBufferTest, Lifecycle) {
   ASSERT_TRUE(glGetError() == GL_NO_ERROR);
 
   // Check if pixels match the values that were assigned to the mapped buffer.
-  GLTestHelper::CheckPixels(0, 0, kImageWidth, kImageHeight, 0, pixel);
+  GLTestHelper::CheckPixels(0, 0, kImageWidth, kImageHeight, 0, pixel, nullptr);
   EXPECT_TRUE(GL_NO_ERROR == glGetError());
 
   // Release the image.
@@ -239,6 +252,7 @@ TEST_P(GpuMemoryBufferTest, Lifecycle) {
 INSTANTIATE_TEST_CASE_P(GpuMemoryBufferTests,
                         GpuMemoryBufferTest,
                         ::testing::Values(gfx::BufferFormat::R_8,
+                                          gfx::BufferFormat::BGR_565,
                                           gfx::BufferFormat::RGBA_4444,
                                           gfx::BufferFormat::RGBA_8888,
                                           gfx::BufferFormat::BGRA_8888));

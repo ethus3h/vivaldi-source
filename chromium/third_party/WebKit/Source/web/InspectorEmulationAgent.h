@@ -5,55 +5,59 @@
 #ifndef InspectorEmulationAgent_h
 #define InspectorEmulationAgent_h
 
-#include "core/InspectorFrontend.h"
 #include "core/inspector/InspectorBaseAgent.h"
+#include "core/inspector/protocol/Emulation.h"
+#include "platform/WebTaskRunner.h"
 
 namespace blink {
 
 class WebLocalFrameImpl;
 class WebViewImpl;
 
-using ErrorString = String;
+class InspectorEmulationAgent final
+    : public InspectorBaseAgent<protocol::Emulation::Metainfo> {
+  WTF_MAKE_NONCOPYABLE(InspectorEmulationAgent);
 
-class InspectorEmulationAgent final : public InspectorBaseAgent<InspectorEmulationAgent, InspectorFrontend::Emulation>, public InspectorBackendDispatcher::EmulationCommandHandler {
-    WTF_MAKE_NONCOPYABLE(InspectorEmulationAgent);
-public:
-    class Client {
-    public:
-        virtual ~Client() {}
+ public:
+  class Client {
+   public:
+    virtual ~Client() {}
 
-        virtual void setCPUThrottlingRate(double rate) {}
-    };
+    virtual void setCPUThrottlingRate(double rate) {}
+  };
 
-    static PassOwnPtrWillBeRawPtr<InspectorEmulationAgent> create(WebLocalFrameImpl*, Client*);
-    ~InspectorEmulationAgent() override;
+  static InspectorEmulationAgent* create(WebLocalFrameImpl*, Client*);
+  ~InspectorEmulationAgent() override;
 
-    void viewportChanged();
+  // protocol::Dispatcher::EmulationCommandHandler implementation.
+  Response forceViewport(double x, double y, double scale) override;
+  Response resetViewport() override;
+  Response resetPageScaleFactor() override;
+  Response setPageScaleFactor(double) override;
+  Response setScriptExecutionDisabled(bool value) override;
+  Response setTouchEmulationEnabled(bool enabled,
+                                    Maybe<String> configuration) override;
+  Response setEmulatedMedia(const String&) override;
+  Response setCPUThrottlingRate(double) override;
+  Response setVirtualTimePolicy(const String& policy,
+                                Maybe<int> virtualTimeBudgetMs) override;
 
-    // InspectorBackendDispatcher::EmulationCommandHandler implementation.
-    void resetScrollAndPageScaleFactor(ErrorString*) override;
-    void setPageScaleFactor(ErrorString*, double pageScaleFactor) override;
-    void setScriptExecutionDisabled(ErrorString*, bool) override;
-    void setTouchEmulationEnabled(ErrorString*, bool enabled, const String* configuration) override;
-    void setEmulatedMedia(ErrorString*, const String&) override;
-    void setCPUThrottlingRate(ErrorString*, double rate) override;
+  // InspectorBaseAgent overrides.
+  Response disable() override;
+  void restore() override;
 
-    // InspectorBaseAgent overrides.
-    void disable(ErrorString*) override;
-    void restore() override;
-    void discardAgent() override;
-    void didCommitLoadForLocalFrame(LocalFrame*) override;
+  DECLARE_VIRTUAL_TRACE();
 
-    DECLARE_VIRTUAL_TRACE();
+ private:
+  InspectorEmulationAgent(WebLocalFrameImpl*, Client*);
+  WebViewImpl* webViewImpl();
+  void virtualTimeBudgetExpired();
 
-private:
-    InspectorEmulationAgent(WebLocalFrameImpl*, Client*);
-    WebViewImpl* webViewImpl();
-
-    RawPtrWillBeMember<WebLocalFrameImpl> m_webLocalFrameImpl;
-    Client* m_client;
+  Member<WebLocalFrameImpl> m_webLocalFrameImpl;
+  Client* m_client;
+  TaskHandle m_virtualTimeBudgetExpiredTaskHandle;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // !defined(InspectorEmulationAgent_h)
+#endif  // !defined(InspectorEmulationAgent_h)

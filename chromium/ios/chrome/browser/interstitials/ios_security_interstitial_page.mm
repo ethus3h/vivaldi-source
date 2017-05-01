@@ -5,19 +5,21 @@
 #include "ios/chrome/browser/interstitials/ios_security_interstitial_page.h"
 
 #include "base/logging.h"
-#include "base/prefs/pref_service.h"
+#include "components/grit/components_resources.h"
+#include "components/prefs/pref_service.h"
 #include "components/security_interstitials/core/common_string_util.h"
-#include "components/security_interstitials/core/metrics_helper.h"
-#include "grit/components_resources.h"
 #include "ios/chrome/browser/application_context.h"
-#include "ios/chrome/browser/interstitials/ios_chrome_controller_client.h"
+#include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/pref_names.h"
-#include "ios/public/provider/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/web/public/interstitials/web_interstitial.h"
 #include "ios/web/public/web_state/web_state.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/jstemplate_builder.h"
 #include "ui/base/webui/web_ui_util.h"
+
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
 
 IOSSecurityInterstitialPage::IOSSecurityInterstitialPage(
     web::WebState* web_state,
@@ -35,7 +37,7 @@ void IOSSecurityInterstitialPage::Show() {
   DCHECK(!web_interstitial_);
   web_interstitial_ = web::WebInterstitial::CreateHtmlInterstitial(
       web_state_, ShouldCreateNewNavigation(), request_url_,
-      scoped_ptr<web::HtmlWebInterstitialDelegate>(this));
+      std::unique_ptr<web::HtmlWebInterstitialDelegate>(this));
   web_interstitial_->Show();
   AfterShow();
 }
@@ -53,12 +55,8 @@ std::string IOSSecurityInterstitialPage::GetHtmlContents() const {
 }
 
 base::string16 IOSSecurityInterstitialPage::GetFormattedHostName() const {
-  ios::ChromeBrowserState* browser_state =
-      ios::ChromeBrowserState::FromBrowserState(web_state_->GetBrowserState());
-  std::string languages =
-      browser_state->GetPrefs()->GetString(prefs::kAcceptLanguages);
   return security_interstitials::common_string_util::GetFormattedHostName(
-      request_url_, languages);
+      request_url_);
 }
 
 bool IOSSecurityInterstitialPage::IsPrefEnabled(const char* pref_name) const {

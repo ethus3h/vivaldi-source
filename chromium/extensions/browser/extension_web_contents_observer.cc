@@ -18,11 +18,13 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/mojo/service_registration.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_messages.h"
 #include "extensions/common/view_type.h"
+#include "url/origin.h"
 
 namespace extensions {
 
@@ -61,6 +63,13 @@ void ExtensionWebContentsObserver::InitializeRenderFrame(
   // frames that are not in an extension process.
   if (!frame_extension)
     return;
+
+  // |render_frame_host->GetProcess()| is an extension process. Grant permission
+  // to commit pages from chrome-extension:// origins.
+  content::ChildProcessSecurityPolicy* security_policy =
+      content::ChildProcessSecurityPolicy::GetInstance();
+  int process_id = render_frame_host->GetProcess()->GetID();
+  security_policy->GrantScheme(process_id, extensions::kExtensionScheme);
 
   // Notify the render frame of the view type.
   render_frame_host->Send(new ExtensionMsg_NotifyRenderViewType(
@@ -105,7 +114,8 @@ void ExtensionWebContentsObserver::RenderViewCreated(
   //
   // Plus, we can delete the concept of activating an extension once site
   // isolation is turned on.
-  render_view_host->Send(new ExtensionMsg_ActivateExtension(extension->id()));
+  RendererStartupHelperFactory::GetForBrowserContext(browser_context_)
+      ->ActivateExtensionInProcess(*extension, render_view_host->GetProcess());
 }
 
 void ExtensionWebContentsObserver::RenderFrameCreated(
@@ -115,14 +125,14 @@ void ExtensionWebContentsObserver::RenderFrameCreated(
   // Optimization: Look up the extension API frame ID to force the mapping to be
   // cached. This minimizes the number of IO->UI->IO thread hops when the ID is
   // looked up again on the IO thread for the webRequest API.
-  ExtensionApiFrameIdMap::Get()->CacheFrameId(render_frame_host);
+  ExtensionApiFrameIdMap::Get()->CacheFrameData(render_frame_host);
 }
 
 void ExtensionWebContentsObserver::RenderFrameDeleted(
     content::RenderFrameHost* render_frame_host) {
   ProcessManager::Get(browser_context_)
       ->UnregisterRenderFrameHost(render_frame_host);
-  ExtensionApiFrameIdMap::Get()->RemoveFrameId(render_frame_host);
+  ExtensionApiFrameIdMap::Get()->RemoveFrameData(render_frame_host);
 }
 
 void ExtensionWebContentsObserver::DidCommitProvisionalLoadForFrame(
@@ -234,8 +244,8 @@ const Extension* ExtensionWebContentsObserver::GetExtensionFromFrame(
     // schemes. With site isolation, this is still needed to exclude sandboxed
     // extension frames with a unique origin.
     if (origin.unique() ||
-        site_url != content::SiteInstance::GetSiteForURL(
-                        browser_context, GURL(origin.Serialize())))
+        site_url != content::SiteInstance::GetSiteForURL(browser_context,
+                                                         origin.GetURL()))
       return nullptr;
   }
 
@@ -271,7 +281,8 @@ std::string ExtensionWebContentsObserver::GetExtensionId(
 void ExtensionWebContentsObserver::OnRequest(
     content::RenderFrameHost* render_frame_host,
     const ExtensionHostMsg_Request_Params& params) {
-  dispatcher_.Dispatch(params, render_frame_host);
+  dispatcher_.Dispatch(params, render_frame_host,
+                       render_frame_host->GetProcess()->GetID());
 }
 
 void ExtensionWebContentsObserver::InitializeFrameHelper(

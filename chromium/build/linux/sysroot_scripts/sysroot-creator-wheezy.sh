@@ -1,15 +1,21 @@
-#!/bin/sh
+#!/bin/bash
 # Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-SCRIPT_DIR=$(dirname $0)
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 DISTRO=debian
 DIST=wheezy
+DIST_UPDATES=wheezy-updates
+
 APT_REPO=http://http.us.debian.org/debian
-REPO_BASEDIR="${APT_REPO}/dists/${DIST}"
-KEYRING_FILE=/usr/share/keyrings/debian-archive-keyring.gpg
+KEYRING_FILE="${SCRIPT_DIR}/debian-archive-wheezy-stable.gpg"
+
+HAS_ARCH_AMD64=1
+HAS_ARCH_I386=1
+HAS_ARCH_ARM=1
+HAS_ARCH_MIPS=1
 
 # Sysroot packages: these are the packages needed to build chrome.
 # NOTE: When DEBIAN_PACKAGES is modified, the packagelist files must be updated
@@ -25,6 +31,8 @@ DEBIAN_PACKAGES="\
   libattr1
   libavahi-client3
   libavahi-common3
+  libbluetooth3
+  libbluetooth-dev
   libbrlapi0.5
   libbrlapi-dev
   libc6
@@ -45,10 +53,11 @@ DEBIAN_PACKAGES="\
   libdrm-dev
   libdrm-nouveau1a
   libdrm-radeon1
+  libegl1-mesa
+  libegl1-mesa-dev
+  libegl1-mesa-drivers
   libelf1
   libelf-dev
-  libexif12
-  libexif-dev
   libexpat1
   libexpat1-dev
   libffi5
@@ -81,6 +90,8 @@ DEBIAN_PACKAGES="\
   libgpg-error-dev
   libgssapi-krb5-2
   libgssrpc4
+  libgtk-3-0
+  libgtk-3-dev
   libgtk2.0-0
   libgtk2.0-dev
   libk5crypto3
@@ -125,9 +136,14 @@ DEBIAN_PACKAGES="\
   libstdc++6
   libstdc++6-4.6-dev
   libtasn1-3
+  libudev-dev
+  libudev0
+  libwayland0
+  libwayland-dev
   libx11-6
   libx11-dev
   libx11-xcb1
+  libx11-xcb-dev
   libxau6
   libxau-dev
   libxcb1
@@ -185,5 +201,6 @@ DEBIAN_PACKAGES="\
 
 DEBIAN_PACKAGES_X86="libquadmath0 libdrm-intel1"
 DEBIAN_PACKAGES_ARM="libdrm-omap1"
+DEBIAN_PACKAGES_AMD64=""
 
-. ${SCRIPT_DIR}/sysroot-creator.sh
+. "${SCRIPT_DIR}/sysroot-creator.sh"

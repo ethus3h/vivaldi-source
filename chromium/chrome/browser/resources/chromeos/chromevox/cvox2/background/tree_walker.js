@@ -32,6 +32,7 @@ AutomationTreeWalkerPhase = {
  * @typedef {{leaf: (AutomationPredicate.Unary|undefined),
  *          root: (AutomationPredicate.Unary|undefined),
  *          visit: (AutomationPredicate.Unary|undefined),
+ *          skipInitialAncestry: (boolean|undefined),
  *          skipInitialSubtree: (boolean|undefined)}}
  */
 var AutomationTreeWalkerRestriction;
@@ -53,6 +54,9 @@ var AutomationTreeWalkerRestriction;
  * tree.
  * leaf: this predicate determines if a node should end downward movement in the
  * tree.
+ *
+ * |skipInitialAncestry| skips visiting ancestor nodes of the start node for
+ * multiple invokations of next when moving backward.
  *
  * Finally, a boolean, |skipInitialSubtree|, makes the first invocation of
  * |next| skip the initial node's subtree when finding a match. This is useful
@@ -87,14 +91,29 @@ AutomationTreeWalker = function(node, dir, opt_restrictions) {
   this.backwardAncestor_ = node.parent;
   var restrictions = opt_restrictions || {};
 
-  this.visitPred_ =
-      restrictions.visit ? restrictions.visit : function() { return true; };
+  this.visitPred_ = function(node) {
+    if (this.skipInitialAncestry_ &&
+        this.phase_ == AutomationTreeWalkerPhase.ANCESTOR)
+      return false;
+
+    if (this.skipInitialSubtree_ &&
+        this.phase != AutomationTreeWalkerPhase.ANCESTOR &&
+        this.phase != AutomationTreeWalkerPhase.OTHER)
+      return false;
+
+    if (restrictions.visit)
+      return restrictions.visit(node);
+
+    return true;
+  };
   /** @type {AutomationPredicate.Unary} @private */
   this.leafPred_ = restrictions.leaf ? restrictions.leaf :
       AutomationTreeWalker.falsePredicate_;
   /** @type {AutomationPredicate.Unary} @private */
   this.rootPred_ = restrictions.root ? restrictions.root :
       AutomationTreeWalker.falsePredicate_;
+  /** @const {boolean} @private */
+  this.skipInitialAncestry_ = restrictions.skipInitialAncestry || false;
   /** @const {boolean} @private */
   this.skipInitialSubtree_ = restrictions.skipInitialSubtree || false;
 };
@@ -127,7 +146,12 @@ AutomationTreeWalker.prototype = {
   next: function() {
     if (!this.node_)
       return this;
+
     do {
+      if (this.rootPred_(this.node_) && this.dir_ == constants.Dir.BACKWARD) {
+        this.node_ = null;
+        return this;
+      }
       if (this.dir_ == constants.Dir.FORWARD)
         this.forward_(this.node_);
       else
@@ -144,6 +168,7 @@ AutomationTreeWalker.prototype = {
     if (!this.leafPred_(node) && node.firstChild) {
       if (this.phase_ == AutomationTreeWalkerPhase.INITIAL)
         this.phase_ = AutomationTreeWalkerPhase.DESCENDANT;
+
       if (!this.skipInitialSubtree_ ||
           this.phase != AutomationTreeWalkerPhase.DESCENDANT) {
         this.node_ = node.firstChild;
@@ -153,7 +178,8 @@ AutomationTreeWalker.prototype = {
 
     var searchNode = node;
     while (searchNode) {
-      // We have crossed out of the initial node's subtree.
+      // We have crossed out of the initial node's subtree for either a
+      // sibling or parent move.
       if (searchNode == this.initialNode_)
         this.phase_ = AutomationTreeWalkerPhase.OTHER;
 
@@ -161,7 +187,16 @@ AutomationTreeWalker.prototype = {
         this.node_ = searchNode.nextSibling;
         return;
       }
-      if (searchNode.parent && this.rootPred_(searchNode.parent))
+
+      // Update the phase based on the parent if needed since we may exit below.
+      if (searchNode.parent == this.initialNode_)
+        this.phase_ = AutomationTreeWalkerPhase.OTHER;
+
+      // Exit if we encounter a root-like node and are not searching descendants
+      // of the initial node.
+      if (searchNode.parent &&
+          this.rootPred_(searchNode.parent) &&
+          this.phase_ != AutomationTreeWalkerPhase.DESCENDANT)
         break;
 
       searchNode = searchNode.parent;
@@ -188,9 +223,6 @@ AutomationTreeWalker.prototype = {
       this.phase_ = AutomationTreeWalkerPhase.ANCESTOR;
       this.backwardAncestor_ = node.parent.parent;
     }
-    if (node.parent && this.rootPred_(node.parent))
-      this.node_ = null;
-    else
-      this.node_ = node.parent;
+    this.node_ = node.parent;
   }
 };

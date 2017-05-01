@@ -35,59 +35,54 @@
 
 namespace blink {
 
-SVGInteger::SVGInteger(int value)
-    : m_value(value)
-{
+SVGInteger::SVGInteger(int value) : m_value(value) {}
+
+SVGInteger* SVGInteger::clone() const {
+  return create(m_value);
 }
 
-PassRefPtrWillBeRawPtr<SVGInteger> SVGInteger::clone() const
-{
-    return create(m_value);
+String SVGInteger::valueAsString() const {
+  return String::number(m_value);
 }
 
-String SVGInteger::valueAsString() const
-{
-    return String::number(m_value);
+SVGParsingError SVGInteger::setValueAsString(const String& string) {
+  m_value = 0;
+
+  if (string.isEmpty())
+    return SVGParseStatus::NoError;
+
+  bool valid = true;
+  m_value = stripLeadingAndTrailingHTMLSpaces(string).toIntStrict(&valid);
+  // toIntStrict returns 0 if valid == false.
+  return valid ? SVGParseStatus::NoError : SVGParseStatus::ExpectedInteger;
 }
 
-SVGParsingError SVGInteger::setValueAsString(const String& string)
-{
-    if (string.isEmpty()) {
-        m_value = 0;
-        return NoError;
-    }
-
-    bool valid = true;
-    m_value = stripLeadingAndTrailingHTMLSpaces(string).toIntStrict(&valid);
-
-    if (!valid) {
-        m_value = 0;
-        return ParsingAttributeFailedError;
-    }
-    return NoError;
+void SVGInteger::add(SVGPropertyBase* other, SVGElement*) {
+  setValue(m_value + toSVGInteger(other)->value());
 }
 
-void SVGInteger::add(PassRefPtrWillBeRawPtr<SVGPropertyBase> other, SVGElement*)
-{
-    setValue(m_value + toSVGInteger(other)->value());
+void SVGInteger::calculateAnimatedValue(SVGAnimationElement* animationElement,
+                                        float percentage,
+                                        unsigned repeatCount,
+                                        SVGPropertyBase* from,
+                                        SVGPropertyBase* to,
+                                        SVGPropertyBase* toAtEndOfDuration,
+                                        SVGElement*) {
+  ASSERT(animationElement);
+
+  SVGInteger* fromInteger = toSVGInteger(from);
+  SVGInteger* toInteger = toSVGInteger(to);
+  SVGInteger* toAtEndOfDurationInteger = toSVGInteger(toAtEndOfDuration);
+
+  float animatedFloat = m_value;
+  animationElement->animateAdditiveNumber(
+      percentage, repeatCount, fromInteger->value(), toInteger->value(),
+      toAtEndOfDurationInteger->value(), animatedFloat);
+  m_value = static_cast<int>(roundf(animatedFloat));
 }
 
-void SVGInteger::calculateAnimatedValue(SVGAnimationElement* animationElement, float percentage, unsigned repeatCount, PassRefPtrWillBeRawPtr<SVGPropertyBase> from, PassRefPtrWillBeRawPtr<SVGPropertyBase> to, PassRefPtrWillBeRawPtr<SVGPropertyBase> toAtEndOfDuration, SVGElement*)
-{
-    ASSERT(animationElement);
-
-    RefPtrWillBeRawPtr<SVGInteger> fromInteger = toSVGInteger(from);
-    RefPtrWillBeRawPtr<SVGInteger> toInteger = toSVGInteger(to);
-    RefPtrWillBeRawPtr<SVGInteger> toAtEndOfDurationInteger = toSVGInteger(toAtEndOfDuration);
-
-    float animatedFloat = m_value;
-    animationElement->animateAdditiveNumber(percentage, repeatCount, fromInteger->value(), toInteger->value(), toAtEndOfDurationInteger->value(), animatedFloat);
-    m_value = static_cast<int>(roundf(animatedFloat));
+float SVGInteger::calculateDistance(SVGPropertyBase* other, SVGElement*) {
+  return abs(m_value - toSVGInteger(other)->value());
 }
 
-float SVGInteger::calculateDistance(PassRefPtrWillBeRawPtr<SVGPropertyBase> other, SVGElement*)
-{
-    return abs(m_value - toSVGInteger(other)->value());
-}
-
-}
+}  // namespace blink

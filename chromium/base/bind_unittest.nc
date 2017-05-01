@@ -5,6 +5,8 @@
 // This is a "No Compile Test" suite.
 // http://dev.chromium.org/developers/testing/no-compile-tests
 
+#include <utility>
+
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/macros.h"
@@ -68,7 +70,7 @@ template <typename T>
 void VoidPolymorphic1(T t) {
 }
 
-#if defined(NCTEST_METHOD_ON_CONST_OBJECT)  // [r"fatal error: cannot initialize a parameter of type 'base::NoRef \*' with an lvalue of type 'typename std::enable_if<!IsMoveOnlyType<const HasRef \*const>::value, const HasRef \*const>::type' \(aka 'const base::HasRef \*const'\)"]
+#if defined(NCTEST_METHOD_ON_CONST_OBJECT)  // [r"fatal error: binding value of type 'const base::HasRef' to reference to type 'base::NoRef' drops 'const' qualifier"]
 
 // Method bound to const-object.
 //
@@ -105,7 +107,7 @@ void WontCompile() {
   no_ref_const_cb.Run();
 }
 
-#elif defined(NCTEST_CONST_POINTER)  // [r"fatal error: reference to type 'base::NoRef \*const' could not bind to an lvalue of type 'typename std::enable_if<!IsMoveOnlyType<const NoRef \*const>::value, const NoRef \*const>::type' \(aka 'const base::NoRef \*const'\)"]
+#elif defined(NCTEST_CONST_POINTER)  // [r"fatal error: cannot initialize a parameter of type 'base::NoRef \*' with an lvalue of type 'const base::NoRef \*const'"]
 
 // Const argument used with non-const pointer parameter of same type.
 //
@@ -117,7 +119,7 @@ void WontCompile() {
   pointer_same_cb.Run();
 }
 
-#elif defined(NCTEST_CONST_POINTER_SUBTYPE)  // [r"fatal error: reference to type 'base::NoRefParent \*const' could not bind to an lvalue of type 'typename std::enable_if<!IsMoveOnlyType<const NoRefChild \*const>::value, const NoRefChild \*const>::type' \(aka 'const base::NoRefChild \*const'\)"]
+#elif defined(NCTEST_CONST_POINTER_SUBTYPE)  // [r"fatal error: cannot initialize a parameter of type 'base::NoRefParent \*' with an lvalue of type 'const base::NoRefChild \*const'"]
 
 // Const argument used with non-const pointer parameter of super type.
 //
@@ -146,7 +148,7 @@ void WontCompile() {
   ref_arg_cb.Run(p);
 }
 
-#elif defined(NCTEST_DISALLOW_BIND_TO_NON_CONST_REF_PARAM)  // [r"fatal error: static_assert failed \"do not bind functions with nonconst ref\""]
+#elif defined(NCTEST_DISALLOW_BIND_TO_NON_CONST_REF_PARAM)  // [r"fatal error: binding value of type 'const base::Parent' to reference to type 'base::Parent' drops 'const' qualifier"]
 
 // Binding functions with reference parameters, unsupported.
 //
@@ -157,7 +159,7 @@ void WontCompile() {
   ref_cb.Run();
 }
 
-#elif defined(NCTEST_NO_IMPLICIT_ARRAY_PTR_CONVERSION)  // [r"fatal error: static_assert failed \"first bound argument to method cannot be array\""]
+#elif defined(NCTEST_NO_IMPLICIT_ARRAY_PTR_CONVERSION)  // [r"fatal error: static_assert failed \"First bound argument to a method cannot be an array.\""]
 
 // A method should not be bindable with an array of objects.
 //
@@ -171,7 +173,7 @@ void WontCompile() {
   method_bound_to_array_cb.Run();
 }
 
-#elif defined(NCTEST_NO_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"a parameter is a refcounted type and needs scoped_refptr\""]
+#elif defined(NCTEST_NO_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
 
 // Refcounted types should not be bound as a raw pointer.
 void WontCompile() {
@@ -194,11 +196,53 @@ void WontCompile() {
   weak_ptr_with_non_void_return_type.Run();
 }
 
-#elif defined(NCTEST_DISALLOW_ASSIGN_DIFFERENT_TYPES)  // [r"fatal error: no viable conversion from 'Callback<typename internal::BindState<typename internal::FunctorTraits<void \(\*\)\(int\)>::RunnableType, typename internal::FunctorTraits<void \(\*\)\(int\)>::RunType>::UnboundRunType>' to 'Callback<void \(\)>'"]
+#elif defined(NCTEST_DISALLOW_ASSIGN_DIFFERENT_TYPES)  // [r"fatal error: no viable conversion from 'Callback<MakeUnboundRunType<void \(\*\)\(int\)>>' to 'Callback<void \(\)>'"]
 
 // Bind result cannot be assigned to Callbacks with a mismatching type.
 void WontCompile() {
   Closure callback_mismatches_bind_type = Bind(&VoidPolymorphic1<int>);
+}
+
+#elif defined(NCTEST_DISALLOW_CAPTURING_LAMBDA)  // [r"fatal error: implicit instantiation of undefined template 'base::internal::FunctorTraits<\(lambda at (\.\./)+base/bind_unittest.nc:[0-9]+:[0-9]+\), void>'"]
+
+void WontCompile() {
+  int i = 0;
+  Bind([i]() {});
+}
+
+#elif defined(NCTEST_DISALLOW_BINDING_ONCE_CALLBACK_WITH_NO_ARGS)  // [r"static_assert failed \"Attempting to bind a base::Callback with no additional arguments: save a heap allocation and use the original base::Callback object\""]
+
+void WontCompile() {
+  OnceClosure cb = BindOnce([] {});
+  OnceClosure cb2 = BindOnce(std::move(cb));
+}
+
+#elif defined(NCTEST_DISALLOW_BINDING_REPEATING_CALLBACK_WITH_NO_ARGS)  // [r"static_assert failed \"Attempting to bind a base::Callback with no additional arguments: save a heap allocation and use the original base::Callback object\""]
+
+void WontCompile() {
+  Closure cb = Bind([] {});
+  Closure cb2 = Bind(cb);
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_LVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  OnceClosure cb = Bind([] {});
+  cb.Run();
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_CONST_LVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  const OnceClosure cb = Bind([] {});
+  cb.Run();
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_CONST_RVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  const OnceClosure cb = Bind([] {});
+  std::move(cb).Run();
 }
 
 #endif

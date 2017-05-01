@@ -5,13 +5,15 @@
 #include "net/log/write_to_file_net_log_observer.h"
 
 #include <stdio.h>
+
+#include <memory>
 #include <set>
 #include <utility>
 
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
+#include "net/log/net_log_entry.h"
 #include "net/log/net_log_util.h"
 #include "net/url_request/url_request_context.h"
 
@@ -86,11 +88,11 @@ void WriteToFileNetLogObserver::StopObserving(
   file_.reset();
 }
 
-void WriteToFileNetLogObserver::OnAddEntry(const NetLog::Entry& entry) {
+void WriteToFileNetLogObserver::OnAddEntry(const NetLogEntry& entry) {
   // Add a comma and newline for every event but the first.  Newlines are needed
   // so can load partial log files by just ignoring the last line.  For this to
   // work, lines cannot be pretty printed.
-  scoped_ptr<base::Value> value(entry.ToValue());
+  std::unique_ptr<base::Value> value(entry.ToValue());
   std::string json;
   base::JSONWriter::Write(*value, &json);
   fprintf(file_.get(), "%s%s", (added_events_ ? ",\n" : ""), json.c_str());

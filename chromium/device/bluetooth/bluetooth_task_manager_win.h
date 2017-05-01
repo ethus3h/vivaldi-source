@@ -7,17 +7,19 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/observer_list.h"
+#include "base/optional.h"
 #include "base/win/scoped_handle.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_export.h"
+#include "device/bluetooth/bluetooth_low_energy_win.h"
 
 namespace base {
 
@@ -56,6 +58,15 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
     std::vector<uint8_t> sdp_bytes;
     // Properties specific to Bluetooth LE devices.
     BluetoothUUID gatt_uuid;
+    uint16_t attribute_handle;
+    // GATT service device path.
+    // Note: Operation of the included characteristics and descriptors of this
+    // service must use service device path instead of resident device device
+    // path.
+    base::FilePath path;
+
+   private:
+    DISALLOW_COPY_AND_ASSIGN(ServiceRecordState);
   };
 
   struct DEVICE_BLUETOOTH_EXPORT DeviceState {
@@ -66,15 +77,18 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
 
     // Properties common to Bluetooth Classic and LE devices.
     std::string address;  // This uniquely identifies the device.
-    std::string name;     // Friendly name
+    base::Optional<std::string> name;  // Friendly name
     bool visible;
     bool connected;
     bool authenticated;
-    ScopedVector<ServiceRecordState> service_record_states;
+    std::vector<std::unique_ptr<ServiceRecordState>> service_record_states;
     // Properties specific to Bluetooth Classic devices.
     uint32_t bluetooth_class;
     // Properties specific to Bluetooth LE devices.
     base::FilePath path;
+
+   private:
+    DISALLOW_COPY_AND_ASSIGN(DeviceState);
   };
 
   class DEVICE_BLUETOOTH_EXPORT Observer {
@@ -91,11 +105,15 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
      // the associated state can change over time. For example, during a
      // discovery session, the "friendly" name may initially be "unknown" before
      // the actual name is retrieved in subsequent poll events.
-     virtual void DevicesPolled(const ScopedVector<DeviceState>& devices) {}
+     virtual void DevicesPolled(
+         const std::vector<std::unique_ptr<DeviceState>>& devices) {}
   };
 
   explicit BluetoothTaskManagerWin(
       scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
+
+  static BluetoothUUID BluetoothLowEnergyUuidToBluetoothUuid(
+      const BTH_LE_UUID& bth_le_uuid);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -111,6 +129,71 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
       const BluetoothAdapter::ErrorCallback& error_callback);
   void PostStartDiscoveryTask();
   void PostStopDiscoveryTask();
+
+  // Callbacks of asynchronous operations of GATT service.
+  typedef base::Callback<void(HRESULT)> HResultCallback;
+  typedef base::Callback<
+      void(std::unique_ptr<BTH_LE_GATT_CHARACTERISTIC>, uint16_t, HRESULT)>
+      GetGattIncludedCharacteristicsCallback;
+  typedef base::Callback<
+      void(std::unique_ptr<BTH_LE_GATT_DESCRIPTOR>, uint16_t, HRESULT)>
+      GetGattIncludedDescriptorsCallback;
+  typedef base::Callback<void(std::unique_ptr<BTH_LE_GATT_CHARACTERISTIC_VALUE>,
+                              HRESULT)>
+      ReadGattCharacteristicValueCallback;
+  typedef base::Callback<void(std::unique_ptr<std::vector<uint8_t>>)>
+      GattCharacteristicValueChangedCallback;
+  typedef base::Callback<void(PVOID, HRESULT)> GattEventRegistrationCallback;
+
+  // Get all included characteristics of a given service. The service is
+  // uniquely identified by its |uuid| and |attribute_handle| with service
+  // device |service_path|. The result is returned asynchronously through
+  // |callback|.
+  void PostGetGattIncludedCharacteristics(
+      const base::FilePath& service_path,
+      const BluetoothUUID& uuid,
+      uint16_t attribute_handle,
+      const GetGattIncludedCharacteristicsCallback& callback);
+
+  // Get all included descriptors of a given |characterisitc| in service
+  // with |service_path|. The result is returned asynchronously through
+  // |callback|.
+  void PostGetGattIncludedDescriptors(
+      const base::FilePath& service_path,
+      const PBTH_LE_GATT_CHARACTERISTIC characteristic,
+      const GetGattIncludedDescriptorsCallback& callback);
+
+  // Post read the value of a given |characteristic| in service with
+  // |service_path|. The result is returned asynchronously through |callback|.
+  void PostReadGattCharacteristicValue(
+      const base::FilePath& device_path,
+      const PBTH_LE_GATT_CHARACTERISTIC characteristic,
+      const ReadGattCharacteristicValueCallback& callback);
+
+  // Post write the value of a given |characteristic| in service with
+  // |service_path| to |new_value|. The operation result is returned
+  // asynchronously through |callback|.
+  void PostWriteGattCharacteristicValue(
+      const base::FilePath& service_path,
+      const PBTH_LE_GATT_CHARACTERISTIC characteristic,
+      const std::vector<uint8_t>& new_value,
+      const HResultCallback& callback);
+
+  // Post a task to register to receive value changed notifications from
+  // |characteristic| in service with |service_path|. |ccc_descriptor| is the
+  // Client Characteristic Configuration descriptor. |registered_callback| is
+  // the function to be invoked if the event occured. The operation result is
+  // returned asynchronously through |callback|.
+  void PostRegisterGattCharacteristicValueChangedEvent(
+      const base::FilePath& service_path,
+      const PBTH_LE_GATT_CHARACTERISTIC characteristic,
+      const PBTH_LE_GATT_DESCRIPTOR ccc_descriptor,
+      const GattEventRegistrationCallback& callback,
+      const GattCharacteristicValueChangedCallback& registered_callback);
+
+  // Post a task to unregister from value change notifications. |event_handle|
+  // was returned by PostRegisterGattCharacteristicValueChangedEvent.
+  void PostUnregisterGattCharacteristicValueChangedEvent(PVOID event_handle);
 
  private:
   friend class base::RefCountedThreadSafe<BluetoothTaskManagerWin>;
@@ -129,7 +212,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
   void OnAdapterStateChanged(const AdapterState* state);
   void OnDiscoveryStarted(bool success);
   void OnDiscoveryStopped();
-  void OnDevicesPolled(const ScopedVector<DeviceState>* devices);
+  void OnDevicesPolled(std::vector<std::unique_ptr<DeviceState>> devices);
 
   // Called on BluetoothTaskRunner.
   void StartPolling();
@@ -161,19 +244,21 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
   // exposed by those devices.
   bool SearchDevices(int timeout_multiplier,
                      bool search_cached_devices_only,
-                     ScopedVector<DeviceState>* device_list);
+                     std::vector<std::unique_ptr<DeviceState>>* device_list);
 
   // Sends a device search API call to the adapter to look for Bluetooth Classic
   // devices.
-  bool SearchClassicDevices(int timeout_multiplier,
-                            bool search_cached_devices_only,
-                            ScopedVector<DeviceState>* device_list);
+  bool SearchClassicDevices(
+      int timeout_multiplier,
+      bool search_cached_devices_only,
+      std::vector<std::unique_ptr<DeviceState>>* device_list);
 
   // Enumerate Bluetooth Low Energy devices.
-  bool SearchLowEnergyDevices(ScopedVector<DeviceState>* device_list);
+  bool SearchLowEnergyDevices(
+      std::vector<std::unique_ptr<DeviceState>>* device_list);
 
   // Discover services for the devices in |device_list|.
-  bool DiscoverServices(ScopedVector<DeviceState>* device_list,
+  bool DiscoverServices(std::vector<std::unique_ptr<DeviceState>>* device_list,
                         bool search_cached_services_only);
 
   // Discover Bluetooth Classic services for the given |device_address|.
@@ -181,7 +266,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
       const std::string& device_address,
       const GUID& protocol_uuid,
       bool search_cached_services_only,
-      ScopedVector<ServiceRecordState>* service_record_states);
+      std::vector<std::unique_ptr<ServiceRecordState>>* service_record_states);
 
   // Discover Bluetooth Classic services for the given |device_address|.
   // Returns a Win32 error code.
@@ -189,12 +274,44 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
       const std::string& device_address,
       const GUID& protocol_uuid,
       bool search_cached_services_only,
-      ScopedVector<ServiceRecordState>* service_record_states);
+      std::vector<std::unique_ptr<ServiceRecordState>>* service_record_states);
 
   // Discover Bluetooth Low Energy services for the given |device_path|.
   bool DiscoverLowEnergyDeviceServices(
       const base::FilePath& device_path,
-      ScopedVector<ServiceRecordState>* service_record_states);
+      std::vector<std::unique_ptr<ServiceRecordState>>* service_record_states);
+
+  // Search for device paths of the GATT services in |*service_record_states|
+  // from |device_address|.
+  bool SearchForGattServiceDevicePaths(
+      const std::string device_address,
+      std::vector<std::unique_ptr<ServiceRecordState>>* service_record_states);
+
+  // GATT service related functions.
+  void GetGattIncludedCharacteristics(
+      base::FilePath device_path,
+      BluetoothUUID uuid,
+      uint16_t attribute_handle,
+      const GetGattIncludedCharacteristicsCallback& callback);
+  void GetGattIncludedDescriptors(
+      base::FilePath service_path,
+      BTH_LE_GATT_CHARACTERISTIC characteristic,
+      const GetGattIncludedDescriptorsCallback& callback);
+  void ReadGattCharacteristicValue(
+      base::FilePath device_path,
+      BTH_LE_GATT_CHARACTERISTIC characteristic,
+      const ReadGattCharacteristicValueCallback& callback);
+  void WriteGattCharacteristicValue(base::FilePath service_path,
+                                    BTH_LE_GATT_CHARACTERISTIC characteristic,
+                                    std::vector<uint8_t> new_value,
+                                    const HResultCallback& callback);
+  void RegisterGattCharacteristicValueChangedEvent(
+      base::FilePath service_path,
+      BTH_LE_GATT_CHARACTERISTIC characteristic,
+      BTH_LE_GATT_DESCRIPTOR ccc_descriptor,
+      const GattEventRegistrationCallback& callback,
+      const GattCharacteristicValueChangedCallback& registered_callback);
+  void UnregisterGattCharacteristicValueChangedEvent(PVOID event_handle);
 
   // UI task runner reference.
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
@@ -205,8 +322,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothTaskManagerWin
   // List of observers interested in event notifications.
   base::ObserverList<Observer> observers_;
 
-  // Adapter handle owned by bluetooth task runner.
-  base::win::ScopedHandle adapter_handle_;
+  // Weak reference of the adapter handle, let BluetoothClassicWrapper handle
+  // the close of |adapter_handle_|.
+  HANDLE adapter_handle_;
 
   // indicates whether the adapter is in discovery mode or not.
   bool discovering_;

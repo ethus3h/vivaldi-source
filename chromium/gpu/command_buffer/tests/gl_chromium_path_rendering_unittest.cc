@@ -38,10 +38,8 @@ class CHROMIUMPathRenderingTest : public testing::Test {
 
   void SetUp() override {
     GLManager::Options options;
-    base::CommandLine command_line(*base::CommandLine::ForCurrentProcess());
-    command_line.AppendSwitch(switches::kEnableGLPathRendering);
     InitializeContextFeatures(&options);
-    gl_.InitializeWithCommandLine(options, &command_line);
+    gl_.Initialize(options);
   }
 
   virtual void InitializeContextFeatures(GLManager::Options* options) {
@@ -156,7 +154,8 @@ class CHROMIUMPathRenderingDrawTest : public CHROMIUMPathRenderingTest {
       float fx = kFillCoords[i];
       float fy = kFillCoords[i + 1];
 
-      EXPECT_TRUE(GLTestHelper::CheckPixels(x + fx, y + fy, 1, 1, 0, kBlue));
+      EXPECT_TRUE(
+          GLTestHelper::CheckPixels(x + fx, y + fy, 1, 1, 0, kBlue, nullptr));
     }
   }
 
@@ -170,8 +169,8 @@ class CHROMIUMPathRenderingDrawTest : public CHROMIUMPathRenderingTest {
       float bx = kBackgroundCoords[i];
       float by = kBackgroundCoords[i + 1];
 
-      EXPECT_TRUE(
-          GLTestHelper::CheckPixels(x + bx, y + by, 1, 1, 0, kExpectedColor));
+      EXPECT_TRUE(GLTestHelper::CheckPixels(x + bx, y + by, 1, 1, 0,
+                                            kExpectedColor, nullptr));
     }
   }
 
@@ -179,13 +178,17 @@ class CHROMIUMPathRenderingDrawTest : public CHROMIUMPathRenderingTest {
     SCOPED_TRACE(testing::Message() << "Verifying stroke at " << x << "," << y);
     // Inside the stroke we should have green.
     const uint8_t kGreen[] = {0, 255, 0, 255};
-    EXPECT_TRUE(GLTestHelper::CheckPixels(x + 50, y + 53, 1, 1, 0, kGreen));
-    EXPECT_TRUE(GLTestHelper::CheckPixels(x + 26, y + 76, 1, 1, 0, kGreen));
+    EXPECT_TRUE(
+        GLTestHelper::CheckPixels(x + 50, y + 53, 1, 1, 0, kGreen, nullptr));
+    EXPECT_TRUE(
+        GLTestHelper::CheckPixels(x + 26, y + 76, 1, 1, 0, kGreen, nullptr));
 
     // Outside the path we should have black.
     const uint8_t black[] = {0, 0, 0, 0};
-    EXPECT_TRUE(GLTestHelper::CheckPixels(x + 10, y + 10, 1, 1, 0, black));
-    EXPECT_TRUE(GLTestHelper::CheckPixels(x + 80, y + 80, 1, 1, 0, black));
+    EXPECT_TRUE(
+        GLTestHelper::CheckPixels(x + 10, y + 10, 1, 1, 0, black, nullptr));
+    EXPECT_TRUE(
+        GLTestHelper::CheckPixels(x + 80, y + 80, 1, 1, 0, black, nullptr));
   }
   static const GLfloat kProjectionMatrix[16];
   GLint color_loc_;
@@ -457,8 +460,8 @@ TEST_F(CHROMIUMPathRenderingTest, TestPathObjectState) {
   // Make sure nothing got drawn by the drawing commands that should not produce
   // anything.
   const uint8_t black[] = {0, 0, 0, 0};
-  EXPECT_TRUE(
-      GLTestHelper::CheckPixels(0, 0, kResolution, kResolution, 0, black));
+  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, kResolution, kResolution, 0,
+                                        black, nullptr));
 }
 
 TEST_F(CHROMIUMPathRenderingTest, TestUnnamedPathsErrors) {
@@ -1087,8 +1090,8 @@ TEST_P(CHROMIUMPathRenderingWithTexturingTest,
         color[2] = 0;
         color[3] = 255;
 
-        EXPECT_TRUE(
-            GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color));
+        EXPECT_TRUE(GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color,
+                                              nullptr));
       }
     }
   }
@@ -1187,8 +1190,8 @@ TEST_P(CHROMIUMPathRenderingWithTexturingTest,
         color[2] = 0;
         color[3] = 255;
 
-        EXPECT_TRUE(
-            GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color));
+        EXPECT_TRUE(GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color,
+                                              nullptr));
       }
     }
   }
@@ -1586,8 +1589,8 @@ TEST_P(CHROMIUMPathRenderingWithTexturingTest,
 
           uint8_t color[4] = {0, 255, 0, 255};
 
-          EXPECT_TRUE(
-              GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color));
+          EXPECT_TRUE(GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2,
+                                                color, nullptr));
         }
       }
     }
@@ -1680,8 +1683,8 @@ TEST_P(CHROMIUMPathRenderingWithTexturingTest,
 
         uint8_t color[4] = {0, 255, 0, 255};
 
-        EXPECT_TRUE(
-            GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color));
+        EXPECT_TRUE(GLTestHelper::CheckPixels(px + fx, py + fy, 1, 1, 2, color,
+                                              nullptr));
       }
     }
   }

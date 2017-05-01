@@ -158,7 +158,7 @@ class InspectorNetwork(object):
         'method': 'Network.clearBrowserCache'
         }, timeout)
 
-  def StartMonitoringNetwork(self):
+  def StartMonitoringNetwork(self, timeout=60):
     """Starts monitoring network notifications and recording HTTP responses."""
     self.ClearResponseData()
     self._inspector_websocket.RegisterDomain(
@@ -167,14 +167,14 @@ class InspectorNetwork(object):
     request = {
         'method': 'Network.enable'
         }
-    self._inspector_websocket.SyncRequest(request)
+    self._inspector_websocket.SyncRequest(request, timeout)
 
-  def StopMonitoringNetwork(self):
+  def StopMonitoringNetwork(self, timeout=60):
     """Stops monitoring network notifications and recording HTTP responses."""
     request = {
         'method': 'Network.disable'
         }
-    self._inspector_websocket.SyncRequest(request)
+    self._inspector_websocket.SyncRequest(request, timeout)
     # There may be queued messages that don't appear until the SyncRequest
     # happens. Wait to unregister until after sending the disable command.
     self._inspector_websocket.UnregisterDomain('Network')
@@ -239,7 +239,9 @@ class InspectorNetwork(object):
         logging.warning('HTTP Response missing required field: %s', field)
         return
     request_id = params['requestId']
-    assert request_id in self._initiators
+    if request_id not in self._initiators:
+      logging.warning('Dropped a message with no initiator.')
+      return
     initiator = self._initiators[request_id]
     self._http_responses.append(
         InspectorNetworkResponseData(self, params, initiator))
@@ -289,5 +291,5 @@ class TimelineRecorder(object):
     if len(events) == 0:
       return None
     builder = trace_data.TraceDataBuilder()
-    builder.AddEventsTo(trace_data.INSPECTOR_TRACE_PART, events)
+    builder.AddTraceFor(trace_data.INSPECTOR_TRACE_PART, events)
     return model.TimelineModel(builder.AsData(), shift_world_to_zero=False)

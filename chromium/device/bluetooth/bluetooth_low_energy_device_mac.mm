@@ -10,70 +10,35 @@
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/mac/sdk_forward_declarations.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "device/bluetooth/bluetooth_adapter_mac.h"
 #include "device/bluetooth/bluetooth_device.h"
+#include "device/bluetooth/bluetooth_low_energy_peripheral_delegate.h"
+#include "device/bluetooth/bluetooth_remote_gatt_service_mac.h"
 
 using device::BluetoothDevice;
 using device::BluetoothLowEnergyDeviceMac;
 
-namespace {
-
-// Converts a CBUUID to a BluetoothUUID.
-device::BluetoothUUID BluetoothUUIDWithCBUUID(CBUUID* uuid) {
-  // UUIDString only available OS X >= 10.8.
-  DCHECK(base::mac::IsOSMountainLionOrLater());
-  std::string uuid_c_string = base::SysNSStringToUTF8([uuid UUIDString]);
-  return device::BluetoothUUID(uuid_c_string);
-}
-
-}  // namespace
-
 BluetoothLowEnergyDeviceMac::BluetoothLowEnergyDeviceMac(
     BluetoothAdapterMac* adapter,
-    CBPeripheral* peripheral,
-    NSDictionary* advertisement_data,
-    int rssi)
-    : BluetoothDeviceMac(adapter) {
+    CBPeripheral* peripheral)
+    : BluetoothDeviceMac(adapter),
+      peripheral_(peripheral, base::scoped_policy::RETAIN) {
   DCHECK(BluetoothAdapterMac::IsLowEnergyAvailable());
+  DCHECK(peripheral_.get());
+  peripheral_delegate_.reset([[BluetoothLowEnergyPeripheralDelegate alloc]
+      initWithBluetoothLowEnergyDeviceMac:this]);
+  [peripheral_ setDelegate:peripheral_delegate_];
   identifier_ = GetPeripheralIdentifier(peripheral);
   hash_address_ = GetPeripheralHashAddress(peripheral);
-  Update(peripheral, advertisement_data, rssi);
+  UpdateTimestamp();
 }
 
 BluetoothLowEnergyDeviceMac::~BluetoothLowEnergyDeviceMac() {
-}
-
-void BluetoothLowEnergyDeviceMac::Update(CBPeripheral* peripheral,
-                                         NSDictionary* advertisement_data,
-                                         int rssi) {
-  last_update_time_.reset([[NSDate date] retain]);
-  peripheral_.reset([peripheral retain]);
-  rssi_ = rssi;
-  NSNumber* connectable =
-      [advertisement_data objectForKey:CBAdvertisementDataIsConnectable];
-  connectable_ = [connectable boolValue];
-  ClearServiceData();
-  NSDictionary* service_data =
-      [advertisement_data objectForKey:CBAdvertisementDataServiceDataKey];
-  for (CBUUID* uuid in service_data) {
-    NSData* data = [service_data objectForKey:uuid];
-    BluetoothUUID service_uuid = BluetoothUUIDWithCBUUID(uuid);
-    SetServiceData(service_uuid, static_cast<const char*>([data bytes]),
-                   [data length]);
-  }
-  NSArray* service_uuids =
-      [advertisement_data objectForKey:CBAdvertisementDataServiceUUIDsKey];
-  for (CBUUID* uuid in service_uuids) {
-    advertised_uuids_.insert(
-        BluetoothUUID(std::string([[uuid UUIDString] UTF8String])));
-  }
-  NSArray* overflow_service_uuids = [advertisement_data
-      objectForKey:CBAdvertisementDataOverflowServiceUUIDsKey];
-  for (CBUUID* uuid in overflow_service_uuids) {
-    advertised_uuids_.insert(
-        BluetoothUUID(std::string([[uuid UUIDString] UTF8String])));
+  if (IsGattConnected()) {
+    GetMacAdapter()->DisconnectGatt(this);
   }
 }
 
@@ -106,8 +71,17 @@ uint16_t BluetoothLowEnergyDeviceMac::GetDeviceID() const {
   return 0;
 }
 
-int BluetoothLowEnergyDeviceMac::GetRSSI() const {
-  return rssi_;
+uint16_t BluetoothLowEnergyDeviceMac::GetAppearance() const {
+  // TODO(crbug.com/588083): Implementing GetAppearance()
+  // on mac, win, and android platforms for chrome
+  NOTIMPLEMENTED();
+  return 0;
+}
+
+base::Optional<std::string> BluetoothLowEnergyDeviceMac::GetName() const {
+  if ([peripheral_ name])
+    return base::SysNSStringToUTF8([peripheral_ name]);
+  return base::nullopt;
 }
 
 bool BluetoothLowEnergyDeviceMac::IsPaired() const {
@@ -119,7 +93,7 @@ bool BluetoothLowEnergyDeviceMac::IsConnected() const {
 }
 
 bool BluetoothLowEnergyDeviceMac::IsGattConnected() const {
-  return (GetPeripheralState() == CBPeripheralStateConnected);
+  return ([peripheral_ state] == CBPeripheralStateConnected);
 }
 
 bool BluetoothLowEnergyDeviceMac::IsConnectable() const {
@@ -127,21 +101,7 @@ bool BluetoothLowEnergyDeviceMac::IsConnectable() const {
 }
 
 bool BluetoothLowEnergyDeviceMac::IsConnecting() const {
-  return false;
-}
-
-BluetoothDevice::UUIDList BluetoothLowEnergyDeviceMac::GetUUIDs() const {
-  return BluetoothDevice::UUIDList(advertised_uuids_.begin(),
-                                   advertised_uuids_.end());
-}
-
-int16_t BluetoothLowEnergyDeviceMac::GetInquiryRSSI() const {
-  return kUnknownPower;
-}
-
-int16_t BluetoothLowEnergyDeviceMac::GetInquiryTxPower() const {
-  NOTIMPLEMENTED();
-  return kUnknownPower;
+  return ([peripheral_ state] == CBPeripheralStateConnecting);
 }
 
 bool BluetoothLowEnergyDeviceMac::ExpectingPinCode() const {
@@ -213,30 +173,148 @@ void BluetoothLowEnergyDeviceMac::ConnectToServiceInsecurely(
   NOTIMPLEMENTED();
 }
 
-void BluetoothLowEnergyDeviceMac::CreateGattConnection(
-    const GattConnectionCallback& callback,
-    const ConnectErrorCallback& error_callback) {
-  NOTIMPLEMENTED();
-}
-
-NSDate* BluetoothLowEnergyDeviceMac::GetLastUpdateTime() const {
-  return last_update_time_.get();
-}
-
-std::string BluetoothLowEnergyDeviceMac::GetDeviceName() const {
-  return base::SysNSStringToUTF8([peripheral_ name]);
-}
-
 void BluetoothLowEnergyDeviceMac::CreateGattConnectionImpl() {
-  // Mac implementation does not yet use the default CreateGattConnection
-  // implementation. http://crbug.com/520774
-  NOTIMPLEMENTED();
+  if (!IsGattConnected()) {
+    GetMacAdapter()->CreateGattConnection(this);
+  }
 }
 
 void BluetoothLowEnergyDeviceMac::DisconnectGatt() {
-  // Mac implementation does not yet use the default CreateGattConnection
-  // implementation. http://crbug.com/520774
-  NOTIMPLEMENTED();
+  GetMacAdapter()->DisconnectGatt(this);
+}
+
+void BluetoothLowEnergyDeviceMac::DidDiscoverPrimaryServices(NSError* error) {
+  if (error) {
+    // TODO(http://crbug.com/609320): Need to pass the error.
+    // TODO(http://crbug.com/609844): Decide what to do if discover failed
+    // a device services.
+    VLOG(1) << "Can't discover primary services: "
+            << error.localizedDescription.UTF8String << " (" << error.domain
+            << ": " << error.code << ")";
+    return;
+  }
+  VLOG(1) << "DidDiscoverPrimaryServices.";
+
+  if (!IsGattConnected()) {
+    // Don't create services if the device disconnected.
+    return;
+  }
+
+  for (CBService* cb_service in GetPeripheral().services) {
+    BluetoothRemoteGattServiceMac* gatt_service =
+        GetBluetoothRemoteGattService(cb_service);
+    if (!gatt_service) {
+      gatt_service = new BluetoothRemoteGattServiceMac(this, cb_service,
+                                                       true /* is_primary */);
+      auto result_iter = gatt_services_.insert(std::make_pair(
+          gatt_service->GetIdentifier(), base::WrapUnique(gatt_service)));
+      DCHECK(result_iter.second);
+      adapter_->NotifyGattServiceAdded(gatt_service);
+    }
+  }
+  for (auto it = gatt_services_.begin(); it != gatt_services_.end(); ++it) {
+    device::BluetoothRemoteGattService* gatt_service = it->second.get();
+    device::BluetoothRemoteGattServiceMac* gatt_service_mac =
+        static_cast<BluetoothRemoteGattServiceMac*>(gatt_service);
+    gatt_service_mac->DiscoverCharacteristics();
+  }
+}
+
+void BluetoothLowEnergyDeviceMac::DidDiscoverCharacteristics(
+    CBService* cb_service,
+    NSError* error) {
+  if (error) {
+    // TODO(http://crbug.com/609320): Need to pass the error.
+    // TODO(http://crbug.com/609844): Decide what to do if discover failed
+    VLOG(1) << "Can't discover characteristics: "
+            << error.localizedDescription.UTF8String << " (" << error.domain
+            << ": " << error.code << ")";
+    return;
+  }
+  VLOG(1) << "DidDiscoverCharacteristics.";
+
+  if (!IsGattConnected()) {
+    // Don't create characteristics if the device disconnected.
+    return;
+  }
+
+  BluetoothRemoteGattServiceMac* gatt_service =
+      GetBluetoothRemoteGattService(cb_service);
+  DCHECK(gatt_service);
+  gatt_service->DidDiscoverCharacteristics();
+  SendNotificationIfDiscoveryComplete();
+}
+
+void BluetoothLowEnergyDeviceMac::DidModifyServices(
+    NSArray* invalidatedServices) {
+  VLOG(1) << "DidModifyServices: ";
+  for (CBService* cb_service in invalidatedServices) {
+    BluetoothRemoteGattServiceMac* gatt_service =
+        GetBluetoothRemoteGattService(cb_service);
+    DCHECK(gatt_service);
+    VLOG(1) << gatt_service->GetUUID().canonical_value();
+    std::unique_ptr<BluetoothRemoteGattService> scoped_service =
+        std::move(gatt_services_[gatt_service->GetIdentifier()]);
+    gatt_services_.erase(gatt_service->GetIdentifier());
+    adapter_->NotifyGattServiceRemoved(scoped_service.get());
+  }
+  device_uuids_.ClearServiceUUIDs();
+  SetGattServicesDiscoveryComplete(false);
+  adapter_->NotifyDeviceChanged(this);
+  [GetPeripheral() discoverServices:nil];
+}
+
+void BluetoothLowEnergyDeviceMac::DidUpdateValue(
+    CBCharacteristic* characteristic,
+    NSError* error) {
+  VLOG(1) << "DidUpdateValue.";
+  BluetoothRemoteGattServiceMac* gatt_service =
+      GetBluetoothRemoteGattService(characteristic.service);
+  DCHECK(gatt_service);
+  gatt_service->DidUpdateValue(characteristic, error);
+}
+
+void BluetoothLowEnergyDeviceMac::DidWriteValue(
+    CBCharacteristic* characteristic,
+    NSError* error) {
+  VLOG(1) << "DidWriteValue.";
+  BluetoothRemoteGattServiceMac* gatt_service =
+      GetBluetoothRemoteGattService(characteristic.service);
+  DCHECK(gatt_service);
+  gatt_service->DidWriteValue(characteristic, error);
+}
+
+void BluetoothLowEnergyDeviceMac::DidUpdateNotificationState(
+    CBCharacteristic* characteristic,
+    NSError* error) {
+  VLOG(1) << "DidUpdateNotificationState";
+  BluetoothRemoteGattServiceMac* gatt_service =
+      GetBluetoothRemoteGattService(characteristic.service);
+  DCHECK(gatt_service);
+  gatt_service->DidUpdateNotificationState(characteristic, error);
+}
+
+void BluetoothLowEnergyDeviceMac::DidDiscoverDescriptors(
+    CBCharacteristic* cb_characteristic,
+    NSError* error) {
+  if (error) {
+    // TODO(http://crbug.com/609320): Need to pass the error.
+    // TODO(http://crbug.com/609844): Decide what to do if discover failed
+    VLOG(1) << "Can't discover descriptors: "
+            << error.localizedDescription.UTF8String << " (" << error.domain
+            << ": " << error.code << ")";
+    return;
+  }
+  VLOG(1) << "DidDiscoverDescriptors.";
+  if (!IsGattConnected()) {
+    // Don't discover descriptors if the device disconnected.
+    return;
+  }
+  BluetoothRemoteGattServiceMac* gatt_service =
+      GetBluetoothRemoteGattService(cb_characteristic.service);
+  DCHECK(gatt_service);
+  gatt_service->DidDiscoverDescriptors(cb_characteristic);
+  SendNotificationIfDiscoveryComplete();
 }
 
 // static
@@ -259,16 +337,63 @@ std::string BluetoothLowEnergyDeviceMac::GetPeripheralHashAddress(
   return BluetoothDevice::CanonicalizeAddress(hash);
 }
 
-CBPeripheralState BluetoothLowEnergyDeviceMac::GetPeripheralState() const {
-  Class peripheral_class = NSClassFromString(@"CBPeripheral");
-  base::scoped_nsobject<NSMethodSignature> signature([[peripheral_class
-      instanceMethodSignatureForSelector:@selector(state)] retain]);
-  base::scoped_nsobject<NSInvocation> invocation(
-      [[NSInvocation invocationWithMethodSignature:signature] retain]);
-  [invocation setTarget:peripheral_];
-  [invocation setSelector:@selector(state)];
-  [invocation invoke];
-  CBPeripheralState state = CBPeripheralStateDisconnected;
-  [invocation getReturnValue:&state];
-  return state;
+void BluetoothLowEnergyDeviceMac::SendNotificationIfDiscoveryComplete() {
+  // Notify when all services have been discovered.
+  bool discovery_complete =
+      std::find_if_not(
+          gatt_services_.begin(), gatt_services_.end(),
+          [](GattServiceMap::value_type& pair) {
+            BluetoothRemoteGattService* gatt_service = pair.second.get();
+            return static_cast<BluetoothRemoteGattServiceMac*>(gatt_service)
+                ->IsDiscoveryComplete();
+          }) == gatt_services_.end();
+  if (discovery_complete) {
+    device_uuids_.ReplaceServiceUUIDs(gatt_services_);
+    SetGattServicesDiscoveryComplete(true);
+    adapter_->NotifyGattServicesDiscovered(this);
+    adapter_->NotifyDeviceChanged(this);
+  }
+}
+
+device::BluetoothAdapterMac* BluetoothLowEnergyDeviceMac::GetMacAdapter() {
+  return static_cast<BluetoothAdapterMac*>(this->adapter_);
+}
+
+CBPeripheral* BluetoothLowEnergyDeviceMac::GetPeripheral() {
+  return peripheral_;
+}
+
+device::BluetoothRemoteGattServiceMac*
+BluetoothLowEnergyDeviceMac::GetBluetoothRemoteGattService(
+    CBService* cb_service) const {
+  for (auto it = gatt_services_.begin(); it != gatt_services_.end(); ++it) {
+    device::BluetoothRemoteGattService* gatt_service = it->second.get();
+    device::BluetoothRemoteGattServiceMac* gatt_service_mac =
+        static_cast<BluetoothRemoteGattServiceMac*>(gatt_service);
+    if (gatt_service_mac->GetService() == cb_service)
+      return gatt_service_mac;
+  }
+  return nullptr;
+}
+
+void BluetoothLowEnergyDeviceMac::DidDisconnectPeripheral(NSError* error) {
+  SetGattServicesDiscoveryComplete(false);
+  // Removing all services at once to ensure that calling GetGattService on
+  // removed service in GattServiceRemoved returns null.
+  GattServiceMap gatt_services_swapped;
+  gatt_services_swapped.swap(gatt_services_);
+  gatt_services_swapped.clear();
+  device_uuids_.ClearServiceUUIDs();
+  // There are two cases in which this function will be called:
+  //   1. When the connection to the device breaks (either because
+  //      we closed it or the device closed it).
+  //   2. When we cancel a pending connection request.
+  if (create_gatt_connection_error_callbacks_.empty()) {
+    // If there are no pending callbacks then the connection broke (#1).
+    DidDisconnectGatt(true /* notifyDeviceChanged */);
+    return;
+  }
+  // Else we canceled the connection request (#2).
+  // TODO(http://crbug.com/585897): Need to pass the error.
+  DidFailToConnectGatt(BluetoothDevice::ConnectErrorCode::ERROR_FAILED);
 }

@@ -56,13 +56,29 @@ var testing = {};
     var noAnimationStyle = document.createElement('style');
     noAnimationStyle.id = 'no-animation';
     noAnimationStyle.textContent =
-      '* {' +
+      '*, * /deep/ * {' +
       '  -webkit-transition-duration: 0ms !important;' +
       '  -webkit-transition-delay: 0ms !important;' +
       '  -webkit-animation-duration: 0ms !important;' +
       '  -webkit-animation-delay: 0ms !important;' +
       '}';
     document.querySelector('head').appendChild(noAnimationStyle);
+
+    var realElementAnimate = Element.prototype.animate;
+    Element.prototype.animate = function(keyframes, opt_options) {
+      if (typeof opt_options == 'object')
+        opt_options.duration = 0;
+      else
+        opt_options = 0;
+      return realElementAnimate.call(this, keyframes, opt_options);
+    };
+    if (document.timeline && document.timeline.play) {
+      var realTimelinePlay = document.timeline.play;
+      document.timeline.play = function(a) {
+        a.timing.duration = 0;
+        return realTimelinePlay.call(document.timeline, a);
+      };
+    }
   };
 
   Test.prototype = {
@@ -195,6 +211,9 @@ var testing = {};
             // TODO(apacible): re-enable when following issue is fixed.
             // github.com/GoogleChrome/accessibility-developer-tools/issues/251
             "tableHasAppropriateHeaders",
+
+            // TODO(crbug.com/657514): This rule is flaky on Linux/ChromeOS.
+            "requiredOwnedAriaRoleMissing",
         ];
       }
       return this.accessibilityAuditConfig_;
@@ -872,6 +891,16 @@ var testing = {};
    */
   function assertEquals(expected, actual, opt_message) {
     chai.assert.strictEqual(actual, expected, opt_message);
+  }
+
+  /**
+   * @param {*} expected
+   * @param {*} actual
+   * {string=} opt_message
+   * @throws {Error}
+   */
+  function assertDeepEquals(expected, actual, opt_message) {
+    chai.assert.deepEqual(actual, expected, opt_message);
   }
 
   /**
@@ -1651,6 +1680,7 @@ var testing = {};
     exports.assertGE = assertGE;
     exports.assertGT = assertGT;
     exports.assertEquals = assertEquals;
+    exports.assertDeepEquals = assertDeepEquals;
     exports.assertLE = assertLE;
     exports.assertLT = assertLT;
     exports.assertNotEquals = assertNotEquals;
@@ -1667,6 +1697,7 @@ var testing = {};
     exports.expectGE = createExpect(assertGE);
     exports.expectGT = createExpect(assertGT);
     exports.expectEquals = createExpect(assertEquals);
+    exports.expectDeepEquals = createExpect(assertDeepEquals);
     exports.expectLE = createExpect(assertLE);
     exports.expectLT = createExpect(assertLT);
     exports.expectNotEquals = createExpect(assertNotEquals);

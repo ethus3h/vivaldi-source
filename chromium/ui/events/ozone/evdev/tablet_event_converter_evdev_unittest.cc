@@ -8,13 +8,15 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <unistd.h>
+
+#include <memory>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/scoped_vector.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/run_loop.h"
@@ -76,7 +78,7 @@ namespace ui {
 
 class MockTabletEventConverterEvdev : public TabletEventConverterEvdev {
  public:
-  MockTabletEventConverterEvdev(int fd,
+  MockTabletEventConverterEvdev(ScopedInputDevice fd,
                                 base::FilePath path,
                                 CursorDelegateEvdev* cursor,
                                 const EventDeviceInfo& devinfo,
@@ -97,7 +99,7 @@ class MockTabletEventConverterEvdev : public TabletEventConverterEvdev {
   int read_pipe_;
   int write_pipe_;
 
-  std::vector<scoped_ptr<Event>> dispatched_events_;
+  std::vector<std::unique_ptr<Event>> dispatched_events_;
 
   DISALLOW_COPY_AND_ASSIGN(MockTabletEventConverterEvdev);
 };
@@ -121,7 +123,7 @@ class MockTabletCursorEvdev : public CursorDelegateEvdev {
   gfx::Rect GetCursorConfinedBounds() override {
     return cursor_confined_bounds_;
   }
-
+  void InitializeOnEvdev() override {}
  private:
   gfx::PointF cursor_location_;
   gfx::Rect cursor_confined_bounds_;
@@ -129,12 +131,12 @@ class MockTabletCursorEvdev : public CursorDelegateEvdev {
 };
 
 MockTabletEventConverterEvdev::MockTabletEventConverterEvdev(
-    int fd,
+    ScopedInputDevice fd,
     base::FilePath path,
     CursorDelegateEvdev* cursor,
     const EventDeviceInfo& devinfo,
     DeviceEventDispatcherEvdev* dispatcher)
-    : TabletEventConverterEvdev(fd,
+    : TabletEventConverterEvdev(std::move(fd),
                                 path,
                                 1,
                                 cursor,
@@ -171,13 +173,6 @@ class TabletEventConverterEvdevTest : public testing::Test {
 
   // Overridden from testing::Test:
   void SetUp() override {
-    // Set up pipe to satisfy message pump (unused).
-    int evdev_io[2];
-    if (pipe(evdev_io))
-      PLOG(FATAL) << "failed pipe";
-    events_in_ = evdev_io[0];
-    events_out_ = evdev_io[1];
-
     cursor_.reset(new ui::MockTabletCursorEvdev());
     device_manager_ = ui::CreateDeviceManagerForTest();
     event_factory_ = ui::CreateEventFactoryEvdevForTest(
@@ -195,11 +190,18 @@ class TabletEventConverterEvdevTest : public testing::Test {
 
   ui::MockTabletEventConverterEvdev* CreateDevice(
       const ui::DeviceCapabilities& caps) {
+    // Set up pipe to satisfy message pump (unused).
+    int evdev_io[2];
+    if (pipe(evdev_io))
+      PLOG(FATAL) << "failed pipe";
+    ui::ScopedInputDevice events_in(evdev_io[0]);
+    events_out_.reset(evdev_io[1]);
+
     ui::EventDeviceInfo devinfo;
     CapabilitiesToDeviceInfo(caps, &devinfo);
     return new ui::MockTabletEventConverterEvdev(
-        events_in_, base::FilePath(kTestDevicePath), cursor_.get(), devinfo,
-        dispatcher_.get());
+        std::move(events_in), base::FilePath(kTestDevicePath), cursor_.get(),
+        devinfo, dispatcher_.get());
   }
 
   ui::CursorDelegateEvdev* cursor() { return cursor_.get(); }
@@ -209,24 +211,23 @@ class TabletEventConverterEvdevTest : public testing::Test {
     DCHECK_GT(dispatched_events_.size(), index);
     ui::Event* ev = dispatched_events_[index].get();
     DCHECK(ev->IsMouseEvent());
-    return static_cast<ui::MouseEvent*>(ev);
+    return ev->AsMouseEvent();
   }
 
   void DispatchEventForTest(ui::Event* event) {
-    scoped_ptr<ui::Event> cloned_event = ui::Event::Clone(*event);
+    std::unique_ptr<ui::Event> cloned_event = ui::Event::Clone(*event);
     dispatched_events_.push_back(std::move(cloned_event));
   }
 
  private:
-  scoped_ptr<ui::MockTabletCursorEvdev> cursor_;
-  scoped_ptr<ui::DeviceManager> device_manager_;
-  scoped_ptr<ui::EventFactoryEvdev> event_factory_;
-  scoped_ptr<ui::DeviceEventDispatcherEvdev> dispatcher_;
+  std::unique_ptr<ui::MockTabletCursorEvdev> cursor_;
+  std::unique_ptr<ui::DeviceManager> device_manager_;
+  std::unique_ptr<ui::EventFactoryEvdev> event_factory_;
+  std::unique_ptr<ui::DeviceEventDispatcherEvdev> dispatcher_;
 
-  std::vector<scoped_ptr<ui::Event>> dispatched_events_;
+  std::vector<std::unique_ptr<ui::Event>> dispatched_events_;
 
-  int events_out_;
-  int events_in_;
+  ui::ScopedInputDevice events_out_;
 
   DISALLOW_COPY_AND_ASSIGN(TabletEventConverterEvdevTest);
 };
@@ -235,8 +236,8 @@ class TabletEventConverterEvdevTest : public testing::Test {
 
 // Uses real data captured from Wacom Intuos 5 Pen
 TEST_F(TabletEventConverterEvdevTest, MoveTopLeft) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
@@ -267,8 +268,8 @@ TEST_F(TabletEventConverterEvdevTest, MoveTopLeft) {
 }
 
 TEST_F(TabletEventConverterEvdevTest, MoveTopRight) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
@@ -302,8 +303,8 @@ TEST_F(TabletEventConverterEvdevTest, MoveTopRight) {
 }
 
 TEST_F(TabletEventConverterEvdevTest, MoveBottomLeft) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
@@ -337,8 +338,8 @@ TEST_F(TabletEventConverterEvdevTest, MoveBottomLeft) {
 }
 
 TEST_F(TabletEventConverterEvdevTest, MoveBottomRight) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
@@ -374,8 +375,8 @@ TEST_F(TabletEventConverterEvdevTest, MoveBottomRight) {
 }
 
 TEST_F(TabletEventConverterEvdevTest, Tap) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_X, 15456},
@@ -418,26 +419,26 @@ TEST_F(TabletEventConverterEvdevTest, Tap) {
   ui::MouseEvent* event = dispatched_event(0);
   EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
   EXPECT_EQ(ui::EventPointerType::POINTER_TYPE_PEN,
-            event->pointer_details().pointer_type());
-  EXPECT_FLOAT_EQ(5.625f, event->pointer_details().tilt_x());
-  EXPECT_FLOAT_EQ(0.f, event->pointer_details().tilt_y());
+            event->pointer_details().pointer_type);
+  EXPECT_FLOAT_EQ(5.625f, event->pointer_details().tilt_x);
+  EXPECT_FLOAT_EQ(0.f, event->pointer_details().tilt_y);
   event = dispatched_event(1);
   EXPECT_EQ(ui::ET_MOUSE_PRESSED, event->type());
   EXPECT_EQ(ui::EventPointerType::POINTER_TYPE_PEN,
-            event->pointer_details().pointer_type());
-  EXPECT_FLOAT_EQ((float)992 / 2047, event->pointer_details().force());
+            event->pointer_details().pointer_type);
+  EXPECT_FLOAT_EQ((float)992 / 2047, event->pointer_details().force);
   EXPECT_EQ(true, event->IsLeftMouseButton());
   event = dispatched_event(2);
   EXPECT_EQ(ui::EventPointerType::POINTER_TYPE_PEN,
-            event->pointer_details().pointer_type());
+            event->pointer_details().pointer_type);
   EXPECT_EQ(ui::ET_MOUSE_RELEASED, event->type());
-  EXPECT_FLOAT_EQ(0.0f, event->pointer_details().force());
+  EXPECT_FLOAT_EQ(0.0f, event->pointer_details().force);
   EXPECT_EQ(true, event->IsLeftMouseButton());
 }
 
 TEST_F(TabletEventConverterEvdevTest, StylusButtonPress) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
@@ -489,8 +490,8 @@ TEST_F(TabletEventConverterEvdevTest, StylusButtonPress) {
 
 // Should only get an event if BTN_TOOL received
 TEST_F(TabletEventConverterEvdevTest, CheckStylusFiltering) {
-  scoped_ptr<ui::MockTabletEventConverterEvdev> dev =
-      make_scoped_ptr(CreateDevice(kWacomIntuos5SPen));
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      base::WrapUnique(CreateDevice(kWacomIntuos5SPen));
 
   struct input_event mock_kernel_queue[] = {
       {{0, 0}, EV_ABS, ABS_X, 0},

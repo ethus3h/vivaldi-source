@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 
-#include "base/memory/scoped_ptr.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
 #include "gpu/command_buffer/service/error_state_mock.h"
 #include "gpu/command_buffer/service/feature_info.h"
@@ -120,7 +119,8 @@ TEST_F(VertexAttribManagerTest, SetAttribInfo) {
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
   manager_ = NULL;
-  buffer_manager.Destroy(false);
+  buffer_manager.MarkContextLost();
+  buffer_manager.Destroy();
 }
 
 TEST_F(VertexAttribManagerTest, HaveFixedAttribs) {
@@ -147,7 +147,6 @@ TEST_F(VertexAttribManagerTest, CanAccess) {
 
   EXPECT_TRUE(attrib->CanAccess(0));
   manager_->Enable(1, true);
-  EXPECT_FALSE(attrib->CanAccess(0));
 
   manager_->SetAttribInfo(1, buffer, 4, GL_FLOAT, GL_FALSE, 0, 16, 0, GL_FALSE);
   EXPECT_FALSE(attrib->CanAccess(0));
@@ -181,7 +180,8 @@ TEST_F(VertexAttribManagerTest, CanAccess) {
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
   manager_ = NULL;
-  buffer_manager.Destroy(false);
+  buffer_manager.MarkContextLost();
+  buffer_manager.Destroy();
 }
 
 TEST_F(VertexAttribManagerTest, Unbind) {
@@ -218,7 +218,8 @@ TEST_F(VertexAttribManagerTest, Unbind) {
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
   manager_ = NULL;
-  buffer_manager.Destroy(false);
+  buffer_manager.MarkContextLost();
+  buffer_manager.Destroy();
 }
 
 // TODO(gman): Test ValidateBindings
@@ -226,5 +227,3 @@ TEST_F(VertexAttribManagerTest, Unbind) {
 
 }  // namespace gles2
 }  // namespace gpu
-
-

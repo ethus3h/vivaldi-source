@@ -6,19 +6,23 @@ package org.chromium.content_shell_apk;
 
 import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
+import android.annotation.TargetApi;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
+import android.os.PowerManager;
 import android.text.TextUtils;
 import android.view.ViewGroup;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityInstrumentationTestCase;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.ContentView;
 import org.chromium.content.browser.ContentViewCore;
-import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;
@@ -32,7 +36,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
-import java.lang.reflect.Method;
+import java.lang.reflect.AnnotatedElement;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -50,6 +54,25 @@ public class ContentShellTestBase
 
     public ContentShellTestBase() {
         super(ContentShellActivity.class);
+    }
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        assertScreenIsOn();
+    }
+
+    @TargetApi(Build.VERSION_CODES.KITKAT_WATCH)
+    @SuppressWarnings("deprecation")
+    private void assertScreenIsOn() {
+        PowerManager pm = (PowerManager) getInstrumentation().getContext().getSystemService(
+                Context.POWER_SERVICE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            assertTrue("Many tests will fail if the screen is not on.", pm.isInteractive());
+        } else {
+            assertTrue("Many tests will fail if the screen is not on.", pm.isScreenOn());
+        }
     }
 
     /**
@@ -75,7 +98,7 @@ public class ContentShellTestBase
      * The url is synchronously loaded.
      * @param url Test url to load.
      */
-    protected void startActivityWithTestUrl(String url) throws Throwable {
+    protected void startActivityWithTestUrl(String url) {
         launchContentShellWithUrl(UrlUtils.getIsolatedTestFileUrl(url));
         assertNotNull(getActivity());
         waitForActiveShellToBeDoneLoading();
@@ -102,13 +125,12 @@ public class ContentShellTestBase
      * WAIT_FOR_ACTIVE_SHELL_LOADING_TIMEOUT milliseconds and it shouldn't be used for long
      * loading pages. Instead it should be used more for test initialization. The proper way
      * to wait is to use a TestCallbackHelperContainer after the initial load is completed.
-     * @throws InterruptedException
      */
-    protected void waitForActiveShellToBeDoneLoading() throws InterruptedException {
+    protected void waitForActiveShellToBeDoneLoading() {
         final ContentShellActivity activity = getActivity();
 
         // Wait for the Content Shell to be initialized.
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+        CriteriaHelper.pollUiThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 Shell shell = activity.getActiveShell();
@@ -138,9 +160,8 @@ public class ContentShellTestBase
      * @param url The URL to create the new {@link Shell} with.
      * @return A new instance of a {@link Shell}.
      * @throws ExecutionException
-     * @throws InterruptedException
      */
-    protected Shell loadNewShell(final String url) throws ExecutionException, InterruptedException {
+    protected Shell loadNewShell(final String url) throws ExecutionException {
         Shell shell = ThreadUtils.runOnUiThreadBlocking(new Callable<Shell>() {
             @Override
             public Shell call() {
@@ -198,14 +219,14 @@ public class ContentShellTestBase
      * Waits till the ContentViewCore receives the expected page scale factor
      * from the compositor and asserts that this happens.
      */
-    protected void assertWaitForPageScaleFactorMatch(final float expectedScale)
-            throws InterruptedException {
-        CriteriaHelper.pollForCriteria(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return getContentViewCore().getScale() == expectedScale;
-            }
-        });
+    protected void assertWaitForPageScaleFactorMatch(float expectedScale) {
+        CriteriaHelper.pollInstrumentationThread(
+                Criteria.equals(expectedScale, new Callable<Float>() {
+                    @Override
+                    public Float call() {
+                        return getContentViewCore().getScale();
+                    }
+                }));
     }
 
     /**
@@ -230,7 +251,7 @@ public class ContentShellTestBase
     protected void runTest() throws Throwable {
         super.runTest();
         try {
-            Method method = getClass().getMethod(getName(), (Class[]) null);
+            AnnotatedElement method = getClass().getMethod(getName(), (Class[]) null);
             if (method.isAnnotationPresent(RerunWithUpdatedContainerView.class)) {
                 replaceContainerView();
                 super.runTest();

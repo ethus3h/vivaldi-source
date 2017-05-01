@@ -76,8 +76,10 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   // current selection and can be called on any object in the tree.
   v8::Local<v8::Value> SelectionAnchorObject();
   int SelectionAnchorOffset();
+  std::string SelectionAnchorAffinity();
   v8::Local<v8::Value> SelectionFocusObject();
   int SelectionFocusOffset();
+  std::string SelectionFocusAffinity();
 
   // The following selection functions return text offsets calculated starting
   // at this object. They only report on a selection that is placed on the
@@ -111,6 +113,7 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   unsigned int Color();
   // For input elements of type color.
   unsigned int ColorValue();
+  std::string FontFamily();
   float FontSize();
   std::string Orientation();
   int PosInSet();
@@ -123,6 +126,10 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   int32_t ColumnHeadersCount();
   bool IsClickable();
   bool IsButtonStateMixed();
+  float BoundsX();
+  float BoundsY();
+  float BoundsWidth();
+  float BoundsHeight();
 
   // Bound methods.
   v8::Local<v8::Object> AriaControlsElementAtIndex(unsigned index);
@@ -160,10 +167,19 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   void ScrollToMakeVisible();
   void ScrollToMakeVisibleWithSubFocus(int x, int y, int width, int height);
   void ScrollToGlobalPoint(int x, int y);
+  int ScrollX();
+  int ScrollY();
   int WordStart(int character_index);
   int WordEnd(int character_index);
   v8::Local<v8::Object> NextOnLine();
   v8::Local<v8::Object> PreviousOnLine();
+  std::string MisspellingAtIndex(int index);
+  v8::Local<v8::Object> OffsetContainer();
+  float BoundsInContainerX();
+  float BoundsInContainerY();
+  float BoundsInContainerWidth();
+  float BoundsInContainerHeight();
+  bool HasNonIdentityTransform();
 
   std::string Name();
   std::string NameFrom();
@@ -172,8 +188,11 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
 
   std::string Description();
   std::string DescriptionFrom();
+  int MisspellingsCount();
   int DescriptionElementCount();
   v8::Local<v8::Object> DescriptionElementAtIndex(unsigned index);
+
+  std::string Placeholder();
 
   blink::WebAXObject accessibility_object_;
   Factory* factory_;

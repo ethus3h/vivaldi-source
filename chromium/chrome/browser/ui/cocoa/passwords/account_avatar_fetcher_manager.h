@@ -8,16 +8,15 @@
 #include <Cocoa/Cocoa.h>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "net/url_request/url_request_context_getter.h"
 
 class AccountAvatarFetcherBridge;
-@class CredentialItemView;
+@class CredentialItemButton;
 class GURL;
 
 // Handles retrieving avatar images for credential items.
 @interface AccountAvatarFetcherManager : NSObject {
-  ScopedVector<AccountAvatarFetcherBridge> bridges_;
+  std::vector<std::unique_ptr<AccountAvatarFetcherBridge>> bridges_;
   scoped_refptr<net::URLRequestContextGetter> requestContext_;
 }
 
@@ -26,7 +25,7 @@ class GURL;
         (scoped_refptr<net::URLRequestContextGetter>)requestContext;
 
 // Retrieves the image located at |avatarURL| and updates |view| if successful.
-- (void)fetchAvatar:(const GURL&)avatarURL forView:(CredentialItemView*)view;
+- (void)fetchAvatar:(const GURL&)avatarURL forView:(CredentialItemButton*)view;
 
 @end
 

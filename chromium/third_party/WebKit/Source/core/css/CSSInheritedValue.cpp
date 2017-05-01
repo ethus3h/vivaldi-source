@@ -20,13 +20,17 @@
 
 #include "core/css/CSSInheritedValue.h"
 
+#include "core/css/CSSValuePool.h"
 #include "wtf/text/WTFString.h"
 
 namespace blink {
 
-String CSSInheritedValue::customCSSText() const
-{
-    return "inherit";
+CSSInheritedValue* CSSInheritedValue::create() {
+  return cssValuePool().inheritedValue();
 }
 
-} // namespace blink
+String CSSInheritedValue::customCSSText() const {
+  return "inherit";
+}
+
+}  // namespace blink

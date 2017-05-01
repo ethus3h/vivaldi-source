@@ -4,19 +4,22 @@
 
 #include "ios/chrome/browser/infobars/infobar_utils.h"
 
+#include <memory>
 #include <utility>
 
-#include "base/mac/scoped_nsobject.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "ios/chrome/browser/infobars/confirm_infobar_controller.h"
 #include "ios/chrome/browser/infobars/infobar.h"
 
-scoped_ptr<infobars::InfoBar> CreateConfirmInfoBar(
-    scoped_ptr<ConfirmInfoBarDelegate> delegate) {
-  scoped_ptr<InfoBarIOS> infobar(new InfoBarIOS(std::move(delegate)));
-  base::scoped_nsobject<ConfirmInfoBarController> controller(
-      [[ConfirmInfoBarController alloc] initWithDelegate:infobar.get()]);
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
+
+std::unique_ptr<infobars::InfoBar> CreateConfirmInfoBar(
+    std::unique_ptr<ConfirmInfoBarDelegate> delegate) {
+  std::unique_ptr<InfoBarIOS> infobar(new InfoBarIOS(std::move(delegate)));
+  ConfirmInfoBarController* controller =
+      [[ConfirmInfoBarController alloc] initWithDelegate:infobar.get()];
   infobar->SetController(controller);
   return std::move(infobar);
 }

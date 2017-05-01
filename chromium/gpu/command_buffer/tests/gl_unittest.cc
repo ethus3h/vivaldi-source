@@ -6,6 +6,8 @@
 #include <GLES2/gl2ext.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
@@ -30,7 +32,7 @@ TEST_F(GLTest, Basic) {
   uint8_t expected[] = {
       0, 255, 0, 255,
   };
-  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 1, 1, 0, expected));
+  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 1, 1, 0, expected, nullptr));
   GLTestHelper::CheckGLError("no errors", __LINE__);
 }
 
@@ -40,7 +42,7 @@ TEST_F(GLTest, BasicFBO) {
   GLuint fbo = 0;
   glGenFramebuffers(1, &fbo);
   glBindTexture(GL_TEXTURE_2D, tex);
-  scoped_ptr<uint8_t[]> pixels(new uint8_t[16 * 16 * 4]);
+  std::unique_ptr<uint8_t[]> pixels(new uint8_t[16 * 16 * 4]);
   memset(pixels.get(), 0, 16*16*4);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                pixels.get());
@@ -59,7 +61,7 @@ TEST_F(GLTest, BasicFBO) {
   uint8_t expected[] = {
       0, 255, 0, 255,
   };
-  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 16, 16, 0, expected));
+  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 16, 16, 0, expected, nullptr));
   glDeleteFramebuffers(1, &fbo);
   glDeleteTextures(1, &tex);
   GLTestHelper::CheckGLError("no errors", __LINE__);
@@ -90,16 +92,18 @@ TEST_F(GLTest, SimpleShader) {
   };
   glClearColor(0.5f, 0.0f, 1.0f, 0.0f);
   glClear(GL_COLOR_BUFFER_BIT);
-  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 1, 1, 1, expected_clear));
+  EXPECT_TRUE(
+      GLTestHelper::CheckPixels(0, 0, 1, 1, 1, expected_clear, nullptr));
   uint8_t expected_draw[] = {
       0, 255, 0, 255,
   };
   glDrawArrays(GL_TRIANGLES, 0, 6);
-  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 1, 1, 0, expected_draw));
+  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 1, 1, 0, expected_draw, nullptr));
 }
 
 TEST_F(GLTest, FeatureFlagsMatchCapabilities) {
-  scoped_refptr<gles2::FeatureInfo> features = new gles2::FeatureInfo;
+  scoped_refptr<gles2::FeatureInfo> features =
+      new gles2::FeatureInfo(gl_.workarounds());
   EXPECT_TRUE(features->InitializeForTesting());
   const auto& caps = gl_.GetCapabilities();
   const auto& flags = features->feature_flags();
@@ -116,6 +120,7 @@ TEST_F(GLTest, FeatureFlagsMatchCapabilities) {
             flags.blend_equation_advanced_coherent);
   EXPECT_EQ(caps.texture_rg, flags.ext_texture_rg);
   EXPECT_EQ(caps.image_ycbcr_422, flags.chromium_image_ycbcr_422);
+  EXPECT_EQ(caps.image_ycbcr_420v, flags.chromium_image_ycbcr_420v);
   EXPECT_EQ(caps.render_buffer_format_bgra8888,
             flags.ext_render_buffer_format_bgra8888);
   EXPECT_EQ(caps.occlusion_query_boolean, flags.occlusion_query_boolean);

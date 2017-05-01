@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_ENROLLMENT_ENROLLMENT_SCREEN_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_ENROLLMENT_ENROLLMENT_SCREEN_H_
 
+#include <memory>
 #include <string>
 
 #include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/login/enrollment/enrollment_screen_actor.h"
 #include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_helper.h"
@@ -54,10 +54,8 @@ class EnrollmentScreen
       pairing_chromeos::ControllerPairingController* shark_controller);
 
   // BaseScreen implementation:
-  void PrepareToShow() override;
   void Show() override;
   void Hide() override;
-  std::string GetName() const override;
 
   // EnrollmentScreenActor::Controller implementation:
   void OnLoginDone(const std::string& user,
@@ -65,6 +63,7 @@ class EnrollmentScreen
   void OnRetry() override;
   void OnCancel() override;
   void OnConfirmationClosed() override;
+  void OnAdJoined(const std::string& realm) override;
   void OnDeviceAttributeProvided(const std::string& asset_id,
                                  const std::string& location) override;
 
@@ -83,14 +82,28 @@ class EnrollmentScreen
 
  private:
   FRIEND_TEST_ALL_PREFIXES(EnrollmentScreenTest, TestSuccess);
+  FRIEND_TEST_ALL_PREFIXES(AttestationAuthEnrollmentScreenTest, TestCancel);
+  FRIEND_TEST_ALL_PREFIXES(ForcedAttestationAuthEnrollmentScreenTest,
+                           TestCancel);
+  FRIEND_TEST_ALL_PREFIXES(MultiAuthEnrollmentScreenTest, TestCancel);
   FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
                            TestProperPageGetsLoadedOnEnrollmentSuccess);
   FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
                            TestAttributePromptPageGetsLoaded);
   FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
                            TestAuthCodeGetsProperlyReceivedFromGaia);
+  FRIEND_TEST_ALL_PREFIXES(HandsOffNetworkScreenTest, RequiresNoInput);
 
-  // Creates an enrollment helper.
+  // The authentication mechanisms that this class can use.
+  enum Auth {
+    AUTH_ATTESTATION,
+    AUTH_OAUTH,
+  };
+
+  // Sets the current config to use for enrollment.
+  void SetConfig();
+
+  // Creates an enrollment helper if needed.
   void CreateEnrollmentHelper();
 
   // Clears auth in |enrollment_helper_|. Deletes |enrollment_helper_| and runs
@@ -112,6 +125,12 @@ class EnrollmentScreen
   // |enrollment_mode_|.
   void UMA(policy::MetricEnrollment sample);
 
+  // Do attestation based enrollment.
+  void AuthenticateUsingAttestation();
+
+  // Shows the interactive screen. Resets auth then shows the signin screen.
+  void ShowInteractiveScreen();
+
   // Shows the signin screen. Used as a callback to run after auth reset.
   void ShowSigninScreen();
 
@@ -119,16 +138,24 @@ class EnrollmentScreen
   // Used as a callback to run after successful enrollment.
   void ShowAttributePromptScreen();
 
-  void OnAnyEnrollmentError();
+  // Record metrics when we encounter an enrollment error.
+  void RecordEnrollmentErrorMetrics();
 
-  pairing_chromeos::ControllerPairingController* shark_controller_;
+  // Advance to the next authentication mechanism if possible.
+  bool AdvanceToNextAuth();
+
+  pairing_chromeos::ControllerPairingController* shark_controller_ = nullptr;
 
   EnrollmentScreenActor* actor_;
+  policy::EnrollmentConfig config_;
   policy::EnrollmentConfig enrollment_config_;
-  bool enrollment_failed_once_;
+  Auth current_auth_ = AUTH_OAUTH;
+  Auth last_auth_ = AUTH_OAUTH;
+  bool enrollment_failed_once_ = false;
   std::string enrolling_user_domain_;
-  scoped_ptr<base::ElapsedTimer> elapsed_timer_;
-  scoped_ptr<EnterpriseEnrollmentHelper> enrollment_helper_;
+  std::string auth_code_;
+  std::unique_ptr<base::ElapsedTimer> elapsed_timer_;
+  std::unique_ptr<EnterpriseEnrollmentHelper> enrollment_helper_;
   base::WeakPtrFactory<EnrollmentScreen> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(EnrollmentScreen);

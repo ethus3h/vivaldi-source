@@ -6,13 +6,13 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -28,6 +28,7 @@
 #include "ui/app_list/views/apps_grid_view_folder_delegate.h"
 #include "ui/app_list/views/test/apps_grid_view_test_api.h"
 #include "ui/events/event_utils.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
 
 namespace app_list {
@@ -41,8 +42,8 @@ const int kTilesPerPage = kCols * kRows;
 
 class PageFlipWaiter : public PaginationModelObserver {
  public:
-  PageFlipWaiter(base::MessageLoopForUI* ui_loop, PaginationModel* model)
-      : ui_loop_(ui_loop), model_(model), wait_(false) {
+  explicit PageFlipWaiter(PaginationModel* model)
+      : model_(model), wait_(false) {
     model_->AddObserver(this);
   }
 
@@ -52,7 +53,8 @@ class PageFlipWaiter : public PaginationModelObserver {
     DCHECK(!wait_);
     wait_ = true;
 
-    ui_loop_->Run();
+    ui_run_loop_.reset(new base::RunLoop);
+    ui_run_loop_->Run();
     wait_ = false;
   }
 
@@ -69,12 +71,12 @@ class PageFlipWaiter : public PaginationModelObserver {
     selected_pages_ += base::IntToString(new_selected);
 
     if (wait_)
-      ui_loop_->QuitWhenIdle();
+      ui_run_loop_->QuitWhenIdle();
   }
   void TransitionStarted() override {}
   void TransitionChanged() override {}
 
-  base::MessageLoopForUI* ui_loop_;
+  std::unique_ptr<base::RunLoop> ui_run_loop_;
   PaginationModel* model_;
   bool wait_;
   std::string selected_pages_;
@@ -110,14 +112,6 @@ class AppsGridViewTest : public views::ViewsTestBase {
   }
 
  protected:
-  void EnsureFoldersEnabled() {
-#if defined(OS_MACOSX)
-    // Folders require toolkit-views app list to be enabled.
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kEnableMacViewsAppList);
-#endif
-  }
-
   AppListItemView* GetItemViewAt(int index) {
     return static_cast<AppListItemView*>(
         test_api_->GetViewAtModelIndex(index));
@@ -153,10 +147,10 @@ class AppsGridViewTest : public views::ViewsTestBase {
     AppListItemView* view = GetItemViewForPoint(from);
     DCHECK(view);
 
-    gfx::Point translated_from = gfx::PointAtOffsetFromOrigin(
-        from - view->bounds().origin());
-    gfx::Point translated_to = gfx::PointAtOffsetFromOrigin(
-        to - view->bounds().origin());
+    gfx::Point translated_from =
+        gfx::PointAtOffsetFromOrigin(from - view->origin());
+    gfx::Point translated_to =
+        gfx::PointAtOffsetFromOrigin(to - view->origin());
 
     ui::MouseEvent pressed_event(ui::ET_MOUSE_PRESSED, translated_from, from,
                                  ui::EventTimeForNow(), 0, 0);
@@ -173,9 +167,9 @@ class AppsGridViewTest : public views::ViewsTestBase {
     apps_grid_view_->OnKeyPressed(key_event);
   }
 
-  scoped_ptr<AppListTestModel> model_;
-  scoped_ptr<AppsGridView> apps_grid_view_;
-  scoped_ptr<AppsGridViewTestApi> test_api_;
+  std::unique_ptr<AppListTestModel> model_;
+  std::unique_ptr<AppsGridView> apps_grid_view_;
+  std::unique_ptr<AppsGridViewTestApi> test_api_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppsGridViewTest);
@@ -320,8 +314,6 @@ TEST_F(AppsGridViewTest, MouseDragWithFolderDisabled) {
 }
 
 TEST_F(AppsGridViewTest, MouseDragItemIntoFolder) {
-  EnsureFoldersEnabled();
-
   size_t kTotalItems = 3;
   model_->PopulateApps(kTotalItems);
   EXPECT_EQ(model_->top_level_item_list()->item_count(), kTotalItems);
@@ -369,8 +361,6 @@ TEST_F(AppsGridViewTest, MouseDragItemIntoFolder) {
 }
 
 TEST_F(AppsGridViewTest, MouseDragMaxItemsInFolder) {
-  EnsureFoldersEnabled();
-
   // Create and add a folder with 15 items in it.
   size_t kTotalItems = kMaxFolderItems - 1;
   model_->CreateAndPopulateFolderWithApps(kTotalItems);
@@ -416,8 +406,6 @@ TEST_F(AppsGridViewTest, MouseDragMaxItemsInFolder) {
 // Check that moving items around doesn't allow a drop to happen into a full
 // folder.
 TEST_F(AppsGridViewTest, MouseDragMaxItemsInFolderWithMovement) {
-  EnsureFoldersEnabled();
-
   // Create and add a folder with 16 items in it.
   size_t kTotalItems = kMaxFolderItems;
   model_->CreateAndPopulateFolderWithApps(kTotalItems);
@@ -453,7 +441,7 @@ TEST_F(AppsGridViewTest, MouseDragMaxItemsInFolderWithMovement) {
   // Move onto the folder and end the drag.
   to = GetItemTileRectAt(0, 1).CenterPoint();
   gfx::Point translated_to =
-      gfx::PointAtOffsetFromOrigin(to - dragged_view->bounds().origin());
+      gfx::PointAtOffsetFromOrigin(to - dragged_view->origin());
   ui::MouseEvent drag_event(ui::ET_MOUSE_DRAGGED, translated_to, to,
                             ui::EventTimeForNow(), 0, 0);
   apps_grid_view_->UpdateDragFromItem(AppsGridView::MOUSE, drag_event);
@@ -466,9 +454,6 @@ TEST_F(AppsGridViewTest, MouseDragMaxItemsInFolderWithMovement) {
 }
 
 TEST_F(AppsGridViewTest, MouseDragItemReorder) {
-  // This test assumes Folders are enabled.
-  EnsureFoldersEnabled();
-
   model_->PopulateApps(4);
   EXPECT_EQ(4u, model_->top_level_item_list()->item_count());
   EXPECT_EQ(std::string("Item 0,Item 1,Item 2,Item 3"),
@@ -525,8 +510,6 @@ TEST_F(AppsGridViewTest, MouseDragItemReorder) {
 }
 
 TEST_F(AppsGridViewTest, MouseDragFolderReorder) {
-  EnsureFoldersEnabled();
-
   size_t kTotalItems = 2;
   model_->CreateAndPopulateFolderWithApps(kTotalItems);
   model_->PopulateAppWithId(kTotalItems);
@@ -587,7 +570,7 @@ TEST_F(AppsGridViewTest, MouseDragFlipPage) {
   test_api_->SetPageFlipDelay(10);
   GetPaginationModel()->SetTransitionDurations(10, 10);
 
-  PageFlipWaiter page_flip_waiter(message_loop(), GetPaginationModel());
+  PageFlipWaiter page_flip_waiter(GetPaginationModel());
 
   const int kPages = 3;
   model_->PopulateApps(kPages * kTilesPerPage);
@@ -659,8 +642,6 @@ TEST_F(AppsGridViewTest, SimultaneousDragWithFolderDisabled) {
 }
 
 TEST_F(AppsGridViewTest, UpdateFolderBackgroundOnCancelDrag) {
-  EnsureFoldersEnabled();
-
   const int kTotalItems = 4;
   TestAppsGridViewFolderDelegate folder_delegate;
   apps_grid_view_->set_folder_delegate(&folder_delegate);

@@ -13,46 +13,55 @@
 #include "components/dom_distiller/core/proto/distilled_article.pb.h"
 #include "components/dom_distiller/core/task_tracker.h"
 #include "components/dom_distiller/core/viewer.h"
-#include "ios/chrome/browser/dom_distiller/dom_distiller_service_factory.h"
-#include "ios/public/provider/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace dom_distiller {
 
-DistillerViewer::DistillerViewer(ios::ChromeBrowserState* browser_state,
-                                 const GURL& url,
-                                 const DistillationFinishedCallback& callback)
-    : DomDistillerRequestViewBase(
-          new DistilledPagePrefs(browser_state->GetPrefs())),
+DistillerViewer::DistillerViewer(
+    dom_distiller::DomDistillerService* distillerService,
+    PrefService* prefs,
+    const GURL& url,
+    const DistillationFinishedCallback& callback,
+    std::unique_ptr<dom_distiller::DistillerPage> page)
+    : DistillerViewerInterface(distillerService, prefs),
       url_(url),
       callback_(callback) {
-  DCHECK(browser_state);
+  DCHECK(distillerService);
   DCHECK(url.is_valid());
-  dom_distiller::DomDistillerService* distillerService =
-      dom_distiller::DomDistillerServiceFactory::GetForBrowserState(
-          browser_state);
+  if (!page) {
+    page = distillerService->CreateDefaultDistillerPage(gfx::Size());
+  }
 
-  scoped_ptr<ViewerHandle> viewer_handle = distillerService->ViewUrl(
-      this, distillerService->CreateDefaultDistillerPage(gfx::Size()), url);
+  std::unique_ptr<ViewerHandle> viewer_handle =
+      distillerService->ViewUrl(this, std::move(page), url);
 
   TakeViewerHandle(std::move(viewer_handle));
 }
 
-DistillerViewer::~DistillerViewer() {
-}
+DistillerViewer::~DistillerViewer() {}
 
 void DistillerViewer::OnArticleReady(
     const dom_distiller::DistilledArticleProto* article_proto) {
   DomDistillerRequestViewBase::OnArticleReady(article_proto);
+  bool is_empty = article_proto->pages_size() == 0 ||
+                  article_proto->pages(0).html().empty();
+  if (!is_empty) {
+    std::vector<ImageInfo> images;
+    for (int i = 0; i < article_proto->pages(0).image_size(); i++) {
+      auto image = article_proto->pages(0).image(i);
+      images.push_back(ImageInfo{GURL(image.url()), image.data()});
+    }
+    const std::string html = viewer::GetUnsafeArticleTemplateHtml(
+        url_.spec(), distilled_page_prefs_->GetTheme(),
+        distilled_page_prefs_->GetFontFamily());
 
-  const std::string html = viewer::GetUnsafeArticleTemplateHtml(
-      url_.spec(), distilled_page_prefs_->GetTheme(),
-      distilled_page_prefs_->GetFontFamily());
-
-  std::string html_and_script(html);
-  html_and_script +=
-      "<script> distiller_on_ios = true; " + js_buffer_ + "</script>";
-  callback_.Run(url_, html_and_script);
+    std::string html_and_script(html);
+    html_and_script +=
+        "<script> distiller_on_ios = true; " + js_buffer_ + "</script>";
+    callback_.Run(url_, html_and_script, images, article_proto->title());
+  } else {
+    callback_.Run(url_, std::string(), {}, std::string());
+  }
 }
 
 void DistillerViewer::SendJavaScript(const std::string& buffer) {

@@ -9,6 +9,7 @@
 
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,10 +19,11 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_split.h"
+#include "base/threading/thread_checker.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/policy_export.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 #include "net/url_request/url_fetcher_delegate.h"
-#include "policy/proto/device_management_backend.pb.h"
 
 
 namespace net {
@@ -38,20 +40,23 @@ class DeviceManagementService;
 // canceled by deleting the object.
 class POLICY_EXPORT DeviceManagementRequestJob {
  public:
-  // Describes the job type.
+  // Describes the job type.  (Integer values are stated explicitly to
+  // facilitate reading of logs.)
   enum JobType {
-    TYPE_AUTO_ENROLLMENT,
-    TYPE_REGISTRATION,
-    TYPE_API_AUTH_CODE_FETCH,
-    TYPE_POLICY_FETCH,
-    TYPE_UNREGISTRATION,
-    TYPE_UPLOAD_CERTIFICATE,
-    TYPE_DEVICE_STATE_RETRIEVAL,
-    TYPE_UPLOAD_STATUS,
-    TYPE_REMOTE_COMMANDS,
-    TYPE_ATTRIBUTE_UPDATE_PERMISSION,
-    TYPE_ATTRIBUTE_UPDATE,
-    TYPE_GCM_ID_UPDATE,
+    TYPE_AUTO_ENROLLMENT = 0,
+    TYPE_REGISTRATION = 1,
+    TYPE_API_AUTH_CODE_FETCH = 2,
+    TYPE_POLICY_FETCH = 3,
+    TYPE_UNREGISTRATION = 4,
+    TYPE_UPLOAD_CERTIFICATE = 5,
+    TYPE_DEVICE_STATE_RETRIEVAL = 6,
+    TYPE_UPLOAD_STATUS = 7,
+    TYPE_REMOTE_COMMANDS = 8,
+    TYPE_ATTRIBUTE_UPDATE_PERMISSION = 9,
+    TYPE_ATTRIBUTE_UPDATE = 10,
+    TYPE_GCM_ID_UPDATE = 11,
+    TYPE_ANDROID_MANAGEMENT_CHECK = 12,
+    TYPE_CERT_BASED_REGISTRATION = 13,
   };
 
   typedef base::Callback<
@@ -68,6 +73,12 @@ class POLICY_EXPORT DeviceManagementRequestJob {
   void SetOAuthToken(const std::string& oauth_token);
   void SetDMToken(const std::string& dm_token);
   void SetClientID(const std::string& client_id);
+  // Sets the critical request parameter, which is used to differentiate regular
+  // DMServer requests (like scheduled policy fetches) from time-sensitive ones
+  // (like policy fetch during device enrollment). Should only be called before
+  // Start()ing the job, at most once.
+  void SetCritical(bool critical);
+
   enterprise_management::DeviceManagementRequest* GetRequest();
 
   // A job may automatically retry if it fails due to a temporary condition, or
@@ -93,6 +104,7 @@ class POLICY_EXPORT DeviceManagementRequestJob {
   // Fires the job, to be filled in by implementations.
   virtual void Run() = 0;
 
+  JobType type_;
   ParameterMap query_params_;
   std::string gaia_token_;
   std::string dm_token_;
@@ -129,7 +141,8 @@ class POLICY_EXPORT DeviceManagementService : public net::URLFetcherDelegate {
     virtual std::string GetPlatformParameter() = 0;
   };
 
-  explicit DeviceManagementService(scoped_ptr<Configuration> configuration);
+  explicit DeviceManagementService(
+      std::unique_ptr<Configuration> configuration);
   ~DeviceManagementService() override;
 
   // The ID of URLFetchers created by the DeviceManagementService. This can be
@@ -152,6 +165,10 @@ class POLICY_EXPORT DeviceManagementService : public net::URLFetcherDelegate {
   // Gets the URL that the DMServer requests are sent to.
   std::string GetServerUrl();
 
+  // Sets the retry delay to a shorter time to prevent browser tests from
+  // timing out.
+  static void SetRetryDelayForTesting(long retryDelayMs);
+
  private:
   typedef std::map<const net::URLFetcher*,
                    DeviceManagementRequestJobImpl*> JobFetcherMap;
@@ -167,6 +184,7 @@ class POLICY_EXPORT DeviceManagementService : public net::URLFetcherDelegate {
 
   // Starts a job.
   void StartJob(DeviceManagementRequestJobImpl* job);
+  void StartJobAfterDelay(base::WeakPtr<DeviceManagementRequestJobImpl> job);
 
   // Adds a job. Caller must make sure the job pointer stays valid until the job
   // completes or gets canceled via RemoveJob().
@@ -178,7 +196,7 @@ class POLICY_EXPORT DeviceManagementService : public net::URLFetcherDelegate {
 
   // A Configuration implementation that is used to obtain various parameters
   // used to talk to the device management server.
-  scoped_ptr<Configuration> configuration_;
+  std::unique_ptr<Configuration> configuration_;
 
   // The jobs we currently have in flight.
   JobFetcherMap pending_jobs_;
@@ -190,7 +208,12 @@ class POLICY_EXPORT DeviceManagementService : public net::URLFetcherDelegate {
   // If it is not initialized, incoming requests are queued.
   bool initialized_;
 
-  // Used to create tasks to run |Initialize| delayed on the UI thread.
+  // TaskRunner used to schedule retry attempts.
+  const scoped_refptr<base::SequencedTaskRunner> task_runner_;
+
+  base::ThreadChecker thread_checker_;
+
+  // Used to create tasks which run delayed on the UI thread.
   base::WeakPtrFactory<DeviceManagementService> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(DeviceManagementService);

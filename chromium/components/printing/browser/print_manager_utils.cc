@@ -22,12 +22,10 @@ void RenderParamsFromPrintSettings(const PrintSettings& settings,
   params->margin_top = settings.page_setup_device_units().content_area().y();
   params->margin_left = settings.page_setup_device_units().content_area().x();
   params->dpi = settings.dpi();
-  // Currently hardcoded at 1.25. See PrintSettings' constructor.
-  params->min_shrink = settings.min_shrink();
-  // Currently hardcoded at 2.0. See PrintSettings' constructor.
-  params->max_shrink = settings.max_shrink();
+  params->scale_factor = settings.scale_factor();
   // Currently hardcoded at 72dpi. See PrintSettings' constructor.
   params->desired_dpi = settings.desired_dpi();
+  params->rasterize_pdf = settings.rasterize_pdf();
   // Always use an invalid cookie.
   params->document_cookie = 0;
   params->selection_only = settings.selection_only();

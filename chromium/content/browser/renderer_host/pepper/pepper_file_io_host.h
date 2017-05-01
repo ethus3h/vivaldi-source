@@ -15,6 +15,7 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
+#include "content/public/common/quarantine.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_platform_file.h"
 #include "ppapi/c/pp_file_info.h"
@@ -49,6 +50,7 @@ class PepperFileIOHost : public ppapi::host::ResourceHost,
 
   struct UIThreadStuff {
     UIThreadStuff();
+    UIThreadStuff(const UIThreadStuff& other);
     ~UIThreadStuff();
     base::ProcessId resolved_render_process_id;
     scoped_refptr<storage::FileSystemContext> file_system_context;
@@ -81,8 +83,16 @@ class PepperFileIOHost : public ppapi::host::ResourceHost,
       ppapi::host::ReplyMessageContext reply_context,
       base::File::Error error_code);
 
-  void OnOpenProxyCallback(ppapi::host::ReplyMessageContext reply_context,
-                           base::File::Error error_code);
+  void OnLocalFileOpened(ppapi::host::ReplyMessageContext reply_context,
+                         const base::FilePath& path,
+                         base::File::Error error_code);
+
+  void OnLocalFileQuarantined(ppapi::host::ReplyMessageContext reply_context,
+                              const base::FilePath& path,
+                              QuarantineFileResult quarantine_result);
+
+  void SendFileOpenReply(ppapi::host::ReplyMessageContext reply_context,
+                         base::File::Error error_code);
 
   void GotUIThreadStuffForInternalFileSystems(
       ppapi::host::ReplyMessageContext reply_context,
@@ -114,7 +124,6 @@ class PepperFileIOHost : public ppapi::host::ResourceHost,
 
   BrowserPpapiHostImpl* browser_ppapi_host_;
 
-  RenderProcessHost* render_process_host_;
   int render_process_id_;
   base::ProcessId resolved_render_process_id_;
 

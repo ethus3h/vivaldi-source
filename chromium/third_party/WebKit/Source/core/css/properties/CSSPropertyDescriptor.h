@@ -1,63 +1,31 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CSSPropertyDescriptor_h
-#define CSSPropertyDescriptor_h
-
-#include "core/css/properties/CSSPropertyFunctions.h"
-#include <type_traits>
+#include "core/CSSPropertyNames.h"
 
 namespace blink {
 
-/**
- * The API for a single, non-shorthand property in the CSS style engine. All properties
- * in the style engine must implement this API (see CSSPropertyFunctions).
- *
- * The API is a complete, stateless representation of all the behaviors of a single
- * property (e.g. 'width', 'color'). Calls to property logic are directed through the
- * CSSPropertyDescriptor object, which stores resolved function pointers.
- *
- * To add a new property, create a subclass of CSSPropertyFunctions and implement
- * all public static methods. Then, call CSSPropertyDescriptor::create<SubclassName>() to get a
- * descriptor for the class, which can be registered with CSSPropertyDescriptor::add().
- *
- * No property-specific logic should exist in the style engine outside of this class.
- */
-class CSSPropertyDescriptor {
-    STACK_ALLOCATED();
-public:
-    // Given a subclass of CSSPropertyFunctions, creates a CSSPropertyDescriptor from its static methods.
-    template <class T> static CSSPropertyDescriptor create()
-    {
-        static_assert(std::is_base_of<T, CSSPropertyFunctions>::value, "Property must inherit from CSSPropertyFunctions");
-        ASSERT(T::id != CSSPropertyFunctions::id);
-        ASSERT(T::parseSingleValue != CSSPropertyFunctions::parseSingleValue);
-        CSSPropertyDescriptor descriptor;
-        descriptor.m_valid = true;
-        descriptor.m_id = T::id();
-        descriptor.m_parseSingleValue = T::parseSingleValue;
-        return descriptor;
-    }
+class CSSValue;
+class CSSParserTokenRange;
+class CSSParserContext;
 
-    static void add(CSSPropertyDescriptor);
+// Stores function pointers matching those declared in CSSPropertyAPI.
+struct CSSPropertyDescriptor {
+  const CSSValue* (*parseSingleValue)(CSSParserTokenRange&,
+                                      const CSSParserContext*);
 
-    // Returns the property's descriptor, or null if that property does not have an API yet.
-    // TODO(sashab): Change this to return a const& once all properties have an API.
-    static const CSSPropertyDescriptor* get(CSSPropertyID);
+  // Stores whether or not this descriptor is for a valid property. Do not
+  // access the contents of this descriptor unless this value is true.
+  // TODO(aazzam): Remove this once the switch in
+  // CSSPropertyParser::parseSingleValue() has been completely replaced by
+  // CSSPropertyDescriptors.
+  bool temporaryCanReadValue;
 
-    // Accessors to functions on the property API.
-    CSSPropertyID id() const { return m_id; }
-    PassRefPtrWillBeRawPtr<CSSValue> parseSingleValue(CSSParserTokenRange& range, const CSSParserContext& context) const { return m_parseSingleValue(range, context); }
-
-private:
-    // Used internally to check whether an array entry is filled or not.
-    bool m_valid;
-
-    CSSPropertyID m_id;
-    CSSPropertyFunctions::parseSingleValueFunction m_parseSingleValue;
+  // Returns the corresponding CSSPropertyDescriptor for a given CSSPropertyID.
+  // Use this function to access the API for a property. Returns a descriptor
+  // with isValid set to false if no descriptor exists for this ID.
+  static const CSSPropertyDescriptor& get(CSSPropertyID);
 };
 
-} // namespace blink
-
-#endif // CSSPropertyDescriptor_h
+}  // namespace blink

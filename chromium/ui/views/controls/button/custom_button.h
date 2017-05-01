@@ -5,26 +5,23 @@
 #ifndef UI_VIEWS_CONTROLS_BUTTON_CUSTOM_BUTTON_H_
 #define UI_VIEWS_CONTROLS_BUTTON_CUSTOM_BUTTON_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "build/build_config.h"
 #include "ui/events/event_constants.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/throb_animation.h"
-#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/controls/button/button.h"
 
 namespace views {
 
-class InkDropDelegate;
-
 // A button with custom rendering. The base of ImageButton and LabelButton.
 // Note that this type of button is not focusable by default and will not be
-// part of the focus chain.  Call SetFocusable(true) to make it part of the
-// focus chain.
-class VIEWS_EXPORT CustomButton : public Button,
-                                  public gfx::AnimationDelegate,
-                                  public views::InkDropHost {
+// part of the focus chain, unless in accessibility mode. Call
+// SetFocusForPlatform() to make it part of the focus chain.
+class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
  public:
   // An enum describing the events on which a button should notify its listener.
   enum NotifyAction {
@@ -32,19 +29,32 @@ class VIEWS_EXPORT CustomButton : public Button,
     NOTIFY_ON_RELEASE,
   };
 
+  // An enum describing the events on which a button should be clicked for a
+  // given key event.
+  enum KeyClickAction {
+    CLICK_ON_KEY_PRESS,
+    CLICK_ON_KEY_RELEASE,
+    CLICK_NONE,
+  };
+
   // The menu button's class name.
   static const char kViewClassName[];
 
-  static const CustomButton* AsCustomButton(const views::View* view);
-  static CustomButton* AsCustomButton(views::View* view);
+  static const CustomButton* AsCustomButton(const View* view);
+  static CustomButton* AsCustomButton(View* view);
 
   ~CustomButton() override;
 
   // Get/sets the current display state of the button.
   ButtonState state() const { return state_; }
+  // Clients passing in STATE_DISABLED should consider calling
+  // SetEnabled(false) instead because the enabled flag can affect other things
+  // like event dispatching, focus traversals, etc. Calling SetEnabled(false)
+  // will also set the state of |this| to STATE_DISABLED.
   void SetState(ButtonState state);
 
   // Starts throbbing. See HoverAnimation for a description of cycles_til_stop.
+  // This method does nothing if |animate_on_state_change_| is false.
   void StartThrobbing(int cycles_til_stop);
 
   // Stops throbbing immediately.
@@ -59,10 +69,15 @@ class VIEWS_EXPORT CustomButton : public Button,
   int triggerable_event_flags() const { return triggerable_event_flags_; }
 
   // Sets whether |RequestFocus| should be invoked on a mouse press. The default
-  // is true.
+  // is false.
   void set_request_focus_on_press(bool value) {
+// On Mac, buttons should not request focus on a mouse press. Hence keep the
+// default value i.e. false.
+#if !defined(OS_MACOSX)
     request_focus_on_press_ = value;
+#endif
   }
+
   bool request_focus_on_press() const { return request_focus_on_press_; }
 
   // See description above field.
@@ -75,11 +90,18 @@ class VIEWS_EXPORT CustomButton : public Button,
     notify_action_ = notify_action;
   }
 
+  void set_hide_ink_drop_when_showing_context_menu(
+      bool hide_ink_drop_when_showing_context_menu) {
+    hide_ink_drop_when_showing_context_menu_ =
+        hide_ink_drop_when_showing_context_menu;
+  }
+
+  void set_ink_drop_base_color(SkColor color) { ink_drop_base_color_ = color; }
+
   void SetHotTracked(bool is_hot_tracked);
   bool IsHotTracked() const;
 
   // Overridden from View:
-  void Layout() override;
   void OnEnabledChanged() override;
   const char* GetClassName() const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
@@ -93,26 +115,31 @@ class VIEWS_EXPORT CustomButton : public Button,
   bool OnKeyReleased(const ui::KeyEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+  bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override;
   void ShowContextMenu(const gfx::Point& p,
                        ui::MenuSourceType source_type) override;
   void OnDragDone() override;
-  void GetAccessibleState(ui::AXViewState* state) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void VisibilityChanged(View* starting_from, bool is_visible) override;
+
+  // Overridden from InkDropHostView:
+  std::unique_ptr<InkDrop> CreateInkDrop() override;
+  SkColor GetInkDropBaseColor() const override;
 
   // Overridden from gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
 
-  // Overridden from views::InkDropHost:
-  void AddInkDropLayer(ui::Layer* ink_drop_layer) override;
-  void RemoveInkDropLayer(ui::Layer* ink_drop_layer) override;
-  gfx::Point CalculateInkDropCenter() const override;
+  // Overridden from View:
+  void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) override;
+  void OnBlur() override;
 
  protected:
   // Construct the Button with a Listener. See comment for Button's ctor.
   explicit CustomButton(ButtonListener* listener);
 
   // Invoked from SetState() when SetState() is passed a value that differs from
-  // the current state. CustomButton's implementation of StateChanged() does
+  // the current node_data. CustomButton's implementation of StateChanged() does
   // nothing; this method is provided for subclasses that wish to do something
   // on state changes.
   virtual void StateChanged();
@@ -133,19 +160,8 @@ class VIEWS_EXPORT CustomButton : public Button,
   // Returns true if the button should enter hovered state; that is, if the
   // mouse is over the button, and no other window has capture (which would
   // prevent the button from receiving MouseExited events and updating its
-  // state). This does not take into account enabled state.
+  // node_data). This does not take into account enabled node_data.
   bool ShouldEnterHoveredState();
-
-  InkDropDelegate* ink_drop_delegate() const { return ink_drop_delegate_; }
-  void set_ink_drop_delegate(InkDropDelegate* ink_drop_delegate) {
-    ink_drop_delegate_ = ink_drop_delegate;
-  }
-
-  // Overridden from View:
-  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
-  void ViewHierarchyChanged(
-      const ViewHierarchyChangedDetails& details) override;
-  void OnBlur() override;
 
   // Overridden from Button:
   void NotifyClick(const ui::Event& event) override;
@@ -160,8 +176,8 @@ class VIEWS_EXPORT CustomButton : public Button,
 
   gfx::ThrobAnimation hover_animation_;
 
-  // Should we animate when the state changes? Defaults to true.
-  bool animate_on_state_change_;
+  // Should we animate when the state changes?
+  bool animate_on_state_change_ = false;
 
   // Is the hover animation running because StartThrob was invoked?
   bool is_throbbing_;
@@ -172,22 +188,19 @@ class VIEWS_EXPORT CustomButton : public Button,
   // See description above setter.
   bool request_focus_on_press_;
 
-  // Animation delegate for the ink drop ripple effect. It is owned by a
-  // descendant class and needs to be reset before an instance of the concrete
-  // CustomButton is destroyed.
-  InkDropDelegate* ink_drop_delegate_;
-
   // The event on which the button should notify its listener.
   NotifyAction notify_action_;
 
   // True when a button click should trigger an animation action on
-  // |ink_drop_delegate_|.
-  // TODO(bruthig): Use an InkDropAction enum and drop the flag.
+  // ink_drop_delegate().
   bool has_ink_drop_action_on_click_;
 
-  // The animation action to trigger on the |ink_drop_delegate_| when the button
-  // is clicked.
-  InkDropState ink_drop_action_on_click_;
+  // When true, the ink drop ripple and hover will be hidden prior to showing
+  // the context menu.
+  bool hide_ink_drop_when_showing_context_menu_;
+
+  // The color of the ripple and hover.
+  SkColor ink_drop_base_color_;
 
   DISALLOW_COPY_AND_ASSIGN(CustomButton);
 };

@@ -15,8 +15,9 @@
 #include "content/public/common/webplugininfo.h"
 #include "ppapi/c/pp_module.h"
 #include "ppapi/c/ppb.h"
+#include "ppapi/features/features.h"
 
-#if !defined(ENABLE_PLUGINS)
+#if !BUILDFLAG(ENABLE_PLUGINS)
 #error "Plugins should be enabled"
 #endif
 
@@ -37,6 +38,7 @@ struct CONTENT_EXPORT PepperPluginInfo {
   };
 
   PepperPluginInfo();
+  PepperPluginInfo(const PepperPluginInfo& other);
   ~PepperPluginInfo();
 
   WebPluginInfo ToWebPluginInfo() const;
@@ -56,9 +58,10 @@ struct CONTENT_EXPORT PepperPluginInfo {
   std::string version;
   std::vector<WebPluginMimeType> mime_types;
 
-  // True when the plugin has been detected as the debug version.
+  // True when the plugin is an external plugin i.e. not bundled with Chrome or
+  // via the component updater.
   // Defaults to false.
-  bool is_debug;
+  bool is_external;
 
   // When is_internal is set, this contains the function pointers to the
   // entry points for the internal plugins.

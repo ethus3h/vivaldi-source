@@ -36,6 +36,7 @@ class CheckReturnValue {
       checked_ = other.checked_;
       other.checked_ = true;
     }
+    return *this;
   }
 
   ~CheckReturnValue() {
@@ -77,7 +78,8 @@ void UncheckedDelete(T* object) {
   }
 }
 
-// A deleter for scoped_ptr that will delete the object via UncheckedDelete().
+// A deleter for std::unique_ptr that will delete the object via
+// UncheckedDelete().
 template <class T>
 struct UncheckedDeleter {
   inline void operator()(T* ptr) const { UncheckedDelete(ptr); }
@@ -234,6 +236,10 @@ class MemoryAllocator {
           UncheckedDelete(mapping);
         }
       }
+    }
+    // If the above fails (e.g. because we are in a sandbox), just try the heap.
+    if (!mem && base::UncheckedMalloc(bytes, reinterpret_cast<void**>(&mem))) {
+      mem[0] = static_cast<uint8_t>(HEAP_ALLOCATION);
     }
     return mem ? reinterpret_cast<pointer>(mem + sizeof(T)) : NULL;
   }

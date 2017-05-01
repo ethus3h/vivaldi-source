@@ -5,8 +5,9 @@
 #ifndef UI_AURA_ENV_H_
 #define UI_AURA_ENV_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "base/supports_user_data.h"
 #include "ui/aura/aura_export.h"
@@ -16,9 +17,14 @@
 
 namespace ui {
 class ContextFactory;
+class ContextFactoryPrivate;
 class PlatformEventSource;
 }
 namespace aura {
+
+namespace client {
+class FocusClient;
+}
 
 namespace test {
 class EnvTestHelper;
@@ -27,19 +33,33 @@ class EnvTestHelper;
 class EnvObserver;
 class InputStateLookup;
 class Window;
+class WindowPort;
+class WindowTreeClient;
 class WindowTreeHost;
 
 // A singleton object that tracks general state within Aura.
 class AURA_EXPORT Env : public ui::EventTarget, public base::SupportsUserData {
  public:
-  // Creates the single Env instance (if it hasn't been created yet). If
-  // |create_event_source| is true a PlatformEventSource is created.
-  // TODO(sky): nuke |create_event_source|. Only necessary while mojo's
-  // nativeviewportservice lives in the same process as the viewmanager.
-  static void CreateInstance(bool create_event_source);
+  enum class Mode {
+    // Classic aura.
+    LOCAL,
+
+    // Aura with a backend of mus.
+    MUS,
+  };
+
+  ~Env() override;
+
+  // NOTE: if you pass in Mode::MUS it is expected that you call
+  // SetWindowTreeClient() before any windows are created.
+  static std::unique_ptr<Env> CreateInstance(Mode mode = Mode::LOCAL);
   static Env* GetInstance();
   static Env* GetInstanceDontCreate();
-  static void DeleteInstance();
+
+  Mode mode() const { return mode_; }
+
+  // Called internally to create the appropriate WindowPort implementation.
+  std::unique_ptr<WindowPort> CreateWindowPort(Window* window);
 
   void AddObserver(EnvObserver* observer);
   void RemoveObserver(EnvObserver* observer);
@@ -68,16 +88,36 @@ class AURA_EXPORT Env : public ui::EventTarget, public base::SupportsUserData {
   }
   ui::ContextFactory* context_factory() { return context_factory_; }
 
+  void set_context_factory_private(
+      ui::ContextFactoryPrivate* context_factory_private) {
+    context_factory_private_ = context_factory_private;
+  }
+  ui::ContextFactoryPrivate* context_factory_private() {
+    return context_factory_private_;
+  }
+
+  // See CreateInstance() for description.
+  void SetWindowTreeClient(WindowTreeClient* window_tree_client);
+  bool HasWindowTreeClient() const { return window_tree_client_ != nullptr; }
+
+  // Sets the active FocusClient and the window the FocusClient is associated
+  // with. |window| is not necessarily the window that actually has focus.
+  // |window| may be null, which indicates all windows share a FocusClient.
+  void SetActiveFocusClient(client::FocusClient* focus_client,
+                            Window* focus_client_root);
+  client::FocusClient* active_focus_client() { return active_focus_client_; }
+  Window* active_focus_client_root() { return active_focus_client_root_; }
+
  private:
+  class ActiveFocusClientWindowObserver;
+
   friend class test::EnvTestHelper;
   friend class Window;
   friend class WindowTreeHost;
 
-  Env();
-  ~Env() override;
+  explicit Env(Mode mode);
 
-  // See description of CreateInstance() for deatils of |create_event_source|.
-  void Init(bool create_event_source);
+  void Init();
 
   // Called by the Window when it is initialized. Notifies observers.
   void NotifyWindowInitialized(Window* window);
@@ -88,11 +128,18 @@ class AURA_EXPORT Env : public ui::EventTarget, public base::SupportsUserData {
   // Invoked by WindowTreeHost when it is activated. Notifies observers.
   void NotifyHostActivated(WindowTreeHost* host);
 
+  void OnActiveFocusClientWindowDestroying();
+
   // Overridden from ui::EventTarget:
   bool CanAcceptEvent(const ui::Event& event) override;
   ui::EventTarget* GetParentTarget() override;
-  scoped_ptr<ui::EventTargetIterator> GetChildIterator() const override;
+  std::unique_ptr<ui::EventTargetIterator> GetChildIterator() const override;
   ui::EventTargeter* GetEventTargeter() override;
+
+  // This is not const for tests, which may share Env across tests and so needs
+  // to reset the value.
+  Mode mode_;
+  WindowTreeClient* window_tree_client_ = nullptr;
 
   base::ObserverList<EnvObserver> observers_;
 
@@ -101,10 +148,16 @@ class AURA_EXPORT Env : public ui::EventTarget, public base::SupportsUserData {
   gfx::Point last_mouse_location_;
   bool is_touch_down_;
 
-  scoped_ptr<InputStateLookup> input_state_lookup_;
-  scoped_ptr<ui::PlatformEventSource> event_source_;
+  std::unique_ptr<InputStateLookup> input_state_lookup_;
+  std::unique_ptr<ui::PlatformEventSource> event_source_;
 
   ui::ContextFactory* context_factory_;
+  ui::ContextFactoryPrivate* context_factory_private_;
+
+  Window* active_focus_client_root_ = nullptr;
+  client::FocusClient* active_focus_client_ = nullptr;
+  std::unique_ptr<ActiveFocusClientWindowObserver>
+      active_focus_client_window_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(Env);
 };

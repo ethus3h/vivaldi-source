@@ -10,18 +10,13 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/values.h"
 #include "dbus/bus.h"
 #include "dbus/object_manager.h"
+#include "dbus/values_util.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace bluez {
-
-namespace {
-
-// TODO(armansito): Move this constant to cros_system_api.
-const char kValueProperty[] = "Value";
-
-}  // namespace
 
 // static
 const char BluetoothGattCharacteristicClient::kNoResponseError[] =
@@ -37,12 +32,10 @@ BluetoothGattCharacteristicClient::Properties::Properties(
     : dbus::PropertySet(object_proxy, interface_name, callback) {
   RegisterProperty(bluetooth_gatt_characteristic::kUUIDProperty, &uuid);
   RegisterProperty(bluetooth_gatt_characteristic::kServiceProperty, &service);
-  RegisterProperty(kValueProperty, &value);
+  RegisterProperty(bluetooth_gatt_characteristic::kValueProperty, &value);
   RegisterProperty(bluetooth_gatt_characteristic::kNotifyingProperty,
                    &notifying);
   RegisterProperty(bluetooth_gatt_characteristic::kFlagsProperty, &flags);
-  RegisterProperty(bluetooth_gatt_characteristic::kDescriptorsProperty,
-                   &descriptors);
 }
 
 BluetoothGattCharacteristicClient::Properties::~Properties() {}
@@ -104,6 +97,11 @@ class BluetoothGattCharacteristicClientImpl
         bluetooth_gatt_characteristic::kBluetoothGattCharacteristicInterface,
         bluetooth_gatt_characteristic::kReadValue);
 
+    // Append empty option dict
+    dbus::MessageWriter writer(&method_call);
+    base::DictionaryValue dict;
+    dbus::AppendValueData(&writer, dict);
+
     object_proxy->CallMethodWithErrorCallback(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::Bind(&BluetoothGattCharacteristicClientImpl::OnValueSuccess,
@@ -129,6 +127,10 @@ class BluetoothGattCharacteristicClientImpl
         bluetooth_gatt_characteristic::kWriteValue);
     dbus::MessageWriter writer(&method_call);
     writer.AppendArrayOfBytes(value.data(), value.size());
+
+    // Append empty option dict
+    base::DictionaryValue dict;
+    dbus::AppendValueData(&writer, dict);
 
     object_proxy->CallMethodWithErrorCallback(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -200,16 +202,16 @@ class BluetoothGattCharacteristicClientImpl
   void ObjectAdded(const dbus::ObjectPath& object_path,
                    const std::string& interface_name) override {
     VLOG(2) << "Remote GATT characteristic added: " << object_path.value();
-    FOR_EACH_OBSERVER(BluetoothGattCharacteristicClient::Observer, observers_,
-                      GattCharacteristicAdded(object_path));
+    for (auto& observer : observers_)
+      observer.GattCharacteristicAdded(object_path);
   }
 
   // dbus::ObjectManager::Interface override.
   void ObjectRemoved(const dbus::ObjectPath& object_path,
                      const std::string& interface_name) override {
     VLOG(2) << "Remote GATT characteristic removed: " << object_path.value();
-    FOR_EACH_OBSERVER(BluetoothGattCharacteristicClient::Observer, observers_,
-                      GattCharacteristicRemoved(object_path));
+    for (auto& observer : observers_)
+      observer.GattCharacteristicRemoved(object_path);
   }
 
  protected:
@@ -232,9 +234,8 @@ class BluetoothGattCharacteristicClientImpl
                                  const std::string& property_name) {
     VLOG(2) << "Remote GATT characteristic property changed: "
             << object_path.value() << ": " << property_name;
-    FOR_EACH_OBSERVER(
-        BluetoothGattCharacteristicClient::Observer, observers_,
-        GattCharacteristicPropertyChanged(object_path, property_name));
+    for (auto& observer : observers_)
+      observer.GattCharacteristicPropertyChanged(object_path, property_name);
   }
 
   // Called when a response for successful method call is received.

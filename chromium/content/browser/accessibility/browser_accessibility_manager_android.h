@@ -74,16 +74,25 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   }
   bool prune_tree_for_screen_reader() { return prune_tree_for_screen_reader_; }
 
-  // Implementation of BrowserAccessibilityManager.
-  void NotifyAccessibilityEvent(ui::AXEvent event_type,
-                                BrowserAccessibility* node) override;
-  void OnLocationChanges(
+  bool ShouldExposePasswordText();
+
+  // BrowserAccessibilityManager overrides.
+  BrowserAccessibility* GetFocus() override;
+  void NotifyAccessibilityEvent(
+      BrowserAccessibilityEvent::Source source,
+      ui::AXEvent event_type,
+      BrowserAccessibility* node) override;
+  void SendLocationChangeEvents(
       const std::vector<AccessibilityHostMsg_LocationChangeParams>& params)
           override;
 
   // --------------------------------------------------------------------------
   // Methods called from Java via JNI
   // --------------------------------------------------------------------------
+
+  // Global methods.
+  base::android::ScopedJavaLocalRef<jstring> GetSupportedHtmlElementTypes(
+      JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
 
   // Tree methods.
   jint GetRootId(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
@@ -99,6 +108,9 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   jboolean IsEditableText(JNIEnv* env,
                           const base::android::JavaParamRef<jobject>& obj,
                           jint id);
+  jboolean IsFocused(JNIEnv* env,
+                     const base::android::JavaParamRef<jobject>& obj,
+                     jint id);
   jint GetEditableTextSelectionStart(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
@@ -145,6 +157,9 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
                         const base::android::JavaParamRef<jobject>& obj,
                         jint id,
                         jboolean increment);
+  void ShowContextMenu(JNIEnv* env,
+                       const base::android::JavaParamRef<jobject>& obj,
+                       jint id);
 
   // Return the id of the next node in tree order in the direction given by
   // |forwards|, starting with |start_id|, that matches |element_type|,
@@ -214,6 +229,8 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
               jint id,
               int direction);
 
+  JavaObjectWeakGlobalRef& java_ref() { return java_ref_; }
+
  protected:
   // AXTreeDelegate overrides.
   void OnAtomicUpdateFinished(
@@ -224,6 +241,10 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   bool UseRootScrollOffsetsWhenComputingBounds() override;
 
  private:
+  BrowserAccessibilityAndroid* GetFromUniqueID(int32_t unique_id);
+
+   base::android::ScopedJavaLocalRef<jobject> GetJavaRefFromRootManager();
+
   // This gives BrowserAccessibilityManager::Create access to the class
   // constructor.
   friend class BrowserAccessibilityManager;

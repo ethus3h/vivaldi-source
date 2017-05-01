@@ -10,9 +10,11 @@
 #include "chrome/browser/ui/browser_finder.h"
 #import "chrome/browser/ui/cocoa/history_overlay_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebGestureEvent.h"
+#include "third_party/WebKit/public/platform/WebMouseWheelEvent.h"
 
 #include "app/vivaldi_apptools.h"
+#include "base/mac/mac_util.h"
 
 namespace {
 // The horizontal distance required to cause the browser to perform a history
@@ -35,6 +37,14 @@ const CGFloat kCancelEventVerticalLowerThreshold = 0.01;
 // expect NSTouch callbacks. We set this variable to YES and ignore NSTouch
 // callbacks.
 BOOL forceMagicMouse = NO;
+
+// NOTE(espen@vivaldi.com) Guard to ensure that the magic mouse can not start
+// a history swipe if the document has been scrolled a certain amount after a
+// GestureScrollBegin.
+CGFloat vivaldiFullScrollingDeltaX = 0;
+CGFloat vivaldiFullScrollingDeltaY = 0;
+const CGFloat kVivaldiScrollDeltaLimit = 5;
+
 }  // namespace
 
 @interface HistorySwiper ()
@@ -118,84 +128,39 @@ BOOL forceMagicMouse = NO;
 
 - (void)rendererHandledWheelEvent:(const blink::WebMouseWheelEvent&)event
                          consumed:(BOOL)consumed {
-  // NOTE(espen@vivaldi.com). The history swiper has not been designed with a
-  // BrowserPlugin in mind. Wheel events (two finger swiping creates wheel
-  // events) are sent to the renderer process and the reply, which we examine
-  // here, is used to determine if the renderer scrolls horizontally
-  // (consumed == true) or not. No history swiping can occur if we scroll at the
-  // same time. The initial event has a phase flag set to NSEventPhaseBegan
-  // when sent to the renderer. No history swiping can start before an event
-  // with this phase flag is returned and then only if the renderer has not
-  // consumed the event (consumed = false).
-  //
-  // The problem when we use a BrowserPlugin in the renderer is that this
-  // introduces a new async. message sent from the browser plugin to the
-  // view that will scroll the content. The BrowserPlugin will however always
-  // reply synchronously to the calling code that the event has been consumed.
-  // That state is returned in the event with the NSEventPhaseBegan phase flag
-  // set. See BrowserPlugin::handleInputEvent() and
-  // RenderWidget::OnHandleInputEvent() which calls it and trigger the reply
-  // event.
-  //
-  // We have to relax parsing of the returned values to be able to start
-  // history swiping mode.
-  if (vivaldi::IsVivaldiRunning()) {
-    static int lastPhase = NSEventPhaseNone;  // static to simplify patch.
-    if (event.phase == NSEventPhaseBegan || lastPhase == NSEventPhaseBegan) {
-      beganEventUnconsumed_ = !consumed;
-    }
-    lastPhase = event.phase == NSEventPhaseBegan ? NSEventPhaseBegan
-                                                 : NSEventPhaseNone;
-    return;
-  }
-
   if (event.phase != NSEventPhaseBegan)
     return;
-  beganEventUnconsumed_ = !consumed;
+  firstScrollUnconsumed_ = !consumed;
 }
 
-- (BOOL)canRubberbandLeft:(NSView*)view {
-  Browser* browser = chrome::FindBrowserWithWindow([view window]);
-  // If history swiping isn't possible, allow rubberbanding.
-  if (!browser)
-    return true;
-
-  // TODO(erikchen): Update this comment after determining whether this
-  // NULL-check fixes the crash.
-  // This NULL check likely prevents a crash. http://crbug.com/418761
-  if (!browser->tab_strip_model()->GetActiveWebContents())
-    return true;
-
-  if (!chrome::CanGoBack(browser))
-    return true;
-  // History swiping is possible. By default, disallow rubberbanding.  If the
-  // user has both started, and then cancelled history swiping for this
-  // gesture, allow rubberbanding.
-  return receivingTouches_ && recognitionState_ == history_swiper::kCancelled;
-}
-
-- (BOOL)canRubberbandRight:(NSView*)view {
-  Browser* browser = chrome::FindBrowserWithWindow([view window]);
-  // If history swiping isn't possible, allow rubberbanding.
-  if (!browser)
-    return true;
-
-  // TODO(erikchen): Update this comment after determining whether this
-  // NULL-check fixes the crash.
-  // This NULL check likely prevents a crash. http://crbug.com/418761
-  if (!browser->tab_strip_model()->GetActiveWebContents())
-    return true;
-
-  if (!chrome::CanGoForward(browser))
-    return true;
-  // History swiping is possible. By default, disallow rubberbanding.  If the
-  // user has both started, and then cancelled history swiping for this
-  // gesture, allow rubberbanding.
-  return receivingTouches_ && recognitionState_ == history_swiper::kCancelled;
+- (void)rendererHandledGestureScrollEvent:(const blink::WebGestureEvent&)event
+                                 consumed:(BOOL)consumed {
+  switch (event.type()) {
+    case blink::WebInputEvent::GestureScrollBegin:
+      if (event.data.scrollBegin.synthetic ||
+          event.data.scrollBegin.inertialPhase ==
+              blink::WebGestureEvent::MomentumPhase) {
+        return;
+      }
+      waitingForFirstGestureScroll_ = YES;
+      break;
+    case blink::WebInputEvent::GestureScrollUpdate:
+      if (waitingForFirstGestureScroll_)
+        firstScrollUnconsumed_ = !consumed;
+      waitingForFirstGestureScroll_ = NO;
+      break;
+    default:
+      break;
+  }
 }
 
 - (void)beginGestureWithEvent:(NSEvent*)event {
   inGesture_ = YES;
+  if (vivaldi::IsVivaldiRunning()) {
+    firstScrollUnconsumed_ = NO;
+    recognitionState_ = history_swiper::kPending;
+    vivaldiFullScrollingDeltaX = vivaldiFullScrollingDeltaY = 0;
+  }
 
   // Reset state pertaining to Magic Mouse swipe gestures.
   mouseScrollDelta_ = NSZeroSize;
@@ -229,6 +194,13 @@ BOOL forceMagicMouse = NO;
 - (void)updateGestureCurrentPointFromEvent:(NSEvent*)event {
   NSPoint averagePosition = [self averagePositionInEvent:event];
 
+  // Workaround for frameless window. In framed mode the pointCount
+  // is always > 0 and the code depends on that.
+  if (vivaldi::IsVivaldiRunning() &&
+      averagePosition.x + averagePosition.y == 0) {
+   return;
+ }
+
   // If the start point is valid, then so is the current point.
   if (gestureStartPointValid_)
     gestureTotalY_ += fabs(averagePosition.y - gestureCurrentPoint_.y);
@@ -252,7 +224,8 @@ BOOL forceMagicMouse = NO;
   // Reset state pertaining to previous trackpad gestures.
   gestureStartPointValid_ = NO;
   gestureTotalY_ = 0;
-  beganEventUnconsumed_ = NO;
+  firstScrollUnconsumed_ = NO;
+  waitingForFirstGestureScroll_ = NO;
   recognitionState_ = history_swiper::kPending;
 }
 
@@ -428,9 +401,9 @@ BOOL forceMagicMouse = NO;
       historyOverlay_.view.window);
   if (browser) {
     if (direction == history_swiper::kForwards)
-      chrome::GoForward(browser, CURRENT_TAB);
+      chrome::GoForward(browser, WindowOpenDisposition::CURRENT_TAB);
     else
-      chrome::GoBack(browser, CURRENT_TAB);
+      chrome::GoBack(browser, WindowOpenDisposition::CURRENT_TAB);
   }
 }
 
@@ -452,6 +425,15 @@ BOOL forceMagicMouse = NO;
   // The 'trackSwipeEventWithOptions:' api doesn't handle momentum events.
   if ([theEvent phase] == NSEventPhaseNone)
     return NO;
+
+  if (vivaldi::IsVivaldiRunning() && !forceMagicMouse) {
+    // Prevent navigation if we have already scrolled the page in this event
+    // sequence.
+    if (vivaldiFullScrollingDeltaX > kVivaldiScrollDeltaLimit ||
+        vivaldiFullScrollingDeltaY > kVivaldiScrollDeltaLimit) {
+      return NO;
+    }
+  }
 
   mouseScrollDelta_.width += [theEvent scrollingDeltaX];
   mouseScrollDelta_.height += [theEvent scrollingDeltaY];
@@ -533,15 +515,19 @@ BOOL forceMagicMouse = NO;
               chrome::FindBrowserWithWindow(historyOverlay.view.window);
           if (ended && browser) {
             if (isRightScroll)
-              chrome::GoForward(browser, CURRENT_TAB);
+              chrome::GoForward(browser, WindowOpenDisposition::CURRENT_TAB);
             else
-              chrome::GoBack(browser, CURRENT_TAB);
+              chrome::GoBack(browser, WindowOpenDisposition::CURRENT_TAB);
           }
 
           if (ended || isComplete) {
             [historyOverlay dismiss];
             [historyOverlay release];
             historyOverlay = nil;
+            if (vivaldi::IsVivaldiRunning()) {
+              forceMagicMouse = NO;
+              firstScrollUnconsumed_ = NO;
+            }
           }
       }];
 }
@@ -550,12 +536,34 @@ BOOL forceMagicMouse = NO;
   if (![theEvent respondsToSelector:@selector(phase)])
     return NO;
 
+  // NOTE(espen@vivaldi.com). NSEventTypeBeginGesture and NSEventTypeEndGesture
+  // are not automatically called by cocoa after 10.11 but the history swiping
+  // relies on these events. The workaround is to test for the phase in
+  // scrollwheel events. Only magic mouse will set NSEventPhaseBegan and
+  // NSEventPhaseEnd.
+  if (vivaldi::IsVivaldiRunning() && base::mac::IsAtLeastOS10_11()) {
+    if (theEvent.type == NSScrollWheel) {
+      if (theEvent.phase == NSEventPhaseBegan) {
+        [self beginGestureWithEvent:theEvent];
+      }
+      else if (theEvent.phase == NSEventPhaseEnded) {
+        [self beginGestureWithEvent:theEvent];
+      }
+    }
+  }
+
   // The only events that this class consumes have type NSEventPhaseChanged.
   // This simultaneously weeds our regular mouse wheel scroll events, and
   // gesture events with incorrect phase.
   if ([theEvent phase] != NSEventPhaseChanged &&
       [theEvent momentumPhase] != NSEventPhaseChanged) {
     return NO;
+  }
+
+  if (vivaldi::IsVivaldiRunning() && !firstScrollUnconsumed_) {
+    // Collect full scrolling distance as long as the render consumes it.
+    vivaldiFullScrollingDeltaX += fabs([theEvent scrollingDeltaX]);
+    vivaldiFullScrollingDeltaY += fabs([theEvent scrollingDeltaY]);
   }
 
   // We've already processed this gesture.
@@ -576,7 +584,7 @@ BOOL forceMagicMouse = NO;
 
   // Don't enable history swiping until the renderer has decided to not consume
   // the event with phase NSEventPhaseBegan.
-  if (!beganEventUnconsumed_)
+  if (!firstScrollUnconsumed_)
     return NO;
 
   // Magic mouse and touchpad swipe events are identical except magic mouse

@@ -13,16 +13,15 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
-#include "base/strings/stringprintf.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "net/base/host_port_pair.h"
-#include "net/base/net_util.h"
 #include "net/base/upload_data_stream.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_response_info.h"
-#include "net/log/net_log.h"
+#include "net/log/net_log_event_type.h"
+#include "net/log/net_log_with_source.h"
 #include "net/spdy/spdy_header_block.h"
 #include "net/spdy/spdy_http_utils.h"
 #include "net/spdy/spdy_protocol.h"
@@ -30,9 +29,12 @@
 
 namespace net {
 
+const size_t SpdyHttpStream::kRequestBodyBufferSize = 1 << 14;  // 16KB
+
 SpdyHttpStream::SpdyHttpStream(const base::WeakPtr<SpdySession>& spdy_session,
                                bool direct)
-    : spdy_session_(spdy_session),
+    : MultiplexedHttpStream(MultiplexedSessionHandle(spdy_session)),
+      spdy_session_(spdy_session),
       is_reused_(spdy_session_->IsReused()),
       stream_closed_(false),
       closed_stream_status_(ERR_FAILED),
@@ -41,12 +43,13 @@ SpdyHttpStream::SpdyHttpStream(const base::WeakPtr<SpdySession>& spdy_session,
       closed_stream_sent_bytes_(0),
       request_info_(NULL),
       response_info_(NULL),
-      response_headers_status_(RESPONSE_HEADERS_ARE_INCOMPLETE),
+      response_headers_complete_(false),
       user_buffer_len_(0),
       request_body_buf_size_(0),
       buffered_read_callback_pending_(false),
       more_read_data_pending_(false),
       direct_(direct),
+      was_alpn_negotiated_(false),
       weak_factory_(this) {
   DCHECK(spdy_session_.get());
 }
@@ -60,7 +63,7 @@ SpdyHttpStream::~SpdyHttpStream() {
 
 int SpdyHttpStream::InitializeStream(const HttpRequestInfo* request_info,
                                      RequestPriority priority,
-                                     const BoundNetLog& stream_net_log,
+                                     const NetLogWithSource& stream_net_log,
                                      const CompletionCallback& callback) {
   DCHECK(!stream_);
   if (!spdy_session_)
@@ -68,15 +71,15 @@ int SpdyHttpStream::InitializeStream(const HttpRequestInfo* request_info,
 
   request_info_ = request_info;
   if (request_info_->method == "GET") {
-    int error = spdy_session_->GetPushStream(request_info_->url, &stream_,
-                                             stream_net_log);
+    int error = spdy_session_->GetPushStream(request_info_->url, priority,
+                                             &stream_, stream_net_log);
     if (error != OK)
       return error;
 
     // |stream_| may be NULL even if OK was returned.
     if (stream_.get()) {
       DCHECK_EQ(stream_->type(), SPDY_PUSH_STREAM);
-      stream_->SetDelegate(this);
+      InitializeStreamHelper();
       return OK;
     }
   }
@@ -89,18 +92,10 @@ int SpdyHttpStream::InitializeStream(const HttpRequestInfo* request_info,
 
   if (rv == OK) {
     stream_ = stream_request_.ReleaseStream();
-    stream_->SetDelegate(this);
+    InitializeStreamHelper();
   }
 
   return rv;
-}
-
-UploadProgress SpdyHttpStream::GetUploadProgress() const {
-  if (!request_info_ || !HasUploadData())
-    return UploadProgress();
-
-  return UploadProgress(request_info_->upload_data_stream->position(),
-                        request_info_->upload_data_stream->size());
 }
 
 int SpdyHttpStream::ReadResponseHeaders(const CompletionCallback& callback) {
@@ -111,7 +106,7 @@ int SpdyHttpStream::ReadResponseHeaders(const CompletionCallback& callback) {
   CHECK(stream_.get());
 
   // Check if we already have the response headers. If so, return synchronously.
-  if (response_headers_status_ == RESPONSE_HEADERS_ARE_COMPLETE) {
+  if (response_headers_complete_) {
     CHECK(!stream_->IsIdle());
     return OK;
   }
@@ -124,6 +119,14 @@ int SpdyHttpStream::ReadResponseHeaders(const CompletionCallback& callback) {
 
 int SpdyHttpStream::ReadResponseBody(
     IOBuffer* buf, int buf_len, const CompletionCallback& callback) {
+  // Invalidate HttpRequestInfo pointer. This is to allow the stream to be
+  // shared across multiple transactions which might require this
+  // stream to outlive the request_'s owner.
+  // Only allowed when Reading of response body starts. It is safe to reset it
+  // at this point since request_->upload_data_stream is also not needed
+  // anymore.
+  request_info_ = nullptr;
+
   if (stream_.get())
     CHECK(!stream_->IsIdle());
 
@@ -155,25 +158,12 @@ void SpdyHttpStream::Close(bool not_reusable) {
   DCHECK(!stream_.get());
 }
 
-HttpStream* SpdyHttpStream::RenewStreamForAuth() {
-  return NULL;
-}
-
 bool SpdyHttpStream::IsResponseBodyComplete() const {
   return stream_closed_;
 }
 
 bool SpdyHttpStream::IsConnectionReused() const {
   return is_reused_;
-}
-
-void SpdyHttpStream::SetConnectionReused() {
-  // SPDY doesn't need an indicator here.
-}
-
-bool SpdyHttpStream::CanReuseConnection() const {
-  // SPDY streams aren't considered reusable.
-  return false;
 }
 
 int64_t SpdyHttpStream::GetTotalReceivedBytes() const {
@@ -233,9 +223,7 @@ int SpdyHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
 
   CHECK(!request_body_buf_.get());
   if (HasUploadData()) {
-    // Use kMaxSpdyFrameChunkSize as the buffer size, since the request
-    // body data is written with this size at a time.
-    request_body_buf_ = new IOBufferWithSize(kMaxSpdyFrameChunkSize);
+    request_body_buf_ = new IOBufferWithSize(kRequestBodyBufferSize);
     // The request body buffer is empty at first.
     request_body_buf_size_ = 0;
   }
@@ -275,13 +263,12 @@ int SpdyHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
     return ERR_IO_PENDING;
   }
 
-  scoped_ptr<SpdyHeaderBlock> headers(new SpdyHeaderBlock);
-  CreateSpdyHeadersFromHttpRequest(*request_info_, request_headers,
-                                   stream_->GetProtocolVersion(), direct_,
-                                   headers.get());
+  SpdyHeaderBlock headers;
+  CreateSpdyHeadersFromHttpRequest(*request_info_, request_headers, direct_,
+                                   &headers);
   stream_->net_log().AddEvent(
-      NetLog::TYPE_HTTP_TRANSACTION_HTTP2_SEND_REQUEST_HEADERS,
-      base::Bind(&SpdyHeaderBlockNetLogCallback, headers.get()));
+      NetLogEventType::HTTP_TRANSACTION_HTTP2_SEND_REQUEST_HEADERS,
+      base::Bind(&SpdyHeaderBlockNetLogCallback, &headers));
   result = stream_->SendRequestHeaders(
       std::move(headers),
       HasUploadData() ? MORE_DATA_TO_SEND : NO_MORE_DATA_TO_SEND);
@@ -302,19 +289,18 @@ void SpdyHttpStream::Cancel() {
   }
 }
 
-void SpdyHttpStream::OnRequestHeadersSent() {
-  if (!request_callback_.is_null())
-    DoRequestCallback(OK);
-
-  // TODO(akalin): Do this immediately after sending the request
-  // headers.
-  if (HasUploadData())
+void SpdyHttpStream::OnHeadersSent() {
+  if (HasUploadData()) {
     ReadAndSendRequestBodyData();
+  } else {
+    MaybePostRequestCallback(OK);
+  }
 }
 
-SpdyResponseHeadersStatus SpdyHttpStream::OnResponseHeadersUpdated(
+void SpdyHttpStream::OnHeadersReceived(
     const SpdyHeaderBlock& response_headers) {
-  CHECK_EQ(response_headers_status_, RESPONSE_HEADERS_ARE_INCOMPLETE);
+  DCHECK(!response_headers_complete_);
+  response_headers_complete_ = true;
 
   if (!response_info_) {
     DCHECK_EQ(stream_->type(), SPDY_PUSH_STREAM);
@@ -322,38 +308,28 @@ SpdyResponseHeadersStatus SpdyHttpStream::OnResponseHeadersUpdated(
     response_info_ = push_response_info_.get();
   }
 
-  if (!SpdyHeadersToHttpResponse(
-          response_headers, stream_->GetProtocolVersion(), response_info_)) {
-    // We do not have complete headers yet.
-    return RESPONSE_HEADERS_ARE_INCOMPLETE;
-  }
+  const bool headers_valid =
+      SpdyHeadersToHttpResponse(response_headers, response_info_);
+  DCHECK(headers_valid);
 
   response_info_->response_time = stream_->response_time();
-  response_headers_status_ = RESPONSE_HEADERS_ARE_COMPLETE;
   // Don't store the SSLInfo in the response here, HttpNetworkTransaction
   // will take care of that part.
-  SSLInfo ssl_info;
-  NextProto protocol_negotiated = kProtoUnknown;
-  stream_->GetSSLInfo(&ssl_info,
-                      &response_info_->was_npn_negotiated,
-                      &protocol_negotiated);
-  response_info_->npn_negotiated_protocol =
-      SSLClientSocket::NextProtoToString(protocol_negotiated);
+  response_info_->was_alpn_negotiated = was_alpn_negotiated_;
   response_info_->request_time = stream_->GetRequestTime();
-  response_info_->connection_info =
-      HttpResponseInfo::ConnectionInfoFromNextProto(stream_->GetProtocol());
+  response_info_->connection_info = HttpResponseInfo::CONNECTION_INFO_HTTP2;
+  response_info_->alpn_negotiated_protocol =
+      HttpResponseInfo::ConnectionInfoToString(response_info_->connection_info);
   response_info_->vary_data
       .Init(*request_info_, *response_info_->headers.get());
 
   if (!response_callback_.is_null()) {
     DoResponseCallback(OK);
   }
-
-  return RESPONSE_HEADERS_ARE_COMPLETE;
 }
 
-void SpdyHttpStream::OnDataReceived(scoped_ptr<SpdyBuffer> buffer) {
-  CHECK_EQ(response_headers_status_, RESPONSE_HEADERS_ARE_COMPLETE);
+void SpdyHttpStream::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {
+  DCHECK(response_headers_complete_);
 
   // Note that data may be received for a SpdyStream prior to the user calling
   // ReadResponseBody(), therefore user_buffer_ may be NULL.  This may often
@@ -381,7 +357,7 @@ void SpdyHttpStream::OnTrailers(const SpdyHeaderBlock& trailers) {}
 
 void SpdyHttpStream::OnClose(int status) {
   // Cancel any pending reads from the upload data stream.
-  if (request_info_->upload_data_stream)
+  if (request_info_ && request_info_->upload_data_stream)
     request_info_->upload_data_stream->Reset();
 
   if (stream_.get()) {
@@ -429,7 +405,7 @@ void SpdyHttpStream::OnStreamCreated(
     int rv) {
   if (rv == OK) {
     stream_ = stream_request_.ReleaseStream();
-    stream_->SetDelegate(this);
+    InitializeStreamHelper();
   }
   callback.Run(rv);
 }
@@ -437,9 +413,10 @@ void SpdyHttpStream::OnStreamCreated(
 void SpdyHttpStream::ReadAndSendRequestBodyData() {
   CHECK(HasUploadData());
   CHECK_EQ(request_body_buf_size_, 0);
-
-  if (request_info_->upload_data_stream->IsEOF())
+  if (request_info_->upload_data_stream->IsEOF()) {
+    MaybePostRequestCallback(OK);
     return;
+  }
 
   // Read the data from the request body stream.
   const int rv = request_info_->upload_data_stream
@@ -448,18 +425,40 @@ void SpdyHttpStream::ReadAndSendRequestBodyData() {
              base::Bind(&SpdyHttpStream::OnRequestBodyReadCompleted,
                         weak_factory_.GetWeakPtr()));
 
-  if (rv != ERR_IO_PENDING) {
-    // ERR_IO_PENDING is the only possible error.
-    CHECK_GE(rv, 0);
+  if (rv != ERR_IO_PENDING)
     OnRequestBodyReadCompleted(rv);
-  }
+}
+
+void SpdyHttpStream::InitializeStreamHelper() {
+  stream_->SetDelegate(this);
+  was_alpn_negotiated_ = stream_->WasAlpnNegotiated();
+}
+
+void SpdyHttpStream::ResetStreamInternal() {
+  spdy_session_->ResetStream(stream()->stream_id(), RST_STREAM_INTERNAL_ERROR,
+                             std::string());
 }
 
 void SpdyHttpStream::OnRequestBodyReadCompleted(int status) {
+  if (status < 0) {
+    DCHECK_NE(ERR_IO_PENDING, status);
+    // Post |request_callback_| with received error.  This should be posted
+    // before ResetStreamInternal, because the latter would call
+    // |request_callback_| via OnClose with an error code potentially different
+    // from |status|.
+    MaybePostRequestCallback(status);
+
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(&SpdyHttpStream::ResetStreamInternal,
+                              weak_factory_.GetWeakPtr()));
+
+    return;
+  }
+
   CHECK_GE(status, 0);
   request_body_buf_size_ = status;
   const bool eof = request_info_->upload_data_stream->IsEOF();
-  // Only the final fame may have a length of 0.
+  // Only the final frame may have a length of 0.
   if (eof) {
     CHECK_GE(request_body_buf_size_, 0);
   } else {
@@ -534,10 +533,23 @@ void SpdyHttpStream::DoBufferedReadCallback() {
 void SpdyHttpStream::DoRequestCallback(int rv) {
   CHECK_NE(rv, ERR_IO_PENDING);
   CHECK(!request_callback_.is_null());
-
   // Since Run may result in being called back, reset request_callback_ in
   // advance.
-  ResetAndReturn(&request_callback_).Run(rv);
+  base::ResetAndReturn(&request_callback_).Run(rv);
+}
+
+void SpdyHttpStream::MaybeDoRequestCallback(int rv) {
+  CHECK_NE(ERR_IO_PENDING, rv);
+  if (request_callback_)
+    base::ResetAndReturn(&request_callback_).Run(rv);
+}
+
+void SpdyHttpStream::MaybePostRequestCallback(int rv) {
+  CHECK_NE(ERR_IO_PENDING, rv);
+  if (request_callback_)
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(&SpdyHttpStream::MaybeDoRequestCallback,
+                              weak_factory_.GetWeakPtr(), rv));
 }
 
 void SpdyHttpStream::DoResponseCallback(int rv) {
@@ -546,21 +558,7 @@ void SpdyHttpStream::DoResponseCallback(int rv) {
 
   // Since Run may result in being called back, reset response_callback_ in
   // advance.
-  ResetAndReturn(&response_callback_).Run(rv);
-}
-
-void SpdyHttpStream::GetSSLInfo(SSLInfo* ssl_info) {
-  DCHECK(stream_.get());
-  bool using_npn;
-  NextProto protocol_negotiated = kProtoUnknown;
-  stream_->GetSSLInfo(ssl_info, &using_npn, &protocol_negotiated);
-}
-
-void SpdyHttpStream::GetSSLCertRequestInfo(
-    SSLCertRequestInfo* cert_request_info) {
-  // A SPDY stream cannot request client certificates. Client authentication may
-  // only occur during the initial SSL handshake.
-  NOTREACHED();
+  base::ResetAndReturn(&response_callback_).Run(rv);
 }
 
 bool SpdyHttpStream::GetRemoteEndpoint(IPEndPoint* endpoint) {
@@ -570,13 +568,8 @@ bool SpdyHttpStream::GetRemoteEndpoint(IPEndPoint* endpoint) {
   return spdy_session_->GetPeerAddress(endpoint) == OK;
 }
 
-void SpdyHttpStream::Drain(HttpNetworkSession* session) {
-  NOTREACHED();
-  Close(false);
-  delete this;
-}
-
-void SpdyHttpStream::PopulateNetErrorDetails(NetErrorDetails* /*details*/) {
+void SpdyHttpStream::PopulateNetErrorDetails(NetErrorDetails* details) {
+  details->connection_info = HttpResponseInfo::CONNECTION_INFO_HTTP2;
   return;
 }
 

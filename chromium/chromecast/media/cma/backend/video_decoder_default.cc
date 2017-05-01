@@ -4,28 +4,45 @@
 
 #include "chromecast/media/cma/backend/video_decoder_default.h"
 
-#include "base/logging.h"
-#include "chromecast/public/media/cast_decoder_buffer.h"
+#include "base/memory/ptr_util.h"
+#include "chromecast/media/cma/backend/media_sink_default.h"
 
 namespace chromecast {
 namespace media {
 
-VideoDecoderDefault::VideoDecoderDefault() : delegate_(nullptr) {}
+VideoDecoderDefault::VideoDecoderDefault() {}
 
 VideoDecoderDefault::~VideoDecoderDefault() {}
 
+void VideoDecoderDefault::Start(base::TimeDelta start_pts) {
+  DCHECK(!sink_);
+  sink_ = base::MakeUnique<MediaSinkDefault>(delegate_, start_pts);
+}
+
+void VideoDecoderDefault::Stop() {
+  DCHECK(sink_);
+  sink_.reset();
+}
+
+void VideoDecoderDefault::SetPlaybackRate(float rate) {
+  DCHECK(sink_);
+  sink_->SetPlaybackRate(rate);
+}
+
+base::TimeDelta VideoDecoderDefault::GetCurrentPts() {
+  DCHECK(sink_);
+  return sink_->GetCurrentPts();
+}
+
 void VideoDecoderDefault::SetDelegate(Delegate* delegate) {
-  DCHECK(delegate);
+  DCHECK(!sink_);
   delegate_ = delegate;
 }
 
 MediaPipelineBackend::BufferStatus VideoDecoderDefault::PushBuffer(
     CastDecoderBuffer* buffer) {
-  DCHECK(delegate_);
-  DCHECK(buffer);
-  if (buffer->end_of_stream())
-    delegate_->OnEndOfStream();
-  return MediaPipelineBackend::kBufferSuccess;
+  DCHECK(sink_);
+  return sink_->PushBuffer(buffer);
 }
 
 void VideoDecoderDefault::GetStatistics(Statistics* statistics) {

@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <map>
 #include <utility>
 
@@ -13,7 +14,7 @@
 #include "base/i18n/rtl.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "ui/accessibility/ax_view_state.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -134,7 +135,7 @@ TableView::TableView(ui::TableModel* model,
       table_type_(table_type),
       single_selection_(single_selection),
       select_on_remove_(true),
-      table_view_observer_(NULL),
+      observer_(NULL),
       row_height_(font_list_.GetHeight() + kTextVerticalPadding * 2),
       last_parent_width_(0),
       layout_width_(0),
@@ -145,7 +146,8 @@ TableView::TableView(ui::TableModel* model,
     visible_column.column = columns[i];
     visible_columns_.push_back(visible_column);
   }
-  SetFocusable(true);
+  // Always focusable, even on Mac (consistent with NSTableView).
+  SetFocusBehavior(FocusBehavior::ALWAYS);
   SetModel(model);
 }
 
@@ -178,7 +180,7 @@ View* TableView::CreateParentIfNecessary() {
 }
 
 void TableView::SetRowBackgroundPainter(
-    scoped_ptr<TableViewRowBackgroundPainter> painter) {
+    std::unique_ptr<TableViewRowBackgroundPainter> painter) {
   row_background_painter_ = std::move(painter);
 }
 
@@ -191,10 +193,6 @@ int TableView::RowCount() const {
   return model_ ? model_->RowCount() : 0;
 }
 
-int TableView::SelectedRowCount() {
-  return static_cast<int>(selection_model_.size());
-}
-
 void TableView::Select(int model_row) {
   if (!model_)
     return;
@@ -203,7 +201,7 @@ void TableView::Select(int model_row) {
 }
 
 int TableView::FirstSelectedRow() {
-  return SelectedRowCount() == 0 ? -1 : selection_model_.selected_indices()[0];
+  return selection_model_.empty() ? -1 : selection_model_.selected_indices()[0];
 }
 
 void TableView::SetColumnVisibility(int id, bool is_visible) {
@@ -232,21 +230,33 @@ void TableView::SetColumnVisibility(int id, bool is_visible) {
 void TableView::ToggleSortOrder(int visible_column_index) {
   DCHECK(visible_column_index >= 0 &&
          visible_column_index < static_cast<int>(visible_columns_.size()));
-  if (!visible_columns_[visible_column_index].column.sortable)
+  const ui::TableColumn& column = visible_columns_[visible_column_index].column;
+  if (!column.sortable)
     return;
-  const int column_id = visible_columns_[visible_column_index].column.id;
   SortDescriptors sort(sort_descriptors_);
-  if (!sort.empty() && sort[0].column_id == column_id) {
-    sort[0].ascending = !sort[0].ascending;
+  if (!sort.empty() && sort[0].column_id == column.id) {
+    if (sort[0].ascending == column.initial_sort_is_ascending) {
+      // First toggle inverts the order.
+      sort[0].ascending = !sort[0].ascending;
+    } else {
+      // Second toggle clears the sort.
+      sort.clear();
+    }
   } else {
-    SortDescriptor descriptor(column_id, visible_columns_[
-        visible_column_index].column.initial_sort_is_ascending);
+    SortDescriptor descriptor(column.id, column.initial_sort_is_ascending);
     sort.insert(sort.begin(), descriptor);
     // Only persist two sort descriptors.
     if (sort.size() > 2)
       sort.resize(2);
   }
   SetSortDescriptors(sort);
+}
+
+void TableView::SetSortDescriptors(const SortDescriptors& sort_descriptors) {
+  sort_descriptors_ = sort_descriptors;
+  SortItemsAndUpdateMapping();
+  if (header_)
+    header_->SchedulePaint();
 }
 
 bool TableView::IsColumnVisible(int id) const {
@@ -378,8 +388,8 @@ bool TableView::OnKeyPressed(const ui::KeyEvent& event) {
     default:
       break;
   }
-  if (table_view_observer_)
-    table_view_observer_->OnKeyDown(event.key_code());
+  if (observer_)
+    observer_->OnKeyDown(event.key_code());
   return false;
 }
 
@@ -394,8 +404,8 @@ bool TableView::OnMousePressed(const ui::MouseEvent& event) {
 
   if (event.GetClickCount() == 2) {
     SelectByViewIndex(row);
-    if (table_view_observer_)
-      table_view_observer_->OnDoubleClick();
+    if (observer_)
+      observer_->OnDoubleClick();
   } else if (event.GetClickCount() == 1) {
     ui::ListSelectionModel new_model;
     ConfigureSelectionModelForEvent(event, &new_model);
@@ -429,18 +439,19 @@ bool TableView::GetTooltipTextOrigin(const gfx::Point& p,
   return GetTooltipImpl(p, NULL, loc);
 }
 
-void TableView::GetAccessibleState(ui::AXViewState* state) {
-  state->role = ui::AX_ROLE_TABLE;
-  state->AddStateFlag(ui::AX_STATE_READ_ONLY);
-  state->count = RowCount();
+void TableView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
+  node_data->role = ui::AX_ROLE_TABLE;
+  node_data->AddStateFlag(ui::AX_STATE_READ_ONLY);
+  node_data->AddIntAttribute(ui::AX_ATTR_SET_SIZE, RowCount());
 
   if (selection_model_.active() != ui::ListSelectionModel::kUnselectedIndex) {
     // Get information about the active item, this is not the same as the set
     // of selected items (of which there could be more than one).
-    state->role = ui::AX_ROLE_ROW;
-    state->index = selection_model_.active();
+    node_data->role = ui::AX_ROLE_ROW;
+    node_data->AddIntAttribute(ui::AX_ATTR_POS_IN_SET,
+                               selection_model_.active());
     if (selection_model_.IsSelected(selection_model_.active())) {
-      state->AddStateFlag(ui::AX_STATE_SELECTED);
+      node_data->AddStateFlag(ui::AX_STATE_SELECTED);
     }
 
     std::vector<base::string16> name_parts;
@@ -452,7 +463,7 @@ void TableView::GetAccessibleState(ui::AXViewState* state) {
         name_parts.push_back(value);
       }
     }
-    state->name = base::JoinString(name_parts, base::ASCIIToUTF16(", "));
+    node_data->SetName(base::JoinString(name_parts, base::ASCIIToUTF16(", ")));
   }
 }
 
@@ -494,8 +505,8 @@ void TableView::OnItemsRemoved(int start, int length) {
     selection_model_.set_active(FirstSelectedRow());
   if (!selection_model_.empty() && selection_model_.anchor() == -1)
     selection_model_.set_anchor(FirstSelectedRow());
-  if (table_view_observer_)
-    table_view_observer_->OnSelectionChanged();
+  if (observer_)
+    observer_->OnSelectionChanged();
 }
 
 gfx::Point TableView::GetKeyboardContextMenuLocation() {
@@ -638,13 +649,6 @@ void TableView::NumRowsChanged() {
   SchedulePaint();
 }
 
-void TableView::SetSortDescriptors(const SortDescriptors& sort_descriptors) {
-  sort_descriptors_ = sort_descriptors;
-  SortItemsAndUpdateMapping();
-  if (header_)
-    header_->SchedulePaint();
-}
-
 void TableView::SortItemsAndUpdateMapping() {
   if (!is_sorted()) {
     view_to_model_.clear();
@@ -659,9 +663,11 @@ void TableView::SortItemsAndUpdateMapping() {
       GroupSortHelper sort_helper(this);
       GetModelIndexToRangeStart(grouper_, RowCount(),
                                 &sort_helper.model_index_to_range_start);
-      std::sort(view_to_model_.begin(), view_to_model_.end(), sort_helper);
+      std::stable_sort(view_to_model_.begin(), view_to_model_.end(),
+                       sort_helper);
     } else {
-      std::sort(view_to_model_.begin(), view_to_model_.end(), SortHelper(this));
+      std::stable_sort(view_to_model_.begin(), view_to_model_.end(),
+                       SortHelper(this));
     }
     for (int i = 0; i < row_count; ++i)
       model_to_view_[view_to_model_[i]] = i;
@@ -836,8 +842,8 @@ void TableView::SetSelectionModel(const ui::ListSelectionModel& new_selection) {
     ScrollRectToVisible(vis_rect);
   }
 
-  if (table_view_observer_)
-    table_view_observer_->OnSelectionChanged();
+  if (observer_)
+    observer_->OnSelectionChanged();
 
   NotifyAccessibilityEvent(ui::AX_EVENT_FOCUS, true);
 }

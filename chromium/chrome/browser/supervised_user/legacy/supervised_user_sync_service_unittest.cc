@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/bind.h"
-#include "base/prefs/scoped_user_pref_update.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
@@ -16,12 +15,13 @@
 #include "chrome/browser/supervised_user/legacy/supervised_user_sync_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/sync/model/attachments/attachment_id.h"
+#include "components/sync/model/attachments/attachment_service_proxy_for_test.h"
+#include "components/sync/model/sync_change.h"
+#include "components/sync/model/sync_error_factory_mock.h"
+#include "components/sync/protocol/sync.pb.h"
 #include "content/public/test/test_browser_thread_bundle.h"
-#include "sync/api/attachments/attachment_id.h"
-#include "sync/api/sync_change.h"
-#include "sync/api/sync_error_factory_mock.h"
-#include "sync/internal_api/public/attachments/attachment_service_proxy_for_test.h"
-#include "sync/protocol/sync.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
@@ -90,8 +90,8 @@ class SupervisedUserSyncServiceTest : public ::testing::Test {
   ~SupervisedUserSyncServiceTest() override;
 
  protected:
-  scoped_ptr<SyncChangeProcessor> CreateChangeProcessor();
-  scoped_ptr<SyncErrorFactory> CreateErrorFactory();
+  std::unique_ptr<SyncChangeProcessor> CreateChangeProcessor();
+  std::unique_ptr<SyncErrorFactory> CreateErrorFactory();
   SyncData CreateRemoteData(const std::string& id,
                             const std::string& name,
                             const std::string& avatar);
@@ -120,16 +120,16 @@ SupervisedUserSyncServiceTest::SupervisedUserSyncServiceTest()
 
 SupervisedUserSyncServiceTest::~SupervisedUserSyncServiceTest() {}
 
-scoped_ptr<SyncChangeProcessor>
+std::unique_ptr<SyncChangeProcessor>
 SupervisedUserSyncServiceTest::CreateChangeProcessor() {
   EXPECT_FALSE(change_processor_);
   change_processor_ = new MockChangeProcessor();
-  return scoped_ptr<SyncChangeProcessor>(change_processor_);
+  return std::unique_ptr<SyncChangeProcessor>(change_processor_);
 }
 
-scoped_ptr<SyncErrorFactory>
+std::unique_ptr<SyncErrorFactory>
 SupervisedUserSyncServiceTest::CreateErrorFactory() {
-  return scoped_ptr<SyncErrorFactory>(new syncer::SyncErrorFactoryMock());
+  return std::unique_ptr<SyncErrorFactory>(new syncer::SyncErrorFactoryMock());
 }
 
 SyncData SupervisedUserSyncServiceTest::CreateRemoteData(

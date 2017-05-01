@@ -15,26 +15,27 @@ import android.os.Bundle;
 import android.provider.Browser;
 import android.test.InstrumentationTestRunner;
 import android.text.TextUtils;
-import android.util.Log;
 import android.view.View;
 import android.widget.ListView;
 
+import org.chromium.base.ActivityState;
+import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ApplicationStatus.ActivityStateListener;
+import org.chromium.base.Log;
 import org.chromium.base.PerfTraceEvent;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.annotations.SuppressFBWarnings;
 import org.chromium.base.test.BaseActivityInstrumentationTestCase;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.PerfTest;
 import org.chromium.base.test.util.parameter.BaseParameter;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeApplication;
 import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.DeferredStartupHandler;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
-import org.chromium.chrome.browser.document.DocumentActivity;
-import org.chromium.chrome.browser.document.IncognitoDocumentActivity;
 import org.chromium.chrome.browser.infobar.InfoBar;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.omnibox.AutocompleteController;
@@ -42,7 +43,6 @@ import org.chromium.chrome.browser.omnibox.LocationBarLayout;
 import org.chromium.chrome.browser.omnibox.OmniboxResultsAdapter.OmniboxResultItem;
 import org.chromium.chrome.browser.omnibox.OmniboxSuggestion;
 import org.chromium.chrome.browser.omnibox.UrlBar;
-import org.chromium.chrome.browser.preferences.NetworkPredictionOptions;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.preferences.Preferences;
 import org.chromium.chrome.browser.preferences.PreferencesLauncher;
@@ -52,10 +52,6 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.document.AsyncTabCreationParams;
-import org.chromium.chrome.browser.util.FeatureUtilities;
-import org.chromium.chrome.test.util.ActivityUtils;
 import org.chromium.chrome.test.util.ApplicationTestUtils;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.MenuUtils;
@@ -63,7 +59,6 @@ import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.parameters.AddFakeAccountToAppParameter;
 import org.chromium.chrome.test.util.parameters.AddFakeAccountToOsParameter;
 import org.chromium.chrome.test.util.parameters.AddGoogleAccountToOsParameter;
-import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.JavaScriptUtils;
@@ -74,6 +69,7 @@ import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.PageTransition;
 
 import java.io.File;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.util.LinkedList;
 import java.util.List;
@@ -84,6 +80,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Base class for all Chrome instrumentation tests.
@@ -94,16 +91,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 @CommandLineFlags.Add({
         ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
         // Preconnect causes issues with the single-threaded Java test server.
-        ChromeSwitches.DISABLE_PRECONNECT})
+        "--disable-features=NetworkPrediction"})
 public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
         extends BaseActivityInstrumentationTestCase<T> {
 
-    private static final String TAG = "ChromeActivityTestCaseBase";
+    private static final String TAG = "cr_CATestCaseBase";
 
     // The number of ms to wait for the rendering activity to be started.
     protected static final int ACTIVITY_START_TIMEOUT_MS = 1000;
-
-    private static final String PERF_NORUN_TAG = "--NORUN--";
 
     private static final String PERF_ANNOTATION_FORMAT = "**PERFANNOTATION(%s):";
 
@@ -113,19 +108,19 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
 
     private static final long OMNIBOX_FIND_SUGGESTION_TIMEOUT_MS = 10 * 1000;
 
+    protected boolean mSkipClearAppData;
+    private Thread.UncaughtExceptionHandler mDefaultUncaughtExceptionHandler;
+    private Class<T> mChromeActivityClass;
+
     public ChromeActivityTestCaseBase(Class<T> activityClass) {
         super(activityClass);
+        mChromeActivityClass = activityClass;
     }
-
-    protected boolean mSkipClearAppData = false;
-    protected boolean mSkipCheckHttpServer = false;
-
-    private Thread.UncaughtExceptionHandler mDefaultUncaughtExceptionHandler;
 
     private class ChromeUncaughtExceptionHandler implements Thread.UncaughtExceptionHandler {
         @Override
         public void uncaughtException(Thread t, Throwable e) {
-            String stackTrace = Log.getStackTraceString(e);
+            String stackTrace = android.util.Log.getStackTraceString(e);
             if (e.getClass().getName().endsWith("StrictModeViolation")) {
                 stackTrace += "\nSearch logcat for \"StrictMode policy violation\" for full stack.";
             }
@@ -144,8 +139,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
         super.setUp();
         mDefaultUncaughtExceptionHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new ChromeUncaughtExceptionHandler());
-        ApplicationTestUtils.setUp(
-                getInstrumentation().getTargetContext(), !mSkipClearAppData, !mSkipCheckHttpServer);
+        ApplicationTestUtils.setUp(getInstrumentation().getTargetContext(), !mSkipClearAppData);
         setActivityInitialTouchMode(false);
         startMainActivity();
     }
@@ -186,40 +180,53 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
      * and the activity's main looper has become idle.
      */
     protected void startActivityCompletely(Intent intent) {
-        final Class<?> activityClazz =
-                FeatureUtilities.isDocumentMode(getInstrumentation().getTargetContext())
-                ? DocumentActivity.class : ChromeTabbedActivity.class;
-        Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(
-                activityClazz.getName(), null, false);
-        Activity activity = getInstrumentation().startActivitySync(intent);
-        assertNotNull("Main activity did not start", activity);
-        ChromeActivity chromeActivity = (ChromeActivity)
-                monitor.waitForActivityWithTimeout(ACTIVITY_START_TIMEOUT_MS);
-        assertNotNull("ChromeActivity did not start", chromeActivity);
-        setActivity(chromeActivity);
-        Log.d(TAG, "startActivityCompletely <<");
+        final CallbackHelper activityCallback = new CallbackHelper();
+        final AtomicReference<T> activityRef = new AtomicReference<>();
+        ActivityStateListener stateListener = new ActivityStateListener() {
+            @SuppressWarnings("unchecked")
+            @Override
+            public void onActivityStateChange(Activity activity, int newState) {
+                if (newState == ActivityState.RESUMED) {
+                    if (!mChromeActivityClass.isAssignableFrom(activity.getClass())) {
+                        return;
+                    }
+
+                    activityRef.set((T) activity);
+                    activityCallback.notifyCalled();
+                    ApplicationStatus.unregisterActivityStateListener(this);
+                }
+            }
+        };
+        ApplicationStatus.registerStateListenerForAllActivities(stateListener);
+
+        try {
+            getInstrumentation().startActivitySync(intent);
+            activityCallback.waitForCallback("Activity did not start as expected", 0);
+            T activity = activityRef.get();
+            assertNotNull("Activity reference is null.", activity);
+            setActivity(activity);
+            Log.d(TAG, "startActivityCompletely <<");
+        } catch (InterruptedException | TimeoutException e) {
+            throw new RuntimeException(e);
+        } finally {
+            ApplicationStatus.unregisterActivityStateListener(stateListener);
+        }
     }
 
     /** Convenience function for {@link ApplicationTestUtils#clearAppData(Context)}. */
-    protected void clearAppData() throws Exception {
+    protected void clearAppData() {
         ApplicationTestUtils.clearAppData(getInstrumentation().getTargetContext());
     }
 
     /**
-     * Lets tests specify whether they want prerendering turned on.
-     * It is on by default. Since in some places different code paths are used for the same feature
-     * depending of whether instant is on or off (ex: infobars), it is necessary for some tests to
-     * test with and without instant.
-     *
-     * @param enabled whether prerender should be on.
+     * Enables or disables network predictions, i.e. prerendering, prefetching, DNS preresolution,
+     * etc. Network predictions are enabled by default.
      */
-    protected void setAllowPrerender(final boolean enabled) {
+    protected void setNetworkPredictionEnabled(final boolean enabled) {
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                PrefServiceBridge.getInstance().setNetworkPredictionOptions(enabled
-                        ? NetworkPredictionOptions.NETWORK_PREDICTION_ALWAYS
-                        : NetworkPredictionOptions.NETWORK_PREDICTION_NEVER);
+                PrefServiceBridge.getInstance().setNetworkPredictionEnabled(enabled);
             }
         });
     }
@@ -329,7 +336,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
     /**
      * @param url            The url of the page to load.
      * @param pageTransition The type of transition. see
-     *                       {@link org.chromium.content.browser.PageTransition}
+     *                       {@link org.chromium.ui.base.PageTransition}
      *                       for valid values.
      * @param tab            The tab to load the url into.
      * @param secondsToWait  The number of seconds to wait for the page to be loaded.
@@ -360,7 +367,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
     /**
      * @param url            The url of the page to load.
      * @param pageTransition The type of transition. see
-     *                       {@link org.chromium.content.browser.PageTransition}
+     *                       {@link org.chromium.ui.base.PageTransition}
      *                       for valid values.
      * @param tab            The tab to load the url into.
      * @return               FULL_PRERENDERED_PAGE_LOAD or PARTIAL_PRERENDERED_PAGE_LOAD if the
@@ -387,44 +394,16 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
     public Tab loadUrlInNewTab(final String url, final boolean incognito)
             throws InterruptedException {
         Tab tab = null;
-        if (FeatureUtilities.isDocumentMode(getInstrumentation().getContext())) {
-            Runnable activityTrigger = new Runnable() {
+        try {
+            tab = ThreadUtils.runOnUiThreadBlocking(new Callable<Tab>() {
                 @Override
-                public void run() {
-                    ThreadUtils.runOnUiThreadBlocking(new Runnable() {
-                        @Override
-                        public void run() {
-                            AsyncTabCreationParams asyncParams = new AsyncTabCreationParams(
-                                    new LoadUrlParams(url, PageTransition.AUTO_TOPLEVEL));
-                            ChromeLauncherActivity.launchDocumentInstance(
-                                    getActivity(), incognito, asyncParams);
-                        }
-                    });
-                }
-            };
-            final DocumentActivity activity = ActivityUtils.waitForActivity(
-                    getInstrumentation(),
-                    incognito ? IncognitoDocumentActivity.class : DocumentActivity.class,
-                    activityTrigger);
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
-                @Override
-                public boolean isSatisfied() {
-                    return activity.getActivityTab() != null;
+                public Tab call() throws Exception {
+                    return getActivity().getTabCreator(incognito)
+                            .launchUrl(url, TabLaunchType.FROM_LINK);
                 }
             });
-            tab = activity.getActivityTab();
-        } else {
-            try {
-                tab = ThreadUtils.runOnUiThreadBlocking(new Callable<Tab>() {
-                    @Override
-                    public Tab call() throws Exception {
-                        return getActivity().getTabCreator(incognito)
-                                .launchUrl(url, TabLaunchType.FROM_LINK);
-                    }
-                });
-            } catch (ExecutionException e) {
-                fail("Failed to create new tab");
-            }
+        } catch (ExecutionException e) {
+            fail("Failed to create new tab");
         }
         ChromeTabUtils.waitForTabPageLoaded(tab, url);
         getInstrumentation().waitForIdleSync();
@@ -481,12 +460,9 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
             throws InterruptedException {
         prepareUrlIntent(intent, url);
 
-        final boolean isDocumentMode =
-                FeatureUtilities.isDocumentMode(getInstrumentation().getContext());
-
         startActivityCompletely(intent);
 
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria("Tab never selected/initialized.") {
+        CriteriaHelper.pollUiThread(new Criteria("Tab never selected/initialized.") {
             @Override
             public boolean isSatisfied() {
                 return getActivity().getActivityTab() != null;
@@ -496,14 +472,14 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
 
         ChromeTabUtils.waitForTabPageLoaded(tab, (String) null);
 
-        if (!isDocumentMode && tab != null && NewTabPage.isNTPUrl(tab.getUrl())) {
+        if (tab != null && NewTabPage.isNTPUrl(tab.getUrl())) {
             NewTabPageTestUtils.waitForNtpLoaded(tab);
         }
 
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria("Deferred startup never completed") {
+        CriteriaHelper.pollUiThread(new Criteria("Deferred startup never completed") {
             @Override
             public boolean isSatisfied() {
-                return DeferredStartupHandler.getInstance().isDeferredStartupComplete();
+                return DeferredStartupHandler.getInstance().isDeferredStartupCompleteForApp();
             }
         });
 
@@ -528,12 +504,12 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
 
         try {
             Method method = getClass().getMethod(getName(), (Class[]) null);
-            if (method.isAnnotationPresent(RenderProcessLimit.class)) {
+            if (((AnnotatedElement) method).isAnnotationPresent(RenderProcessLimit.class)) {
                 RenderProcessLimit limit = method.getAnnotation(RenderProcessLimit.class);
                 intent.putExtra(ChromeTabbedActivity.INTENT_EXTRA_TEST_RENDER_PROCESS_LIMIT,
                         limit.value());
             }
-        } catch (Exception ex) {
+        } catch (NoSuchMethodException ex) {
             // Ignore exception.
         }
         return intent;
@@ -546,61 +522,39 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
     protected void newIncognitoTabFromMenu() throws InterruptedException {
         Tab tab = null;
 
-        if (FeatureUtilities.isDocumentMode(getInstrumentation().getContext())) {
-            final IncognitoDocumentActivity activity = ActivityUtils.waitForActivity(
-                    getInstrumentation(), IncognitoDocumentActivity.class,
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            MenuUtils.invokeCustomMenuActionSync(
-                                    getInstrumentation(), getActivity(),
-                                    R.id.new_incognito_tab_menu_id);
-                        }
-                    });
+        final CallbackHelper createdCallback = new CallbackHelper();
+        final CallbackHelper selectedCallback = new CallbackHelper();
 
-            CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
-                @Override
-                public boolean isSatisfied() {
-                    return activity.getActivityTab() != null;
-                }
-            });
-
-            tab = activity.getActivityTab();
-        } else {
-            final CallbackHelper createdCallback = new CallbackHelper();
-            final CallbackHelper selectedCallback = new CallbackHelper();
-
-            TabModel incognitoTabModel = getActivity().getTabModelSelector().getModel(true);
-            TabModelObserver observer = new EmptyTabModelObserver() {
-                @Override
-                public void didAddTab(Tab tab, TabLaunchType type) {
-                    createdCallback.notifyCalled();
-                }
-
-                @Override
-                public void didSelectTab(Tab tab, TabSelectionType type, int lastId) {
-                    selectedCallback.notifyCalled();
-                }
-            };
-            incognitoTabModel.addObserver(observer);
-
-            MenuUtils.invokeCustomMenuActionSync(getInstrumentation(), getActivity(),
-                    R.id.new_incognito_tab_menu_id);
-
-            try {
-                createdCallback.waitForCallback(0);
-            } catch (TimeoutException ex) {
-                fail("Never received tab created event");
+        TabModel incognitoTabModel = getActivity().getTabModelSelector().getModel(true);
+        TabModelObserver observer = new EmptyTabModelObserver() {
+            @Override
+            public void didAddTab(Tab tab, TabLaunchType type) {
+                createdCallback.notifyCalled();
             }
-            try {
-                selectedCallback.waitForCallback(0);
-            } catch (TimeoutException ex) {
-                fail("Never received tab selected event");
-            }
-            incognitoTabModel.removeObserver(observer);
 
-            tab = getActivity().getActivityTab();
+            @Override
+            public void didSelectTab(Tab tab, TabSelectionType type, int lastId) {
+                selectedCallback.notifyCalled();
+            }
+        };
+        incognitoTabModel.addObserver(observer);
+
+        MenuUtils.invokeCustomMenuActionSync(getInstrumentation(), getActivity(),
+                R.id.new_incognito_tab_menu_id);
+
+        try {
+            createdCallback.waitForCallback(0);
+        } catch (TimeoutException ex) {
+            fail("Never received tab created event");
         }
+        try {
+            selectedCallback.waitForCallback(0);
+        } catch (TimeoutException ex) {
+            fail("Never received tab selected event");
+        }
+        incognitoTabModel.removeObserver(observer);
+
+        tab = getActivity().getActivityTab();
 
         ChromeTabUtils.waitForTabPageLoaded(tab, (String) null);
         NewTabPageTestUtils.waitForNtpLoaded(tab);
@@ -627,13 +581,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
         return ThreadUtils.runOnUiThreadBlockingNoException(new Callable<Integer>() {
             @Override
             public Integer call() {
-                TabModelSelector tabModelSelector;
-                if (FeatureUtilities.isDocumentMode(getInstrumentation().getContext())) {
-                    tabModelSelector = ChromeApplication.getDocumentTabModelSelector();
-                } else {
-                    tabModelSelector = getActivity().getTabModelSelector();
-                }
-                return tabModelSelector.getModel(true).getCount();
+                return getActivity().getTabModelSelector().getModel(true).getCount();
             }
         });
     }
@@ -716,7 +664,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
                 }
 
                 // Wait for suggestions to show up.
-                CriteriaHelper.pollForCriteria(new Criteria() {
+                CriteriaHelper.pollInstrumentationThread(new Criteria() {
                     @Override
                     public boolean isSatisfied() {
                         return ((LocationBarLayout) getActivity().findViewById(
@@ -732,7 +680,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
                         && !suggestion.getDisplayText().equals(displayText)) {
                     // If there is only one suggestion and it's the same as inputText,
                     // wait for other suggestions before looking for the one we want.
-                    CriteriaHelper.pollForCriteria(new Criteria() {
+                    CriteriaHelper.pollInstrumentationThread(new Criteria() {
                         @Override
                         public boolean isSatisfied() {
                             return suggestionListView.getCount() > 1;
@@ -865,7 +813,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
                 final int maxIndex = Math.min(annotation.traceNames().length, Math.min(
                         annotation.graphNames().length, annotation.seriesNames().length));
 
-                List<String> allNames = new LinkedList<String>();
+                List<String> allNames = new LinkedList<>();
                 for (int i = 0; i < maxIndex; ++i) {
                     // Prune out all of ',' and ';' from the strings.  Replace them with '-'.
                     String name = annotation.traceNames()[i].replaceAll("[,;]", "-");
@@ -934,7 +882,7 @@ public abstract class ChromeActivityTestCaseBase<T extends ChromeActivity>
 
                 System.out.println(perfTagAnalysisString);
             }
-        } catch (Exception ex) {
+        } catch (NoSuchMethodException ex) {
             // Eat exception here.
         }
     }

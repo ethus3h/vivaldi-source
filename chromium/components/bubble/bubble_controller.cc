@@ -11,7 +11,7 @@
 #include "components/bubble/bubble_ui.h"
 
 BubbleController::BubbleController(BubbleManager* manager,
-                                   scoped_ptr<BubbleDelegate> delegate)
+                                   std::unique_ptr<BubbleDelegate> delegate)
     : manager_(manager), delegate_(std::move(delegate)) {
   DCHECK(manager_);
   DCHECK(delegate_);
@@ -60,9 +60,15 @@ bool BubbleController::ShouldClose(BubbleCloseReason reason) const {
   return delegate_->ShouldClose(reason) || reason == BUBBLE_CLOSE_FORCED;
 }
 
-void BubbleController::DoClose() {
+bool BubbleController::OwningFrameIs(
+    const content::RenderFrameHost* frame) const {
+  DCHECK(bubble_ui_);
+  return delegate_->OwningFrame() == frame;
+}
+
+void BubbleController::DoClose(BubbleCloseReason reason) {
   DCHECK(bubble_ui_);
   bubble_ui_->Close();
   bubble_ui_.reset();
-  delegate_->DidClose();
+  delegate_->DidClose(reason);
 }

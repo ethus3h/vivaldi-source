@@ -2,23 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/net/request_tracker_impl.h"
+#import "ios/web/net/request_tracker_impl.h"
 
 #include <stddef.h>
 
+#include <memory>
+#include <vector>
+
 #include "base/logging.h"
-#include "base/mac/scoped_nsobject.h"
+#import "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "ios/web/public/cert_policy.h"
 #include "ios/web/public/certificate_policy_cache.h"
 #include "ios/web/public/ssl_status.h"
-#include "ios/web/public/test/test_browser_state.h"
+#include "ios/web/public/test/fakes/test_browser_state.h"
 #include "ios/web/public/test/test_web_thread.h"
 #include "net/cert/x509_certificate.h"
 #include "net/http/http_response_headers.h"
+#include "net/test/cert_test_util.h"
+#include "net/test/test_data_directory.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_job_factory.h"
@@ -26,7 +32,7 @@
 #include "net/url_request/url_request_test_job.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "testing/gtest_mac.h"
+#import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #include "third_party/ocmock/gtest_support.h"
@@ -113,10 +119,6 @@
   // Nothing, yet.
 }
 
-- (void)handlePassKitObject:(NSData*)data {
-  // Nothing yet.
-}
-
 @end
 
 namespace {
@@ -130,7 +132,7 @@ class DummyURLRequestDelegate : public net::URLRequest::Delegate {
   DummyURLRequestDelegate() {}
   ~DummyURLRequestDelegate() override {}
 
-  void OnResponseStarted(net::URLRequest* request) override {}
+  void OnResponseStarted(net::URLRequest* request, int net_error) override {}
   void OnReadCompleted(net::URLRequest* request, int bytes_read) override {}
 
  private:
@@ -147,7 +149,7 @@ class RequestTrackerTest : public PlatformTest {
   ~RequestTrackerTest() override {}
 
   void SetUp() override {
-    DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
     request_group_id_.reset(
         [[NSString stringWithFormat:@"test%d", g_count++] retain]);
 
@@ -160,7 +162,7 @@ class RequestTrackerTest : public PlatformTest {
   }
 
   void TearDown() override {
-    DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
     tracker_->Close();
   }
 
@@ -172,8 +174,8 @@ class RequestTrackerTest : public PlatformTest {
   scoped_refptr<web::RequestTrackerImpl> tracker_;
   base::scoped_nsobject<NSString> request_group_id_;
   web::TestBrowserState browser_state_;
-  ScopedVector<net::URLRequestContext> contexts_;
-  ScopedVector<net::URLRequest> requests_;
+  std::vector<std::unique_ptr<net::URLRequestContext>> contexts_;
+  std::vector<std::unique_ptr<net::URLRequest>> requests_;
   net::URLRequestJobFactoryImpl job_factory_;
 
   GURL GetURL(size_t i) {
@@ -199,14 +201,14 @@ class RequestTrackerTest : public PlatformTest {
   }
 
   NSString* WaitUntilLoop(bool (^condition)(void)) {
-    DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
     base::Time maxDate = base::Time::Now() + base::TimeDelta::FromSeconds(10);
     while (!condition()) {
       if ([receiver_ error])
         return [receiver_ error];
       if (base::Time::Now() > maxDate)
         return @"Time is up, too slow to go";
-      loop_.RunUntilIdle();
+      base::RunLoop().RunUntilIdle();
       base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(1));
     }
     return nil;
@@ -223,24 +225,24 @@ class RequestTrackerTest : public PlatformTest {
   }
 
   void TrimRequest(NSString* tab_id, const GURL& url) {
-    DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
     receiver_.get()->value_ = 0.0f;
     receiver_.get()->max_ = 0.0f;
     tracker_->StartPageLoad(url, nil);
   }
 
   void EndPage(NSString* tab_id, const GURL& url) {
-    DCHECK_CURRENTLY_ON_WEB_THREAD(web::WebThread::UI);
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
     tracker_->FinishPageLoad(url, false);
     receiver_.get()->value_ = 0.0f;
     receiver_.get()->max_ = 0.0f;
-    loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   net::TestJobInterceptor* AddInterceptorToRequest(size_t i) {
     // |interceptor| will be deleted from |job_factory_|'s destructor.
     net::TestJobInterceptor* protocol_handler = new net::TestJobInterceptor();
-    job_factory_.SetProtocolHandler("http", make_scoped_ptr(protocol_handler));
+    job_factory_.SetProtocolHandler("http", base::WrapUnique(protocol_handler));
     contexts_[i]->set_job_factory(&job_factory_);
     return protocol_handler;
   }
@@ -254,21 +256,17 @@ class RequestTrackerTest : public PlatformTest {
       url = GetURL(requests_.size());
 
     while (i >= requests_.size()) {
-      contexts_.push_back(new net::URLRequestContext());
-      requests_.push_back(
-          contexts_[i]
-              ->CreateRequest(url, net::DEFAULT_PRIORITY, &request_delegate_)
-              .release());
+      contexts_.push_back(base::MakeUnique<net::URLRequestContext>());
+      requests_.push_back(contexts_[i]->CreateRequest(
+          url, net::DEFAULT_PRIORITY, &request_delegate_));
 
       if (secure) {
         // Put a valid SSLInfo inside
         net::HttpResponseInfo* response =
             const_cast<net::HttpResponseInfo*>(&requests_[i]->response_info());
 
-        response->ssl_info.cert = new net::X509Certificate(
-            "subject", "issuer",
-            base::Time::Now() - base::TimeDelta::FromDays(2),
-            base::Time::Now() + base::TimeDelta::FromDays(2));
+        response->ssl_info.cert = net::ImportCertFromFile(
+            net::GetTestCertsDirectory(), "ok_cert.pem");
         response->ssl_info.cert_status = 0;  // No errors.
         response->ssl_info.security_bits = 128;
 
@@ -276,7 +274,7 @@ class RequestTrackerTest : public PlatformTest {
       }
     }
     EXPECT_TRUE(!secure == !requests_[i]->url().SchemeIsCryptographic());
-    return requests_[i];
+    return requests_[i].get();
   }
 
   DummyURLRequestDelegate request_delegate_;
@@ -444,7 +442,7 @@ TEST_F(RequestTrackerTest, CaptureHeaders) {
   // TODO(mmenke):  This is really bizarre. Do something more reasonable.
   const_cast<net::HttpResponseInfo&>(request->response_info()).headers =
       new net::HttpResponseHeaders(headers);
-  scoped_ptr<net::URLRequestTestJob> job(new net::URLRequestTestJob(
+  std::unique_ptr<net::URLRequestTestJob> job(new net::URLRequestTestJob(
       request, request->context()->network_delegate(), headers, "", false));
   AddInterceptorToRequest(0)->set_main_intercept_job(std::move(job));
   request->Start();
@@ -452,7 +450,7 @@ TEST_F(RequestTrackerTest, CaptureHeaders) {
   tracker_->StartRequest(request);
   tracker_->CaptureHeaders(request);
   tracker_->StopRequest(request);
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE([receiver_ headers]->HasHeaderValue("X-Auto-Login",
                                                   "Hello World"));
   std::string mimeType;
@@ -491,11 +489,9 @@ void TwoStartsSSLCallback(bool* called, bool ok) {
 
 // crbug/386180
 TEST_F(RequestTrackerTest, DISABLED_TwoStartsNoEstimate) {
-  net::X509Certificate* cert =
-      new net::X509Certificate("subject", "issuer", base::Time::Now(),
-                               base::Time::Max());
   net::SSLInfo ssl_info;
-  ssl_info.cert = cert;
+  ssl_info.cert =
+      net::ImportCertFromFile(net::GetTestCertsDirectory(), "ok_cert.pem");
   ssl_info.cert_status = net::CERT_STATUS_AUTHORITY_INVALID;
   scoped_refptr<MockCertificatePolicyCache> cache;
   tracker_->SetCertificatePolicyCacheForTest(cache.get());

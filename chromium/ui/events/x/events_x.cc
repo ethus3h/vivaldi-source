@@ -16,6 +16,8 @@
 #include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "build/build_config.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/events/devices/x11/device_data_manager_x11.h"
 #include "ui/events/devices/x11/device_list_cache_x11.h"
 #include "ui/events/devices/x11/touch_factory_x11.h"
@@ -23,9 +25,7 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_code_conversion_x.h"
 #include "ui/events/x/events_x_utils.h"
-#include "ui/gfx/display.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/screen.h"
 #include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/gfx/x/x11_types.h"
 
@@ -76,13 +76,6 @@ unsigned int UpdateX11EventButton(int ui_flag, unsigned int old_x_button) {
 
 namespace ui {
 
-void UpdateDeviceList() {
-  XDisplay* display = gfx::GetXDisplay();
-  DeviceListCacheX11::GetInstance()->UpdateDeviceList(display);
-  TouchFactory::GetInstance()->UpdateDeviceList(display);
-  DeviceDataManagerX11::GetInstance()->UpdateDeviceList(display);
-}
-
 EventType EventTypeFromNative(const base::NativeEvent& native_event) {
   return EventTypeFromXEvent(*native_event);
 }
@@ -91,12 +84,18 @@ int EventFlagsFromNative(const base::NativeEvent& native_event) {
   return EventFlagsFromXEvent(*native_event);
 }
 
-base::TimeDelta EventTimeFromNative(const base::NativeEvent& native_event) {
-  return EventTimeFromXEvent(*native_event);
+base::TimeTicks EventTimeFromNative(const base::NativeEvent& native_event) {
+  base::TimeTicks timestamp = EventTimeFromXEvent(*native_event);
+  ValidateEventTimeClock(&timestamp);
+  return timestamp;
 }
 
 gfx::Point EventLocationFromNative(const base::NativeEvent& native_event) {
   return EventLocationFromXEvent(*native_event);
+}
+
+gfx::PointF EventLocationFromNativeF(const base::NativeEvent& native_event) {
+  return gfx::PointF(EventLocationFromNative(native_event));
 }
 
 gfx::Point EventSystemLocationFromNative(
@@ -154,20 +153,18 @@ int GetTouchId(const base::NativeEvent& native_event) {
   return GetTouchIdFromXEvent(*native_event);
 }
 
-float GetTouchRadiusX(const base::NativeEvent& native_event) {
-  return GetTouchRadiusXFromXEvent(*native_event);
-}
-
-float GetTouchRadiusY(const base::NativeEvent& native_event) {
-  return GetTouchRadiusYFromXEvent(*native_event);
-}
-
 float GetTouchAngle(const base::NativeEvent& native_event) {
   return GetTouchAngleFromXEvent(*native_event);
 }
 
-float GetTouchForce(const base::NativeEvent& native_event) {
-  return GetTouchForceFromXEvent(*native_event);
+PointerDetails GetTouchPointerDetailsFromNative(
+    const base::NativeEvent& native_event) {
+  return PointerDetails(EventPointerType::POINTER_TYPE_TOUCH,
+                        GetTouchRadiusXFromXEvent(*native_event),
+                        GetTouchRadiusYFromXEvent(*native_event),
+                        GetTouchForceFromXEvent(*native_event),
+                        /* tilt_x */ 0.f,
+                        /* tilt_y */ 0.f);
 }
 
 bool GetScrollOffsets(const base::NativeEvent& native_event,
@@ -175,7 +172,8 @@ bool GetScrollOffsets(const base::NativeEvent& native_event,
                       float* y_offset,
                       float* x_offset_ordinal,
                       float* y_offset_ordinal,
-                      int* finger_count) {
+                      int* finger_count,
+                      EventMomentumPhase* momentum_phase) {
   return GetScrollOffsetsFromXEvent(*native_event, x_offset, y_offset,
                                     x_offset_ordinal, y_offset_ordinal,
                                     finger_count);

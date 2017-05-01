@@ -13,10 +13,10 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread_restrictions.h"
@@ -59,7 +59,7 @@
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/user_script.h"
-#include "grit/extensions_strings.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -69,7 +69,6 @@
 
 using base::UserMetricsAction;
 using content::BrowserThread;
-using extensions::SharedModuleInfo;
 
 namespace extensions {
 
@@ -89,27 +88,26 @@ enum OffStoreInstallDecision {
 scoped_refptr<CrxInstaller> CrxInstaller::CreateSilent(
     ExtensionService* frontend) {
   return new CrxInstaller(frontend->AsWeakPtr(),
-                          scoped_ptr<ExtensionInstallPrompt>(),
-                          NULL);
+                          std::unique_ptr<ExtensionInstallPrompt>(), NULL);
 }
 
 // static
 scoped_refptr<CrxInstaller> CrxInstaller::Create(
     ExtensionService* frontend,
-    scoped_ptr<ExtensionInstallPrompt> client) {
+    std::unique_ptr<ExtensionInstallPrompt> client) {
   return new CrxInstaller(frontend->AsWeakPtr(), std::move(client), NULL);
 }
 
 // static
 scoped_refptr<CrxInstaller> CrxInstaller::Create(
     ExtensionService* service,
-    scoped_ptr<ExtensionInstallPrompt> client,
+    std::unique_ptr<ExtensionInstallPrompt> client,
     const WebstoreInstaller::Approval* approval) {
   return new CrxInstaller(service->AsWeakPtr(), std::move(client), approval);
 }
 
 CrxInstaller::CrxInstaller(base::WeakPtr<ExtensionService> service_weak,
-                           scoped_ptr<ExtensionInstallPrompt> client,
+                           std::unique_ptr<ExtensionInstallPrompt> client,
                            const WebstoreInstaller::Approval* approval)
     : install_directory_(service_weak->install_directory()),
       install_source_(Manifest::INTERNAL),
@@ -189,7 +187,7 @@ void CrxInstaller::InstallCrxFile(const CRXFileInfo& source_file) {
 
   if (!installer_task_runner_->PostTask(
           FROM_HERE, base::Bind(&SandboxedUnpacker::StartWithCrx,
-                                unpacker.get(), source_file))) {
+                                unpacker, source_file))) {
     NOTREACHED();
   }
 }
@@ -268,7 +266,7 @@ CrxInstallError CrxInstaller::AllowInstall(const Extension* extension) {
   }
 
   if (expected_version_.IsValid() && fail_install_if_unexpected_version_ &&
-      !expected_version_.Equals(*extension->version())) {
+      expected_version_ != *extension->version()) {
     return CrxInstallError(l10n_util::GetStringFUTF16(
         IDS_EXTENSION_INSTALL_UNEXPECTED_VERSION,
         base::ASCIIToUTF16(expected_version_.GetString()),
@@ -341,17 +339,20 @@ CrxInstallError CrxInstaller::AllowInstall(const Extension* extension) {
     } else {
       const char kHistogramName[] = "Extensions.OffStoreInstallDecisionHard";
       if (is_gallery_install()) {
-        UMA_HISTOGRAM_ENUMERATION(kHistogramName, OnStoreInstall,
+        UMA_HISTOGRAM_ENUMERATION(kHistogramName,
+                                  OffStoreInstallDecision::OnStoreInstall,
                                   NumOffStoreInstallDecision);
       } else if (off_store_install_allow_reason_ != OffStoreInstallDisallowed) {
-        UMA_HISTOGRAM_ENUMERATION(kHistogramName, OffStoreInstallAllowed,
-                                  NumOffStoreInstallDecision);
+        UMA_HISTOGRAM_ENUMERATION(
+            kHistogramName, OffStoreInstallDecision::OffStoreInstallAllowed,
+            NumOffStoreInstallDecision);
         UMA_HISTOGRAM_ENUMERATION("Extensions.OffStoreInstallAllowReason",
                                   off_store_install_allow_reason_,
                                   NumOffStoreInstallAllowReasons);
       } else {
-        UMA_HISTOGRAM_ENUMERATION(kHistogramName, OffStoreInstallDisallowed,
-                                  NumOffStoreInstallDecision);
+        UMA_HISTOGRAM_ENUMERATION(
+            kHistogramName, OffStoreInstallDecision::OffStoreInstallDisallowed,
+            NumOffStoreInstallDecision);
         // Don't delete source in this case so that the user can install
         // manually if they want.
         delete_source_ = false;
@@ -448,7 +449,7 @@ void CrxInstaller::OnUnpackSuccess(
   if (original_manifest)
     original_manifest_.reset(new Manifest(
         Manifest::INVALID_LOCATION,
-        scoped_ptr<base::DictionaryValue>(original_manifest->DeepCopy())));
+        std::unique_ptr<base::DictionaryValue>(original_manifest->DeepCopy())));
 
   // We don't have to delete the unpack dir explicity since it is a child of
   // the temp dir.
@@ -477,33 +478,34 @@ void CrxInstaller::CheckInstall() {
   if (SharedModuleInfo::ImportsModules(extension())) {
     const std::vector<SharedModuleInfo::ImportInfo>& imports =
         SharedModuleInfo::GetImports(extension());
-    std::vector<SharedModuleInfo::ImportInfo>::const_iterator i;
-    for (i = imports.begin(); i != imports.end(); ++i) {
-      base::Version version_required(i->minimum_version);
+    for (const auto& import : imports) {
       const Extension* imported_module =
-          service->GetExtensionById(i->extension_id, true);
-      if (imported_module &&
-          !SharedModuleInfo::IsSharedModule(imported_module)) {
+          service->GetExtensionById(import.extension_id, true);
+      if (!imported_module)
+        continue;
+
+      if (!SharedModuleInfo::IsSharedModule(imported_module)) {
         ReportFailureFromUIThread(CrxInstallError(
             CrxInstallError::ERROR_DECLINED,
             l10n_util::GetStringFUTF16(
                 IDS_EXTENSION_INSTALL_DEPENDENCY_NOT_SHARED_MODULE,
                 base::UTF8ToUTF16(imported_module->name()))));
         return;
-      } else if (imported_module && (version_required.IsValid() &&
-                                     imported_module->version()->CompareTo(
-                                         version_required) < 0)) {
+      }
+      base::Version version_required(import.minimum_version);
+      if (version_required.IsValid() &&
+          imported_module->version()->CompareTo(version_required) < 0) {
         ReportFailureFromUIThread(CrxInstallError(
             CrxInstallError::ERROR_DECLINED,
             l10n_util::GetStringFUTF16(
                 IDS_EXTENSION_INSTALL_DEPENDENCY_OLD_VERSION,
                 base::UTF8ToUTF16(imported_module->name()),
-                base::ASCIIToUTF16(i->minimum_version),
+                base::ASCIIToUTF16(import.minimum_version),
                 base::ASCIIToUTF16(imported_module->version()->GetString()))));
         return;
-      } else if (imported_module &&
-                 !SharedModuleInfo::IsExportAllowedByWhitelist(
-                     imported_module, extension()->id())) {
+      }
+      if (!SharedModuleInfo::IsExportAllowedByWhitelist(imported_module,
+                                                        extension()->id())) {
         ReportFailureFromUIThread(CrxInstallError(
             CrxInstallError::ERROR_DECLINED,
             l10n_util::GetStringFUTF16(
@@ -545,16 +547,16 @@ void CrxInstaller::OnInstallChecksComplete(int failed_checks) {
   }
 
   // Check the blacklist state.
-  if (install_checker_.blacklist_state() == extensions::BLACKLISTED_MALWARE) {
+  if (install_checker_.blacklist_state() == BLACKLISTED_MALWARE) {
     install_flags_ |= kInstallFlagIsBlacklistedForMalware;
   }
 
-  if ((install_checker_.blacklist_state() == extensions::BLACKLISTED_MALWARE ||
-       install_checker_.blacklist_state() == extensions::BLACKLISTED_UNKNOWN) &&
+  if ((install_checker_.blacklist_state() == BLACKLISTED_MALWARE ||
+       install_checker_.blacklist_state() == BLACKLISTED_UNKNOWN) &&
       !allow_silent_install_) {
     // User tried to install a blacklisted extension. Show an error and
     // refuse to install it.
-    ReportFailureFromUIThread(extensions::CrxInstallError(
+    ReportFailureFromUIThread(CrxInstallError(
         CrxInstallError::ERROR_DECLINED,
         l10n_util::GetStringFUTF16(IDS_EXTENSION_IS_BLACKLISTED,
                                    base::UTF8ToUTF16(extension()->name()))));
@@ -617,6 +619,7 @@ void CrxInstaller::ConfirmInstall() {
       overlapping_extension->id() != extension()->id()) {
     ReportFailureFromUIThread(CrxInstallError(l10n_util::GetStringFUTF16(
         IDS_EXTENSION_OVERLAPPING_WEB_EXTENT,
+        base::UTF8ToUTF16(extension()->name()),
         base::UTF8ToUTF16(overlapping_extension->name()))));
     return;
   }
@@ -631,12 +634,8 @@ void CrxInstaller::ConfirmInstall() {
     client_->ShowDialog(base::Bind(&CrxInstaller::OnInstallPromptDone, this),
                         extension(), nullptr, show_dialog_callback_);
   } else {
-    if (!installer_task_runner_->PostTask(
-            FROM_HERE,
-            base::Bind(&CrxInstaller::CompleteInstall, this)))
-      NOTREACHED();
+    UpdateCreationFlagsAndCompleteInstall();
   }
-  return;
 }
 
 void CrxInstaller::OnInstallPromptDone(ExtensionInstallPrompt::Result result) {
@@ -653,10 +652,8 @@ void CrxInstaller::OnInstallPromptDone(ExtensionInstallPrompt::Result result) {
 
     if (update_from_settings_page_) {
       service->GrantPermissionsAndEnableExtension(extension());
-    } else if (!installer_task_runner_->PostTask(
-                   FROM_HERE,
-                   base::Bind(&CrxInstaller::CompleteInstall, this))) {
-      NOTREACHED();
+    } else {
+      UpdateCreationFlagsAndCompleteInstall();
     }
   } else if (!update_from_settings_page_) {
     const char* histogram_name =
@@ -670,6 +667,19 @@ void CrxInstaller::OnInstallPromptDone(ExtensionInstallPrompt::Result result) {
   }
 
   Release();  // balanced in ConfirmInstall() or ConfirmReEnable().
+}
+
+void CrxInstaller::UpdateCreationFlagsAndCompleteInstall() {
+  creation_flags_ = extension()->creation_flags() | Extension::REQUIRE_KEY;
+  // If the extension was already installed and had file access, also grant file
+  // access to the updated extension.
+  if (ExtensionPrefs::Get(profile())->AllowFileAccess(extension()->id()))
+    creation_flags_ |= Extension::ALLOW_FILE_ACCESS;
+
+  if (!installer_task_runner_->PostTask(
+          FROM_HERE, base::Bind(&CrxInstaller::CompleteInstall, this))) {
+    NOTREACHED();
+  }
 }
 
 void CrxInstaller::CompleteInstall() {
@@ -690,7 +700,7 @@ void CrxInstaller::CompleteInstall() {
   // exceeds a small constant.  See crbug.com/69693 .
   UMA_HISTOGRAM_CUSTOM_COUNTS(
     "Extensions.CrxInstallDirPathLength",
-        install_directory_.value().length(), 0, 500, 100);
+        install_directory_.value().length(), 1, 500, 100);
 
   ExtensionAssetsManager* assets_manager =
       ExtensionAssetsManager::GetInstance();
@@ -725,7 +735,8 @@ void CrxInstaller::ReloadExtensionAfterInstall(
       file_util::LoadExtension(
           version_dir,
           install_source_,
-          extension()->creation_flags() | Extension::REQUIRE_KEY,
+          // Note: modified by UpdateCreationFlagsAndCompleteInstall.
+          creation_flags_,
           &error).get());
 
   if (extension()) {
@@ -753,9 +764,9 @@ void CrxInstaller::ReportFailureFromUIThread(const CrxInstallError& error) {
 
   content::NotificationService* service =
       content::NotificationService::current();
-  service->Notify(extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,
+  service->Notify(NOTIFICATION_EXTENSION_INSTALL_ERROR,
                   content::Source<CrxInstaller>(this),
-                  content::Details<const extensions::CrxInstallError>(&error));
+                  content::Details<const CrxInstallError>(&error));
 
   // This isn't really necessary, it is only used because unit tests expect to
   // see errors get reported via this interface.
@@ -810,7 +821,7 @@ void CrxInstaller::ReportSuccessFromUIThread() {
     if ((client_ || allow_silent_install_) &&
         grant_permissions_ &&
         (!expected_version_.IsValid() ||
-         expected_version_.Equals(*extension()->version()))) {
+         expected_version_ == *extension()->version())) {
       PermissionsUpdater perms_updater(profile());
       perms_updater.InitializePermissions(extension());
       perms_updater.GrantActivePermissions(extension());
@@ -834,8 +845,7 @@ void CrxInstaller::NotifyCrxInstallComplete(bool success) {
   // extension before it is unpacked, so they cannot filter based
   // on the extension.
   content::NotificationService::current()->Notify(
-      extensions::NOTIFICATION_CRX_INSTALLER_DONE,
-      content::Source<CrxInstaller>(this),
+      NOTIFICATION_CRX_INSTALLER_DONE, content::Source<CrxInstaller>(this),
       content::Details<const Extension>(success ? extension() : NULL));
 
   InstallTrackerFactory::GetForBrowserContext(profile())
@@ -907,10 +917,10 @@ void CrxInstaller::ConfirmReEnable() {
     ExtensionInstallPrompt::PromptType type =
         ExtensionInstallPrompt::GetReEnablePromptTypeForExtension(
             service->profile(), extension());
-    client_->ShowDialog(
-        base::Bind(&CrxInstaller::OnInstallPromptDone, this), extension(),
-        nullptr, make_scoped_ptr(new ExtensionInstallPrompt::Prompt(type)),
-        ExtensionInstallPrompt::GetDefaultShowDialogCallback());
+    client_->ShowDialog(base::Bind(&CrxInstaller::OnInstallPromptDone, this),
+                        extension(), nullptr,
+                        base::MakeUnique<ExtensionInstallPrompt::Prompt>(type),
+                        ExtensionInstallPrompt::GetDefaultShowDialogCallback());
   }
 }
 

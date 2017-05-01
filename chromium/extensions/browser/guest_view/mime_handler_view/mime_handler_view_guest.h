@@ -22,7 +22,7 @@ class MimeHandlerViewGuestDelegate;
 // MimeHandler to handle a resource stream.
 class StreamContainer {
  public:
-  StreamContainer(scoped_ptr<content::StreamInfo> stream,
+  StreamContainer(std::unique_ptr<content::StreamInfo> stream,
                   int tab_id,
                   bool embedded,
                   const GURL& handler_url,
@@ -41,7 +41,7 @@ class StreamContainer {
   std::string extension_id() const { return extension_id_; }
 
  private:
-  const scoped_ptr<content::StreamInfo> stream_;
+  const std::unique_ptr<content::StreamInfo> stream_;
   const bool embedded_;
   const int tab_id_;
   const GURL handler_url_;
@@ -57,6 +57,14 @@ class MimeHandlerViewGuest :
       content::WebContents* owner_web_contents);
 
   static const char Type[];
+
+  // BrowserPluginGuestDelegate overrides.
+  bool CanUseCrossProcessFrames() override;
+  bool CanBeEmbeddedInsideCrossProcessFrames() override;
+  content::RenderWidgetHost* GetOwnerRenderWidgetHost() override;
+  content::SiteInstance* GetOwnerSiteInstance() override;
+
+  void SetEmbedderFrame(int process_id, int routing_id);
 
  protected:
   explicit MimeHandlerViewGuest(content::WebContents* owner_web_contents);
@@ -87,6 +95,7 @@ class MimeHandlerViewGuest :
   content::JavaScriptDialogManager* GetJavaScriptDialogManager(
       content::WebContents* source) final;
   bool SaveFrame(const GURL& url, const content::Referrer& referrer) final;
+  void OnRenderFrameHostDeleted(int process_id, int routing_id) final;
 
   // content::WebContentsObserver implementation.
   void DocumentOnLoadCompletedInMainFrame() final;
@@ -94,9 +103,13 @@ class MimeHandlerViewGuest :
   std::string view_id() const { return view_id_; }
   base::WeakPtr<StreamContainer> GetStream() const;
 
-  scoped_ptr<MimeHandlerViewGuestDelegate> delegate_;
-  scoped_ptr<StreamContainer> stream_;
+  std::unique_ptr<MimeHandlerViewGuestDelegate> delegate_;
+  std::unique_ptr<StreamContainer> stream_;
   std::string view_id_;
+
+  int embedder_frame_process_id_;
+  int embedder_frame_routing_id_;
+  int embedder_widget_routing_id_;
 
   DISALLOW_COPY_AND_ASSIGN(MimeHandlerViewGuest);
 };

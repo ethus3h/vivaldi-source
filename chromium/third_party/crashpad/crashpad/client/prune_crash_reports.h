@@ -18,8 +18,9 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "client/crash_report_database.h"
 
 namespace crashpad {
@@ -39,7 +40,7 @@ class PruneCondition;
 void PruneCrashReportDatabase(CrashReportDatabase* database,
                               PruneCondition* condition);
 
-scoped_ptr<PruneCondition> GetDefaultDatabasePruneCondition();
+std::unique_ptr<PruneCondition> GetDefaultDatabasePruneCondition();
 
 //! \brief An abstract base class for evaluating crash reports for deletion.
 //!
@@ -56,7 +57,7 @@ class PruneCondition {
   //! of 128 MB.
   //!
   //! \return A PruneCondition for use with PruneCrashReportDatabase().
-  static scoped_ptr<PruneCondition> GetDefault();
+  static std::unique_ptr<PruneCondition> GetDefault();
 
   virtual ~PruneCondition() {}
 
@@ -110,7 +111,7 @@ class DatabaseSizePruneCondition final : public PruneCondition {
   DISALLOW_COPY_AND_ASSIGN(DatabaseSizePruneCondition);
 };
 
-//! \breif A PruneCondition that conjoins two other PruneConditions.
+//! \brief A PruneCondition that conjoins two other PruneConditions.
 class BinaryPruneCondition final : public PruneCondition {
  public:
   enum Operator {
@@ -136,8 +137,8 @@ class BinaryPruneCondition final : public PruneCondition {
 
  private:
   const Operator op_;
-  scoped_ptr<PruneCondition> lhs_;
-  scoped_ptr<PruneCondition> rhs_;
+  std::unique_ptr<PruneCondition> lhs_;
+  std::unique_ptr<PruneCondition> rhs_;
 
   DISALLOW_COPY_AND_ASSIGN(BinaryPruneCondition);
 };

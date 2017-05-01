@@ -6,13 +6,13 @@
 #define TOOLS_GN_BUILD_SETTINGS_H_
 
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 
 #include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "tools/gn/args.h"
 #include "tools/gn/scope.h"
 #include "tools/gn/source_dir.h"
@@ -24,7 +24,7 @@ class Item;
 // may be multiple Settings objects that refer to this, one for each toolchain.
 class BuildSettings {
  public:
-  typedef base::Callback<void(scoped_ptr<Item>)> ItemDefinedCallback;
+  typedef base::Callback<void(std::unique_ptr<Item>)> ItemDefinedCallback;
   typedef base::Callback<void(const std::string&)> PrintCallback;
 
   BuildSettings();
@@ -74,7 +74,7 @@ class BuildSettings {
   base::FilePath GetFullPathSecondary(const SourceDir& dir) const;
 
   // Called when an item is defined from a background thread.
-  void ItemDefined(scoped_ptr<Item> item) const;
+  void ItemDefined(std::unique_ptr<Item> item) const;
   void set_item_defined_callback(ItemDefinedCallback cb) {
     item_defined_callback_ = cb;
   }
@@ -91,21 +91,18 @@ class BuildSettings {
   const std::set<SourceFile>* exec_script_whitelist() const {
     return exec_script_whitelist_.get();
   }
-  void set_exec_script_whitelist(scoped_ptr<std::set<SourceFile>> list) {
+  void set_exec_script_whitelist(std::unique_ptr<std::set<SourceFile>> list) {
     exec_script_whitelist_ = std::move(list);
   }
 
-  // When set (the default), code should perform normal validation of inputs
-  // and structures, like undefined or possibly incorrectly used things. For
-  // some interrogation commands, we don't care about this and actually want
-  // to allow the user to check the structure of the build to solve their
-  // problem, and these checks are undesirable.
-  bool check_for_bad_items() const {
-    return check_for_bad_items_;
-  }
-  void set_check_for_bad_items(bool c) {
-    check_for_bad_items_ = c;
-  }
+  // <Vivaldi>
+  bool RegisterPathMap(const std::string &prefix,
+                       const std::string &map_to_path);
+  static std::string RemapSourcePathToActual(const std::string &path);
+  static std::string RemapActualToSourcePath(const std::string &path);
+  const std::vector<Item *> &global_pools() const {return global_pools_;}
+  void add_global_pool(Item *item) {global_pools_.push_back(item);}
+  // </Vivaldi>
 
  private:
   base::FilePath root_path_;
@@ -120,9 +117,17 @@ class BuildSettings {
   ItemDefinedCallback item_defined_callback_;
   PrintCallback print_callback_;
 
-  scoped_ptr<std::set<SourceFile>> exec_script_whitelist_;
+  std::unique_ptr<std::set<SourceFile>> exec_script_whitelist_;
 
-  bool check_for_bad_items_;
+  // <Vivaldi>
+  struct path_mapper {
+    std::string prefix; // "//foo/" always coded as "foo"
+    std::string actual_path; // relative to root_path_, empty means root_path_
+  };
+
+  static std::vector<path_mapper> path_map_;
+  std::vector<Item *> global_pools_;
+  // </Vivaldi>
 
   BuildSettings& operator=(const BuildSettings& other);  // Disallow.
 };

@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
@@ -13,6 +15,8 @@
 #include "base/values.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "url/gurl.h"
+
+#include "app/vivaldi_apptools.h"
 
 namespace gaia {
 
@@ -23,6 +27,8 @@ const char kGooglemailDomain[] = "googlemail.com";
 
 std::string CanonicalizeEmailImpl(const std::string& email_address,
                                   bool change_googlemail_to_gmail) {
+  if(vivaldi::IsVivaldiRunning())
+    return email_address;
   std::vector<std::string> parts = base::SplitString(
       email_address, "@", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (parts.size() != 2U) {
@@ -46,6 +52,8 @@ std::string CanonicalizeEmailImpl(const std::string& email_address,
 
 
 ListedAccount::ListedAccount() {}
+
+ListedAccount::ListedAccount(const ListedAccount& other) = default;
 
 ListedAccount::~ListedAccount() {}
 
@@ -112,12 +120,17 @@ bool IsGaiaSignonRealm(const GURL& url) {
 }
 
 
-bool ParseListAccountsData(
-    const std::string& data, std::vector<ListedAccount>* accounts) {
-  accounts->clear();
+bool ParseListAccountsData(const std::string& data,
+                           std::vector<ListedAccount>* accounts,
+                           std::vector<ListedAccount>* signed_out_accounts) {
+  if (accounts)
+    accounts->clear();
+
+  if (signed_out_accounts)
+    signed_out_accounts->clear();
 
   // Parse returned data and make sure we have data.
-  scoped_ptr<base::Value> value = base::JSONReader::Read(data);
+  std::unique_ptr<base::Value> value = base::JSONReader::Read(data);
   if (!value)
     return false;
 
@@ -127,7 +140,7 @@ bool ParseListAccountsData(
 
   // Get list of account info.
   base::ListValue* account_list;
-  if (!list->GetList(1, &account_list) || accounts == NULL)
+  if (!list->GetList(1, &account_list))
     return false;
 
   // Build a vector of accounts from the cookie.  Order is important: the first
@@ -146,6 +159,10 @@ bool ParseListAccountsData(
         if (!account->GetInteger(9, &is_email_valid))
           is_email_valid = 1;
 
+        int signed_out = 0;
+        if (!account->GetInteger(14, &signed_out))
+          signed_out = 0;
+
         std::string gaia_id;
         // ListAccounts must also return the Gaia Id.
         if (account->GetString(10, &gaia_id) && !gaia_id.empty()) {
@@ -153,8 +170,12 @@ bool ParseListAccountsData(
           listed_account.email = CanonicalizeEmail(email);
           listed_account.gaia_id = gaia_id;
           listed_account.valid = is_email_valid != 0;
+          listed_account.signed_out = signed_out != 0;
           listed_account.raw_email = email;
-          accounts->push_back(listed_account);
+          auto* list =
+              listed_account.signed_out ? signed_out_accounts : accounts;
+          if (list)
+            list->push_back(listed_account);
         }
       }
     }

@@ -57,7 +57,7 @@ class VivaldiContextMenuViews : public vivaldi::VivaldiContextMenu {
  private:
   aura::Window* GetActiveNativeView();
   views::Widget* GetTopLevelWidget();
-  scoped_ptr<ToolkitDelegateViews> toolkit_delegate_;
+  std::unique_ptr<ToolkitDelegateViews> toolkit_delegate_;
   content::RenderFrameHost* render_frame_host_;
   ui::SimpleMenuModel* menu_model_;
   content::ContextMenuParams params_;

@@ -9,6 +9,11 @@
 
 namespace google_update {
 
+// Specifies whether a tristate item has a value and if so what the value is.
+// When converted from a DWORD in the Windows registry, All values other than 1
+// are mapped to TRISTATE_FALSE.
+enum Tristate { TRISTATE_FALSE = 0, TRISTATE_TRUE = 1, TRISTATE_NONE = 2 };
+
 // The GUID Google Update uses to keep track of Chrome upgrades.
 extern const wchar_t kChromeUpgradeCode[];
 
@@ -47,6 +52,7 @@ extern const wchar_t kRegCriticalVersionField[];
 extern const wchar_t kRegDidRunField[];
 extern const wchar_t kRegEULAAceptedField[];
 extern const wchar_t kRegGoogleUpdateVersion[];
+extern const wchar_t kRegInstallerProgress[];
 extern const wchar_t kRegLangField[];
 extern const wchar_t kRegLastStartedAUField[];
 extern const wchar_t kRegLastCheckedField[];
@@ -76,7 +82,7 @@ extern const wchar_t kRegUsageStatsField[];
 extern const wchar_t kRegVersionField[];
 extern const wchar_t kRegWebAccessibleField[];
 
-// last time that chrome ran in the Time internal format.
+// Last time that chrome ran in the Time internal format.
 extern const wchar_t kRegLastRunTimeField[];
 
 // The name of the value where Google Update reads the list of experiments for

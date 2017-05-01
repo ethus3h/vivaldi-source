@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/containers/hash_tables.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/download/download_path_reservation_tracker.h"
 #include "chrome/browser/download/download_target_determiner_delegate.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/download_manager_delegate.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "extensions/features/features.h"
 
 class DownloadPrefs;
 class Profile;
@@ -31,10 +33,6 @@ class DownloadManager;
 
 namespace extensions {
 class CrxInstaller;
-}
-
-namespace user_prefs {
-class PrefRegistrySyncable;
 }
 
 // This is the Chrome side helper for the download system.
@@ -79,6 +77,7 @@ class ChromeDownloadManagerDelegate
       const base::FilePath::StringType& default_extension,
       bool can_save_as_complete,
       const content::SavePackagePathPickedCallback& callback) override;
+  void SanitizeSavePackageResourceName(base::FilePath* filename) override;
   void OpenDownload(content::DownloadItem* download) override;
   void ShowDownloadInShell(content::DownloadItem* download) override;
   void CheckForFileExistence(
@@ -153,7 +152,7 @@ class ChromeDownloadManagerDelegate
   void OnDownloadTargetDetermined(
       int32_t download_id,
       const content::DownloadTargetCallback& callback,
-      scoped_ptr<DownloadTargetInfo> target_info);
+      std::unique_ptr<DownloadTargetInfo> target_info);
 
   // Returns true if |path| should open in the browser.
   bool IsOpenInBrowserPreferreredForFile(const base::FilePath& path);
@@ -161,9 +160,9 @@ class ChromeDownloadManagerDelegate
   Profile* profile_;
   uint32_t next_download_id_;
   IdCallbackVector id_callbacks_;
-  scoped_ptr<DownloadPrefs> download_prefs_;
+  std::unique_ptr<DownloadPrefs> download_prefs_;
 
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Maps from pending extension installations to DownloadItem IDs.
   typedef base::hash_map<extensions::CrxInstaller*,
       content::DownloadOpenDelayedCallback> CrxInstallerMap;

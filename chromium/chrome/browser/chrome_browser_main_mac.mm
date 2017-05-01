@@ -10,15 +10,18 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/mac/bundle_locations.h"
+#import "base/mac/foundation_util.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_nsobject.h"
+#include "base/mac/sdk_forward_declarations.h"
 #include "base/path_service.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_manager_mac.h"
 #include "chrome/browser/browser_process.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/mac/install_from_dmg.h"
+#include "chrome/browser/mac/keychain_reauthorize.h"
 #import "chrome/browser/mac/keystone_glue.h"
 #include "chrome/browser/mac/mac_startup_profiler.h"
 #include "chrome/browser/ui/app_list/app_list_service.h"
@@ -32,10 +35,9 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_handle.h"
 
-#include "chrome/app/chrome_command_ids.h"
-
 #include "app/vivaldi_apptools.h"
 #include "app/vivaldi_commands.h"
+#include "chrome/app/chrome_command_ids.h"
 
 namespace {
 
@@ -114,7 +116,8 @@ void ChromeBrowserMainPartsMac::PreMainMessageLoopStart() {
   // to enforce the application locale.
   const std::string loaded_locale =
       ui::ResourceBundle::InitSharedInstanceWithLocale(
-          std::string(), NULL, ui::ResourceBundle::LOAD_COMMON_RESOURCES);
+          std::string(), &resource_delegate_,
+          ui::ResourceBundle::LOAD_COMMON_RESOURCES);
   CHECK(!loaded_locale.empty()) << "Default locale could not be found";
 
   base::FilePath resources_pack_path;
@@ -154,7 +157,10 @@ void ChromeBrowserMainPartsMac::PreMainMessageLoopStart() {
                                  bundle:base::mac::FrameworkBundle()]);
     // TODO(viettrungluu): crbug.com/20504 - This currently leaks, so if you
     // change this, you'll probably need to change the Valgrind suppression.
-    [nib instantiateNibWithOwner:NSApp topLevelObjects:nil];
+    NSArray* top_level_objects = nil;
+    [nib instantiateWithOwner:NSApp topLevelObjects:&top_level_objects];
+    for (NSObject* object : top_level_objects)
+      [object retain];
   } else {
   // Now load the nib (from the right bundle).
   base::scoped_nsobject<NSNib> nib(
@@ -162,18 +168,24 @@ void ChromeBrowserMainPartsMac::PreMainMessageLoopStart() {
                                bundle:base::mac::FrameworkBundle()]);
   // TODO(viettrungluu): crbug.com/20504 - This currently leaks, so if you
   // change this, you'll probably need to change the Valgrind suppression.
-  [nib instantiateNibWithOwner:NSApp topLevelObjects:nil];
+  NSArray* top_level_objects = nil;
+  [nib instantiateWithOwner:NSApp topLevelObjects:&top_level_objects];
+  for (NSObject* object : top_level_objects)
+    [object retain];
   }
   // Make sure the app controller has been created.
   DCHECK([NSApp delegate]);
 
-  [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-      // Prevent Cocoa from turning command-line arguments into
-      // |-application:openFiles:|, since we already handle them directly.
-      // @"NO" looks like a mistake, but the value really is supposed to be a
-      // string.
-      @"NSTreatUnknownArgumentsAsOpen": @"NO"
-  }];
+  // Do Keychain reauthorization. This gets two chances to run. If the first
+  // try doesn't complete successfully (crashes or is interrupted for any
+  // reason), there will be a second chance. Once this step completes
+  // successfully, it should never have to run again.
+  NSString* const keychain_reauthorize_pref =
+      @"KeychainReauthorizeInAppSpring2017";
+  const int kKeychainReauthorizeMaxTries = 2;
+
+  chrome::KeychainReauthorizeIfNeeded(keychain_reauthorize_pref,
+                                      kKeychainReauthorizeMaxTries);
 }
 
 void ChromeBrowserMainPartsMac::PostMainMessageLoopStart() {
@@ -207,14 +219,19 @@ void ChromeBrowserMainPartsMac::PostProfileInit() {
       FROM_HERE, base::ThreadTaskRunnerHandle::Get(),
       base::Bind(&EnsureMetadataNeverIndexFile, user_data_dir()));
 
-  // Activation of KeyStone is not automatic but done in response to the
-  // counting and reporting of profiles.  Make sure, assuming KeyStone
-  // is active, that it happened.
-  CHECK(![KeystoneGlue defaultKeystoneGlue] ||
-        [[KeystoneGlue defaultKeystoneGlue] isRegisteredAndActive]);
+  // Activation of Keystone is not automatic but done in response to the
+  // counting and reporting of profiles.
+  KeystoneGlue* glue = [KeystoneGlue defaultKeystoneGlue];
+  if (glue && ![glue isRegisteredAndActive]) {
+    // If profile loading has failed, we still need to handle other tasks
+    // like marking of the product as active.
+    [glue updateProfileCountsWithNumProfiles:0
+                         numSignedInProfiles:0];
+  }
 }
 
 void ChromeBrowserMainPartsMac::DidEndMainMessageLoop() {
-  AppController* appController = [NSApp delegate];
+  AppController* appController =
+      base::mac::ObjCCastStrict<AppController>([NSApp delegate]);
   [appController didEndMainMessageLoop];
 }

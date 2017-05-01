@@ -5,6 +5,8 @@
 #include "google_apis/gcm/engine/gcm_store_impl.h"
 
 #include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,11 +14,12 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "google_apis/gcm/base/fake_encryptor.h"
 #include "google_apis/gcm/base/mcs_message.h"
 #include "google_apis/gcm/base/mcs_util.h"
@@ -48,24 +51,26 @@ class GCMStoreImplTest : public testing::Test {
   GCMStoreImplTest();
   ~GCMStoreImplTest() override;
 
-  scoped_ptr<GCMStoreImpl> BuildGCMStore();
-  void LoadGCMStore(
-      GCMStoreImpl* gcm_store, scoped_ptr<GCMStore::LoadResult>* result_dst);
+  std::unique_ptr<GCMStoreImpl> BuildGCMStore();
+  void LoadGCMStore(GCMStoreImpl* gcm_store,
+                    std::unique_ptr<GCMStore::LoadResult>* result_dst);
 
   std::string GetNextPersistentId();
 
   void PumpLoop();
 
-  void LoadCallback(scoped_ptr<GCMStore::LoadResult>* result_dst,
-                    scoped_ptr<GCMStore::LoadResult> result);
-  void LoadWithoutCheckCallback(scoped_ptr<GCMStore::LoadResult>* result_dst,
-                                scoped_ptr<GCMStore::LoadResult> result);
+  void LoadCallback(std::unique_ptr<GCMStore::LoadResult>* result_dst,
+                    std::unique_ptr<GCMStore::LoadResult> result);
+  void LoadWithoutCheckCallback(
+      std::unique_ptr<GCMStore::LoadResult>* result_dst,
+      std::unique_ptr<GCMStore::LoadResult> result);
   void UpdateCallback(bool success);
 
  protected:
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   base::ThreadTaskRunnerHandle task_runner_handle_;
   base::ScopedTempDir temp_directory_;
+  base::FilePath store_path_;
   bool expected_success_;
   uint64_t next_persistent_id_;
 };
@@ -80,18 +85,20 @@ GCMStoreImplTest::GCMStoreImplTest()
 
 GCMStoreImplTest::~GCMStoreImplTest() {}
 
-scoped_ptr<GCMStoreImpl> GCMStoreImplTest::BuildGCMStore() {
-  return scoped_ptr<GCMStoreImpl>(new GCMStoreImpl(
-      // Pass an non-existent directory as store path to match the exact
-      // behavior in the production code. Currently GCMStoreImpl checks if
-      // the directory exist or not to determine the store existence.
-      temp_directory_.path().Append(FILE_PATH_LITERAL("GCM Store")),
-      task_runner_,
-      make_scoped_ptr<Encryptor>(new FakeEncryptor)));
+std::unique_ptr<GCMStoreImpl> GCMStoreImplTest::BuildGCMStore() {
+  // Pass an non-existent directory as store path to match the exact behavior in
+  // the production code. Currently GCMStoreImpl checks if the directory exists
+  // and contains a CURRENT file to determine the store existence.
+  store_path_ =
+      temp_directory_.GetPath().Append(FILE_PATH_LITERAL("GCM Store"));
+  return std::unique_ptr<GCMStoreImpl>(
+      new GCMStoreImpl(store_path_, task_runner_,
+                       base::WrapUnique<Encryptor>(new FakeEncryptor)));
 }
 
 void GCMStoreImplTest::LoadGCMStore(
-    GCMStoreImpl* gcm_store, scoped_ptr<GCMStore::LoadResult>* result_dst) {
+    GCMStoreImpl* gcm_store,
+    std::unique_ptr<GCMStore::LoadResult>* result_dst) {
   gcm_store->Load(
       GCMStore::CREATE_IF_MISSING,
       base::Bind(&GCMStoreImplTest::LoadCallback,
@@ -107,15 +114,15 @@ std::string GCMStoreImplTest::GetNextPersistentId() {
 void GCMStoreImplTest::PumpLoop() { task_runner_->RunUntilIdle(); }
 
 void GCMStoreImplTest::LoadCallback(
-    scoped_ptr<GCMStore::LoadResult>* result_dst,
-    scoped_ptr<GCMStore::LoadResult> result) {
+    std::unique_ptr<GCMStore::LoadResult>* result_dst,
+    std::unique_ptr<GCMStore::LoadResult> result) {
   ASSERT_TRUE(result->success);
   LoadWithoutCheckCallback(result_dst, std::move(result));
 }
 
 void GCMStoreImplTest::LoadWithoutCheckCallback(
-    scoped_ptr<GCMStore::LoadResult>* result_dst,
-    scoped_ptr<GCMStore::LoadResult> result) {
+    std::unique_ptr<GCMStore::LoadResult>* result_dst,
+    std::unique_ptr<GCMStore::LoadResult> result) {
   *result_dst = std::move(result);
 }
 
@@ -125,8 +132,8 @@ void GCMStoreImplTest::UpdateCallback(bool success) {
 
 // Verify creating a new database and loading it.
 TEST_F(GCMStoreImplTest, LoadNew) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   EXPECT_EQ(0U, load_result->device_android_id);
@@ -137,15 +144,32 @@ TEST_F(GCMStoreImplTest, LoadNew) {
   EXPECT_EQ(base::Time::FromInternalValue(0LL), load_result->last_checkin_time);
 }
 
-// Verify new database is not created when DO_NOT_CREATE_NEW_STORE is passed.
+// Verify new database is not created when DO_NOT_CREATE is passed.
 TEST_F(GCMStoreImplTest, LoadWithoutCreatingNewStore) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
-  gcm_store->Load(
-      GCMStore::DO_NOT_CREATE,
-      base::Bind(&GCMStoreImplTest::LoadWithoutCheckCallback,
-                 base::Unretained(this),
-                 &load_result));
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
+  gcm_store->Load(GCMStore::DO_NOT_CREATE,
+                  base::Bind(&GCMStoreImplTest::LoadWithoutCheckCallback,
+                             base::Unretained(this), &load_result));
+  PumpLoop();
+
+  EXPECT_FALSE(load_result->success);
+  EXPECT_TRUE(load_result->store_does_not_exist);
+}
+
+// Verifies that loads with DO_NOT_CREATE set store_does_not_exist to true when
+// an empty directory was left behind after destroying the database.
+TEST_F(GCMStoreImplTest, LoadWithEmptyDirectory) {
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+
+  // Create an empty directory at the store path, to simulate an empty directory
+  // being left behind after destroying a previous store.
+  ASSERT_TRUE(base::CreateDirectory(store_path_));
+
+  std::unique_ptr<GCMStore::LoadResult> load_result;
+  gcm_store->Load(GCMStore::DO_NOT_CREATE,
+                  base::Bind(&GCMStoreImplTest::LoadWithoutCheckCallback,
+                             base::Unretained(this), &load_result));
   PumpLoop();
 
   EXPECT_FALSE(load_result->success);
@@ -153,8 +177,8 @@ TEST_F(GCMStoreImplTest, LoadWithoutCreatingNewStore) {
 }
 
 TEST_F(GCMStoreImplTest, DeviceCredentials) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   gcm_store->SetDeviceCredentials(
@@ -171,8 +195,8 @@ TEST_F(GCMStoreImplTest, DeviceCredentials) {
 }
 
 TEST_F(GCMStoreImplTest, LastCheckinInfo) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   base::Time last_checkin_time = base::Time::Now();
@@ -204,8 +228,8 @@ TEST_F(GCMStoreImplTest, LastCheckinInfo) {
 }
 
 TEST_F(GCMStoreImplTest, GServicesSettings_ProtocolV2) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::map<std::string, std::string> settings;
@@ -246,8 +270,8 @@ TEST_F(GCMStoreImplTest, GServicesSettings_ProtocolV2) {
 }
 
 TEST_F(GCMStoreImplTest, Registrations) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   // Add one registration with one sender.
@@ -294,8 +318,8 @@ TEST_F(GCMStoreImplTest, Registrations) {
 // Verify saving some incoming messages, reopening the directory, and then
 // removing those incoming messages.
 TEST_F(GCMStoreImplTest, IncomingMessages) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::vector<std::string> persistent_ids;
@@ -329,8 +353,8 @@ TEST_F(GCMStoreImplTest, IncomingMessages) {
 // Verify saving some outgoing messages, reopening the directory, and then
 // removing those outgoing messages.
 TEST_F(GCMStoreImplTest, OutgoingMessages) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::vector<std::string> persistent_ids;
@@ -377,8 +401,8 @@ TEST_F(GCMStoreImplTest, OutgoingMessages) {
 
 // Verify incoming and outgoing messages don't conflict.
 TEST_F(GCMStoreImplTest, IncomingAndOutgoingMessages) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::vector<std::string> persistent_ids;
@@ -436,8 +460,8 @@ TEST_F(GCMStoreImplTest, IncomingAndOutgoingMessages) {
 // Test that per-app message limits are enforced, persisted across restarts,
 // and updated as messages are removed.
 TEST_F(GCMStoreImplTest, PerAppMessageLimits) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   // Add the initial (below app limit) messages.
@@ -507,8 +531,8 @@ TEST_F(GCMStoreImplTest, PerAppMessageLimits) {
 }
 
 TEST_F(GCMStoreImplTest, AccountMapping) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   // Add account mappings.
@@ -580,8 +604,8 @@ TEST_F(GCMStoreImplTest, AccountMapping) {
 }
 
 TEST_F(GCMStoreImplTest, HeartbeatInterval) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::string scope1 = "scope1";
@@ -629,8 +653,8 @@ TEST_F(GCMStoreImplTest, HeartbeatInterval) {
 // same time, they per-app message counts should not go up, as failures should
 // result in decrementing the counts.
 TEST_F(GCMStoreImplTest, AddMessageAfterDestroy) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
   gcm_store->Destroy(base::Bind(&GCMStoreImplTest::UpdateCallback,
                                base::Unretained(this)));
@@ -652,8 +676,8 @@ TEST_F(GCMStoreImplTest, AddMessageAfterDestroy) {
 }
 
 TEST_F(GCMStoreImplTest, ReloadAfterClose) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   gcm_store->Close();
@@ -663,8 +687,8 @@ TEST_F(GCMStoreImplTest, ReloadAfterClose) {
 }
 
 TEST_F(GCMStoreImplTest, LastTokenFetchTime) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
   EXPECT_EQ(base::Time(), load_result->last_token_fetch_time);
 
@@ -691,8 +715,8 @@ TEST_F(GCMStoreImplTest, LastTokenFetchTime) {
 }
 
 TEST_F(GCMStoreImplTest, InstanceIDData) {
-  scoped_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
-  scoped_ptr<GCMStore::LoadResult> load_result;
+  std::unique_ptr<GCMStoreImpl> gcm_store(BuildGCMStore());
+  std::unique_ptr<GCMStore::LoadResult> load_result;
   LoadGCMStore(gcm_store.get(), &load_result);
 
   std::string instance_id_data("Foo");

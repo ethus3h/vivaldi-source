@@ -20,8 +20,9 @@ WriteFromUrlOperation::WriteFromUrlOperation(
     net::URLRequestContextGetter* request_context,
     GURL url,
     const std::string& hash,
-    const std::string& device_path)
-    : Operation(manager, extension_id, device_path),
+    const std::string& device_path,
+    const base::FilePath& download_folder)
+    : Operation(manager, extension_id, device_path, download_folder),
       request_context_(request_context),
       url_(url),
       hash_(hash),
@@ -58,14 +59,14 @@ void WriteFromUrlOperation::GetDownloadTarget(
   }
 
   if (url_.ExtractFileName().empty()) {
-    if (!base::CreateTemporaryFileInDir(temp_dir_.path(), &image_path_)) {
+    if (!base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &image_path_)) {
       Error(error::kTempFileError);
       return;
     }
   } else {
     base::FilePath file_name =
         base::FilePath::FromUTF8Unsafe(url_.ExtractFileName());
-    image_path_ = temp_dir_.path().Append(file_name);
+    image_path_ = temp_dir_.GetPath().Append(file_name);
   }
 
   BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE, continuation);
@@ -88,8 +89,7 @@ void WriteFromUrlOperation::Download(const base::Closure& continuation) {
 
   url_fetcher_->SetRequestContext(request_context_);
   url_fetcher_->SaveResponseToFileAtPath(
-      image_path_,
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE));
+      image_path_, BrowserThread::GetTaskRunnerForThread(BrowserThread::FILE));
 
   AddCleanUpFunction(
       base::Bind(&WriteFromUrlOperation::DestroyUrlFetcher, this));
@@ -109,7 +109,8 @@ void WriteFromUrlOperation::OnURLFetchUploadProgress(
 void WriteFromUrlOperation::OnURLFetchDownloadProgress(
     const net::URLFetcher* source,
     int64_t current,
-    int64_t total) {
+    int64_t total,
+    int64_t current_network_bytes) {
   DCHECK_CURRENTLY_ON(BrowserThread::FILE);
 
   if (IsCancelled()) {

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,16 +17,10 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 
-class Profile;
-
 namespace base {
 class FilePath;
 class FileEnumerator;
 class Time;
-}
-
-namespace content {
-class WebContents;
 }
 
 class DevToolsFileSystemIndexer
@@ -68,7 +63,7 @@ class DevToolsFileSystemIndexer
     TotalWorkCallback total_work_callback_;
     WorkedCallback worked_callback_;
     DoneCallback done_callback_;
-    scoped_ptr<base::FileEnumerator> file_enumerator_;
+    std::unique_ptr<base::FileEnumerator> file_enumerator_;
     typedef std::map<base::FilePath, base::Time> FilePathTimesMap;
     FilePathTimesMap file_path_times_;
     FilePathTimesMap::const_iterator indexing_it_;

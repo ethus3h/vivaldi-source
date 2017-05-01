@@ -1,0 +1,10 @@
+{
+  "flags": {
+    "hue_integration": {
+      "friendly_name": "Philips Hue Integration",
+      "description": "Lets Vivaldi integrate with an existing Philips Hue Lighting system.",
+      "value": "true",
+      "internal_value": "true"
+    }
+  }
+}

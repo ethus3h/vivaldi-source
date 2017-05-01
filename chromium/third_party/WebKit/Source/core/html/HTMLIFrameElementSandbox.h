@@ -5,24 +5,36 @@
 #ifndef HTMLIFrameElementSandbox_h
 #define HTMLIFrameElementSandbox_h
 
-#include "core/dom/DOMSettableTokenList.h"
+#include "core/dom/DOMTokenList.h"
+#include "platform/heap/Handle.h"
 
 namespace blink {
 
-class HTMLIFrameElementSandbox final : public DOMSettableTokenList {
-public:
-    static PassRefPtrWillBeRawPtr<HTMLIFrameElementSandbox> create(DOMSettableTokenListObserver* observer = nullptr)
-    {
-        return adoptRefWillBeNoop(new HTMLIFrameElementSandbox(observer));
-    }
+class HTMLIFrameElement;
 
-    ~HTMLIFrameElementSandbox() override;
+class HTMLIFrameElementSandbox final : public DOMTokenList,
+                                       public DOMTokenListObserver {
+  USING_GARBAGE_COLLECTED_MIXIN(HTMLIFrameElementSandbox);
 
-private:
-    explicit HTMLIFrameElementSandbox(DOMSettableTokenListObserver*);
-    bool validateTokenValue(const AtomicString&, ExceptionState&) const override;
+ public:
+  static HTMLIFrameElementSandbox* create(HTMLIFrameElement* element) {
+    return new HTMLIFrameElementSandbox(element);
+  }
+
+  ~HTMLIFrameElementSandbox() override;
+
+  DECLARE_VIRTUAL_TRACE();
+
+ private:
+  explicit HTMLIFrameElementSandbox(HTMLIFrameElement*);
+  bool validateTokenValue(const AtomicString&, ExceptionState&) const override;
+
+  // DOMTokenListObserver.
+  void valueWasSet() override;
+
+  Member<HTMLIFrameElement> m_element;
 };
 
-}
+}  // namespace blink
 
 #endif

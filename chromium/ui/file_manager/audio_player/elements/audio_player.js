@@ -5,6 +5,14 @@
 Polymer({
   is: 'audio-player',
 
+  listeners: {
+    'toggle-pause-event': 'onTogglePauseEvent_',
+    'small-forward-skip-event': 'onSmallForwardSkipEvent_',
+    'small-backword-skip-event': 'onSmallBackwordSkipEvent_',
+    'big-forward-skip-event': 'onBigForwardSkipEvent_',
+    'big-backword-skip-event': 'onBigBackwordSkipEvent_',
+  },
+
   properties: {
     /**
      * Flag whether the audio is playing or paused. True if playing, or false
@@ -33,10 +41,11 @@ Polymer({
     },
 
     /**
-     * Whether the repeat button is ON.
+     * What mode the repeat button idicates.
+     * repeat-modes can be "no-repeat", "repeat-all", "repeat-one".
      */
-    repeat: {
-      type: Boolean,
+    repeatMode: {
+      type: String,
       notify: true
     },
 
@@ -49,9 +58,16 @@ Polymer({
     },
 
     /**
-     * Whether the expanded button is ON.
+     * Whether the playlist is expanded or not.
      */
-    expanded: {
+    playlistExpanded: {
+      type: Boolean,
+      notify: true
+    },
+    /**
+     * Whether the artwork is expanded or not.
+     */
+    trackInfoExpanded: {
       type: Boolean,
       notify: true
     },
@@ -128,6 +144,10 @@ Polymer({
 
     if (oldValue != newValue) {
       var currentTrack = this.$.trackList.getCurrentTrack();
+      if(currentTrack && currentTrack != this.$.trackInfo.track){
+        this.$.trackInfo.track = currentTrack;
+        this.$.trackInfo.artworkAvailable = !!currentTrack.artworkUrl;
+      }
       if (currentTrack && currentTrack.url != this.$.audio.src) {
         this.$.audio.src = currentTrack.url;
         currentTrackUrl = this.$.audio.src;
@@ -204,7 +224,13 @@ Polymer({
    */
   onAudioEnded: function() {
     this.playcount++;
-    this.advance_(true /* forward */, this.repeat);
+
+    if(this.repeatMode === "repeat-one") {
+      this.playing = true;
+      this.$.audio.currentTime = 0;
+      return;
+    }
+    this.advance_(true /* forward */, this.repeatMode === "repeat-all");
   },
 
   /**
@@ -212,7 +238,12 @@ Polymer({
    * This handler is registered in this.ready().
    */
   onAudioError: function() {
-    this.scheduleAutoAdvance_(true /* forward */, this.repeat);
+    if(this.repeatMode === "repeat-one") {
+      this.playing = false;
+      return;
+    }
+    this.scheduleAutoAdvance_(
+        true /* forward */, this.repeatMode === "repeat-all");
   },
 
   /**
@@ -248,7 +279,8 @@ Polymer({
   /**
    * Goes to the previous or the next track.
    * @param {boolean} forward True if next, false if previous.
-   * @param {boolean} repeat True if repeat-mode is enabled. False otherwise.
+   * @param {boolean} repeat True if repeat-mode is "repeat-all". False
+   *     "no-repeat".
    * @private
    */
   advance_: function(forward, repeat) {
@@ -260,15 +292,16 @@ Polymer({
 
     this.playing = isNextTrackAvailable;
 
-    // If there is only a single file in the list, 'currentTrackInde' is not
-    // changed and the handler is not invoked. Instead, plays here.
-    // TODO(yoshiki): clean up the code around here.
-    if (isNextTrackAvailable &&
-        this.$.trackList.currentTrackIndex == nextTrackIndex) {
-      this.$.audio.play();
-    }
-
+    var shouldFireEvent = this.$.trackList.currentTrackIndex === nextTrackIndex;
     this.$.trackList.currentTrackIndex = nextTrackIndex;
+    this.$.audio.currentTime = 0;
+    // If the next track and current track is the same,
+    // the event will not be fired.
+    // So we will fire the event here.
+    // This happenes if there is only one song.
+    if (shouldFireEvent) {
+      this.$.trackList.fire('current-track-index-changed');
+    }
   },
 
   /**
@@ -361,6 +394,21 @@ Polymer({
         this.tracks[index].title);
     this.$.trackList.notifyPath('tracks.' + index + '.artist',
         this.tracks[index].artist);
+
+    if (this.$.trackInfo.track &&
+        this.$.trackInfo.track.url === this.tracks[index].url){
+      this.$.trackInfo.notifyPath('track.title', this.tracks[index].title);
+      this.$.trackInfo.notifyPath('track.artist', this.tracks[index].artist);
+      var artworkUrl = this.tracks[index].artworkUrl;
+      if (artworkUrl) {
+        this.$.trackInfo.notifyPath('track.artworkUrl',
+            this.tracks[index].artworkUrl);
+        this.$.trackInfo.artworkAvailable = true;
+      } else {
+        this.$.trackInfo.notifyPath('track.artworkUrl', undefined);
+        this.$.trackInfo.artworkAvailable = false;
+      }
+    }
   },
 
   /**
@@ -393,14 +441,14 @@ Polymer({
    * @param {Event} event The event object.
    */
   onKeyDown_: function(event) {
-    switch (event.keyIdentifier) {
-      case 'MediaNextTrack':
+    switch (event.key) {
+      case 'MediaTrackNext':
         this.onControllerNextClicked();
         break;
       case 'MediaPlayPause':
         this.playing = !this.playing;
         break;
-      case 'MediaPreviousTrack':
+      case 'MediaTrackPrevious':
         this.onControllerPreviousClicked();
         break;
       case 'MediaStop':
@@ -416,5 +464,45 @@ Polymer({
    */
   computeAudioVolume_: function(volume) {
     return volume / 100;
-  }
+  },
+
+  /**
+   * Toggle pause.
+   * @private
+   */
+  onTogglePauseEvent_: function(event) {
+    this.$.audioController.playClick();
+  },
+
+  /**
+   * Small skip forward.
+   * @private
+   */
+  onSmallForwardSkipEvent_: function(event) {
+    this.$.audioController.smallSkip(true);
+  },
+
+  /**
+   * Small skip backword.
+   * @private
+   */
+  onSmallBackwordSkipEvent_: function(event) {
+    this.$.audioController.smallSkip(false);
+  },
+
+  /**
+   * Big skip forward.
+   * @private
+   */
+  onBigForwardSkipEvent_: function(event) {
+    this.$.audioController.bigSkip(true);
+  },
+
+  /**
+   * Big skip backword.
+   * @private
+   */
+  onBigBackwordSkipEvent_: function(event) {
+    this.$.audioController.bigSkip(false);
+  },
 });

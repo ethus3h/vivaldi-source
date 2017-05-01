@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "base/logging.h"
-#include "base/prefs/pref_service.h"
+#include "base/memory/ptr_util.h"
 #include "base/sys_info.h"
 #include "base/version.h"
 #include "build/build_config.h"
@@ -17,10 +17,11 @@
 #include "chrome/browser/signin/easy_unlock_service_regular.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "components/proximity_auth/cryptauth/cryptauth_client_impl.h"
-#include "components/proximity_auth/cryptauth/cryptauth_device_manager.h"
-#include "components/proximity_auth/cryptauth/cryptauth_enrollment_manager.h"
-#include "components/proximity_auth/cryptauth/secure_message_delegate.h"
+#include "components/cryptauth/cryptauth_client_impl.h"
+#include "components/cryptauth/cryptauth_device_manager.h"
+#include "components/cryptauth/cryptauth_enrollment_manager.h"
+#include "components/cryptauth/secure_message_delegate.h"
+#include "components/prefs/pref_service.h"
 #include "components/proximity_auth/logging/logging.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_manager_base.h"
@@ -93,20 +94,20 @@ PrefService* ChromeProximityAuthClient::GetPrefService() {
   return profile_->GetPrefs();
 }
 
-scoped_ptr<proximity_auth::SecureMessageDelegate>
+std::unique_ptr<cryptauth::SecureMessageDelegate>
 ChromeProximityAuthClient::CreateSecureMessageDelegate() {
 #if defined(OS_CHROMEOS)
-  return make_scoped_ptr(new chromeos::SecureMessageDelegateChromeOS());
+  return base::MakeUnique<chromeos::SecureMessageDelegateChromeOS>();
 #else
   return nullptr;
 #endif
 }
 
-scoped_ptr<proximity_auth::CryptAuthClientFactory>
+std::unique_ptr<cryptauth::CryptAuthClientFactory>
 ChromeProximityAuthClient::CreateCryptAuthClientFactory() {
-  return make_scoped_ptr(new proximity_auth::CryptAuthClientFactoryImpl(
+  return base::MakeUnique<cryptauth::CryptAuthClientFactoryImpl>(
       ProfileOAuth2TokenServiceFactory::GetForProfile(profile_), GetAccountId(),
-      profile_->GetRequestContext(), GetDeviceClassifier()));
+      profile_->GetRequestContext(), GetDeviceClassifier());
 }
 
 cryptauth::DeviceClassifier ChromeProximityAuthClient::GetDeviceClassifier() {
@@ -140,7 +141,7 @@ std::string ChromeProximityAuthClient::GetAccountId() {
       ->GetAuthenticatedAccountId();
 }
 
-proximity_auth::CryptAuthEnrollmentManager*
+cryptauth::CryptAuthEnrollmentManager*
 ChromeProximityAuthClient::GetCryptAuthEnrollmentManager() {
   EasyUnlockServiceRegular* easy_unlock_service = GetEasyUnlockServiceRegular();
   if (!easy_unlock_service)
@@ -148,7 +149,7 @@ ChromeProximityAuthClient::GetCryptAuthEnrollmentManager() {
   return easy_unlock_service->GetCryptAuthEnrollmentManager();
 }
 
-proximity_auth::CryptAuthDeviceManager*
+cryptauth::CryptAuthDeviceManager*
 ChromeProximityAuthClient::GetCryptAuthDeviceManager() {
   EasyUnlockServiceRegular* easy_unlock_service = GetEasyUnlockServiceRegular();
   if (!easy_unlock_service)

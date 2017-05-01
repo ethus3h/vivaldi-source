@@ -4,13 +4,19 @@
 
 package org.chromium.content.browser;
 
+import android.support.test.filters.LargeTest;
+import android.support.test.filters.MediumTest;
+
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.content.common.ContentSwitches;
 
 /**
  * Test suite for phone number detection.
  */
+@CommandLineFlags.Add({ContentSwitches.ENABLE_CONTENT_INTENT_DETECTION})
 public class PhoneNumberDetectionTest extends ContentDetectionTestBase {
 
     private static final String TELEPHONE_INTENT_PREFIX = "tel:";
@@ -21,13 +27,13 @@ public class PhoneNumberDetectionTest extends ContentDetectionTestBase {
         return intentUrl.equals(expectedUrl);
     }
 
-    /* @LargeTest */
+    @LargeTest
     @Feature({"ContentDetection", "TabContents"})
     @CommandLineFlags.Add(ContentSwitches.NETWORK_COUNTRY_ISO + "=US")
+    @RetryOnFailure
     public void testInternationalNumberIntents() throws Throwable {
         startActivityWithTestUrl(
                 "content/test/data/android/content_detection/phone_international.html");
-        assertWaitForPageScaleFactorMatch(1.0f);
 
         // US: +1 650-253-0000.
         String intentUrl = scrollAndTapExpectingIntent("US");
@@ -138,13 +144,12 @@ public class PhoneNumberDetectionTest extends ContentDetectionTestBase {
         assertTrue(isExpectedTelephoneIntent(intentUrl, "+97144509500"));
     }
 
-    /* @MediumTest */
+    @MediumTest
     @Feature({"ContentDetection", "TabContents"})
     @CommandLineFlags.Add(ContentSwitches.NETWORK_COUNTRY_ISO + "=US")
     public void testLocalUSNumbers() throws Throwable {
         startActivityWithTestUrl(
                 "content/test/data/android/content_detection/phone_local.html");
-        assertWaitForPageScaleFactorMatch(1.0f);
 
         // US_1: 1-888-433-5788.
         String intentUrl = scrollAndTapExpectingIntent("US_1");
@@ -163,13 +168,13 @@ public class PhoneNumberDetectionTest extends ContentDetectionTestBase {
         assertTrue(isExpectedTelephoneIntent(intentUrl, "+31205045100"));
     }
 
-    /* @MediumTest */
+    @MediumTest
     @Feature({"ContentDetection", "TabContents"})
+    @DisabledTest(message = "crbug.com/673279")
     @CommandLineFlags.Add(ContentSwitches.NETWORK_COUNTRY_ISO + "=GB")
     public void testLocalUKNumbers() throws Throwable {
         startActivityWithTestUrl(
                 "content/test/data/android/content_detection/phone_local.html");
-        assertWaitForPageScaleFactorMatch(1.0f);
 
         // GB_1: (0) 20 7323 8299.
         String intentUrl = scrollAndTapExpectingIntent("GB_1");
@@ -188,13 +193,13 @@ public class PhoneNumberDetectionTest extends ContentDetectionTestBase {
         assertTrue(isExpectedTelephoneIntent(intentUrl, "+31205045100"));
     }
 
-    /* @MediumTest */
+    @MediumTest
     @Feature({"ContentDetection", "TabContents"})
     @CommandLineFlags.Add(ContentSwitches.NETWORK_COUNTRY_ISO + "=FR")
+    @RetryOnFailure
     public void testLocalFRNumbers() throws Throwable {
         startActivityWithTestUrl(
                 "content/test/data/android/content_detection/phone_local.html");
-        assertWaitForPageScaleFactorMatch(1.0f);
 
         // FR_1: 01 40 20 50 50.
         String intentUrl = scrollAndTapExpectingIntent("FR_1");

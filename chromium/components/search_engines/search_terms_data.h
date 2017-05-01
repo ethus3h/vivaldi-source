@@ -49,26 +49,17 @@ class SearchTermsData {
   // This implementation returns the empty string.
   virtual std::string GetSuggestRequestIdentifier() const;
 
-  // Returns a string indicating whether InstantExtended is enabled.
-  virtual std::string InstantExtendedEnabledParam(bool for_search) const;
+  // Returns a string indicating whether InstantExtended is enabled, suitable
+  // for adding as a query string param to the homepage or search requests.
+  virtual std::string InstantExtendedEnabledParam() const;
 
   // Returns a string that will cause the search results page to update
   // incrementally.
   virtual std::string ForceInstantResultsParam(bool for_prerender) const;
 
-  // Returns a string indicating which webview is currently in use on iOS,
-  // suitable for adding as a query string param to search requests.  Returns an
-  // empty string if no parameter should be passed along with search requests.
-  virtual std::string IOSWebViewTypeParam() const;
-
   // Returns the value to use for replacements of type
   // GOOGLE_IMAGE_SEARCH_SOURCE.
   virtual std::string GoogleImageSearchSource() const;
-
-  // Returns a string with languages understood by the user.
-  // Determining this requires accessing the Profile, so this can only ever be
-  // non-empty for UIThreadSearchTermsData.
-  virtual std::string GetAcceptLanguages() const;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SearchTermsData);

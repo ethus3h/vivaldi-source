@@ -9,10 +9,10 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/http/http_status_code.h"
 
@@ -24,7 +24,6 @@ class HttpServerResponseInfo;
 class IPEndPoint;
 class ServerSocket;
 class StreamSocket;
-class WebSocket;
 
 class HttpServer {
  public:
@@ -48,7 +47,7 @@ class HttpServer {
   // listening, but not accepting.  This constructor schedules accepting
   // connections asynchronously in case when |delegate| is not ready to get
   // callbacks yet.
-  HttpServer(scoped_ptr<ServerSocket> server_socket,
+  HttpServer(std::unique_ptr<ServerSocket> server_socket,
              HttpServer::Delegate* delegate);
   ~HttpServer();
 
@@ -82,8 +81,6 @@ class HttpServer {
  private:
   friend class HttpServerTest;
 
-  typedef std::map<int, HttpConnection*> IdToConnectionMap;
-
   void DoAcceptLoop();
   void OnAcceptCompleted(int rv);
   int HandleAcceptResult(int rv);
@@ -98,7 +95,9 @@ class HttpServer {
 
   // Expects the raw data to be stored in recv_data_. If parsing is successful,
   // will remove the data parsed from recv_data_, leaving only the unused
-  // recv data.
+  // recv data. If all data has been consumed successfully, but the headers are
+  // not fully parsed, *pos will be set to zero. Returns false if an error is
+  // encountered while parsing, true otherwise.
   bool ParseHeaders(const char* data,
                     size_t data_len,
                     HttpServerRequestInfo* info,
@@ -109,12 +108,12 @@ class HttpServer {
   // Whether or not Close() has been called during delegate callback processing.
   bool HasClosedConnection(HttpConnection* connection);
 
-  const scoped_ptr<ServerSocket> server_socket_;
-  scoped_ptr<StreamSocket> accepted_socket_;
+  const std::unique_ptr<ServerSocket> server_socket_;
+  std::unique_ptr<StreamSocket> accepted_socket_;
   HttpServer::Delegate* const delegate_;
 
   int last_id_;
-  IdToConnectionMap id_to_connection_;
+  std::map<int, std::unique_ptr<HttpConnection>> id_to_connection_;
 
   base::WeakPtrFactory<HttpServer> weak_ptr_factory_;
 

@@ -7,17 +7,17 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/gtest_prod_util.h"
 #include "base/id_map.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/shared_memory.h"
 #include "base/sync_socket.h"
 #include "base/synchronization/lock.h"
 #include "content/common/content_export.h"
 #include "ipc/message_filter.h"
 #include "media/audio/audio_output_ipc.h"
-#include "media/base/audio_hardware_config.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -42,7 +42,8 @@ class CONTENT_EXPORT AudioMessageFilter : public IPC::MessageFilter {
   //
   // The returned object is not thread-safe, and must be used on
   // |io_task_runner|.
-  scoped_ptr<media::AudioOutputIPC> CreateAudioOutputIPC(int render_frame_id);
+  std::unique_ptr<media::AudioOutputIPC> CreateAudioOutputIPC(
+      int render_frame_id);
 
   // IO task runner associated with this message filter.
   base::SingleThreadTaskRunner* io_task_runner() const {
@@ -65,7 +66,7 @@ class CONTENT_EXPORT AudioMessageFilter : public IPC::MessageFilter {
 
   // IPC::MessageFilter override. Called on |io_task_runner_|.
   bool OnMessageReceived(const IPC::Message& message) override;
-  void OnFilterAdded(IPC::Sender* sender) override;
+  void OnFilterAdded(IPC::Channel* channel) override;
   void OnFilterRemoved() override;
   void OnChannelClosing() override;
 
@@ -73,7 +74,8 @@ class CONTENT_EXPORT AudioMessageFilter : public IPC::MessageFilter {
   // audio output device.
   void OnDeviceAuthorized(int stream_id,
                           media::OutputDeviceStatus device_status,
-                          const media::AudioParameters& output_params);
+                          const media::AudioParameters& output_params,
+                          const std::string& matched_device_id);
 
   // Received when browser process has created an audio output stream.
   void OnStreamCreated(int stream_id,
@@ -83,15 +85,14 @@ class CONTENT_EXPORT AudioMessageFilter : public IPC::MessageFilter {
 
   // Received when internal state of browser process' audio output device has
   // changed.
-  void OnStreamStateChanged(int stream_id,
-                            media::AudioOutputIPCDelegateState state);
+  void OnStreamError(int stream_id);
 
   // IPC sender for Send(); must only be accessed on |io_task_runner_|.
   IPC::Sender* sender_;
 
   // A map of stream ids to delegates; must only be accessed on
   // |io_task_runner_|.
-  IDMap<media::AudioOutputIPCDelegate> delegates_;
+  IDMap<media::AudioOutputIPCDelegate*> delegates_;
 
   // Task runner on which IPC calls are executed.
   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;

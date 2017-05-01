@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/public/test/response_providers/data_response_provider.h"
+#import "ios/web/public/test/response_providers/data_response_provider.h"
 
 #include "base/strings/sys_string_conversions.h"
 #import "ios/third_party/gcdwebserver/src/GCDWebServer/Responses/GCDWebServerDataResponse.h"
@@ -17,7 +17,7 @@ GCDWebServerResponse* DataResponseProvider::GetGCDWebServerResponse(
   GCDWebServerDataResponse* data_response = [GCDWebServerDataResponse
       responseWithHTML:base::SysUTF8ToNSString(response_body)];
   data_response.statusCode = response_headers->response_code();
-  void* iter = nullptr;
+  size_t iter = 0;
   std::string name;
   std::string value;
   while (response_headers->EnumerateHeaderLines(&iter, &name, &value)) {

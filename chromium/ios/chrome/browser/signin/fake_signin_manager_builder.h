@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_H_
-#define IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_H_
+#ifndef IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_BUILDER_H_
+#define IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_BUILDER_H_
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
 
 namespace web {
 class BrowserState;
@@ -17,9 +17,9 @@ namespace ios {
 
 // Helper function to be used with KeyedService::SetTestingFactory().
 // The returned instance is initialized.
-scoped_ptr<KeyedService> BuildFakeSigninManager(
+std::unique_ptr<KeyedService> BuildFakeSigninManager(
     web::BrowserState* browser_state);
 
 }  // namespace ios
 
-#endif  // IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_H_
+#endif  // IOS_CHROME_BROWSER_SIGNIN_FAKE_SIGNIN_MANAGER_BUILDER_H_

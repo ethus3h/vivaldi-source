@@ -10,15 +10,21 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "content/common/content_export.h"
-#include "media/base/video_capturer_source.h"
 #include "media/base/video_frame_pool.h"
 #include "media/base/video_types.h"
-#include "skia/ext/platform_canvas.h"
+#include "media/capture/video_capturer_source.h"
 #include "third_party/WebKit/public/platform/WebSize.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+
+namespace base{
+class SingleThreadTaskRunner;
+}
 
 namespace blink {
 class WebMediaPlayer;
 }  // namespace blink
+
+class SkSurface;
 
 namespace content {
 
@@ -28,10 +34,10 @@ namespace content {
 class CONTENT_EXPORT HtmlVideoElementCapturerSource final
     : public media::VideoCapturerSource {
  public:
-  static scoped_ptr<HtmlVideoElementCapturerSource>
-      CreateFromWebMediaPlayerImpl(
-          blink::WebMediaPlayer* player,
-          const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner);
+  static std::unique_ptr<HtmlVideoElementCapturerSource>
+  CreateFromWebMediaPlayerImpl(
+      blink::WebMediaPlayer* player,
+      const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner);
 
   HtmlVideoElementCapturerSource(
       const base::WeakPtr<blink::WebMediaPlayer>& player,
@@ -55,7 +61,7 @@ class CONTENT_EXPORT HtmlVideoElementCapturerSource final
   void sendNewFrame();
 
   media::VideoFramePool frame_pool_;
-  scoped_ptr<SkCanvas> canvas_;
+  sk_sp<SkSurface> surface_;
 
   const base::WeakPtr<blink::WebMediaPlayer> web_media_player_;
   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;

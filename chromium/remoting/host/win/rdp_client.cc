@@ -5,18 +5,20 @@
 #include "remoting/host/win/rdp_client.h"
 
 #include <windows.h>
-#include <stdint.h>
+
+#include <cstdint>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/single_thread_task_runner.h"
-#include "base/win/registry.h"
+#include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "remoting/base/typed_buffer.h"
+#include "remoting/host/screen_resolution.h"
 #include "remoting/host/win/rdp_client_window.h"
-#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 
 namespace remoting {
 
@@ -25,13 +27,6 @@ namespace {
 // 127.0.0.1 is explicitly blocked by the RDP ActiveX control, so we use
 // 127.0.0.2 instead.
 const unsigned char kRdpLoopbackAddress[] = { 127, 0, 0, 2 };
-
-const int kDefaultRdpPort = 3389;
-
-// The port number used by RDP is stored in the registry.
-const wchar_t kRdpPortKeyName[] = L"SYSTEM\\CurrentControlSet\\Control\\"
-    L"Terminal Server\\WinStations\\RDP-Tcp";
-const wchar_t kRdpPortValueName[] = L"PortNumber";
 
 }  // namespace
 
@@ -48,14 +43,18 @@ class RdpClient::Core
       RdpClient::EventHandler* event_handler);
 
   // Initiates a loopback RDP connection.
-  void Connect(const webrtc::DesktopSize& screen_size,
-               const std::string& terminal_id);
+  void Connect(const ScreenResolution& resolution,
+               const std::string& terminal_id,
+               DWORD port_number);
 
   // Initiates a graceful shutdown of the RDP connection.
   void Disconnect();
 
   // Sends Secure Attention Sequence to the session.
   void InjectSas();
+
+  // Change the resolution of the desktop.
+  void ChangeResolution(const ScreenResolution& resolution);
 
   // RdpClientWindow::EventHandler interface.
   void OnConnected() override;
@@ -81,7 +80,7 @@ class RdpClient::Core
   RdpClient::EventHandler* event_handler_;
 
   // Hosts the RDP ActiveX control.
-  scoped_ptr<RdpClientWindow> rdp_client_window_;
+  std::unique_ptr<RdpClientWindow> rdp_client_window_;
 
   // A self-reference to keep the object alive during connection shutdown.
   scoped_refptr<Core> self_;
@@ -92,13 +91,14 @@ class RdpClient::Core
 RdpClient::RdpClient(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-    const webrtc::DesktopSize& screen_size,
+    const ScreenResolution& resolution,
     const std::string& terminal_id,
+    DWORD port_number,
     EventHandler* event_handler) {
   DCHECK(caller_task_runner->BelongsToCurrentThread());
 
   core_ = new Core(caller_task_runner, ui_task_runner, event_handler);
-  core_->Connect(screen_size, terminal_id);
+  core_->Connect(resolution, terminal_id, port_number);
 }
 
 RdpClient::~RdpClient() {
@@ -113,6 +113,12 @@ void RdpClient::InjectSas() {
   core_->InjectSas();
 }
 
+void RdpClient::ChangeResolution(const ScreenResolution& resolution) {
+  DCHECK(CalledOnValidThread());
+
+  core_->ChangeResolution(resolution);
+}
+
 RdpClient::Core::Core(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
@@ -122,11 +128,13 @@ RdpClient::Core::Core(
       event_handler_(event_handler) {
 }
 
-void RdpClient::Core::Connect(const webrtc::DesktopSize& screen_size,
-                              const std::string& terminal_id) {
+void RdpClient::Core::Connect(const ScreenResolution& resolution,
+                              const std::string& terminal_id,
+                              DWORD port_number) {
   if (!ui_task_runner_->BelongsToCurrentThread()) {
     ui_task_runner_->PostTask(
-        FROM_HERE, base::Bind(&Core::Connect, this, screen_size, terminal_id));
+        FROM_HERE,
+        base::Bind(&Core::Connect, this, resolution, terminal_id, port_number));
     return;
   }
 
@@ -134,25 +142,13 @@ void RdpClient::Core::Connect(const webrtc::DesktopSize& screen_size,
   DCHECK(!rdp_client_window_);
   DCHECK(!self_.get());
 
-  // Read the port number used by RDP.
-  DWORD server_port;
-  base::win::RegKey key(HKEY_LOCAL_MACHINE, kRdpPortKeyName, KEY_READ);
-  if (!key.Valid() ||
-      (key.ReadValueDW(kRdpPortValueName, &server_port) != ERROR_SUCCESS) ||
-      server_port > 65535) {
-    server_port = kDefaultRdpPort;
-  }
-
-  net::IPAddressNumber server_address(
-      kRdpLoopbackAddress,
-      kRdpLoopbackAddress + arraysize(kRdpLoopbackAddress));
-  net::IPEndPoint server_endpoint(server_address,
-                                  static_cast<uint16_t>(server_port));
+  net::IPEndPoint server_endpoint(net::IPAddress(kRdpLoopbackAddress),
+                                  base::checked_cast<uint16_t>(port_number));
 
   // Create the ActiveX control window.
   rdp_client_window_.reset(new RdpClientWindow(server_endpoint, terminal_id,
                                                this));
-  if (!rdp_client_window_->Connect(screen_size)) {
+  if (!rdp_client_window_->Connect(resolution)) {
     rdp_client_window_.reset();
 
     // Notify the caller that connection attempt failed.
@@ -183,8 +179,21 @@ void RdpClient::Core::InjectSas() {
     return;
   }
 
-  if (rdp_client_window_)
+  if (rdp_client_window_) {
     rdp_client_window_->InjectSas();
+  }
+}
+
+void RdpClient::Core::ChangeResolution(const ScreenResolution& resolution) {
+  if (!ui_task_runner_->BelongsToCurrentThread()) {
+    ui_task_runner_->PostTask(
+        FROM_HERE, base::Bind(&Core::ChangeResolution, this, resolution));
+    return;
+  }
+
+  if (rdp_client_window_) {
+    rdp_client_window_->ChangeResolution(resolution);
+  }
 }
 
 void RdpClient::Core::OnConnected() {

@@ -5,8 +5,9 @@
 #ifndef CC_OUTPUT_OVERLAY_PROCESSOR_H_
 #define CC_OUTPUT_OVERLAY_PROCESSOR_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
 #include "cc/output/ca_layer_overlay.h"
 #include "cc/output/overlay_candidate.h"
@@ -26,10 +27,10 @@ class CC_EXPORT OverlayProcessor {
     // and adds any additional passes necessary to represent overlays to
     // |render_passes|.
     virtual bool Attempt(ResourceProvider* resource_provider,
-                         RenderPassList* render_passes,
+                         RenderPass* render_pass,
                          OverlayCandidateList* candidates) = 0;
   };
-  using StrategyList = std::vector<scoped_ptr<Strategy>>;
+  using StrategyList = std::vector<std::unique_ptr<Strategy>>;
 
   explicit OverlayProcessor(OutputSurface* surface);
   virtual ~OverlayProcessor();
@@ -38,14 +39,16 @@ class CC_EXPORT OverlayProcessor {
 
   gfx::Rect GetAndResetOverlayDamage();
 
-  void ProcessForOverlays(ResourceProvider* resource_provider,
-                          RenderPassList* render_passes,
-                          OverlayCandidateList* overlay_candidates,
-                          CALayerOverlayList* ca_layer_overlays,
-                          gfx::Rect* damage_rect);
-
-  // Notify the processor that ProcessForOverlays is being skipped this frame.
-  void SkipProcessForOverlays();
+  // Attempt to replace quads from the specified root render pass with overlays
+  // or CALayers. This must be called every frame.
+  void ProcessForOverlays(
+      ResourceProvider* resource_provider,
+      RenderPass* root_render_pass,
+      const RenderPassFilterList& render_pass_filters,
+      const RenderPassFilterList& render_pass_background_filters,
+      OverlayCandidateList* overlay_candidates,
+      CALayerOverlayList* ca_layer_overlays,
+      gfx::Rect* damage_rect);
 
  protected:
   StrategyList strategies_;
@@ -54,11 +57,14 @@ class CC_EXPORT OverlayProcessor {
   gfx::Rect previous_frame_underlay_rect_;
 
  private:
-  bool ProcessForCALayers(ResourceProvider* resource_provider,
-                          RenderPassList* render_passes,
-                          OverlayCandidateList* overlay_candidates,
-                          CALayerOverlayList* ca_layer_overlays,
-                          gfx::Rect* damage_rect);
+  bool ProcessForCALayers(
+      ResourceProvider* resource_provider,
+      RenderPass* render_pass,
+      const RenderPassFilterList& render_pass_filters,
+      const RenderPassFilterList& render_pass_background_filters,
+      OverlayCandidateList* overlay_candidates,
+      CALayerOverlayList* ca_layer_overlays,
+      gfx::Rect* damage_rect);
   // Update |damage_rect| by removing damage casued by |candidates|.
   void UpdateDamageRect(OverlayCandidateList* candidates,
                         gfx::Rect* damage_rect);

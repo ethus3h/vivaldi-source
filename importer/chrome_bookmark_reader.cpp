@@ -19,7 +19,7 @@
 #include "chrome/common/importer/importer_bridge.h"
 #include "chrome/common/importer/importer_data_types.h"
 #include "chrome/browser/shell_integration.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "base/json/json_reader.h"
 
@@ -47,7 +47,7 @@ void ChromeBookmarkFileReader::LoadFile(base::FilePath& file) {
   ReadFileToString(file, &input);
 
   base::JSONReader reader;
-  scoped_ptr<base::Value> root(reader.ReadToValue(input));
+  std::unique_ptr<base::Value> root(reader.ReadToValue(input));
 
   base::DictionaryValue* dict = NULL;
 
@@ -67,34 +67,34 @@ void ChromeBookmarkFileReader::LoadFile(base::FilePath& file) {
   const base::Value* custom_roots;
 
   if (roots_d_value->Get("bookmark_bar", &root_folder_value) &&
-      root_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+      root_folder_value->IsType(base::Value::Type::DICTIONARY)) {
     DecodeNode(*static_cast<const base::DictionaryValue*>(root_folder_value));
   }
   if (roots_d_value->Get("other", &other_folder_value) &&
-      other_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+      other_folder_value->IsType(base::Value::Type::DICTIONARY)) {
     DecodeNode(*static_cast<const base::DictionaryValue*>(other_folder_value));
   }
   // Opera 20+ uses a custom root.
   if (roots_d_value->Get("custom_root", &custom_roots)) {
-    if (custom_roots && custom_roots->IsType(base::Value::TYPE_DICTIONARY)) {
+    if (custom_roots && custom_roots->IsType(base::Value::Type::DICTIONARY)) {
       roots_d_value = static_cast<const base::DictionaryValue*>(custom_roots);
       if (roots_d_value->Get("unsorted", &root_folder_value) &&
-          root_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+          root_folder_value->IsType(base::Value::Type::DICTIONARY)) {
         DecodeNode(
             *static_cast<const base::DictionaryValue*>(root_folder_value));
       }
       if (roots_d_value->Get("speedDial", &root_folder_value) &&
-          root_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+          root_folder_value->IsType(base::Value::Type::DICTIONARY)) {
         DecodeNode(
             *static_cast<const base::DictionaryValue*>(root_folder_value));
       }
       if (roots_d_value->Get("trash", &root_folder_value) &&
-          root_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+          root_folder_value->IsType(base::Value::Type::DICTIONARY)) {
         DecodeNode(
             *static_cast<const base::DictionaryValue*>(root_folder_value));
       }
       if (roots_d_value->Get("userRoot", &root_folder_value) &&
-          root_folder_value->IsType(base::Value::TYPE_DICTIONARY)) {
+          root_folder_value->IsType(base::Value::Type::DICTIONARY)) {
         DecodeNode(
             *static_cast<const base::DictionaryValue*>(root_folder_value));
       }
@@ -104,7 +104,6 @@ void ChromeBookmarkFileReader::LoadFile(base::FilePath& file) {
 
 bool ChromeBookmarkFileReader::DecodeNode(const base::DictionaryValue& value) {
   std::string id_string;
-  int64_t id = 0;
 
   base::string16 title;
   value.GetString(kNameKey, &title);
@@ -126,15 +125,12 @@ bool ChromeBookmarkFileReader::DecodeNode(const base::DictionaryValue& value) {
     GURL url = GURL(url_string);
 
     HandleEntry("url", value);
-
-  }
-  else
-  {
+  } else {
     const base::Value* child_values;
     if (!value.Get(kChildrenKey, &child_values))
       return false;
 
-    if (child_values->GetType() != base::Value::TYPE_LIST)
+    if (child_values->GetType() != base::Value::Type::LIST)
       return false;
 
     const base::ListValue* list_values =
@@ -157,7 +153,7 @@ bool ChromeBookmarkFileReader::DecodeChildren(
     if (!child_value_list.Get(i, &child_value))
       return false;
 
-    if (child_value->GetType() != base::Value::TYPE_DICTIONARY)
+    if (child_value->GetType() != base::Value::Type::DICTIONARY)
       return false;
 
     DecodeNode(*static_cast<const base::DictionaryValue*>(child_value));

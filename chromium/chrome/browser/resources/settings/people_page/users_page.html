@@ -1,64 +1,74 @@
-<link rel="import" href="chrome://resources/polymer/v1_0/polymer/polymer.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/iron-a11y-keys-behavior/iron-a11y-keys-behavior.html">
+<link rel="import" href="chrome://resources/html/polymer.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-flex-layout/classes/iron-flex-layout.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-button/paper-button.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-input/paper-input.html">
-<link rel="import" href="chrome://md-settings/controls/settings_checkbox.html">
-<link rel="import" href="chrome://md-settings/settings_page/settings_section.html">
+<link rel="import" href="/controls/settings_toggle_button.html">
+<link rel="import" href="/settings_shared_css.html">
 <link rel="import" href="user_list.html">
+<link rel="import" href="users_add_user_dialog.html">
 
 <dom-module id="settings-users-page">
-  <link rel="import" type="css" href="chrome://md-settings/settings_shared.css">
-  <link rel="import" type="css" href="users_page.css">
   <template>
-    <div class="settings-box" i18n-content="usersModifiedByOwnerLabel"
-        hidden$="{{computeHideOwnerLabel_(isOwner, isWhitelistManaged)}}">
-    </div>
-    <div class="settings-box" i18n-content="settingsManagedLabel"
-        hidden$="{{computeHideManagedLabel_(isOwner, isWhitelistManaged)}}">
-    </div>
-    <div class="settings-box">
-      <settings-checkbox
+    <style include="settings-shared">
+      .users {
+        /* The users box must line up with the checkbox text. */
+        -webkit-margin-start: var(--settings-indent-width);
+      }
+
+      .settings-box:first-of-type {
+        border-top: none;
+      }
+
+      #add-user-button {
+        /* Add user button must be lined up with the start of users' names. */
+        -webkit-margin-start: 56px;
+      }
+    </style>
+    <template is="dom-if" if="[[isWhitelistManaged_]]">
+      <div class="settings-box">$i18n{settingsManagedLabel}</div>
+    </template>
+    <template is="dom-if" if="[[!isWhitelistManaged_]]">
+      <template is="dom-if" if="[[!isOwner_]]">
+        <div class="settings-box">$i18n{usersModifiedByOwnerLabel}</div>
+      </template>
+    </template>
+    <div class="settings-box block">
+      <settings-toggle-button
           pref="{{prefs.cros.accounts.allowBWSI}}"
-          i18n-values="label:guestBrowsingLabel"
-          disabled="{{editingDisabled}}">
-      </settings-checkbox>
-      <settings-checkbox
+          label="$i18n{guestBrowsingLabel}"
+          disabled="[[isEditingDisabled_(isOwner_, isWhitelistManaged_)]]">
+      </settings-toggle-button>
+      <settings-toggle-button
           pref="{{prefs.cros.accounts.supervisedUsersEnabled}}"
-          i18n-values="label:supervisedUsersLabel"
-          disabled="{{editingDisabled}}">
-      </settings-checkbox>
-      <settings-checkbox
+          label="$i18n{supervisedUsersLabel}"
+          disabled="[[isEditingDisabled_(isOwner_, isWhitelistManaged_)]]">
+      </settings-toggle-button>
+      <settings-toggle-button
           pref="{{prefs.cros.accounts.showUserNamesOnSignIn}}"
-          i18n-values="label:showOnSigninLabel"
-          disabled="{{editingDisabled}}">
-      </settings-checkbox>
-    </div>
-    <div class="settings-box">
-      <settings-checkbox
+          label="$i18n{showOnSigninLabel}"
+          disabled="[[isEditingDisabled_(isOwner_, isWhitelistManaged_)]]">
+      </settings-toggle-button>
+      <settings-toggle-button
           pref="{{prefs.cros.accounts.allowGuest}}"
           id="restrictSignIn"
-          i18n-values="label:restrictSigninLabel"
-          disabled="{{editingDisabled}}" inverted>
-      </settings-checkbox>
+          label="$i18n{restrictSigninLabel}"
+          disabled="[[isEditingDisabled_(isOwner_, isWhitelistManaged_)]]"
+          inverted>
+      </settings-toggle-button>
       <div class="users">
-        <div>
-          <settings-user-list prefs="[[prefs]]"
-              disabled="[[editingUsersDisabled]]">
-          </settings-user-list>
-        </div>
-        <div>
-          <paper-input id="addUserInput" i18n-values="label:addUsersLabel"
-              disabled="[[editingUsersDisabled]]">
-          </paper-input>
-          <div class="add-user-button layout horizontal end-justified">
-            <paper-button i18n-content="addLabel" on-tap="addUser_"
-                disabled="[[editingUsersDisabled]]" raised>
-            </paper-button>
-          </div>
+        <settings-user-list prefs="[[prefs]]"
+            disabled="[[isEditingUsersDisabled_(isOwner_, isWhitelistManaged_,
+                prefs.cros.accounts.allowGuest.value)]]">
+        </settings-user-list>
+        <div id="add-user-button" class="list-item list-button"
+            on-tap="openAddUserDialog_"
+            hidden="[[isEditingUsersDisabled_(isOwner_, isWhitelistManaged_,
+                prefs.cros.accounts.allowGuest.value)]]">
+          $i18n{addUsers}
         </div>
       </div>
     </div>
+    <settings-users-add-user-dialog id="addUserDialog">
+    </settings-users-add-user-dialog>
   </template>
   <script src="users_page.js"></script>
 </dom-module>

@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 #include "base/memory/ref_counted.h"
-#include "media/audio/audio_parameters.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -22,7 +22,17 @@ class AudioCapturerSource
  public:
   class CaptureCallback {
    public:
+    // Signals that audio recording has been started.  Called asynchronously
+    // after Start() has completed. If Start() encounters problems before this
+    // callback can be made, OnCaptureError will be called instead.
+    // This callback is provided for sources such as local audio sources that
+    // require asynchronous initialization so not all sources will support this
+    // notification.
+    virtual void OnCaptureStarted() {}
+
     // Callback to deliver the captured data from the OS.
+    // TODO(chcunningham): Update delay argument to use frames instead of
+    // milliseconds to prevent loss of precision. See http://crbug.com/587291.
     virtual void Capture(const AudioBus* audio_source,
                          int audio_delay_milliseconds,
                          double volume,

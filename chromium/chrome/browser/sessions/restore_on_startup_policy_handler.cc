@@ -4,21 +4,21 @@
 
 #include "chrome/browser/sessions/restore_on_startup_policy_handler.h"
 
-#include "base/prefs/pref_value_map.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
-#include "grit/components_strings.h"
-#include "policy/policy_constants.h"
+#include "components/policy/policy_constants.h"
+#include "components/prefs/pref_value_map.h"
+#include "components/strings/grit/components_strings.h"
 
 namespace policy {
 
 RestoreOnStartupPolicyHandler::RestoreOnStartupPolicyHandler()
     : TypeCheckingPolicyHandler(key::kRestoreOnStartup,
-                                base::Value::TYPE_INTEGER) {}
+                                base::Value::Type::INTEGER) {}
 
 RestoreOnStartupPolicyHandler::~RestoreOnStartupPolicyHandler() {
 }

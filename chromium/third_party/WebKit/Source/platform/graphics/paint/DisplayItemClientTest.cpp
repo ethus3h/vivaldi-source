@@ -4,29 +4,23 @@
 
 #include "platform/graphics/paint/DisplayItemClient.h"
 
+#include "platform/testing/FakeDisplayItemClient.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace blink {
 namespace {
 
-#if ENABLE(ASSERT)
+#if DCHECK_IS_ON() && !defined(UNDEFINED_SANITIZER)
 
-class TestDisplayItemClient : public DisplayItemClient {
-public:
-    String debugName() const final { return "TestDisplayItemClient"; }
-    IntRect visualRect() const final { return IntRect(); }
-};
-
-TEST(DisplayItemClientTest, IsAlive)
-{
-    EXPECT_FALSE(DisplayItemClient::isAlive(*reinterpret_cast<DisplayItemClient*>(0x12345678)));
-    TestDisplayItemClient* testClient = new TestDisplayItemClient;
-    EXPECT_TRUE(DisplayItemClient::isAlive(*testClient));
-    delete testClient;
-    EXPECT_FALSE(DisplayItemClient::isAlive(*testClient));
+TEST(DisplayItemClientTest, IsAlive) {
+  EXPECT_FALSE(reinterpret_cast<DisplayItemClient*>(0x12345678)->isAlive());
+  FakeDisplayItemClient* testClient = new FakeDisplayItemClient;
+  EXPECT_TRUE(testClient->isAlive());
+  delete testClient;
+  EXPECT_FALSE(testClient->isAlive());
 }
 
-#endif // ENABLE(ASSERT)
+#endif
 
-} // namespace
-} // namespace blink
+}  // namespace
+}  // namespace blink

@@ -7,24 +7,24 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gl/gl_export.h"
 #include "ui/gl/gl_surface.h"
 
-namespace gfx {
-
-enum OSMesaSurfaceFormat { OSMesaSurfaceFormatBGRA, OSMesaSurfaceFormatRGBA };
+namespace gl {
 
 // A surface that the Mesa software renderer draws to. This is actually just a
 // buffer in system memory. GetHandle returns a pointer to the buffer. These
 // surfaces can be resized and resizing preserves the contents.
 class GL_EXPORT GLSurfaceOSMesa : public GLSurface {
  public:
-  GLSurfaceOSMesa(OSMesaSurfaceFormat format, const gfx::Size& size);
+  GLSurfaceOSMesa(GLSurfaceFormat format, const gfx::Size& size);
 
   // Implement GLSurface.
-  bool Initialize() override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool Resize(const gfx::Size& new_size,
               float scale_factor,
@@ -33,15 +33,15 @@ class GL_EXPORT GLSurfaceOSMesa : public GLSurface {
   gfx::SwapResult SwapBuffers() override;
   gfx::Size GetSize() override;
   void* GetHandle() override;
-  unsigned GetFormat() override;
+  GLSurfaceFormat GetFormat() override;
 
  protected:
   ~GLSurfaceOSMesa() override;
 
  private:
-  unsigned format_;
   gfx::Size size_;
-  scoped_ptr<int32_t[]> buffer_;
+  GLSurfaceFormat format_;
+  std::unique_ptr<int32_t[]> buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(GLSurfaceOSMesa);
 };
@@ -49,9 +49,9 @@ class GL_EXPORT GLSurfaceOSMesa : public GLSurface {
 // A thin subclass of |GLSurfaceOSMesa| that can be used in place
 // of a native hardware-provided surface when a native surface
 // provider is not available.
-class GLSurfaceOSMesaHeadless : public GLSurfaceOSMesa {
+class GL_EXPORT GLSurfaceOSMesaHeadless : public GLSurfaceOSMesa {
  public:
-  explicit GLSurfaceOSMesaHeadless();
+  GLSurfaceOSMesaHeadless();
 
   bool IsOffscreen() override;
   gfx::SwapResult SwapBuffers() override;
@@ -63,6 +63,6 @@ class GLSurfaceOSMesaHeadless : public GLSurfaceOSMesa {
   DISALLOW_COPY_AND_ASSIGN(GLSurfaceOSMesaHeadless);
 };
 
-}  // namespace gfx
+}  // namespace gl
 
 #endif  // UI_GL_GL_SURFACE_OSMESA_H_

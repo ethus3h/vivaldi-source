@@ -5,6 +5,7 @@
 import("//build/config/features.gni")
 import("//build/config/linux/pkg_config.gni")
 import("//build/config/ui.gni")
+import("//ui/base/ui_features.gni")
 
 declare_args() {
   # Support ChromeOS touchpad gestures with ozone.
@@ -37,8 +38,10 @@ if (use_ozone) {
     deps = [
       "//base",
       "//base/third_party/dynamic_annotations",
+      "//ui/display",
       "//ui/events",
       "//ui/events:events_base",
+      "//ui/gfx",
     ]
 
     defines = [ "EVENTS_OZONE_IMPLEMENTATION" ]
@@ -61,16 +64,6 @@ if (use_ozone) {
 
   config("evdev_gestures") {
     defines = [ "USE_EVDEV_GESTURES" ]
-  }
-
-  if (use_evdev_gestures) {
-    pkg_config("libevdev-cros") {
-      packages = [ "libevdev-cros" ]
-    }
-
-    pkg_config("libgestures") {
-      packages = [ "libgestures" ]
-    }
   }
 
   component("events_ozone_evdev") {
@@ -106,6 +99,8 @@ if (use_ozone) {
       "evdev/keyboard_util_evdev.h",
       "evdev/mouse_button_map_evdev.cc",
       "evdev/mouse_button_map_evdev.h",
+      "evdev/scoped_input_device.cc",
+      "evdev/scoped_input_device.h",
       "evdev/tablet_event_converter_evdev.cc",
       "evdev/tablet_event_converter_evdev.h",
       "evdev/touch_evdev_debug_buffer.cc",
@@ -131,6 +126,7 @@ if (use_ozone) {
       ":events_ozone",
       ":events_ozone_layout",
       "//base",
+      "//ui/display",
       "//ui/events",
       "//ui/events:dom_keycode_converter",
       "//ui/events:events_base",
@@ -158,19 +154,13 @@ if (use_ozone) {
         "evdev/libgestures_glue/gesture_timer_provider.h",
       ]
 
-      public_configs += [ ":evdev_gestures" ]
-
-      configs += [
-        ":libevdev-cros",
-        ":libgestures",
+      deps += [
+        "//third_party/gestures",
+        "//third_party/libevdev",
       ]
-    }
-  }
-}
 
-config("events_ozone_layout_config") {
-  if (use_xkbcommon) {
-    defines = [ "USE_XKBCOMMON" ]
+      public_configs += [ ":evdev_gestures" ]
+    }
   }
 }
 
@@ -196,19 +186,17 @@ component("events_ozone_layout") {
     "//ui/events:events_base",
   ]
 
-  public_configs = [ ":events_ozone_layout_config" ]
-
   if (use_xkbcommon) {
     configs += [ ":xkbcommon" ]
 
     sources += [
-      "layout/xkb/xkb.h",
       "layout/xkb/xkb_evdev_codes.cc",
       "layout/xkb/xkb_evdev_codes.h",
       "layout/xkb/xkb_key_code_converter.h",
       "layout/xkb/xkb_keyboard_layout_engine.cc",
       "layout/xkb/xkb_keyboard_layout_engine.h",
-      "layout/xkb/xkb_keysym.h",
     ]
+
+    deps += [ "//ui/events/keycodes:xkb" ]
   }
 }

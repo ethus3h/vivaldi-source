@@ -6,9 +6,9 @@
 
 #include <stddef.h>
 
-#include <algorithm>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -16,13 +16,16 @@
 #include "base/i18n/rtl.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequenced_task_runner.h"
+#include "base/stl_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task_runner_util.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/customization/customization_document.h"
@@ -44,13 +47,14 @@ namespace {
 
 const char kSequenceToken[] = "chromeos_login_l10n_util";
 
-scoped_ptr<base::DictionaryValue> CreateInputMethodsEntry(
+std::unique_ptr<base::DictionaryValue> CreateInputMethodsEntry(
     const input_method::InputMethodDescriptor& method,
     const std::string selected) {
   input_method::InputMethodUtil* util =
       input_method::InputMethodManager::Get()->GetInputMethodUtil();
   const std::string& ime_id = method.id();
-  scoped_ptr<base::DictionaryValue> input_method(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> input_method(
+      new base::DictionaryValue);
   input_method->SetString("value", ime_id);
   input_method->SetString(
       "title", util->GetInputMethodLongNameStripped(method));
@@ -66,14 +70,14 @@ bool InsertString(const std::string& str, std::set<std::string>* to) {
 }
 
 void AddOptgroupOtherLayouts(base::ListValue* input_methods_list) {
-  scoped_ptr<base::DictionaryValue> optgroup(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> optgroup(new base::DictionaryValue);
   optgroup->SetString(
       "optionGroupName",
       l10n_util::GetStringUTF16(IDS_OOBE_OTHER_KEYBOARD_LAYOUTS));
-  input_methods_list->Append(optgroup.release());
+  input_methods_list->Append(std::move(optgroup));
 }
 
-base::DictionaryValue* CreateLanguageEntry(
+std::unique_ptr<base::DictionaryValue> CreateLanguageEntry(
     const std::string& language_code,
     const base::string16& language_display_name,
     const base::string16& language_native_display_name) {
@@ -86,12 +90,12 @@ base::DictionaryValue* CreateLanguageEntry(
       base::i18n::StringContainsStrongRTLChars(display_name);
   const std::string directionality = has_rtl_chars ? "rtl" : "ltr";
 
-  scoped_ptr<base::DictionaryValue> dictionary(new base::DictionaryValue());
+  auto dictionary = base::MakeUnique<base::DictionaryValue>();
   dictionary->SetString("code", language_code);
   dictionary->SetString("displayName", language_display_name);
   dictionary->SetString("textDirection", directionality);
   dictionary->SetString("nativeDisplayName", language_native_display_name);
-  return dictionary.release();
+  return dictionary;
 }
 
 // Gets the list of languages with |descriptors| based on |base_language_codes|.
@@ -99,7 +103,7 @@ base::DictionaryValue* CreateLanguageEntry(
 // |insert_divider| is true, an entry with its "code" attribute set to
 // kMostRelevantLanguagesDivider is placed between the most relevant languages
 // and all others.
-scoped_ptr<base::ListValue> GetLanguageList(
+std::unique_ptr<base::ListValue> GetLanguageList(
     const input_method::InputMethodDescriptors& descriptors,
     const std::vector<std::string>& base_language_codes,
     const std::vector<std::string>& most_relevant_language_codes,
@@ -153,9 +157,7 @@ scoped_ptr<base::ListValue> GetLanguageList(
     if (lang.empty() || lang == language_id)
       continue;
 
-    if (std::find(base_language_codes.begin(),
-                  base_language_codes.end(),
-                  language_id) != base_language_codes.end()) {
+    if (base::ContainsValue(base_language_codes, language_id)) {
       // Language is supported. No need to replace
       continue;
     }
@@ -163,9 +165,7 @@ scoped_ptr<base::ListValue> GetLanguageList(
     if (!l10n_util::CheckAndResolveLocale(language_id, &resolved_locale))
       continue;
 
-    if (std::find(base_language_codes.begin(),
-                  base_language_codes.end(),
-                  resolved_locale) == base_language_codes.end()) {
+    if (!base::ContainsValue(base_language_codes, resolved_locale)) {
       // Resolved locale is not supported.
       continue;
     }
@@ -188,29 +188,25 @@ scoped_ptr<base::ListValue> GetLanguageList(
        it != language_codes.end(); ++it) {
      // Exclude the language which is not in |base_langauge_codes| even it has
      // input methods.
-    if (std::find(base_language_codes.begin(),
-                  base_language_codes.end(),
-                  *it) == base_language_codes.end()) {
-      continue;
-    }
+     if (!base::ContainsValue(base_language_codes, *it))
+       continue;
 
-    const base::string16 display_name =
-        l10n_util::GetDisplayNameForLocale(*it, app_locale, true);
-    const base::string16 native_display_name =
-        l10n_util::GetDisplayNameForLocale(*it, *it, true);
+     const base::string16 display_name =
+         l10n_util::GetDisplayNameForLocale(*it, app_locale, true);
+     const base::string16 native_display_name =
+         l10n_util::GetDisplayNameForLocale(*it, *it, true);
 
-    language_map[display_name] =
-        std::make_pair(*it, native_display_name);
+     language_map[display_name] = std::make_pair(*it, native_display_name);
 
-    const std::map<std::string, int>::const_iterator index_pos =
-        language_index.find(*it);
-    if (index_pos != language_index.end()) {
-      base::string16& stored_display_name =
-          most_relevant_locales_display_names[index_pos->second];
-      if (stored_display_name.empty()) {
-        stored_display_name = display_name;
-        ++most_relevant_locales_count;
-      }
+     const std::map<std::string, int>::const_iterator index_pos =
+         language_index.find(*it);
+     if (index_pos != language_index.end()) {
+       base::string16& stored_display_name =
+           most_relevant_locales_display_names[index_pos->second];
+       if (stored_display_name.empty()) {
+         stored_display_name = display_name;
+         ++most_relevant_locales_count;
+       }
     } else {
       display_names.push_back(display_name);
     }
@@ -267,15 +263,15 @@ scoped_ptr<base::ListValue> GetLanguageList(
             std::back_inserter(out_display_names));
 
   // Build the language list from the language map.
-  scoped_ptr<base::ListValue> language_list(new base::ListValue());
+  std::unique_ptr<base::ListValue> language_list(new base::ListValue());
   for (size_t i = 0; i < out_display_names.size(); ++i) {
     // Sets the directionality of the display language name.
     base::string16 display_name(out_display_names[i]);
     if (insert_divider && display_name == divider16) {
       // Insert divider.
-      base::DictionaryValue* dictionary = new base::DictionaryValue();
+      auto dictionary = base::MakeUnique<base::DictionaryValue>();
       dictionary->SetString("code", kMostRelevantLanguagesDivider);
-      language_list->Append(dictionary);
+      language_list->Append(std::move(dictionary));
       continue;
     }
 
@@ -287,38 +283,55 @@ scoped_ptr<base::ListValue> GetLanguageList(
   return language_list;
 }
 
+// Note: this method updates |selected_locale| only if it is empty.
+void GetAndMergeKeyboardLayoutsForLocale(input_method::InputMethodUtil* util,
+                                         const std::string& locale,
+                                         std::string* selected_locale,
+                                         std::vector<std::string>* layouts) {
+  std::vector<std::string> layouts_from_locale;
+  util->GetInputMethodIdsFromLanguageCode(
+      locale, input_method::kKeyboardLayoutsOnly, &layouts_from_locale);
+  layouts->insert(layouts->end(), layouts_from_locale.begin(),
+                  layouts_from_locale.end());
+  if (selected_locale->empty() && !layouts_from_locale.empty()) {
+    *selected_locale =
+        util->GetInputMethodDescriptorFromId(layouts_from_locale[0])->id();
+  }
+}
+
 // Invokes |callback| with a list of keyboard layouts that can be used for
 // |resolved_locale|.
 void GetKeyboardLayoutsForResolvedLocale(
+    const std::string& requested_locale,
     const GetKeyboardLayoutsForLocaleCallback& callback,
     const std::string& resolved_locale) {
   input_method::InputMethodUtil* util =
       input_method::InputMethodManager::Get()->GetInputMethodUtil();
   std::vector<std::string> layouts = util->GetHardwareInputMethodIds();
-  std::vector<std::string> layouts_from_locale;
-  util->GetInputMethodIdsFromLanguageCode(
-      resolved_locale,
-      input_method::kKeyboardLayoutsOnly,
-      &layouts_from_locale);
-  layouts.insert(layouts.end(), layouts_from_locale.begin(),
-                 layouts_from_locale.end());
 
+  // "Selected" will be set from the fist non-empty list.
   std::string selected;
-  if (!layouts_from_locale.empty()) {
-    selected =
-        util->GetInputMethodDescriptorFromId(layouts_from_locale[0])->id();
-  }
+  GetAndMergeKeyboardLayoutsForLocale(util, requested_locale, &selected,
+                                      &layouts);
+  GetAndMergeKeyboardLayoutsForLocale(util, resolved_locale, &selected,
+                                      &layouts);
 
-  scoped_ptr<base::ListValue> input_methods_list(new base::ListValue);
+  std::unique_ptr<base::ListValue> input_methods_list(new base::ListValue);
   std::set<std::string> input_methods_added;
   for (std::vector<std::string>::const_iterator it = layouts.begin();
        it != layouts.end(); ++it) {
     const input_method::InputMethodDescriptor* ime =
         util->GetInputMethodDescriptorFromId(*it);
+    // TODO(tbarzic): This is added to avoid crash loop on starting public
+    //     session. The problem should be properly fixed, and this workaround
+    //     removed.
+    if (!ime) {
+      LOG(WARNING) << *it << " layout not found.";
+      continue;
+    }
     if (!InsertString(ime->id(), &input_methods_added))
       continue;
-    input_methods_list->Append(
-        CreateInputMethodsEntry(*ime, selected).release());
+    input_methods_list->Append(CreateInputMethodsEntry(*ime, selected));
   }
 
   callback.Run(std::move(input_methods_list));
@@ -341,7 +354,7 @@ std::string CalculateSelectedLanguage(const std::string& requested_locale,
 }
 
 void ResolveLanguageListOnBlockingPool(
-    scoped_ptr<chromeos::locale_util::LanguageSwitchResult>
+    std::unique_ptr<chromeos::locale_util::LanguageSwitchResult>
         language_switch_result,
     const scoped_refptr<base::TaskRunner> task_runner,
     const UILanguageListResolvedCallback& resolved_callback) {
@@ -372,7 +385,7 @@ void ResolveLanguageListOnBlockingPool(
   const std::string list_locale =
       language_switch_result ? language_switch_result->loaded_locale
                              : g_browser_process->GetApplicationLocale();
-  scoped_ptr<base::ListValue> language_list(
+  std::unique_ptr<base::ListValue> language_list(
       chromeos::GetUILanguageList(nullptr, selected_code));
 
   task_runner->PostTask(
@@ -416,7 +429,7 @@ void AdjustUILanguageList(const std::string& selected,
 }  // namespace
 
 void ResolveUILanguageList(
-    scoped_ptr<chromeos::locale_util::LanguageSwitchResult>
+    std::unique_ptr<chromeos::locale_util::LanguageSwitchResult>
         language_switch_result,
     const UILanguageListResolvedCallback& callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -427,14 +440,14 @@ void ResolveUILanguageList(
                             base::ThreadTaskRunnerHandle::Get(), callback));
 }
 
-scoped_ptr<base::ListValue> GetMinimalUILanguageList() {
+std::unique_ptr<base::ListValue> GetMinimalUILanguageList() {
   const std::string application_locale =
       g_browser_process->GetApplicationLocale();
   base::string16 language_native_display_name =
       l10n_util::GetDisplayNameForLocale(
           application_locale, application_locale, true);
 
-  scoped_ptr<base::ListValue> language_list(new base::ListValue());
+  std::unique_ptr<base::ListValue> language_list(new base::ListValue());
   language_list->Append(CreateLanguageEntry(application_locale,
                                             language_native_display_name,
                                             language_native_display_name));
@@ -442,7 +455,7 @@ scoped_ptr<base::ListValue> GetMinimalUILanguageList() {
   return language_list;
 }
 
-scoped_ptr<base::ListValue> GetUILanguageList(
+std::unique_ptr<base::ListValue> GetUILanguageList(
     const std::vector<std::string>* most_relevant_language_codes,
     const std::string& selected) {
   ComponentExtensionIMEManager* manager =
@@ -450,9 +463,8 @@ scoped_ptr<base::ListValue> GetUILanguageList(
           ->GetComponentExtensionIMEManager();
   input_method::InputMethodDescriptors descriptors =
       manager->GetXkbIMEAsInputMethodDescriptor();
-  scoped_ptr<base::ListValue> languages_list(GetLanguageList(
-      descriptors,
-      l10n_util::GetAvailableLocales(),
+  std::unique_ptr<base::ListValue> languages_list(GetLanguageList(
+      descriptors, l10n_util::GetAvailableLocales(),
       most_relevant_language_codes
           ? *most_relevant_language_codes
           : StartupCustomizationDocument::GetInstance()->configured_locales(),
@@ -487,7 +499,7 @@ std::string FindMostRelevantLocale(
   return fallback_locale;
 }
 
-scoped_ptr<base::ListValue> GetAcceptLanguageList() {
+std::unique_ptr<base::ListValue> GetAcceptLanguageList() {
   // Collect the language codes from the supported accept-languages.
   const std::string app_locale = g_browser_process->GetApplicationLocale();
   std::vector<std::string> accept_language_codes;
@@ -499,11 +511,11 @@ scoped_ptr<base::ListValue> GetAcceptLanguageList() {
       false);
 }
 
-scoped_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
+std::unique_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
     const std::string& locale,
     const std::string& selected,
     bool activate_keyboards) {
-  scoped_ptr<base::ListValue> input_methods_list(new base::ListValue);
+  std::unique_ptr<base::ListValue> input_methods_list(new base::ListValue);
   input_method::InputMethodManager* manager =
       input_method::InputMethodManager::Get();
   input_method::InputMethodUtil* util = manager->GetInputMethodUtil();
@@ -518,7 +530,7 @@ scoped_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
         locale, hardware_login_input_methods);
   }
 
-  scoped_ptr<input_method::InputMethodDescriptors> input_methods(
+  std::unique_ptr<input_method::InputMethodDescriptors> input_methods(
       manager->GetActiveIMEState()->GetActiveInputMethods());
   std::set<std::string> input_methods_added;
 
@@ -531,8 +543,7 @@ scoped_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
     // Do not crash in case of misconfiguration.
     if (ime) {
       input_methods_added.insert(*i);
-      input_methods_list->Append(
-          CreateInputMethodsEntry(*ime, selected).release());
+      input_methods_list->Append(CreateInputMethodsEntry(*ime, selected));
     } else {
       NOTREACHED();
     }
@@ -548,8 +559,8 @@ scoped_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
       optgroup_added = true;
       AddOptgroupOtherLayouts(input_methods_list.get());
     }
-    input_methods_list->Append(CreateInputMethodsEntry((*input_methods)[i],
-                                                       selected).release());
+    input_methods_list->Append(
+        CreateInputMethodsEntry((*input_methods)[i], selected));
   }
 
   // "xkb:us::eng" should always be in the list of available layouts.
@@ -563,8 +574,8 @@ scoped_ptr<base::ListValue> GetAndActivateLoginKeyboardLayouts(
       optgroup_added = true;
       AddOptgroupOtherLayouts(input_methods_list.get());
     }
-    input_methods_list->Append(CreateInputMethodsEntry(*us_eng_descriptor,
-                                                       selected).release());
+    input_methods_list->Append(
+        CreateInputMethodsEntry(*us_eng_descriptor, selected));
     manager->GetActiveIMEState()->EnableInputMethod(us_keyboard_id);
   }
   return input_methods_list;
@@ -585,13 +596,12 @@ void GetKeyboardLayoutsForLocale(
   std::string (*get_application_locale)(const std::string&, bool) =
       &l10n_util::GetApplicationLocale;
   base::PostTaskAndReplyWithResult(
-      background_task_runner.get(),
-      FROM_HERE,
+      background_task_runner.get(), FROM_HERE,
       base::Bind(get_application_locale, locale, false /* set_icu_locale */),
-      base::Bind(&GetKeyboardLayoutsForResolvedLocale, callback));
+      base::Bind(&GetKeyboardLayoutsForResolvedLocale, locale, callback));
 }
 
-scoped_ptr<base::DictionaryValue> GetCurrentKeyboardLayout() {
+std::unique_ptr<base::DictionaryValue> GetCurrentKeyboardLayout() {
   const input_method::InputMethodDescriptor current_input_method =
       input_method::InputMethodManager::Get()
           ->GetActiveIMEState()

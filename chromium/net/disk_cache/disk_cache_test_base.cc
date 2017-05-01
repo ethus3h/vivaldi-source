@@ -10,8 +10,8 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
@@ -22,10 +22,15 @@
 #include "net/disk_cache/memory/mem_backend_impl.h"
 #include "net/disk_cache/simple/simple_backend_impl.h"
 #include "net/disk_cache/simple/simple_index.h"
+#include "net/test/gtest_util.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+using net::test::IsOk;
 
 DiskCacheTest::DiskCacheTest() {
   CHECK(temp_dir_.CreateUniqueTempDir());
-  cache_path_ = temp_dir_.path();
+  cache_path_ = temp_dir_.GetPath();
   if (!base::MessageLoop::current())
     message_loop_.reset(new base::MessageLoopForIO());
 }
@@ -55,7 +60,7 @@ void DiskCacheTest::TearDown() {
 }
 
 DiskCacheTestWithCache::TestIterator::TestIterator(
-    scoped_ptr<disk_cache::Backend::Iterator> iterator)
+    std::unique_ptr<disk_cache::Backend::Iterator> iterator)
     : iterator_(std::move(iterator)) {}
 
 DiskCacheTestWithCache::TestIterator::~TestIterator() {}
@@ -103,7 +108,7 @@ void DiskCacheTestWithCache::SimulateCrash() {
   ASSERT_TRUE(!memory_only_);
   net::TestCompletionCallback cb;
   int rv = cache_impl_->FlushQueueForTest(cb.callback());
-  ASSERT_EQ(net::OK, cb.GetResult(rv));
+  ASSERT_THAT(cb.GetResult(rv), IsOk());
   cache_impl_->ClearRefCountForTest();
 
   cache_.reset();
@@ -174,9 +179,19 @@ int DiskCacheTestWithCache::CalculateSizeOfAllEntries() {
   return cb.GetResult(rv);
 }
 
-scoped_ptr<DiskCacheTestWithCache::TestIterator>
-    DiskCacheTestWithCache::CreateIterator() {
-  return scoped_ptr<TestIterator>(new TestIterator(cache_->CreateIterator()));
+int DiskCacheTestWithCache::CalculateSizeOfEntriesBetween(
+    const base::Time initial_time,
+    const base::Time end_time) {
+  net::TestCompletionCallback cb;
+  int rv = cache_->CalculateSizeOfEntriesBetween(initial_time, end_time,
+                                                 cb.callback());
+  return cb.GetResult(rv);
+}
+
+std::unique_ptr<DiskCacheTestWithCache::TestIterator>
+DiskCacheTestWithCache::CreateIterator() {
+  return std::unique_ptr<TestIterator>(
+      new TestIterator(cache_->CreateIterator()));
 }
 
 void DiskCacheTestWithCache::FlushQueueForTest() {
@@ -185,7 +200,7 @@ void DiskCacheTestWithCache::FlushQueueForTest() {
 
   net::TestCompletionCallback cb;
   int rv = cache_impl_->FlushQueueForTest(cb.callback());
-  EXPECT_EQ(net::OK, cb.GetResult(rv));
+  EXPECT_THAT(cb.GetResult(rv), IsOk());
 }
 
 void DiskCacheTestWithCache::RunTaskForTest(const base::Closure& closure) {
@@ -196,7 +211,7 @@ void DiskCacheTestWithCache::RunTaskForTest(const base::Closure& closure) {
 
   net::TestCompletionCallback cb;
   int rv = cache_impl_->RunTaskForTest(closure, cb.callback());
-  EXPECT_EQ(net::OK, cb.GetResult(rv));
+  EXPECT_THAT(cb.GetResult(rv), IsOk());
 }
 
 int DiskCacheTestWithCache::ReadData(disk_cache::Entry* entry, int index,
@@ -312,18 +327,18 @@ void DiskCacheTestWithCache::CreateBackend(uint32_t flags,
 
   if (simple_cache_mode_) {
     net::TestCompletionCallback cb;
-    scoped_ptr<disk_cache::SimpleBackendImpl> simple_backend(
-        new disk_cache::SimpleBackendImpl(
-            cache_path_, size_, type_, runner, NULL));
+    std::unique_ptr<disk_cache::SimpleBackendImpl> simple_backend(
+        new disk_cache::SimpleBackendImpl(cache_path_, size_, type_, runner,
+                                          NULL));
     int rv = simple_backend->Init(cb.callback());
-    ASSERT_EQ(net::OK, cb.GetResult(rv));
+    ASSERT_THAT(cb.GetResult(rv), IsOk());
     simple_cache_impl_ = simple_backend.get();
     cache_ = std::move(simple_backend);
     if (simple_cache_wait_for_index_) {
       net::TestCompletionCallback wait_for_index_cb;
       rv = simple_cache_impl_->index()->ExecuteWhenReady(
           wait_for_index_cb.callback());
-      ASSERT_EQ(net::OK, wait_for_index_cb.GetResult(rv));
+      ASSERT_THAT(wait_for_index_cb.GetResult(rv), IsOk());
     }
     return;
   }
@@ -342,5 +357,5 @@ void DiskCacheTestWithCache::CreateBackend(uint32_t flags,
   cache_impl_->SetFlags(flags);
   net::TestCompletionCallback cb;
   int rv = cache_impl_->Init(cb.callback());
-  ASSERT_EQ(net::OK, cb.GetResult(rv));
+  ASSERT_THAT(cb.GetResult(rv), IsOk());
 }

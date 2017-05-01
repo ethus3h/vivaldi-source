@@ -16,21 +16,21 @@
 #include "ui/display/types/gamma_ramp_rgb_entry.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/ipc/geometry/gfx_param_traits.h"
 #include "ui/gfx/ipc/gfx_param_traits.h"
-#include "ui/gfx/ipc/gfx_param_traits_macros.h"
+#include "ui/gfx/ipc/skia/gfx_skia_param_traits.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/ozone/common/gpu/ozone_gpu_message_params.h"
-#include "ui/ozone/ozone_base_export.h"
 
 #undef IPC_MESSAGE_EXPORT
-#define IPC_MESSAGE_EXPORT OZONE_BASE_EXPORT
+#define IPC_MESSAGE_EXPORT
 
 #define IPC_MESSAGE_START OzoneGpuMsgStart
 
-IPC_ENUM_TRAITS_MAX_VALUE(ui::DisplayConnectionType,
-                          ui::DISPLAY_CONNECTION_TYPE_LAST)
+IPC_ENUM_TRAITS_MAX_VALUE(display::DisplayConnectionType,
+                          display::DISPLAY_CONNECTION_TYPE_LAST)
 
-IPC_ENUM_TRAITS_MAX_VALUE(ui::HDCPState, ui::HDCP_STATE_LAST)
+IPC_ENUM_TRAITS_MAX_VALUE(display::HDCPState, display::HDCP_STATE_LAST)
 
 IPC_ENUM_TRAITS_MAX_VALUE(gfx::OverlayTransform, gfx::OVERLAY_TRANSFORM_LAST)
 
@@ -48,18 +48,21 @@ IPC_STRUCT_TRAITS_BEGIN(ui::DisplaySnapshot_Params)
   IPC_STRUCT_TRAITS_MEMBER(type)
   IPC_STRUCT_TRAITS_MEMBER(is_aspect_preserving_scaling)
   IPC_STRUCT_TRAITS_MEMBER(has_overscan)
+  IPC_STRUCT_TRAITS_MEMBER(has_color_correction_matrix)
   IPC_STRUCT_TRAITS_MEMBER(display_name)
   IPC_STRUCT_TRAITS_MEMBER(sys_path)
   IPC_STRUCT_TRAITS_MEMBER(modes)
+  IPC_STRUCT_TRAITS_MEMBER(edid)
   IPC_STRUCT_TRAITS_MEMBER(has_current_mode)
   IPC_STRUCT_TRAITS_MEMBER(current_mode)
   IPC_STRUCT_TRAITS_MEMBER(has_native_mode)
   IPC_STRUCT_TRAITS_MEMBER(native_mode)
   IPC_STRUCT_TRAITS_MEMBER(product_id)
   IPC_STRUCT_TRAITS_MEMBER(string_representation)
+  IPC_STRUCT_TRAITS_MEMBER(maximum_cursor_size)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_TRAITS_BEGIN(ui::GammaRampRGBEntry)
+IPC_STRUCT_TRAITS_BEGIN(display::GammaRampRGBEntry)
   IPC_STRUCT_TRAITS_MEMBER(r)
   IPC_STRUCT_TRAITS_MEMBER(g)
   IPC_STRUCT_TRAITS_MEMBER(b)
@@ -138,12 +141,13 @@ IPC_MESSAGE_CONTROL1(OzoneGpuMsg_GetHDCPState, int64_t /* display_id */)
 
 IPC_MESSAGE_CONTROL2(OzoneGpuMsg_SetHDCPState,
                      int64_t /* display_id */,
-                     ui::HDCPState /* state */)
+                     display::HDCPState /* state */)
 
-// Provides the gamma ramp for display adjustment.
-IPC_MESSAGE_CONTROL2(OzoneGpuMsg_SetGammaRamp,
-                     int64_t,                             // display ID,
-                     std::vector<ui::GammaRampRGBEntry>)  // lut
+IPC_MESSAGE_CONTROL4(OzoneGpuMsg_SetColorCorrection,
+                     int64_t,                                  // display ID,
+                     std::vector<display::GammaRampRGBEntry>,  // degamma lut
+                     std::vector<display::GammaRampRGBEntry>,  // gamma lut
+                     std::vector<float>)  // transform matrix
 
 IPC_MESSAGE_CONTROL2(OzoneGpuMsg_CheckOverlayCapabilities,
                      gfx::AcceleratedWidget /* widget */,
@@ -165,7 +169,7 @@ IPC_MESSAGE_CONTROL2(OzoneHostMsg_DisplayConfigured,
 IPC_MESSAGE_CONTROL3(OzoneHostMsg_HDCPStateReceived,
                      int64_t /* display_id */,
                      bool /* success */,
-                     ui::HDCPState /* state */)
+                     display::HDCPState /* state */)
 
 // Response for OzoneGpuMsg_SetHDCPState.
 IPC_MESSAGE_CONTROL2(OzoneHostMsg_HDCPStateUpdated,

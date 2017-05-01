@@ -11,6 +11,9 @@
 
 namespace extensions {
 
+class ChromeMetricsPrivateDelegate;
+class ClipboardExtensionHelper;
+
 // Extra support for extensions APIs in Chrome.
 class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
  public:
@@ -20,7 +23,7 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
   // ExtensionsApiClient implementation.
   void AddAdditionalValueStoreCaches(
       content::BrowserContext* context,
-      const scoped_refptr<SettingsStorageFactory>& factory,
+      const scoped_refptr<ValueStoreFactory>& factory,
       const scoped_refptr<base::ObserverListThreadSafe<SettingsObserver>>&
           observers,
       std::map<settings_namespace::Namespace, ValueStoreCache*>* caches)
@@ -30,27 +33,43 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
   AppViewGuestDelegate* CreateAppViewGuestDelegate() const override;
   ExtensionOptionsGuestDelegate* CreateExtensionOptionsGuestDelegate(
       ExtensionOptionsGuest* guest) const override;
-  scoped_ptr<guest_view::GuestViewManagerDelegate>
-      CreateGuestViewManagerDelegate(
-          content::BrowserContext* context) const override;
-  scoped_ptr<MimeHandlerViewGuestDelegate> CreateMimeHandlerViewGuestDelegate(
+  std::unique_ptr<guest_view::GuestViewManagerDelegate>
+  CreateGuestViewManagerDelegate(
+      content::BrowserContext* context) const override;
+  std::unique_ptr<MimeHandlerViewGuestDelegate>
+  CreateMimeHandlerViewGuestDelegate(
       MimeHandlerViewGuest* guest) const override;
   WebViewGuestDelegate* CreateWebViewGuestDelegate(
       WebViewGuest* web_view_guest) const override;
   WebViewPermissionHelperDelegate* CreateWebViewPermissionHelperDelegate(
       WebViewPermissionHelper* web_view_permission_helper) const override;
-  WebRequestEventRouterDelegate* CreateWebRequestEventRouterDelegate()
-      const override;
+  std::unique_ptr<WebRequestEventRouterDelegate>
+  CreateWebRequestEventRouterDelegate() const override;
   scoped_refptr<ContentRulesRegistry> CreateContentRulesRegistry(
       content::BrowserContext* browser_context,
       RulesCacheDelegate* cache_delegate) const override;
-  scoped_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
+  std::unique_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
       content::WebContents* web_contents) const override;
-  scoped_ptr<VirtualKeyboardDelegate> CreateVirtualKeyboardDelegate()
+  std::unique_ptr<VirtualKeyboardDelegate> CreateVirtualKeyboardDelegate()
       const override;
   ManagementAPIDelegate* CreateManagementAPIDelegate() const override;
+  MetricsPrivateDelegate* GetMetricsPrivateDelegate() override;
+
+#if defined(OS_CHROMEOS)
+  void SaveImageDataToClipboard(
+      const std::vector<char>& image_data,
+      api::clipboard::ImageType type,
+      const base::Closure& success_callback,
+      const base::Callback<void(const std::string&)>& error_callback) override;
+#endif
 
  private:
+  std::unique_ptr<ChromeMetricsPrivateDelegate> metrics_private_delegate_;
+
+#if defined(OS_CHROMEOS)
+  std::unique_ptr<ClipboardExtensionHelper> clipboard_extension_helper_;
+#endif
+
   DISALLOW_COPY_AND_ASSIGN(ChromeExtensionsAPIClient);
 };
 

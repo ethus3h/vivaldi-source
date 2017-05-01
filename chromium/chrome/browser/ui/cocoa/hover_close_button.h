@@ -7,6 +7,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "third_party/skia/include/core/SkColor.h"
 #import "ui/base/cocoa/hover_button.h"
 
 @class GTMKeyValueAnimation;
@@ -18,6 +19,9 @@
   GTMKeyValueAnimation* fadeOutAnimation_;
   HoverState previousState_;
 }
+
+// The color of the icon in its idle (not-hovering) state.
+@property(nonatomic) SkColor iconColor;
 
 @end
 

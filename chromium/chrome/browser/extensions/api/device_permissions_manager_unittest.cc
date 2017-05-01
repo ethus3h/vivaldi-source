@@ -10,7 +10,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/test/base/testing_profile.h"
-#include "device/core/mock_device_client.h"
+#include "device/base/mock_device_client.h"
 #include "device/hid/hid_device_info.h"
 #include "device/hid/mock_hid_service.h"
 #include "device/usb/mock_usb_device.h"
@@ -82,7 +82,7 @@ class DevicePermissionsManagerTest : public testing::Test {
 
   void TearDown() override { env_.reset(nullptr); }
 
-  scoped_ptr<extensions::TestExtensionEnvironment> env_;
+  std::unique_ptr<extensions::TestExtensionEnvironment> env_;
   const extensions::Extension* extension_;
   device::MockDeviceClient device_client_;
   scoped_refptr<MockUsbDevice> device0_;
@@ -282,7 +282,7 @@ TEST_F(DevicePermissionsManagerTest, UpdateLastUsed) {
 }
 
 TEST_F(DevicePermissionsManagerTest, LoadPrefs) {
-  scoped_ptr<base::Value> prefs_value = base::test::ParseJson(
+  std::unique_ptr<base::Value> prefs_value = base::test::ParseJson(
       "["
       "  {"
       "    \"manufacturer_string\": \"Test Manufacturer\","

@@ -9,23 +9,20 @@ GEN_INCLUDE(['settings_page_browsertest.js']);
 /**
  * @constructor
  * @extends {SettingsPageBrowserTest}
-*/
+ */
 function SettingsAdvancedPageBrowserTest() {}
 
 SettingsAdvancedPageBrowserTest.prototype = {
   __proto__: SettingsPageBrowserTest.prototype,
-
-  /** @override */
-  browsePreload: 'chrome://md-settings/advanced',
 };
 
 // Times out on debug builders and may time out on memory bots because
 // the Settings page can take several seconds to load in a Release build
 // and several times that in a Debug build. See https://crbug.com/558434.
 GEN('#if defined(MEMORY_SANITIZER) || !defined(NDEBUG)');
-GEN('#define MAYBE_Load DISABLED_Main');
+GEN('#define MAYBE_Load DISABLED_Load');
 GEN('#else');
-GEN('#define MAYBE_Load Main');
+GEN('#define MAYBE_Load Load');
 GEN('#endif');
 
 TEST_F('SettingsAdvancedPageBrowserTest', 'MAYBE_Load', function() {
@@ -35,21 +32,25 @@ TEST_F('SettingsAdvancedPageBrowserTest', 'MAYBE_Load', function() {
 
   // Register mocha tests.
   suite('SettingsPage', function() {
+    suiteSetup(function() {
+      self.toggleAdvanced();
+    });
+
     test('load page', function() {
       // This will fail if there are any asserts or errors in the Settings page.
     });
 
     test('advanced pages', function() {
-      var page = self.getPage('advanced');
-      expectTrue(!!self.getSection(page, 'privacy'));
-      expectTrue(!!self.getSection(page, 'passwordsAndForms'));
-      expectTrue(!!self.getSection(page, 'languages'));
-      expectTrue(!!self.getSection(page, 'downloads'));
-      expectTrue(!!self.getSection(page, 'reset'));
-      if (cr.isChromeOS) {
-        expectTrue(!!self.getSection(page, 'dateTime'));
-        expectTrue(!!self.getSection(page, 'bluetooth'));
-        expectTrue(!!self.getSection(page, 'a11y'));
+      var page = self.getPage('basic');
+      var sections = ['privacy', 'passwordsAndForms', 'languages', 'downloads',
+          'reset'];
+      if (cr.isChromeOS)
+        sections = sections.concat(['dateTime', 'bluetooth', 'a11y']);
+
+      for (var i = 0; i < sections.length; i++) {
+        var section = self.getSection(page, sections[i], true /* advanced */);
+        expectTrue(!!section);
+        self.verifySubpagesHidden(section);
       }
     });
   });

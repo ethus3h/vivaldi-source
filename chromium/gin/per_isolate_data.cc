@@ -8,7 +8,7 @@
 
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "gin/public/gin_embedders.h"
 
 using v8::ArrayBuffer;
@@ -21,11 +21,16 @@ using v8::ObjectTemplate;
 
 namespace gin {
 
-PerIsolateData::PerIsolateData(Isolate* isolate,
-                               ArrayBuffer::Allocator* allocator)
+PerIsolateData::PerIsolateData(
+    Isolate* isolate,
+    ArrayBuffer::Allocator* allocator,
+    IsolateHolder::AccessMode access_mode,
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
     : isolate_(isolate),
       allocator_(allocator),
-      task_runner_(base::ThreadTaskRunnerHandle::Get()) {
+      access_mode_(access_mode),
+      task_runner_(
+          task_runner ? task_runner : base::ThreadTaskRunnerHandle::Get()) {
   isolate_->SetData(kEmbedderNativeGin, this);
 }
 
@@ -114,7 +119,7 @@ NamedPropertyInterceptor* PerIsolateData::GetNamedPropertyInterceptor(
 }
 
 void PerIsolateData::EnableIdleTasks(
-    scoped_ptr<V8IdleTaskRunner> idle_task_runner) {
+    std::unique_ptr<V8IdleTaskRunner> idle_task_runner) {
   idle_task_runner_ = std::move(idle_task_runner);
 }
 

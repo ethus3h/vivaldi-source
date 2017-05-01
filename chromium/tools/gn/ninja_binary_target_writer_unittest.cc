@@ -13,10 +13,8 @@
 #include "tools/gn/test_with_scope.h"
 
 TEST(NinjaBinaryTargetWriter, SourceSet) {
-  TestWithScope setup;
   Err err;
-
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
+  TestWithScope setup;
 
   Target target(setup.settings(), Label(SourceDir("//foo/"), "bar"));
   target.set_output_type(Target::SOURCE_SET);
@@ -82,7 +80,8 @@ TEST(NinjaBinaryTargetWriter, SourceSet) {
             "|| obj/foo/bar.stamp\n"
         "  ldflags =\n"
         "  libs =\n"
-        "  output_extension = .so\n";
+        "  output_extension = .so\n"
+        "  output_dir = \n";
     std::string out_str = out.str();
     EXPECT_EQ(expected, out_str);
   }
@@ -110,9 +109,9 @@ TEST(NinjaBinaryTargetWriter, SourceSet) {
         // There are no sources so there are no params to alink. (In practice
         // this will probably fail in the archive tool.)
         "build obj/foo/libstlib.a: alink || obj/foo/bar.stamp\n"
-        "  ldflags =\n"
-        "  libs =\n"
-        "  output_extension = \n";
+        "  arflags =\n"
+        "  output_extension = \n"
+        "  output_dir = \n";
     std::string out_str = out.str();
     EXPECT_EQ(expected, out_str);
   }
@@ -138,21 +137,126 @@ TEST(NinjaBinaryTargetWriter, SourceSet) {
         "build obj/foo/libstlib.a: alink obj/foo/bar.input1.o "
             "obj/foo/bar.input2.o ../../foo/input3.o ../../foo/input4.obj "
             "|| obj/foo/bar.stamp\n"
-        "  ldflags =\n"
-        "  libs =\n"
-        "  output_extension = \n";
+        "  arflags =\n"
+        "  output_extension = \n"
+        "  output_dir = \n";
     std::string out_str = out.str();
     EXPECT_EQ(expected, out_str);
   }
 }
 
-// This tests that output extension overrides apply, and input dependencies
-// are applied.
-TEST(NinjaBinaryTargetWriter, ProductExtensionAndInputDeps) {
+TEST(NinjaBinaryTargetWriter, StaticLibrary) {
   TestWithScope setup;
   Err err;
 
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
+  TestTarget target(setup, "//foo:bar", Target::STATIC_LIBRARY);
+  target.sources().push_back(SourceFile("//foo/input1.cc"));
+  target.config_values().arflags().push_back("--asdf");
+  ASSERT_TRUE(target.OnResolved(&err));
+
+  std::ostringstream out;
+  NinjaBinaryTargetWriter writer(&target, out);
+  writer.Run();
+
+  const char expected[] =
+      "defines =\n"
+      "include_dirs =\n"
+      "cflags =\n"
+      "cflags_cc =\n"
+      "root_out_dir = .\n"
+      "target_out_dir = obj/foo\n"
+      "target_output_name = libbar\n"
+      "\n"
+      "build obj/foo/libbar.input1.o: cxx ../../foo/input1.cc\n"
+      "\n"
+      "build obj/foo/libbar.a: alink obj/foo/libbar.input1.o\n"
+      "  arflags = --asdf\n"
+      "  output_extension = \n"
+      "  output_dir = \n";
+  std::string out_str = out.str();
+  EXPECT_EQ(expected, out_str);
+}
+
+TEST(NinjaBinaryTargetWriter, CompleteStaticLibrary) {
+  TestWithScope setup;
+  Err err;
+
+  TestTarget target(setup, "//foo:bar", Target::STATIC_LIBRARY);
+  target.sources().push_back(SourceFile("//foo/input1.cc"));
+  target.config_values().arflags().push_back("--asdf");
+  target.set_complete_static_lib(true);
+
+  TestTarget baz(setup, "//foo:baz", Target::STATIC_LIBRARY);
+  baz.sources().push_back(SourceFile("//foo/input2.cc"));
+
+  target.public_deps().push_back(LabelTargetPair(&baz));
+
+  ASSERT_TRUE(target.OnResolved(&err));
+  ASSERT_TRUE(baz.OnResolved(&err));
+
+  // A complete static library that depends on an incomplete static library
+  // should link in the dependent object files as if the dependent target
+  // were a source set.
+  {
+    std::ostringstream out;
+    NinjaBinaryTargetWriter writer(&target, out);
+    writer.Run();
+
+    const char expected[] =
+        "defines =\n"
+        "include_dirs =\n"
+        "cflags =\n"
+        "cflags_cc =\n"
+        "root_out_dir = .\n"
+        "target_out_dir = obj/foo\n"
+        "target_output_name = libbar\n"
+        "\n"
+        "build obj/foo/libbar.input1.o: cxx ../../foo/input1.cc\n"
+        "\n"
+        "build obj/foo/libbar.a: alink obj/foo/libbar.input1.o "
+            "obj/foo/libbaz.input2.o || obj/foo/libbaz.a\n"
+        "  arflags = --asdf\n"
+        "  output_extension = \n"
+        "  output_dir = \n";
+    std::string out_str = out.str();
+    EXPECT_EQ(expected, out_str);
+  }
+
+  // Make the dependent static library complete.
+  baz.set_complete_static_lib(true);
+
+  // Dependent complete static libraries should not be linked directly.
+  {
+    std::ostringstream out;
+    NinjaBinaryTargetWriter writer(&target, out);
+    writer.Run();
+
+    const char expected[] =
+        "defines =\n"
+        "include_dirs =\n"
+        "cflags =\n"
+        "cflags_cc =\n"
+        "root_out_dir = .\n"
+        "target_out_dir = obj/foo\n"
+        "target_output_name = libbar\n"
+        "\n"
+        "build obj/foo/libbar.input1.o: cxx ../../foo/input1.cc\n"
+        "\n"
+        "build obj/foo/libbar.a: alink obj/foo/libbar.input1.o "
+            "|| obj/foo/libbaz.a\n"
+        "  arflags = --asdf\n"
+        "  output_extension = \n"
+        "  output_dir = \n";
+    std::string out_str = out.str();
+    EXPECT_EQ(expected, out_str);
+  }
+}
+
+// This tests that output extension and output dir overrides apply, and input
+// dependencies are applied.
+TEST(NinjaBinaryTargetWriter, OutputExtensionAndInputDeps) {
+  Err err;
+  TestWithScope setup;
 
   // An action for our library to depend on.
   Target action(setup.settings(), Label(SourceDir("//foo/"), "action"));
@@ -161,10 +265,11 @@ TEST(NinjaBinaryTargetWriter, ProductExtensionAndInputDeps) {
   action.SetToolchain(setup.toolchain());
   ASSERT_TRUE(action.OnResolved(&err));
 
-  // A shared library w/ the product_extension set to a custom value.
+  // A shared library w/ the output_extension set to a custom value.
   Target target(setup.settings(), Label(SourceDir("//foo/"), "shlib"));
   target.set_output_type(Target::SHARED_LIBRARY);
   target.set_output_extension(std::string("so.6"));
+  target.set_output_dir(SourceDir("//out/Debug/foo/"));
   target.sources().push_back(SourceFile("//foo/input1.cc"));
   target.sources().push_back(SourceFile("//foo/input2.cc"));
   target.public_deps().push_back(LabelTargetPair(&action));
@@ -184,11 +289,10 @@ TEST(NinjaBinaryTargetWriter, ProductExtensionAndInputDeps) {
       "target_out_dir = obj/foo\n"
       "target_output_name = libshlib\n"
       "\n"
-      "build obj/foo/shlib.inputdeps.stamp: stamp obj/foo/action.stamp\n"
       "build obj/foo/libshlib.input1.o: cxx ../../foo/input1.cc"
-        " || obj/foo/shlib.inputdeps.stamp\n"
+        " || obj/foo/action.stamp\n"
       "build obj/foo/libshlib.input2.o: cxx ../../foo/input2.cc"
-        " || obj/foo/shlib.inputdeps.stamp\n"
+        " || obj/foo/action.stamp\n"
       "\n"
       "build ./libshlib.so.6: solink obj/foo/libshlib.input1.o "
       // The order-only dependency here is stricly unnecessary since the
@@ -197,7 +301,8 @@ TEST(NinjaBinaryTargetWriter, ProductExtensionAndInputDeps) {
           "obj/foo/libshlib.input2.o || obj/foo/action.stamp\n"
       "  ldflags =\n"
       "  libs =\n"
-      "  output_extension = .so.6\n";
+      "  output_extension = .so.6\n"
+      "  output_dir = foo\n";
 
   std::string out_str = out.str();
   EXPECT_EQ(expected, out_str);
@@ -205,10 +310,8 @@ TEST(NinjaBinaryTargetWriter, ProductExtensionAndInputDeps) {
 
 // Tests libs are applied.
 TEST(NinjaBinaryTargetWriter, LibsAndLibDirs) {
-  TestWithScope setup;
   Err err;
-
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
+  TestWithScope setup;
 
   // A shared library w/ libs and lib_dirs.
   Target target(setup.settings(), Label(SourceDir("//foo/"), "shlib"));
@@ -234,22 +337,23 @@ TEST(NinjaBinaryTargetWriter, LibsAndLibDirs) {
       "build ./libshlib.so: solink | ../../foo/lib1.a\n"
       "  ldflags = -L../../foo/bar\n"
       "  libs = ../../foo/lib1.a -lfoo\n"
-      "  output_extension = .so\n";
+      "  output_extension = .so\n"
+      "  output_dir = \n";
 
   std::string out_str = out.str();
   EXPECT_EQ(expected, out_str);
 }
 
-TEST(NinjaBinaryTargetWriter, EmptyProductExtension) {
-  TestWithScope setup;
+TEST(NinjaBinaryTargetWriter, EmptyOutputExtension) {
   Err err;
+  TestWithScope setup;
 
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
-
-  // This test is the same as ProductExtension, except that
-  // we call set_output_extension("") and ensure that we still get the default.
+  // This test is the same as OutputExtensionAndInputDeps, except that we call
+  // set_output_extension("") and ensure that we get an empty one and override
+  // the output prefix so that the name matches the target exactly.
   Target target(setup.settings(), Label(SourceDir("//foo/"), "shlib"));
   target.set_output_type(Target::SHARED_LIBRARY);
+  target.set_output_prefix_override(true);
   target.set_output_extension(std::string());
   target.sources().push_back(SourceFile("//foo/input1.cc"));
   target.sources().push_back(SourceFile("//foo/input2.cc"));
@@ -268,26 +372,25 @@ TEST(NinjaBinaryTargetWriter, EmptyProductExtension) {
       "cflags_cc =\n"
       "root_out_dir = .\n"
       "target_out_dir = obj/foo\n"
-      "target_output_name = libshlib\n"
+      "target_output_name = shlib\n"
       "\n"
-      "build obj/foo/libshlib.input1.o: cxx ../../foo/input1.cc\n"
-      "build obj/foo/libshlib.input2.o: cxx ../../foo/input2.cc\n"
+      "build obj/foo/shlib.input1.o: cxx ../../foo/input1.cc\n"
+      "build obj/foo/shlib.input2.o: cxx ../../foo/input2.cc\n"
       "\n"
-      "build ./libshlib.so: solink obj/foo/libshlib.input1.o "
-          "obj/foo/libshlib.input2.o\n"
+      "build ./shlib: solink obj/foo/shlib.input1.o "
+          "obj/foo/shlib.input2.o\n"
       "  ldflags =\n"
       "  libs =\n"
-      "  output_extension = .so\n";
+      "  output_extension = \n"
+      "  output_dir = \n";
 
   std::string out_str = out.str();
   EXPECT_EQ(expected, out_str);
 }
 
 TEST(NinjaBinaryTargetWriter, SourceSetDataDeps) {
-  TestWithScope setup;
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
-
   Err err;
+  TestWithScope setup;
 
   // This target is a data (runtime) dependency of the intermediate target.
   Target data(setup.settings(), Label(SourceDir("//foo/"), "data_target"));
@@ -360,21 +463,20 @@ TEST(NinjaBinaryTargetWriter, SourceSetDataDeps) {
           "obj/foo/inter.stamp\n"
       "  ldflags =\n"
       "  libs =\n"
-      "  output_extension = \n";
+      "  output_extension = \n"
+      "  output_dir = \n";
   EXPECT_EQ(final_expected, final_out.str());
 }
 
 TEST(NinjaBinaryTargetWriter, SharedLibraryModuleDefinitionFile) {
+  Err err;
   TestWithScope setup;
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
 
   Target shared_lib(setup.settings(), Label(SourceDir("//foo/"), "bar"));
   shared_lib.set_output_type(Target::SHARED_LIBRARY);
   shared_lib.SetToolchain(setup.toolchain());
   shared_lib.sources().push_back(SourceFile("//foo/sources.cc"));
   shared_lib.sources().push_back(SourceFile("//foo/bar.def"));
-
-  Err err;
   ASSERT_TRUE(shared_lib.OnResolved(&err));
 
   std::ostringstream out;
@@ -395,21 +497,20 @@ TEST(NinjaBinaryTargetWriter, SharedLibraryModuleDefinitionFile) {
       "build ./libbar.so: solink obj/foo/libbar.sources.o | ../../foo/bar.def\n"
       "  ldflags = /DEF:../../foo/bar.def\n"
       "  libs =\n"
-      "  output_extension = .so\n";
+      "  output_extension = .so\n"
+      "  output_dir = \n";
   EXPECT_EQ(expected, out.str());
 }
 
 TEST(NinjaBinaryTargetWriter, LoadableModule) {
+  Err err;
   TestWithScope setup;
-  setup.build_settings()->SetBuildDir(SourceDir("//out/Debug/"));
 
   Target loadable_module(setup.settings(), Label(SourceDir("//foo/"), "bar"));
   loadable_module.set_output_type(Target::LOADABLE_MODULE);
   loadable_module.visibility().SetPublic();
   loadable_module.SetToolchain(setup.toolchain());
   loadable_module.sources().push_back(SourceFile("//foo/sources.cc"));
-
-  Err err;
   ASSERT_TRUE(loadable_module.OnResolved(&err)) << err.message();
 
   std::ostringstream out;
@@ -430,7 +531,8 @@ TEST(NinjaBinaryTargetWriter, LoadableModule) {
       "build ./libbar.so: solink_module obj/foo/libbar.sources.o\n"
       "  ldflags =\n"
       "  libs =\n"
-      "  output_extension = .so\n";
+      "  output_extension = .so\n"
+      "  output_dir = \n";
   EXPECT_EQ(loadable_expected, out.str());
 
   // Final target.
@@ -461,7 +563,8 @@ TEST(NinjaBinaryTargetWriter, LoadableModule) {
       "build ./exe: link obj/foo/exe.final.o || ./libbar.so\n"
       "  ldflags =\n"
       "  libs =\n"
-      "  output_extension = \n";
+      "  output_extension = \n"
+      "  output_dir = \n";
   EXPECT_EQ(final_expected, final_out.str());
 }
 
@@ -479,7 +582,7 @@ TEST(NinjaBinaryTargetWriter, WinPrecompiledHeaders) {
   pch_settings.set_default_toolchain_label(setup.toolchain()->label());
 
   // Declare a C++ compiler that supports PCH.
-  scoped_ptr<Tool> cxx_tool(new Tool);
+  std::unique_ptr<Tool> cxx_tool(new Tool);
   TestWithScope::SetCommandForTool(
       "c++ {{source}} {{cflags}} {{cflags_cc}} {{defines}} {{include_dirs}} "
       "-o {{output}}",
@@ -490,7 +593,7 @@ TEST(NinjaBinaryTargetWriter, WinPrecompiledHeaders) {
   pch_toolchain.SetTool(Toolchain::TYPE_CXX, std::move(cxx_tool));
 
   // Add a C compiler as well.
-  scoped_ptr<Tool> cc_tool(new Tool);
+  std::unique_ptr<Tool> cc_tool(new Tool);
   TestWithScope::SetCommandForTool(
       "cc {{source}} {{cflags}} {{cflags_c}} {{defines}} {{include_dirs}} "
       "-o {{output}}",
@@ -607,7 +710,7 @@ TEST(NinjaBinaryTargetWriter, GCCPrecompiledHeaders) {
   pch_settings.set_default_toolchain_label(setup.toolchain()->label());
 
   // Declare a C++ compiler that supports PCH.
-  scoped_ptr<Tool> cxx_tool(new Tool);
+  std::unique_ptr<Tool> cxx_tool(new Tool);
   TestWithScope::SetCommandForTool(
       "c++ {{source}} {{cflags}} {{cflags_cc}} {{defines}} {{include_dirs}} "
       "-o {{output}}",
@@ -619,7 +722,7 @@ TEST(NinjaBinaryTargetWriter, GCCPrecompiledHeaders) {
   pch_toolchain.ToolchainSetupComplete();
 
   // Add a C compiler as well.
-  scoped_ptr<Tool> cc_tool(new Tool);
+  std::unique_ptr<Tool> cc_tool(new Tool);
   TestWithScope::SetCommandForTool(
       "cc {{source}} {{cflags}} {{cflags_c}} {{defines}} {{include_dirs}} "
       "-o {{output}}",
@@ -736,4 +839,84 @@ TEST(NinjaBinaryTargetWriter, DupeObjFileError) {
 
   // Should have issued an error.
   EXPECT_TRUE(scheduler.is_failed());
+}
+
+// This tests that output extension and output dir overrides apply, and input
+// dependencies are applied.
+TEST(NinjaBinaryTargetWriter, InputFiles) {
+  Err err;
+  TestWithScope setup;
+
+  // This target has one input.
+  {
+    Target target(setup.settings(), Label(SourceDir("//foo/"), "bar"));
+    target.set_output_type(Target::SOURCE_SET);
+    target.visibility().SetPublic();
+    target.sources().push_back(SourceFile("//foo/input1.cc"));
+    target.sources().push_back(SourceFile("//foo/input2.cc"));
+    target.inputs().push_back(SourceFile("//foo/input.data"));
+    target.SetToolchain(setup.toolchain());
+    ASSERT_TRUE(target.OnResolved(&err));
+
+    std::ostringstream out;
+    NinjaBinaryTargetWriter writer(&target, out);
+    writer.Run();
+
+    const char expected[] =
+        "defines =\n"
+        "include_dirs =\n"
+        "cflags =\n"
+        "cflags_cc =\n"
+        "root_out_dir = .\n"
+        "target_out_dir = obj/foo\n"
+        "target_output_name = bar\n"
+        "\n"
+        "build obj/foo/bar.input1.o: cxx ../../foo/input1.cc"
+          " | ../../foo/input.data\n"
+        "build obj/foo/bar.input2.o: cxx ../../foo/input2.cc"
+          " | ../../foo/input.data\n"
+        "\n"
+        "build obj/foo/bar.stamp: stamp obj/foo/bar.input1.o "
+            "obj/foo/bar.input2.o\n";
+
+    EXPECT_EQ(expected, out.str());
+  }
+
+  // This target has multiple inputs.
+  {
+    Target target(setup.settings(), Label(SourceDir("//foo/"), "bar"));
+    target.set_output_type(Target::SOURCE_SET);
+    target.visibility().SetPublic();
+    target.sources().push_back(SourceFile("//foo/input1.cc"));
+    target.sources().push_back(SourceFile("//foo/input2.cc"));
+    target.inputs().push_back(SourceFile("//foo/input1.data"));
+    target.inputs().push_back(SourceFile("//foo/input2.data"));
+    target.SetToolchain(setup.toolchain());
+    ASSERT_TRUE(target.OnResolved(&err));
+
+    std::ostringstream out;
+    NinjaBinaryTargetWriter writer(&target, out);
+    writer.Run();
+
+    const char expected[] =
+        "defines =\n"
+        "include_dirs =\n"
+        "cflags =\n"
+        "cflags_cc =\n"
+        "root_out_dir = .\n"
+        "target_out_dir = obj/foo\n"
+        "target_output_name = bar\n"
+        "\n"
+        "build obj/foo/bar.inputs.stamp: stamp"
+          " ../../foo/input1.data ../../foo/input2.data\n"
+        "build obj/foo/bar.input1.o: cxx ../../foo/input1.cc"
+          " | obj/foo/bar.inputs.stamp\n"
+        "build obj/foo/bar.input2.o: cxx ../../foo/input2.cc"
+          " | obj/foo/bar.inputs.stamp\n"
+        "\n"
+        "build obj/foo/bar.stamp: stamp obj/foo/bar.input1.o "
+            "obj/foo/bar.input2.o\n";
+
+    EXPECT_EQ(expected, out.str());
+  }
 }

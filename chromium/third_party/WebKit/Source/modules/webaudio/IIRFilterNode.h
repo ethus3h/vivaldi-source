@@ -11,28 +11,40 @@
 
 namespace blink {
 
-class AbstractAudioContext;
+class BaseAudioContext;
 class ExceptionState;
+class IIRFilterOptions;
 
 class IIRFilterNode : public AudioNode {
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    static IIRFilterNode* create(AbstractAudioContext& context, float sampleRate, const Vector<double> feedforward, const Vector<double> feedback)
-    {
-        return new IIRFilterNode(context, sampleRate, feedforward, feedback);
-    }
-    DECLARE_VIRTUAL_TRACE();
+  DEFINE_WRAPPERTYPEINFO();
 
-    // Get the magnitude and phase response of the filter at the given
-    // set of frequencies (in Hz). The phase response is in radians.
-    void getFrequencyResponse(const DOMFloat32Array* frequencyHz, DOMFloat32Array* magResponse, DOMFloat32Array* phaseResponse, ExceptionState&);
+ public:
+  static IIRFilterNode* create(BaseAudioContext&,
+                               const Vector<double> feedforward,
+                               const Vector<double> feedback,
+                               ExceptionState&);
 
-private:
-    IIRFilterNode(AbstractAudioContext&, float sampleRate, const Vector<double> denominator, const Vector<double> numerator);
+  static IIRFilterNode* create(BaseAudioContext*,
+                               const IIRFilterOptions&,
+                               ExceptionState&);
 
-    IIRProcessor* iirProcessor() const;
+  DECLARE_VIRTUAL_TRACE();
+
+  // Get the magnitude and phase response of the filter at the given
+  // set of frequencies (in Hz). The phase response is in radians.
+  void getFrequencyResponse(const DOMFloat32Array* frequencyHz,
+                            DOMFloat32Array* magResponse,
+                            DOMFloat32Array* phaseResponse,
+                            ExceptionState&);
+
+ private:
+  IIRFilterNode(BaseAudioContext&,
+                const Vector<double> denominator,
+                const Vector<double> numerator);
+
+  IIRProcessor* iirProcessor() const;
 };
 
-}
+}  // namespace blink
 
-#endif // IIRFilterNode_h
+#endif  // IIRFilterNode_h

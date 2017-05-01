@@ -27,7 +27,6 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import StringIO
 import csv
 import errno
 import logging
@@ -36,9 +35,9 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
-from webkitpy.common.system.outputtee import Tee
 from webkitpy.common.system.filesystem import FileSystem
 
 
@@ -69,7 +68,7 @@ class ScriptError(Exception):
             message += "\n\noutput: %s" % shortened_output
 
         Exception.__init__(self, message)
-        self.script_args = script_args # 'args' is already used by Exception
+        self.script_args = script_args  # 'args' is already used by Exception
         self.exit_code = exit_code
         self.output = output
         self.cwd = cwd
@@ -79,7 +78,7 @@ class ScriptError(Exception):
 
     def command_name(self):
         command_path = self.script_args
-        if type(command_path) is list:
+        if isinstance(command_path, list):
             command_path = command_path[0]
         return os.path.basename(command_path)
 
@@ -97,57 +96,13 @@ class Executive(object):
         # shows up on Mac and Linux.
         return sys.platform not in ('win32', 'cygwin')
 
-    def _run_command_with_teed_output(self, args, teed_output, **kwargs):
-        child_process = self.popen(args,
-                                   stdout=self.PIPE,
-                                   stderr=self.STDOUT,
-                                   close_fds=self._should_close_fds(),
-                                   **kwargs)
-
-        # Use our own custom wait loop because Popen ignores a tee'd
-        # stderr/stdout.
-        # FIXME: This could be improved not to flatten output to stdout.
-        while True:
-            output_line = child_process.stdout.readline()
-            if output_line == "" and child_process.poll() != None:
-                # poll() is not threadsafe and can throw OSError due to:
-                # http://bugs.python.org/issue1731717
-                return child_process.poll()
-            # We assume that the child process wrote to us in utf-8,
-            # so no re-encoding is necessary before writing here.
-            teed_output.write(output_line)
-
     def cpu_count(self):
         return multiprocessing.cpu_count()
 
-    @staticmethod
-    def interpreter_for_script(script_path, fs=None):
-        fs = fs or FileSystem()
-        lines = fs.read_text_file(script_path).splitlines()
-        if not len(lines):
-            return None
-        first_line = lines[0]
-        if not first_line.startswith('#!'):
-            return None
-        if first_line.find('python') > -1:
-            return sys.executable
-        if first_line.find('ruby') > -1:
-            return 'ruby'
-        return None
-
-    @staticmethod
-    def shell_command_for_script(script_path, fs=None):
-        fs = fs or FileSystem()
-        # Win32 does not support shebang. We need to detect the interpreter ourself.
-        if sys.platform == 'win32':
-            interpreter = Executive.interpreter_for_script(script_path, fs)
-            if interpreter:
-                return [interpreter, script_path]
-        return [script_path]
-
     def kill_process(self, pid):
         """Attempts to kill the given pid.
-        Will fail silently if pid does not exist or insufficient permisssions."""
+        Will fail silently if pid does not exist or insufficient permissions.
+        """
         if sys.platform == "win32":
             # We only use taskkill.exe on windows (not cygwin) because subprocess.pid
             # is a CYGWIN pid and taskkill.exe expects a windows pid.
@@ -166,19 +121,19 @@ class Executive(object):
                 retries_left -= 1
                 os.kill(pid, signal.SIGKILL)
                 _ = os.waitpid(pid, os.WNOHANG)
-            except OSError, e:
-                if e.errno == errno.EAGAIN:
+            except OSError as error:
+                if error.errno == errno.EAGAIN:
                     if retries_left <= 0:
-                        _log.warn("Failed to kill pid %s.  Too many EAGAIN errors." % pid)
+                        _log.warning("Failed to kill pid %s.  Too many EAGAIN errors.", pid)
                     continue
-                if e.errno == errno.ESRCH:  # The process does not exist.
+                if error.errno == errno.ESRCH:  # The process does not exist.
                     return
-                if e.errno == errno.EPIPE:  # The process has exited already on cygwin
+                if error.errno == errno.EPIPE:  # The process has exited already on cygwin
                     return
-                if e.errno == errno.ECHILD:
+                if error.errno == errno.ECHILD:
                     # Can't wait on a non-child process, but the kill worked.
                     return
-                if e.errno == errno.EACCES and sys.platform == 'cygwin':
+                if error.errno == errno.EACCES and sys.platform == 'cygwin':
                     # Cygwin python sometimes can't kill native processes.
                     return
                 raise
@@ -225,6 +180,7 @@ class Executive(object):
 
     def check_running_pid(self, pid):
         """Return True if pid is alive, otherwise return False."""
+        _log.debug('Checking whether pid %d is alive.', pid)
         if sys.platform == 'win32':
             return self._win32_check_running_pid(pid)
 
@@ -265,7 +221,7 @@ class Executive(object):
                 pid = line[1]
                 if process_name_filter(process_name):
                     running_pids.append(int(pid))
-            except (ValueError, IndexError), e:
+            except (ValueError, IndexError):
                 pass
 
         return sorted(running_pids)
@@ -302,18 +258,11 @@ class Executive(object):
             seconds_left -= sleep_length
             time.sleep(sleep_length)
 
-    def _windows_image_name(self, process_name):
-        name, extension = os.path.splitext(process_name)
-        if not extension:
-            # taskkill expects processes to end in .exe
-            # If necessary we could add a flag to disable appending .exe.
-            process_name = "%s.exe" % name
-        return process_name
-
     def interrupt(self, pid):
         interrupt_signal = signal.SIGINT
-        # FIXME: The python docs seem to imply that platform == 'win32' may need to use signal.CTRL_C_EVENT
-        # http://docs.python.org/2/library/signal.html
+        # Note: The python docs seem to suggest that on Windows, we may want to use
+        # signal.CTRL_C_EVENT (http://docs.python.org/2/library/signal.html), but
+        # it appears that signal.SIGINT also appears to work on Windows.
         try:
             os.kill(pid, interrupt_signal)
         except OSError:
@@ -345,7 +294,7 @@ class Executive(object):
         # Popen in Python 2.5 and before does not automatically encode unicode objects.
         # http://bugs.python.org/issue5290
         # See https://bugs.webkit.org/show_bug.cgi?id=37528
-        # for an example of a regresion caused by passing a unicode string directly.
+        # for an example of a regression caused by passing a unicode string directly.
         # FIXME: We may need to encode differently on different platforms.
         if isinstance(input, unicode):
             input = input.encode(self._child_process_encoding())
@@ -353,7 +302,8 @@ class Executive(object):
 
     def command_for_printing(self, args):
         """Returns a print-ready string representing command args.
-        The string should be copy/paste ready for execution in a shell."""
+        The string should be copy/paste ready for execution in a shell.
+        """
         args = self._stringify_args(args)
         escaped_args = []
         for arg in args:
@@ -369,12 +319,13 @@ class Executive(object):
                     cwd=None,
                     env=None,
                     input=None,
+                    timeout_seconds=None,
                     error_handler=None,
                     return_exit_code=False,
                     return_stderr=True,
                     decode_output=True, debug_logging=True):
         """Popen wrapper for convenience and to work around python bugs."""
-        assert(isinstance(args, list) or isinstance(args, tuple))
+        assert isinstance(args, list) or isinstance(args, tuple)
         start_time = time.time()
 
         stdin, string_to_communicate = self._compute_stdin(input)
@@ -387,18 +338,26 @@ class Executive(object):
                              cwd=cwd,
                              env=env,
                              close_fds=self._should_close_fds())
+
+        if timeout_seconds:
+            timer = threading.Timer(timeout_seconds, process.kill)
+            timer.start()
+
         output = process.communicate(string_to_communicate)[0]
 
         # run_command automatically decodes to unicode() unless explicitly told not to.
         if decode_output:
-            output = output.decode(self._child_process_encoding())
+            output = output.decode(self._child_process_encoding(), errors="replace")
 
         # wait() is not threadsafe and can throw OSError due to:
         # http://bugs.python.org/issue1731717
         exit_code = process.wait()
 
+        if timeout_seconds:
+            timer.cancel()
+
         if debug_logging:
-            _log.debug('"%s" took %.2fs' % (self.command_for_printing(args), time.time() - start_time))
+            _log.debug('"%s" took %.2fs', self.command_for_printing(args), time.time() - start_time)
 
         if return_exit_code:
             return exit_code
@@ -448,16 +407,9 @@ class Executive(object):
         # The Windows implementation of Popen cannot handle unicode strings. :(
         return map(self._encode_argument_if_needed, string_args)
 
-    # The only required argument to popen is named "args", the rest are optional keyword arguments.
     def popen(self, args, **kwargs):
-        # FIXME: We should always be stringifying the args, but callers who pass shell=True
-        # expect that the exact bytes passed will get passed to the shell (even if they're wrongly encoded).
-        # shell=True is wrong for many other reasons, and we should remove this
-        # hack as soon as we can fix all callers to not use shell=True.
-        if kwargs.get('shell') == True:
-            string_args = args
-        else:
-            string_args = self._stringify_args(args)
+        assert not kwargs.get('shell')
+        string_args = self._stringify_args(args)
         return subprocess.Popen(string_args, **kwargs)
 
     def call(self, args, **kwargs):

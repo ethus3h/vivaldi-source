@@ -18,6 +18,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
+#include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/chromeos/policy/device_local_account_policy_service.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
@@ -53,7 +54,7 @@ DeviceLocalAccountPolicyBroker* GetBroker(content::BrowserContext* context) {
   if (!service)
     return NULL;
 
-  return service->GetBrokerForUser(user->email());
+  return service->GetBrokerForUser(user->GetAccountId().GetUserEmail());
 }
 
 }  // namespace
@@ -71,7 +72,7 @@ SchemaRegistryService* SchemaRegistryServiceFactory::GetForContext(
 }
 
 // static
-scoped_ptr<SchemaRegistryService>
+std::unique_ptr<SchemaRegistryService>
 SchemaRegistryServiceFactory::CreateForContext(
     content::BrowserContext* context,
     const Schema& chrome_schema,
@@ -99,7 +100,7 @@ SchemaRegistryService* SchemaRegistryServiceFactory::GetForContextInternal(
   return it->second;
 }
 
-scoped_ptr<SchemaRegistryService>
+std::unique_ptr<SchemaRegistryService>
 SchemaRegistryServiceFactory::CreateForContextInternal(
     content::BrowserContext* context,
     const Schema& chrome_schema,
@@ -107,7 +108,7 @@ SchemaRegistryServiceFactory::CreateForContextInternal(
   DCHECK(!context->IsOffTheRecord());
   DCHECK(registries_.find(context) == registries_.end());
 
-  scoped_ptr<SchemaRegistry> registry;
+  std::unique_ptr<SchemaRegistry> registry;
 
 #if defined(OS_CHROMEOS)
   DeviceLocalAccountPolicyBroker* broker = GetBroker(context);
@@ -123,7 +124,24 @@ SchemaRegistryServiceFactory::CreateForContextInternal(
   if (!registry)
     registry.reset(new SchemaRegistry);
 
-  scoped_ptr<SchemaRegistryService> service(new SchemaRegistryService(
+#if defined(OS_CHROMEOS)
+  Profile* const profile = Profile::FromBrowserContext(context);
+  if (chromeos::ProfileHelper::IsSigninProfile(profile)) {
+    // Pass the SchemaRegistry of the signin profile to device cloud policy
+    // manager, for being used for fetching the component policies.
+    policy::DeviceCloudPolicyManagerChromeOS* device_cloud_policy_manager =
+        g_browser_process->platform_part()
+            ->browser_policy_connector_chromeos()
+            ->GetDeviceCloudPolicyManager();
+    // TODO(tnagel): Do we need to do something for Active Directory management?
+    if (device_cloud_policy_manager) {
+      device_cloud_policy_manager->SetSigninProfileSchemaRegistry(
+          registry.get());
+    }
+  }
+#endif
+
+  std::unique_ptr<SchemaRegistryService> service(new SchemaRegistryService(
       std::move(registry), chrome_schema, global_registry));
   registries_[context] = service.get();
   return service;

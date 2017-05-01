@@ -5,6 +5,9 @@
 #ifndef TOOLS_BATTOR_AGENT_BATTOR_AGENT_H_
 #define TOOLS_BATTOR_AGENT_BATTOR_AGENT_H_
 
+#include <map>
+
+#include "base/cancelable_callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -39,6 +42,9 @@ class BattOrAgent : public BattOrConnection::Listener,
     virtual void OnStartTracingComplete(BattOrError error) = 0;
     virtual void OnStopTracingComplete(const std::string& trace,
                                        BattOrError error) = 0;
+    virtual void OnRecordClockSyncMarkerComplete(BattOrError error) = 0;
+    virtual void OnGetFirmwareGitHashComplete(const std::string& version,
+                                              BattOrError error) = 0;
   };
 
   BattOrAgent(
@@ -50,29 +56,39 @@ class BattOrAgent : public BattOrConnection::Listener,
 
   void StartTracing();
   void StopTracing();
+  void RecordClockSyncMarker(const std::string& marker);
+  void GetFirmwareGitHash();
 
   // Returns whether the BattOr is able to record clock sync markers in its own
   // trace log.
-  static bool SupportsExplicitClockSync() { return false; }
+  static bool SupportsExplicitClockSync() { return true; }
 
   // BattOrConnection::Listener implementation.
   void OnConnectionOpened(bool success) override;
   void OnBytesSent(bool success) override;
   void OnMessageRead(bool success,
                      BattOrMessageType type,
-                     scoped_ptr<std::vector<char>> bytes) override;
+                     std::unique_ptr<std::vector<char>> bytes) override;
 
  protected:
   // The connection that knows how to communicate with the BattOr in terms of
   // protocol primitives. This is protected so that it can be replaced with a
   // fake in testing.
-  scoped_ptr<BattOrConnection> connection_;
+  std::unique_ptr<BattOrConnection> connection_;
+
+  // Timeout for when an action isn't completed within the allotted time. This
+  // is virtual and protected so that timeouts can be disabled in testing. The
+  // testing task runner that runs delayed tasks immediately deals poorly with
+  // timeouts posted as future tasks.
+  virtual void OnActionTimeout();
 
  private:
   enum class Command {
     INVALID,
     START_TRACING,
     STOP_TRACING,
+    RECORD_CLOCK_SYNC_MARKER,
+    GET_FIRMWARE_GIT_HASH,
   };
 
   enum class Action {
@@ -82,7 +98,6 @@ class BattOrAgent : public BattOrConnection::Listener,
     REQUEST_CONNECTION,
 
     // Actions required for starting tracing.
-    SEND_RESET,
     SEND_INIT,
     READ_INIT_ACK,
     SEND_SET_GAIN,
@@ -96,12 +111,22 @@ class BattOrAgent : public BattOrConnection::Listener,
     SEND_SAMPLES_REQUEST,
     READ_CALIBRATION_FRAME,
     READ_DATA_FRAME,
+
+    // Actions required for recording a clock sync marker.
+    SEND_CURRENT_SAMPLE_REQUEST,
+    READ_CURRENT_SAMPLE,
+
+    // Actions required for returning firmware git hash.
+    SEND_GIT_HASH_REQUEST,
+    READ_GIT_HASH,
   };
 
   // Performs an action.
   void PerformAction(Action action);
   // Performs an action after a delay.
   void PerformDelayedAction(Action action, base::TimeDelta delay);
+
+
 
   // Requests a connection to the BattOr.
   void BeginConnect();
@@ -127,11 +152,23 @@ class BattOrAgent : public BattOrConnection::Listener,
   // The tracing command currently being executed by the agent.
   Command command_;
 
+  // A map from the sample number (including samples from the calibration frame)
+  // to the ID of the clock sync marker that is associated with that sample
+  // number. If we ever have to store a large number of these, consider using an
+  // unordered map.
+  std::map<uint32_t, std::string> clock_sync_markers_;
+
+  // The clock sync marker being recorded (if we're currently recording one).
+  std::string pending_clock_sync_marker_;
+
+  // The time at which the last clock sync marker was recorded.
+  base::TimeTicks last_clock_sync_time_;
+
   // Checker to make sure that this is only ever called on the IO thread.
   base::ThreadChecker thread_checker_;
 
   // The BattOr's EEPROM (which is required for calibration).
-  scoped_ptr<BattOrEEPROM> battor_eeprom_;
+  std::unique_ptr<BattOrEEPROM> battor_eeprom_;
 
   // The first frame (required for calibration).
   std::vector<RawBattOrSample> calibration_frame_;
@@ -139,8 +176,24 @@ class BattOrAgent : public BattOrConnection::Listener,
   // The actual data samples recorded.
   std::vector<RawBattOrSample> samples_;
 
+  // The expected sequence number of the next frame. We use this to ensure that
+  // we receive frames in order.
+  uint32_t next_sequence_number_;
+
+  // The number of times we've attempted to init the BattOr.
+  uint8_t num_init_attempts_;
+
+  // The number of times we've attempted the BattOr StartTracing command.
+  uint8_t num_start_tracing_attempts_;
+
   // The number of times that we've attempted to read the last message.
   uint8_t num_read_attempts_;
+
+  // The timeout that's run when an action times out.
+  base::CancelableClosure timeout_callback_;
+
+  // The git hash of the BattOr firmware.
+  std::string firmware_git_hash_;
 
   DISALLOW_COPY_AND_ASSIGN(BattOrAgent);
 };

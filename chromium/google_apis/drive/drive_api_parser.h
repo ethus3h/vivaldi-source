@@ -6,14 +6,15 @@
 #define GOOGLE_APIS_DRIVE_DRIVE_API_PARSER_H_
 
 #include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/scoped_vector.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "url/gurl.h"
@@ -44,7 +45,7 @@ class AboutResource {
       base::JSONValueConverter<AboutResource>* converter);
 
   // Creates about resource from parsed JSON.
-  static scoped_ptr<AboutResource> CreateFrom(const base::Value& value);
+  static std::unique_ptr<AboutResource> CreateFrom(const base::Value& value);
 
   // Returns the largest change ID number.
   int64_t largest_change_id() const { return largest_change_id_; }
@@ -106,7 +107,7 @@ class DriveAppIcon {
       base::JSONValueConverter<DriveAppIcon>* converter);
 
   // Creates drive app icon instance from parsed JSON.
-  static scoped_ptr<DriveAppIcon> CreateFrom(const base::Value& value);
+  static std::unique_ptr<DriveAppIcon> CreateFrom(const base::Value& value);
 
   // Category of the icon.
   IconCategory category() const { return category_; }
@@ -160,7 +161,7 @@ class AppResource {
       base::JSONValueConverter<AppResource>* converter);
 
   // Creates app resource from parsed JSON.
-  static scoped_ptr<AppResource> CreateFrom(const base::Value& value);
+  static std::unique_ptr<AppResource> CreateFrom(const base::Value& value);
 
   // Returns application ID, which is 12-digit decimals (e.g. "123456780123").
   const std::string& application_id() const { return application_id_; }
@@ -188,35 +189,37 @@ class AppResource {
   // List of primary mime types supported by this WebApp. Primary status should
   // trigger this WebApp becoming the default handler of file instances that
   // have these mime types.
-  const ScopedVector<std::string>& primary_mimetypes() const {
+  const std::vector<std::unique_ptr<std::string>>& primary_mimetypes() const {
     return primary_mimetypes_;
   }
 
   // List of secondary mime types supported by this WebApp. Secondary status
   // should make this WebApp show up in "Open with..." pop-up menu of the
   // default action menu for file with matching mime types.
-  const ScopedVector<std::string>& secondary_mimetypes() const {
+  const std::vector<std::unique_ptr<std::string>>& secondary_mimetypes() const {
     return secondary_mimetypes_;
   }
 
   // List of primary file extensions supported by this WebApp. Primary status
   // should trigger this WebApp becoming the default handler of file instances
   // that match these extensions.
-  const ScopedVector<std::string>& primary_file_extensions() const {
+  const std::vector<std::unique_ptr<std::string>>& primary_file_extensions()
+      const {
     return primary_file_extensions_;
   }
 
   // List of secondary file extensions supported by this WebApp. Secondary
   // status should make this WebApp show up in "Open with..." pop-up menu of the
   // default action menu for file with matching extensions.
-  const ScopedVector<std::string>& secondary_file_extensions() const {
+  const std::vector<std::unique_ptr<std::string>>& secondary_file_extensions()
+      const {
     return secondary_file_extensions_;
   }
 
   // Returns Icons for this application.  An application can have multiple
   // icons for different purpose (application, document, shared document)
   // in several sizes.
-  const ScopedVector<DriveAppIcon>& icons() const {
+  const std::vector<std::unique_ptr<DriveAppIcon>>& icons() const {
     return icons_;
   }
 
@@ -233,22 +236,22 @@ class AppResource {
   }
   void set_removable(bool removable) { removable_ = removable; }
   void set_primary_mimetypes(
-      ScopedVector<std::string> primary_mimetypes) {
+      std::vector<std::unique_ptr<std::string>> primary_mimetypes) {
     primary_mimetypes_ = std::move(primary_mimetypes);
   }
   void set_secondary_mimetypes(
-      ScopedVector<std::string> secondary_mimetypes) {
+      std::vector<std::unique_ptr<std::string>> secondary_mimetypes) {
     secondary_mimetypes_ = std::move(secondary_mimetypes);
   }
   void set_primary_file_extensions(
-      ScopedVector<std::string> primary_file_extensions) {
+      std::vector<std::unique_ptr<std::string>> primary_file_extensions) {
     primary_file_extensions_ = std::move(primary_file_extensions);
   }
   void set_secondary_file_extensions(
-      ScopedVector<std::string> secondary_file_extensions) {
+      std::vector<std::unique_ptr<std::string>> secondary_file_extensions) {
     secondary_file_extensions_ = std::move(secondary_file_extensions);
   }
-  void set_icons(ScopedVector<DriveAppIcon> icons) {
+  void set_icons(std::vector<std::unique_ptr<DriveAppIcon>> icons) {
     icons_ = std::move(icons);
   }
   void set_create_url(const GURL& url) {
@@ -270,11 +273,11 @@ class AppResource {
   bool supports_create_;
   bool removable_;
   GURL create_url_;
-  ScopedVector<std::string> primary_mimetypes_;
-  ScopedVector<std::string> secondary_mimetypes_;
-  ScopedVector<std::string> primary_file_extensions_;
-  ScopedVector<std::string> secondary_file_extensions_;
-  ScopedVector<DriveAppIcon> icons_;
+  std::vector<std::unique_ptr<std::string>> primary_mimetypes_;
+  std::vector<std::unique_ptr<std::string>> secondary_mimetypes_;
+  std::vector<std::unique_ptr<std::string>> primary_file_extensions_;
+  std::vector<std::unique_ptr<std::string>> secondary_file_extensions_;
+  std::vector<std::unique_ptr<DriveAppIcon>> icons_;
 
   DISALLOW_COPY_AND_ASSIGN(AppResource);
 };
@@ -292,18 +295,22 @@ class AppList {
       base::JSONValueConverter<AppList>* converter);
 
   // Creates app list from parsed JSON.
-  static scoped_ptr<AppList> CreateFrom(const base::Value& value);
+  static std::unique_ptr<AppList> CreateFrom(const base::Value& value);
 
   // ETag for this resource.
   const std::string& etag() const { return etag_; }
 
   // Returns a vector of applications.
-  const ScopedVector<AppResource>& items() const { return items_; }
+  const std::vector<std::unique_ptr<AppResource>>& items() const {
+    return items_;
+  }
 
   void set_etag(const std::string& etag) {
     etag_ = etag;
   }
-  void set_items(ScopedVector<AppResource> items) { items_ = std::move(items); }
+  void set_items(std::vector<std::unique_ptr<AppResource>> items) {
+    items_ = std::move(items);
+  }
 
  private:
   friend class DriveAPIParserTest;
@@ -314,7 +321,7 @@ class AppList {
   bool Parse(const base::Value& value);
 
   std::string etag_;
-  ScopedVector<AppResource> items_;
+  std::vector<std::unique_ptr<AppResource>> items_;
 
   DISALLOW_COPY_AND_ASSIGN(AppList);
 };
@@ -332,18 +339,12 @@ class ParentReference {
       base::JSONValueConverter<ParentReference>* converter);
 
   // Creates parent reference from parsed JSON.
-  static scoped_ptr<ParentReference> CreateFrom(const base::Value& value);
+  static std::unique_ptr<ParentReference> CreateFrom(const base::Value& value);
 
   // Returns the file id of the reference.
   const std::string& file_id() const { return file_id_; }
 
-  // Returns the URL for the parent in Drive.
-  const GURL& parent_link() const { return parent_link_; }
-
   void set_file_id(const std::string& file_id) { file_id_ = file_id; }
-  void set_parent_link(const GURL& parent_link) {
-    parent_link_ = parent_link;
-  }
 
  private:
   // Parses and initializes data members from content of |value|.
@@ -351,7 +352,6 @@ class ParentReference {
   bool Parse(const base::Value& value);
 
   std::string file_id_;
-  GURL parent_link_;
 };
 
 // FileLabels represents labels for file or folder.
@@ -367,12 +367,15 @@ class FileLabels {
       base::JSONValueConverter<FileLabels>* converter);
 
   // Creates about resource from parsed JSON.
-  static scoped_ptr<FileLabels> CreateFrom(const base::Value& value);
+  static std::unique_ptr<FileLabels> CreateFrom(const base::Value& value);
 
   // Whether this file has been trashed.
   bool is_trashed() const { return trashed_; }
+  // Whether this file is starred by the user.
+  bool is_starred() const { return starred_; }
 
   void set_trashed(bool trashed) { trashed_ = trashed; }
+  void set_starred(bool starred) { starred_ = starred; }
 
  private:
   friend class FileResource;
@@ -382,6 +385,7 @@ class FileLabels {
   bool Parse(const base::Value& value);
 
   bool trashed_;
+  bool starred_;
 };
 
 // ImageMediaMetadata represents image metadata for a file.
@@ -397,7 +401,8 @@ class ImageMediaMetadata {
       base::JSONValueConverter<ImageMediaMetadata>* converter);
 
   // Creates about resource from parsed JSON.
-  static scoped_ptr<ImageMediaMetadata> CreateFrom(const base::Value& value);
+  static std::unique_ptr<ImageMediaMetadata> CreateFrom(
+      const base::Value& value);
 
   // Width of the image in pixels.
   int width() const { return width_; }
@@ -433,6 +438,7 @@ class FileResource {
   };
 
   FileResource();
+  FileResource(const FileResource& other);
   ~FileResource();
 
   // Registers the mapping between JSON field names and the members in this
@@ -441,7 +447,7 @@ class FileResource {
       base::JSONValueConverter<FileResource>* converter);
 
   // Creates file resource from parsed JSON.
-  static scoped_ptr<FileResource> CreateFrom(const base::Value& value);
+  static std::unique_ptr<FileResource> CreateFrom(const base::Value& value);
 
   // Returns true if this is a directory.
   // Note: "folder" is used elsewhere in this file to match Drive API reference,
@@ -606,15 +612,19 @@ class FileList {
   static bool HasFileListKind(const base::Value& value);
 
   // Creates file list from parsed JSON.
-  static scoped_ptr<FileList> CreateFrom(const base::Value& value);
+  static std::unique_ptr<FileList> CreateFrom(const base::Value& value);
 
   // Returns a link to the next page of files.  The URL includes the next page
   // token.
   const GURL& next_link() const { return next_link_; }
 
   // Returns a set of files in this list.
-  const ScopedVector<FileResource>& items() const { return items_; }
-  ScopedVector<FileResource>* mutable_items() { return &items_; }
+  const std::vector<std::unique_ptr<FileResource>>& items() const {
+    return items_;
+  }
+  std::vector<std::unique_ptr<FileResource>>* mutable_items() {
+    return &items_;
+  }
 
   void set_next_link(const GURL& next_link) {
     next_link_ = next_link;
@@ -629,7 +639,7 @@ class FileList {
   bool Parse(const base::Value& value);
 
   GURL next_link_;
-  ScopedVector<FileResource> items_;
+  std::vector<std::unique_ptr<FileResource>> items_;
 
   DISALLOW_COPY_AND_ASSIGN(FileList);
 };
@@ -647,7 +657,7 @@ class ChangeResource {
       base::JSONValueConverter<ChangeResource>* converter);
 
   // Creates change resource from parsed JSON.
-  static scoped_ptr<ChangeResource> CreateFrom(const base::Value& value);
+  static std::unique_ptr<ChangeResource> CreateFrom(const base::Value& value);
 
   // Returns change ID for this change.  This is a monotonically increasing
   // number.
@@ -673,7 +683,7 @@ class ChangeResource {
   void set_deleted(bool deleted) {
     deleted_ = deleted;
   }
-  void set_file(scoped_ptr<FileResource> file) { file_ = std::move(file); }
+  void set_file(std::unique_ptr<FileResource> file) { file_ = std::move(file); }
   void set_modification_date(const base::Time& modification_date) {
     modification_date_ = modification_date;
   }
@@ -689,7 +699,7 @@ class ChangeResource {
   int64_t change_id_;
   std::string file_id_;
   bool deleted_;
-  scoped_ptr<FileResource> file_;
+  std::unique_ptr<FileResource> file_;
   base::Time modification_date_;
 
   DISALLOW_COPY_AND_ASSIGN(ChangeResource);
@@ -711,7 +721,7 @@ class ChangeList {
   static bool HasChangeListKind(const base::Value& value);
 
   // Creates change list from parsed JSON.
-  static scoped_ptr<ChangeList> CreateFrom(const base::Value& value);
+  static std::unique_ptr<ChangeList> CreateFrom(const base::Value& value);
 
   // Returns a link to the next page of files.  The URL includes the next page
   // token.
@@ -721,8 +731,12 @@ class ChangeList {
   int64_t largest_change_id() const { return largest_change_id_; }
 
   // Returns a set of changes in this list.
-  const ScopedVector<ChangeResource>& items() const { return items_; }
-  ScopedVector<ChangeResource>* mutable_items() { return &items_; }
+  const std::vector<std::unique_ptr<ChangeResource>>& items() const {
+    return items_;
+  }
+  std::vector<std::unique_ptr<ChangeResource>>* mutable_items() {
+    return &items_;
+  }
 
   void set_next_link(const GURL& next_link) {
     next_link_ = next_link;
@@ -741,7 +755,7 @@ class ChangeList {
 
   GURL next_link_;
   int64_t largest_change_id_;
-  ScopedVector<ChangeResource> items_;
+  std::vector<std::unique_ptr<ChangeResource>> items_;
 
   DISALLOW_COPY_AND_ASSIGN(ChangeList);
 };

@@ -6,16 +6,16 @@
 #define COMPONENTS_USER_MANAGER_KNOWN_USER_H_
 
 #include <string>
+#include <vector>
 
 #include "components/user_manager/user_manager_export.h"
 
 class AccountId;
+enum class AccountType;
 class PrefRegistrySimple;
 
 namespace base {
 class DictionaryValue;
-class ListValue;
-class TaskRunner;
 }
 
 namespace user_manager {
@@ -68,11 +68,15 @@ void USER_MANAGER_EXPORT SetIntegerPref(const AccountId& account_id,
                                         const std::string& path,
                                         const int in_value);
 
+// Returns the list of known AccountIds.
+std::vector<AccountId> USER_MANAGER_EXPORT GetKnownAccountIds();
+
 // This call forms full account id of a known user by email and (optionally)
 // gaia_id.
 // This is a temporary call while migrating to AccountId.
 AccountId USER_MANAGER_EXPORT GetAccountId(const std::string& user_email,
-                                           const std::string& gaia_id);
+                                           const std::string& id,
+                                           const AccountType& account_type);
 
 // Returns true if |subsystem| data was migrated to GaiaId for the |account_id|.
 bool USER_MANAGER_EXPORT GetGaiaIdMigrationStatus(const AccountId& account_id,
@@ -88,6 +92,10 @@ SetGaiaIdMigrationStatusDone(const AccountId& account_id,
 // (crbug.com/548926).
 void USER_MANAGER_EXPORT UpdateGaiaID(const AccountId& account_id,
                                       const std::string& gaia_id);
+
+// Updates |account_id.account_type_| and |account_id.GetGaiaId()| or
+// |account_id.GetObjGuid()| for user with |account_id|.
+void USER_MANAGER_EXPORT UpdateId(const AccountId& account_id);
 
 // Find GAIA ID for user with |account_id|, fill in |out_value| and return
 // true

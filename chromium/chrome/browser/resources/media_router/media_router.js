@@ -2,16 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-<include src="media_router_data.js">
-<include src="media_router_ui_interface.js">
+// <include src="media_router_data.js">
+// <include src="media_router_ui_interface.js">
 
 // Handles user events for the Media Router UI.
 cr.define('media_router', function() {
   'use strict';
-
-  // The ESC key maps to keycode '27'.
-  // @const {number}
-  var KEYCODE_ESC = 27;
 
   /**
    * The media-router-container element. Initialized after polymer is ready.
@@ -24,19 +20,24 @@ cr.define('media_router', function() {
    * router content, such as the media sink and media route lists.
    */
   function initialize() {
-    media_router.browserApi.requestInitialData();
+    // For non-Mac platforms, request data immediately after initialization.
+    if (!cr.isMac)
+      onRequestInitialData();
 
     container = /** @type {!MediaRouterContainerElement} */
         ($('media-router-container'));
-    media_router.ui.setContainer(container);
+
+    media_router.ui.setElements(container,
+        /** @type {!MediaRouterHeaderElement} */(container.header));
 
     container.addEventListener('acknowledge-first-run-flow',
                                onAcknowledgeFirstRunFlow);
     container.addEventListener('back-click', onNavigateToSinkList);
     container.addEventListener('cast-mode-selected', onCastModeSelected);
-    container.addEventListener('close-button-click', onCloseDialogEvent);
-    container.addEventListener('close-dialog', onCloseDialogEvent);
-    container.addEventListener('close-route-click', onCloseRouteClick);
+    container.addEventListener('change-route-source-click',
+                               onChangeRouteSourceClick);
+    container.addEventListener('close-dialog', onCloseDialog);
+    container.addEventListener('close-route', onCloseRoute);
     container.addEventListener('create-route', onCreateRoute);
     container.addEventListener('issue-action-click', onIssueActionClick);
     container.addEventListener('join-route-click', onJoinRouteClick);
@@ -44,6 +45,7 @@ cr.define('media_router', function() {
                                onNavigateToDetails);
     container.addEventListener('navigate-to-cast-mode-list',
                                onNavigateToCastMode);
+    container.addEventListener('report-filter', onFilter);
     container.addEventListener('report-initial-action', onInitialAction);
     container.addEventListener('report-initial-action-close',
                                onInitialActionClose);
@@ -51,16 +53,34 @@ cr.define('media_router', function() {
     container.addEventListener('report-sink-click-time',
                                onSinkClickTimeReported);
     container.addEventListener('report-sink-count', onSinkCountReported);
+    container.addEventListener('report-resolved-route',
+                               onReportRouteCreationOutcome);
+    container.addEventListener('request-initial-data',
+                               onRequestInitialData);
+    container.addEventListener('search-sinks-and-create-route',
+                               onSearchSinksAndCreateRoute);
     container.addEventListener('show-initial-state', onShowInitialState);
     container.addEventListener('sink-click', onSinkClick);
 
-    // Pressing the ESC key closes the dialog.
-    document.addEventListener('keydown', function(e) {
-      if (e.keyCode == KEYCODE_ESC) {
-        container.maybeReportUserFirstAction(
-            media_router.MediaRouterUserAction.CLOSE);
-      }
-    });
+    window.addEventListener('blur', onWindowBlur);
+  }
+
+  /**
+   * Requests that the Media Router searches for a sink with criteria
+   * |event.detail.name|.
+   * @param {!Event} event
+   * Parameters in |event|.detail:
+   *   id - id of the pseudo sink generating the request.
+   *   name - sink search criteria.
+   *   domain - user's current domain.
+   *   selectedCastMode - type of cast mode selected by the user.
+   */
+  function onSearchSinksAndCreateRoute(event) {
+    /** @type {{id: string, domain: string, name: string,
+     *          selectedCastMode: number}} */
+    var detail = event.detail;
+    media_router.browserApi.searchSinksAndCreateRoute(
+        detail.id, detail.name, detail.domain, detail.selectedCastMode);
   }
 
   /**
@@ -78,22 +98,63 @@ cr.define('media_router', function() {
   }
 
   /**
+   * Reports the route for which the users wants to replace the source and the
+   * cast mode that should be used for the new source.
+   *
+   * @param {!Event} event The event object.
+   * Parameters in |event|.detail:
+   *   route - route to modify.
+   *   selectedCastMode - type of cast mode selected by the user.
+   */
+  function onChangeRouteSourceClick(event) {
+    /** @type {{route: !media_router.Route, selectedCastMode: number}} */
+    var detail = event.detail;
+    media_router.browserApi.changeRouteSource(
+        detail.route, detail.selectedCastMode);
+  }
+
+  /**
    * Updates the preference that the user has seen the first run flow.
    * Called when the user clicks on the acknowledgement button on the first run
    * flow.
+   *
+   * @param {!Event} event
+   * Parameters in |event|.detail:
+   *   optedIntoCloudServices - whether or not the user opted into cloud
+   *                            services.
    */
-  function onAcknowledgeFirstRunFlow() {
-    media_router.browserApi.acknowledgeFirstRunFlow();
+  function onAcknowledgeFirstRunFlow(event) {
+    /** @type {{optedIntoCloudServices: boolean}} */
+    var detail = event.detail;
+    media_router.browserApi.acknowledgeFirstRunFlow(
+        detail.optedIntoCloudServices);
   }
 
   /**
    * Closes the dialog.
-   * Called when the user clicks the close button on the dialog.
+   * Called when the user clicks the close button on the dialog. Reports
+   * whether the user closed the dialog via the ESC key.
+   *
+   * @param {!Event} event
+   * Parameters in |event|.detail:
+   *   pressEscToClose - whether or not the user pressed ESC to close the
+   *                     dialog.
    */
-  function onCloseDialogEvent() {
+  function onCloseDialog(event) {
+    /** @type {{pressEscToClose: boolean}} */
+    var detail = event.detail;
     container.maybeReportUserFirstAction(
         media_router.MediaRouterUserAction.CLOSE);
-    media_router.browserApi.closeDialog();
+    media_router.browserApi.closeDialog(detail.pressEscToClose);
+  }
+
+  /**
+   * Reports when the user uses the filter input to filter the sink list. This
+   * is reported at most once each time the user enters the filter view, and
+   * only if text is actually entered in the filter input.
+   */
+  function onFilter() {
+    media_router.browserApi.reportFilter();
   }
 
   /**
@@ -137,7 +198,7 @@ cr.define('media_router', function() {
    *   helpPageId - the numeric help center ID.
    */
   function onIssueActionClick(event) {
-    /** @type {{id: string, actionType: number, helpPageId: number}} */
+    /** @type {{id: number, actionType: number, helpPageId: number}} */
     var detail = event.detail;
     media_router.browserApi.actOnIssue(detail.id,
                                        detail.actionType,
@@ -169,19 +230,20 @@ cr.define('media_router', function() {
    * Parameters in |event|.detail:
    *   route - The route to close.
    */
-  function onCloseRouteClick(event) {
+  function onCloseRoute(event) {
     /** @type {{route: !media_router.Route}} */
     var detail = event.detail;
     media_router.browserApi.closeRoute(detail.route);
   }
 
   /**
-   * Joins a route.
-   * Called when the user requests to join a media route.
+   * Starts casting to an existing route.
+   * Called when the user requests to start casting to a media route that is
+   * joinable.
    *
    * @param {!Event} event
    * Parameters in |event|.detail:
-   *   route - route to join.
+   *   route - The route to connect to if possible.
    */
   function onJoinRouteClick(event) {
     /** @type {{route: !media_router.Route}} */
@@ -229,6 +291,30 @@ cr.define('media_router', function() {
   function onReportRouteCreation(event) {
     var detail = event.detail;
     media_router.browserApi.reportRouteCreation(detail.success);
+  }
+
+  /**
+   * Reports success or the type of failure for route creation response.
+   * Called when the route is resolved; either the route creation was a success
+   * or if there was no route or the route's corresponding sink is invalid;
+   * either the sink does not exist or was not the sink we were looking for.
+   *
+   * @param {!Event} event
+   * Parameters in |event|.detail:
+   *   outcome - the outcome of a create route response.
+   *
+   */
+  function onReportRouteCreationOutcome(event) {
+    /** @type {{outcome: number}} */
+    var detail = event.detail;
+    media_router.browserApi.reportRouteCreationOutcome(detail.outcome);
+  }
+
+  /**
+   * Requests for initial data to load into the dialog.
+   */
+  function onRequestInitialData() {
+    media_router.browserApi.requestInitialData();
   }
 
   /**
@@ -285,6 +371,13 @@ cr.define('media_router', function() {
     /** @type {{sinkCount: number}} */
     var detail = event.detail;
     media_router.browserApi.reportSinkCount(detail.sinkCount);
+  }
+
+  /**
+   * Reports when the user clicks outside the dialog.
+   */
+  function onWindowBlur() {
+    media_router.browserApi.reportBlur();
   }
 
   return {

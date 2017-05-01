@@ -37,6 +37,7 @@ WHITELISTED_LICENSES = [
     'Apache (v2.0) BSD (2 clause)',
     'Apache (v2.0) BSD-like',
     'Apache (v2.0) GPL (v2)',
+    'Apache (v2.0) ISC',
     'Apache (v2.0)',
     'Apple MIT',  # https://fedoraproject.org/wiki/Licensing/Apple_MIT_License
     'BSD (2 clause) ISC',
@@ -63,6 +64,7 @@ WHITELISTED_LICENSES = [
     'GPL (v2 or later) with Bison parser exception',
     'GPL (v2 or later) with libtool exception',
     'GPL (v2) LGPL (v2.1 or later)',
+    'GPL (v3 or later) LGPL (v2.1 or later) with Bison parser exception',
     'GPL (v3 or later) with Bison parser exception',
     'GPL with Bison parser exception',
     'ISC',
@@ -75,11 +77,13 @@ WHITELISTED_LICENSES = [
     'LGPL (v3 or later)',
     'MIT/X11 (BSD like) LGPL (v2.1 or later)',
     'MIT/X11 (BSD like)',
+    'MIT/X11 (BSD like) Public domain MIT/X11 (BSD like)',
     'MPL (v1.0) LGPL (v2 or later)',
     'MPL (v1.1) BSD (3 clause) GPL (v2) LGPL (v2.1 or later)',
     'MPL (v1.1) BSD (3 clause) LGPL (v2.1 or later)',
     'MPL (v1.1) BSD-like GPL (unversioned/unknown version)',
     'MPL (v1.1) BSD-like GPL (v2) LGPL (v2.1 or later)',
+    'MPL (v1.1) BSD-like LGPL (v2.1 or later)',
     'MPL (v1.1) BSD-like',
     'MPL (v1.1) GPL (unversioned/unknown version)',
     'MPL (v1.1) GPL (v2) LGPL (v2 or later)',
@@ -94,6 +98,7 @@ WHITELISTED_LICENSES = [
     'Public domain BSD',
     'Public domain BSD-like',
     'Public domain LGPL (v2.1 or later)',
+    'Public domain University of Illinois/NCSA Open Source License (BSD like)',
     'Public domain',
     'SGI Free Software License B',
     'SunSoft (BSD like)',
@@ -141,12 +146,6 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
     'chrome/common/extensions/docs/server2/third_party': [
         'UNKNOWN',
     ],
-    'courgette/third_party/bsdiff_create.cc': [  # http://crbug.com/98095
-        'UNKNOWN',
-    ],
-    'courgette/third_party/qsufsort.h': [  # http://crbug.com/98095
-        'UNKNOWN',
-    ],
     'native_client': [  # http://crbug.com/98099
         'UNKNOWN',
     ],
@@ -177,8 +176,27 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
+    # https://bugs.chromium.org/p/swiftshader/issues/detail?id=1
+    'third_party/swiftshader': [
+        'UNKNOWN',
+    ],
+
     # http://code.google.com/p/angleproject/issues/detail?id=217
     'third_party/angle': [
+        'UNKNOWN',
+    ],
+
+    # http://crbug.com/603946
+    # https://github.com/google/oauth2client/issues/331
+    # Just imports googleapiclient. Chromite is not shipped.
+    'third_party/chromite/third_party/apiclient': [
+        'UNKNOWN',
+    ],
+
+    # http://crbug.com/603946
+    # https://github.com/google/google-api-python-client/issues/216
+    # Apache (v2.0) license. Chromite is not shipped.
+    'third_party/chromite/third_party/googleapiclient/channel.py': [
         'UNKNOWN',
     ],
 
@@ -188,9 +206,23 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
+    # http://crbug.com/603939
+    # https://github.com/jcgregorio/httplib2/issues/307
+    # MIT license. Chromite is not shipped.
+    'third_party/chromite/third_party/httplib2': [
+        'UNKNOWN',
+    ],
+
     # http://crbug.com/326117
     # https://bitbucket.org/chrisatlee/poster/issue/21
     'third_party/chromite/third_party/poster': [
+        'UNKNOWN',
+    ],
+
+    # http://crbug.com/603944
+    # https://github.com/kennethreitz/requests/issues/1610
+    # Apache (v2.0) license. Chromite is not shipped
+    'third_party/chromite/third_party/requests': [
         'UNKNOWN',
     ],
 
@@ -199,12 +231,15 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
-    # https://mail.python.org/pipermail/cython-devel/2014-July/004062.html
-    'third_party/cython': [
-        'UNKNOWN',
+    # https://bugs.chromium.org/p/chromium/issues/detail?id=655755
+    'third_party/dpkg-dev': [
+        'GPL (v2 or later)',
     ],
 
     'third_party/devscripts': [
+        'GPL (v2 or later)',
+    ],
+    'third_party/catapult/firefighter/default/tracing/third_party/devscripts': [
         'GPL (v2 or later)',
     ],
     'third_party/catapult/tracing/third_party/devscripts': [
@@ -220,6 +255,12 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
     # https://bugs.launchpad.net/beautifulsoup/+bug/1481316
     # MIT license.
     'third_party/catapult/third_party/beautifulsoup': [
+        'UNKNOWN'
+    ],
+
+    # https://bitbucket.org/ned/coveragepy/issue/313/add-license-file-containing-2-3-or-4
+    # Apache (v2.0) license, not shipped
+    'third_party/catapult/third_party/coverage': [
         'UNKNOWN'
     ],
 
@@ -325,12 +366,6 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
-    # https://bitbucket.org/gutworth/six/issues/129/add-license-headers-to-source-files
-    # MIT license.
-    'third_party/catapult/third_party/six': [
-        'UNKNOWN',
-    ],
-
     'third_party/expat/files/lib': [  # http://crbug.com/98121
         'UNKNOWN',
     ],
@@ -346,6 +381,12 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
     'third_party/freetype2': [ # http://crbug.com/177319
+        'UNKNOWN',
+    ],
+    'third_party/freetype-android': [ # http://crbug.com/177319
+        'UNKNOWN',
+    ],
+    'third_party/grpc': [ # https://github.com/grpc/grpc/issues/6951
         'UNKNOWN',
     ],
     'third_party/hunspell': [  # http://crbug.com/98134
@@ -377,9 +418,6 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
     'third_party/lcov/contrib/galaxy/genflat.pl': [
         'GPL (v2 or later)',
     ],
-    'third_party/libjingle/source/talk': [  # http://crbug.com/98310
-        'UNKNOWN',
-    ],
     'third_party/libjpeg_turbo': [  # http://crbug.com/98314
         'UNKNOWN',
     ],
@@ -398,7 +436,7 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
-    'third_party/libvpx_new/source': [  # http://crbug.com/98319
+    'third_party/libvpx/source': [  # http://crbug.com/98319
         'UNKNOWN',
     ],
     'third_party/libxml': [
@@ -425,6 +463,9 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
     ],
     'third_party/openmax_dl/dl' : [
         'Khronos Group',
+    ],
+    'third_party/opus/src/autogen.sh' : [  # https://trac.xiph.org/ticket/2253#ticket
+        'UNKNOWN',
     ],
     'third_party/boringssl': [
         # There are some files in BoringSSL which came from OpenSSL and have no
@@ -476,27 +517,27 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
 
-    # http://crbug.com/334668
-    # MIT license.
-    'tools/swarming_client/third_party/httplib2': [
+    # New BSD license. http://crbug.com/98455
+    'tools/swarming_client/third_party/google': [
+        'UNKNOWN',
+    ],
+
+    # https://github.com/google/google-api-python-client/issues/216
+    # Apache v2.0.
+    'tools/swarming_client/third_party/googleapiclient': [
         'UNKNOWN',
     ],
 
     # http://crbug.com/334668
-    # Apache v2.0.
-    'tools/swarming_client/third_party/oauth2client': [
+    # https://github.com/jcgregorio/httplib2/issues/307
+    # MIT license.
+    'tools/swarming_client/third_party/httplib2': [
         'UNKNOWN',
     ],
 
     # http://crbug.com/471372
     # BSD
     'tools/swarming_client/third_party/pyasn1': [
-        'UNKNOWN',
-    ],
-
-    # http://crbug.com/471372
-    # Apache v2.0.
-    'tools/swarming_client/third_party/rsa': [
         'UNKNOWN',
     ],
 
@@ -572,15 +613,34 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
     # Not shipped, MIT license but the header files contain no licensing info.
-    'tools/telemetry/third_party/altgraph': [
+    'third_party/catapult/telemetry/third_party/altgraph': [
         'UNKNOWN',
     ],
     # Not shipped, MIT license but the header files contain no licensing info.
-    'tools/telemetry/third_party/modulegraph': [
+    'third_party/catapult/telemetry/third_party/modulegraph': [
         'UNKNOWN',
     ],
-    'tools/telemetry/third_party/pyserial': [
+    'third_party/catapult/telemetry/third_party/pyserial': [
         # https://sourceforge.net/p/pyserial/feature-requests/35/
+        'UNKNOWN',
+    ],
+    # Not shipped, GPL license but some header files contain no licensing info.
+    'third_party/logilab/logilab/astroid': [
+        'GPL (v2 or later)',
+        # https://github.com/PyCQA/astroid/issues/336
+        'UNKNOWN',
+    ],
+    # Not shipped, GPL license but some header files contain no licensing info.
+    'third_party/logilab/logilab/common': [
+        'GPL (v2 or later)',
+        # Look for email by nednguyen@google.com in May 5th in
+        # https://lists.logilab.org/pipermail/python-projects/
+        'UNKNOWN',
+    ],
+    # Not shipped, GPL license but some header files contain no licensing info.
+    'third_party/pylint': [
+        'GPL (v2 or later)',
+        # https://github.com/PyCQA/pylint/issues/894
         'UNKNOWN',
     ],
 }
@@ -589,11 +649,16 @@ EXCLUDED_PATHS = [
     # Don't check generated files
     'out/',
 
+    # Don't check downloaded goma client binaries
+    'build/goma/client',
+
     # Don't check sysroot directories
+    'build/linux/debian_jessie_arm64-sysroot',
     'build/linux/debian_wheezy_amd64-sysroot',
     'build/linux/debian_wheezy_arm-sysroot',
     'build/linux/debian_wheezy_i386-sysroot',
     'build/linux/debian_wheezy_mips-sysroot',
+    'build/linux/ubuntu_precise_amd64-sysroot',
 ]
 
 

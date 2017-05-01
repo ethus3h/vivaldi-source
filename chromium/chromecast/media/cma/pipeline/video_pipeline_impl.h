@@ -5,10 +5,10 @@
 #ifndef CHROMECAST_MEDIA_CMA_BASE_VIDEO_PIPELINE_IMPL_H_
 #define CHROMECAST_MEDIA_CMA_BASE_VIDEO_PIPELINE_IMPL_H_
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "chromecast/media/cma/pipeline/av_pipeline_impl.h"
 #include "chromecast/media/cma/pipeline/video_pipeline_client.h"
 #include "chromecast/public/media/media_pipeline_backend.h"
@@ -31,10 +31,9 @@ class VideoPipelineImpl : public AvPipelineImpl {
                     const VideoPipelineClient& client);
   ~VideoPipelineImpl() override;
 
-  void Initialize(
+  ::media::PipelineStatus Initialize(
       const std::vector<::media::VideoDecoderConfig>& configs,
-      scoped_ptr<CodedFrameProvider> frame_provider,
-      const ::media::PipelineStatusCB& status_cb);
+      std::unique_ptr<CodedFrameProvider> frame_provider);
 
   // AvPipelineImpl implementation:
   void UpdateStatistics() override;
@@ -45,9 +44,11 @@ class VideoPipelineImpl : public AvPipelineImpl {
   void OnUpdateConfig(StreamId id,
                       const ::media::AudioDecoderConfig& audio_config,
                       const ::media::VideoDecoderConfig& video_config) override;
+  const EncryptionScheme& GetEncryptionScheme(StreamId id) const override;
 
   MediaPipelineBackend::VideoDecoder* const video_decoder_;
   const VideoPipelineClient::NaturalSizeChangedCB natural_size_changed_cb_;
+  std::vector<EncryptionScheme> encryption_schemes_;
 
   DISALLOW_COPY_AND_ASSIGN(VideoPipelineImpl);
 };

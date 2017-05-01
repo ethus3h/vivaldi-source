@@ -14,7 +14,7 @@
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/invalidation/impl/gcm_network_channel_delegate.h"
@@ -32,13 +32,15 @@
 #include "google/cacheinvalidation/types.pb.h"
 #endif
 
+#include "sync/vivaldi_sync_urls.h"
+
 namespace syncer {
 
 namespace {
 
 const char kCacheInvalidationEndpointUrl[] =
-    "https://clients4.google.com/invalidation/android/request/";
-const char kCacheInvalidationPackageName[] = "com.google.chrome.invalidations";
+    SYNC_URL("/invalidation/");
+const char kCacheInvalidationPackageName[] = "com.vivaldi.vivaldi.invalidations";
 
 // Register backoff policy.
 const net::BackoffEntry::Policy kRegisterBackoffPolicy = {
@@ -112,7 +114,7 @@ void RecordOutgoingMessageStatus(OutgoingMessageStatus status) {
 
 GCMNetworkChannel::GCMNetworkChannel(
     scoped_refptr<net::URLRequestContextGetter> request_context_getter,
-    scoped_ptr<GCMNetworkChannelDelegate> delegate)
+    std::unique_ptr<GCMNetworkChannelDelegate> delegate)
     : request_context_getter_(request_context_getter),
       delegate_(std::move(delegate)),
       register_backoff_entry_(new net::BackoffEntry(&kRegisterBackoffPolicy)),
@@ -121,8 +123,10 @@ GCMNetworkChannel::GCMNetworkChannel(
       diagnostic_info_(this),
       weak_factory_(this) {
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
-  delegate_->Initialize(base::Bind(&GCMNetworkChannel::OnConnectionStateChanged,
-                                   weak_factory_.GetWeakPtr()));
+  delegate_->Initialize(
+      base::Bind(&GCMNetworkChannel::OnConnectionStateChanged,
+                 weak_factory_.GetWeakPtr()),
+      base::Bind(&GCMNetworkChannel::OnStoreReset, weak_factory_.GetWeakPtr()));
   Register();
 }
 
@@ -194,7 +198,7 @@ void GCMNetworkChannel::OnGetTokenComplete(
     const GoogleServiceAuthError& error,
     const std::string& token) {
   DCHECK(CalledOnValidThread());
-  if (cached_message_.empty()) {
+  if (cached_message_.empty() || registration_id_.empty()) {
     // Nothing to do.
     return;
   }
@@ -236,7 +240,7 @@ void GCMNetworkChannel::OnURLFetchComplete(const net::URLFetcher* source) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(fetcher_.get(), source);
   // Free fetcher at the end of function.
-  scoped_ptr<net::URLFetcher> fetcher = std::move(fetcher_);
+  std::unique_ptr<net::URLFetcher> fetcher = std::move(fetcher_);
 
   net::URLRequestStatus status = fetcher->GetStatus();
   diagnostic_info_.last_post_response_code_ =
@@ -300,6 +304,11 @@ void GCMNetworkChannel::OnIncomingMessage(const std::string& message,
 
 void GCMNetworkChannel::OnConnectionStateChanged(bool online) {
   UpdateGcmChannelState(online);
+}
+
+void GCMNetworkChannel::OnStoreReset() {
+  // TODO(crbug.com/661660): Tell server the registration ID is no longer valid.
+  registration_id_.clear();
 }
 
 void GCMNetworkChannel::OnNetworkChanged(
@@ -403,9 +412,9 @@ GCMNetworkChannelDiagnostic::GCMNetworkChannelDiagnostic(
       registration_result_(gcm::GCMClient::UNKNOWN_ERROR),
       sent_messages_count_(0) {}
 
-scoped_ptr<base::DictionaryValue>
+std::unique_ptr<base::DictionaryValue>
 GCMNetworkChannelDiagnostic::CollectDebugData() const {
-  scoped_ptr<base::DictionaryValue> status(new base::DictionaryValue);
+  std::unique_ptr<base::DictionaryValue> status(new base::DictionaryValue);
   status->SetString("GCMNetworkChannel.Channel", "GCM");
   std::string reg_id_hash = base::SHA1HashString(registration_id_);
   status->SetString("GCMNetworkChannel.HashedRegistrationID",

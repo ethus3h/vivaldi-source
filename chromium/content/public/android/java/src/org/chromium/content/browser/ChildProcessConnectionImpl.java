@@ -8,19 +8,20 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.DeadObjectException;
 import android.os.IBinder;
 import android.os.RemoteException;
 
-import org.chromium.base.CpuFeatures;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.VisibleForTesting;
-import org.chromium.base.library_loader.Linker;
-import org.chromium.content.app.ChildProcessService;
 import org.chromium.content.app.ChromiumLinkerParams;
+import org.chromium.content.common.FileDescriptorInfo;
 import org.chromium.content.common.IChildProcessCallback;
 import org.chromium.content.common.IChildProcessService;
 
@@ -34,46 +35,52 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
     private final int mServiceNumber;
     private final boolean mInSandbox;
     private final ChildProcessConnection.DeathCallback mDeathCallback;
-    private final Class<? extends ChildProcessService> mServiceClass;
+    private final ComponentName mServiceName;
 
     // Synchronization: While most internal flow occurs on the UI thread, the public API
     // (specifically start and stop) may be called from any thread, hence all entry point methods
     // into the class are synchronized on the lock to protect access to these members.
     private final Object mLock = new Object();
-    private IChildProcessService mService = null;
+    private IChildProcessService mService;
     // Set to true when the service connected successfully.
-    private boolean mServiceConnectComplete = false;
+    private boolean mServiceConnectComplete;
     // Set to true when the service disconnects, as opposed to being properly closed. This happens
     // when the process crashes or gets killed by the system out-of-memory killer.
-    private boolean mServiceDisconnected = false;
+    private boolean mServiceDisconnected;
     // When the service disconnects (i.e. mServiceDisconnected is set to true), the status of the
     // oom bindings is stashed here for future inspection.
-    private boolean mWasOomProtected = false;
-    private int mPid = 0;  // Process ID of the corresponding child process.
+    private boolean mWasOomProtected;
+    private int mPid;  // Process ID of the corresponding child process.
     // Initial binding protects the newly spawned process from being killed before it is put to use,
     // it is maintained between calls to start() and removeInitialBinding().
-    private ChildServiceConnection mInitialBinding = null;
+    private ChildServiceConnection mInitialBinding;
     // Strong binding will make the service priority equal to the priority of the activity. We want
     // the OS to be able to kill background renderers as it kills other background apps, so strong
     // bindings are maintained only for services that are active at the moment (between
     // addStrongBinding() and removeStrongBinding()).
-    private ChildServiceConnection mStrongBinding = null;
+    private ChildServiceConnection mStrongBinding;
     // Low priority binding maintained in the entire lifetime of the connection, i.e. between calls
     // to start() and stop().
-    private ChildServiceConnection mWaivedBinding = null;
+    private ChildServiceConnection mWaivedBinding;
     // Incremented on addStrongBinding(), decremented on removeStrongBinding().
-    private int mStrongBindingCount = 0;
+    private int mStrongBindingCount;
     // Moderate binding will make the service priority equal to the priority of a visible process
     // while the app is in the foreground. It will stay bound only while the app is in the
     // foreground to protect a background process from the system out-of-memory killer.
-    private ChildServiceConnection mModerateBinding = null;
+    private ChildServiceConnection mModerateBinding;
 
     // Linker-related parameters.
-    private ChromiumLinkerParams mLinkerParams = null;
+    private ChromiumLinkerParams mLinkerParams;
 
     private final boolean mAlwaysInForeground;
+    private final ChildProcessCreationParams mCreationParams;
 
-    private static final String TAG = "cr.ChildProcessConnect";
+    // Caches whether non-sandboxed and sandboxed services require an extra
+    // binding flag provided via ChildProcessCreationParams.
+    // TODO(mnaganov): Get rid of it after the release of the next Android SDK.
+    private static Boolean sNeedsExtrabindFlags[] = new Boolean[2];
+
+    private static final String TAG = "ChildProcessConnect";
 
     private static class ConnectionParams {
         final String[] mCommandLine;
@@ -101,27 +108,21 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
     private ChildProcessConnection.ConnectionCallback mConnectionCallback;
 
     private class ChildServiceConnection implements ServiceConnection {
-        private boolean mBound = false;
+        private boolean mBound;
 
         private final int mBindFlags;
-        private final ChildProcessLauncher.ChildProcessCreationParams mCreationParams;
 
         private Intent createServiceBindIntent() {
-            final String packageName = mCreationParams != null
-                    ? mCreationParams.getPackageName() : mContext.getPackageName();
             Intent intent = new Intent();
-            intent.setComponent(
-                    new ComponentName(packageName, mServiceClass.getName() + mServiceNumber));
+            if (mCreationParams != null) {
+                mCreationParams.addIntentExtras(intent);
+            }
+            intent.setComponent(mServiceName);
             return intent;
         }
 
-        public ChildServiceConnection(int bindFlags,
-                ChildProcessLauncher.ChildProcessCreationParams creationParams) {
-            if (creationParams != null) {
-                bindFlags = creationParams.addExtraBindFlags(bindFlags);
-            }
+        public ChildServiceConnection(int bindFlags) {
             mBindFlags = bindFlags;
-            mCreationParams = creationParams;
         }
 
         boolean bind(String[] commandLine) {
@@ -129,9 +130,9 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
                 try {
                     TraceEvent.begin("ChildProcessConnectionImpl.ChildServiceConnection.bind");
                     final Intent intent = createServiceBindIntent();
-                    if (commandLine != null) {
-                        intent.putExtra(EXTRA_COMMAND_LINE, commandLine);
-                    }
+                    // Note, the intent may be saved and re-used by Android for re-launching the
+                    // child service. Do not pass data that is different for each child; command
+                    // line arguments for example.
                     if (mLinkerParams != null) {
                         mLinkerParams.addIntentExtras(intent);
                     }
@@ -207,25 +208,54 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
 
     ChildProcessConnectionImpl(Context context, int number, boolean inSandbox,
             ChildProcessConnection.DeathCallback deathCallback,
-            Class<? extends ChildProcessService> serviceClass,
+            String serviceClassName,
             ChromiumLinkerParams chromiumLinkerParams,
             boolean alwaysInForeground,
-            ChildProcessLauncher.ChildProcessCreationParams creationParams) {
+            ChildProcessCreationParams creationParams) {
         mContext = context;
         mServiceNumber = number;
         mInSandbox = inSandbox;
         mDeathCallback = deathCallback;
-        mServiceClass = serviceClass;
+        String packageName =
+                creationParams != null ? creationParams.getPackageName() : context.getPackageName();
+        mServiceName = new ComponentName(packageName, serviceClassName + mServiceNumber);
         mLinkerParams = chromiumLinkerParams;
         mAlwaysInForeground = alwaysInForeground;
+        mCreationParams = creationParams;
         int initialFlags = Context.BIND_AUTO_CREATE;
         if (mAlwaysInForeground) initialFlags |= Context.BIND_IMPORTANT;
-        mInitialBinding = new ChildServiceConnection(initialFlags, creationParams);
+        int extraBindFlags = 0;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && mCreationParams != null
+                && mCreationParams.getIsExternalService()
+                && isExportedService(inSandbox, mContext, mServiceName)) {
+            extraBindFlags = Context.BIND_EXTERNAL_SERVICE;
+        }
+        mInitialBinding = new ChildServiceConnection(initialFlags | extraBindFlags);
         mStrongBinding = new ChildServiceConnection(
-                Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT, creationParams);
+                Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT | extraBindFlags);
         mWaivedBinding = new ChildServiceConnection(
-                Context.BIND_AUTO_CREATE | Context.BIND_WAIVE_PRIORITY, creationParams);
-        mModerateBinding = new ChildServiceConnection(Context.BIND_AUTO_CREATE, creationParams);
+                Context.BIND_AUTO_CREATE | Context.BIND_WAIVE_PRIORITY | extraBindFlags);
+        mModerateBinding = new ChildServiceConnection(Context.BIND_AUTO_CREATE | extraBindFlags);
+    }
+
+    private static boolean isExportedService(boolean inSandbox, Context context,
+            ComponentName serviceName) {
+        // Check for the cached value first. It is assumed that all pooled child services
+        // have identical attributes in the manifest.
+        final int arrayIndex = inSandbox ? 1 : 0;
+        if (sNeedsExtrabindFlags[arrayIndex] != null) {
+            return sNeedsExtrabindFlags[arrayIndex].booleanValue();
+        }
+        boolean result = false;
+        try {
+            PackageManager packageManager = context.getPackageManager();
+            ServiceInfo serviceInfo = packageManager.getServiceInfo(serviceName, 0);
+            result = serviceInfo.exported;
+        } catch (PackageManager.NameNotFoundException e) {
+            Log.e(TAG, "Could not retrieve info about service %s", serviceName, e);
+        }
+        sNeedsExtrabindFlags[arrayIndex] = Boolean.valueOf(result);
+        return result;
     }
 
     @Override
@@ -236,6 +266,12 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
     @Override
     public boolean isInSandbox() {
         return mInSandbox;
+    }
+
+    @Override
+    public String getPackageName() {
+        return mCreationParams != null ? mCreationParams.getPackageName()
+                : mContext.getPackageName();
     }
 
     @Override
@@ -331,14 +367,9 @@ public class ChildProcessConnectionImpl implements ChildProcessConnection {
             assert mServiceConnectComplete && mService != null;
             assert mConnectionParams != null;
 
-            Bundle bundle = new Bundle();
-            bundle.putStringArray(EXTRA_COMMAND_LINE, mConnectionParams.mCommandLine);
-            bundle.putParcelableArray(EXTRA_FILES, mConnectionParams.mFilesToBeMapped);
-            // Add the CPU properties now.
-            bundle.putInt(EXTRA_CPU_COUNT, CpuFeatures.getCount());
-            bundle.putLong(EXTRA_CPU_FEATURES, CpuFeatures.getMask());
-            bundle.putBundle(Linker.EXTRA_LINKER_SHARED_RELROS,
-                             mConnectionParams.mSharedRelros);
+            Bundle bundle =
+                    ChildProcessLauncher.createsServiceBundle(mConnectionParams.mCommandLine,
+                            mConnectionParams.mFilesToBeMapped, mConnectionParams.mSharedRelros);
             try {
                 mPid = mService.setupConnection(bundle, mConnectionParams.mCallback);
                 assert mPid != 0 : "Child service claims to be run by a process of pid=0.";

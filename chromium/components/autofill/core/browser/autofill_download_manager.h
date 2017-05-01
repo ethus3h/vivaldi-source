@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <list>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,10 +39,10 @@ class AutofillDownloadManager : public net::URLFetcherDelegate {
   class Observer {
    public:
     // Called when field type predictions are successfully received from the
-    // server. |response_xml| contains the server response for the forms
+    // server. |response| contains the server response for the forms
     // represented by |form_signatures|.
     virtual void OnLoadedServerPredictions(
-        std::string response_xml,
+        std::string response,
         const std::vector<std::string>& form_signatures) = 0;
 
     // These notifications are used to help with testing.
@@ -94,7 +95,6 @@ class AutofillDownloadManager : public net::URLFetcherDelegate {
   FRIEND_TEST_ALL_PREFIXES(AutofillDownloadManagerTest, QueryAndUploadTest);
   FRIEND_TEST_ALL_PREFIXES(AutofillDownloadManagerTest, BackoffLogic_Upload);
   FRIEND_TEST_ALL_PREFIXES(AutofillDownloadManagerTest, BackoffLogic_Query);
-  FRIEND_TEST_ALL_PREFIXES(AutofillDownloadManagerTest, UploadRequestIsGzipped);
 
   struct FormRequestData;
   typedef std::list<std::pair<std::string, std::string> > QueryRequestCache;
@@ -136,8 +136,11 @@ class AutofillDownloadManager : public net::URLFetcherDelegate {
 
   // For each requested form for both query and upload we create a separate
   // request and save its info. As url fetcher is identified by its address
-  // we use a map between fetchers and info.
-  std::map<net::URLFetcher*, FormRequestData> url_fetchers_;
+  // we use a map between fetchers and info. The value type is a pair of an
+  // owning pointer to the key and the actual FormRequestData.
+  std::map<net::URLFetcher*,
+           std::pair<std::unique_ptr<net::URLFetcher>, FormRequestData>>
+      url_fetchers_;
 
   // Cached QUERY requests.
   QueryRequestCache cached_forms_;

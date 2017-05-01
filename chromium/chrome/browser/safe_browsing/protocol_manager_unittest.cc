@@ -1,20 +1,22 @@
 // Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
 
+#include "chrome/browser/safe_browsing/protocol_manager.h"
+
+#include <memory>
 #include <vector>
 
-#include "base/base64.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/test_simple_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/test/scoped_mock_time_message_loop_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/safe_browsing/chunk.pb.h"
-#include "chrome/browser/safe_browsing/protocol_manager.h"
-#include "chrome/browser/safe_browsing/safe_browsing_util.h"
+#include "components/safe_browsing_db/safe_browsing_prefs.h"
 #include "components/safe_browsing_db/safebrowsing.pb.h"
+#include "components/safe_browsing_db/util.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
@@ -71,7 +73,11 @@ namespace safe_browsing {
 
 class SafeBrowsingProtocolManagerTest : public testing::Test {
  protected:
-  std::string key_param_;
+  SafeBrowsingProtocolManagerTest()
+      : thread_bundle_(content::TestBrowserThreadBundle::Options::IO_MAINLOOP) {
+  }
+
+  ~SafeBrowsingProtocolManagerTest() override {}
 
   void SetUp() override {
     std::string key = google_apis::GetAPIKey();
@@ -82,7 +88,7 @@ class SafeBrowsingProtocolManagerTest : public testing::Test {
     }
   }
 
-  scoped_ptr<SafeBrowsingProtocolManager> CreateProtocolManager(
+  std::unique_ptr<SafeBrowsingProtocolManager> CreateProtocolManager(
       SafeBrowsingProtocolManagerDelegate* delegate) {
     SafeBrowsingProtocolConfig config;
     config.client_name = kClient;
@@ -91,8 +97,8 @@ class SafeBrowsingProtocolManagerTest : public testing::Test {
     config.backup_http_error_url_prefix = kBackupHttpUrlPrefix;
     config.backup_network_error_url_prefix = kBackupNetworkUrlPrefix;
     config.version = kAppVer;
-    return scoped_ptr<SafeBrowsingProtocolManager>(
-        SafeBrowsingProtocolManager::Create(delegate, NULL, config));
+    return std::unique_ptr<SafeBrowsingProtocolManager>(
+        SafeBrowsingProtocolManager::Create(delegate, nullptr, config));
   }
 
   void ValidateUpdateFetcherRequest(const net::TestURLFetcher* url_fetcher,
@@ -122,11 +128,21 @@ class SafeBrowsingProtocolManagerTest : public testing::Test {
     EXPECT_EQ("", url_fetcher->upload_data());
     EXPECT_EQ(GURL(expected_url), url_fetcher->GetOriginalURL());
   }
+
+  // Fakes BrowserThreads and the main MessageLoop.
+  content::TestBrowserThreadBundle thread_bundle_;
+
+  // Replaces the main MessageLoop's TaskRunner with a TaskRunner on which time
+  // is mocked to allow testing of things bound to timers below.
+  base::ScopedMockTimeMessageLoopTaskRunner mock_time_task_runner_;
+
+  std::string key_param_;
 };
 
 // Ensure that we respect section 5 of the SafeBrowsing protocol specification.
 TEST_F(SafeBrowsingProtocolManagerTest, TestBackOffTimes) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   pm->next_update_interval_ = TimeDelta::FromSeconds(1800);
   ASSERT_TRUE(pm->back_off_fuzz_ >= 0.0 && pm->back_off_fuzz_ <= 1.0);
@@ -175,7 +191,8 @@ TEST_F(SafeBrowsingProtocolManagerTest, TestBackOffTimes) {
 }
 
 TEST_F(SafeBrowsingProtocolManagerTest, TestChunkStrings) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   // Add and Sub chunks.
   SBListChunkRanges phish(kDefaultPhishList);
@@ -203,7 +220,8 @@ TEST_F(SafeBrowsingProtocolManagerTest, TestChunkStrings) {
 }
 
 TEST_F(SafeBrowsingProtocolManagerTest, TestGetHashBackOffTimes) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   // No errors or back off time yet.
   EXPECT_EQ(0U, pm->gethash_error_count_);
@@ -254,290 +272,57 @@ TEST_F(SafeBrowsingProtocolManagerTest, TestGetHashBackOffTimes) {
   EXPECT_TRUE(pm->next_gethash_time_== now + TimeDelta::FromMinutes(480));
 }
 
-TEST_F(SafeBrowsingProtocolManagerTest, TestGetV4HashBackOffTimes) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  // No errors or back off time yet.
-  EXPECT_EQ(0U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(1U, pm->gethash_v4_back_off_mult_);
-  Time now = Time::Now();
-  EXPECT_TRUE(pm->next_gethash_v4_time_ < now);
-
-  // 1 error.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(1U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(1U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(15), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(30), pm->next_gethash_v4_time_);
-
-  // 2 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(2U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(2U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(30), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(60), pm->next_gethash_v4_time_);
-
-  // 3 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(3U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(4U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(60), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(120), pm->next_gethash_v4_time_);
-
-  // 4 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(4U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(8U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(120), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(240), pm->next_gethash_v4_time_);
-
-  // 5 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(5U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(16U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(240), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(480), pm->next_gethash_v4_time_);
-
-  // 6 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(6U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(32U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(480), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(960), pm->next_gethash_v4_time_);
-
-  // 7 errors.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(7U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(64U, pm->gethash_v4_back_off_mult_);
-  EXPECT_LE(now + TimeDelta::FromMinutes(960), pm->next_gethash_v4_time_);
-  EXPECT_GE(now + TimeDelta::FromMinutes(1920), pm->next_gethash_v4_time_);
-
-  // 8 errors, reached max backoff.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(8U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(128U, pm->gethash_v4_back_off_mult_);
-  EXPECT_EQ(now + TimeDelta::FromHours(24), pm->next_gethash_v4_time_);
-
-  // 9 errors, reached max backoff and multiplier capped.
-  pm->HandleGetHashV4Error(now);
-  EXPECT_EQ(9U, pm->gethash_v4_error_count_);
-  EXPECT_EQ(128U, pm->gethash_v4_back_off_mult_);
-  EXPECT_EQ(now + TimeDelta::FromHours(24), pm->next_gethash_v4_time_);
-}
-
 TEST_F(SafeBrowsingProtocolManagerTest, TestGetHashUrl) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   EXPECT_EQ(
       "https://prefix.com/foo/gethash?client=unittest&appver=1.0&"
       "pver=3.0" +
           key_param_ + "&ext=0",
-      pm->GetHashUrl(false).spec());
+      pm->GetHashUrl(SBER_LEVEL_OFF).spec());
 
   pm->set_additional_query(kAdditionalQuery);
   EXPECT_EQ(
       "https://prefix.com/foo/gethash?client=unittest&appver=1.0&"
       "pver=3.0" +
           key_param_ + "&additional_query&ext=1",
-      pm->GetHashUrl(true).spec());
-}
-
-TEST_F(SafeBrowsingProtocolManagerTest, TestGetV4HashUrl) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+      pm->GetHashUrl(SBER_LEVEL_LEGACY).spec());
 
   EXPECT_EQ(
-      "https://safebrowsing.googleapis.com/v4/encodedFullHashes/request_base64?"
-      "alt=proto&client_id=unittest&client_version=1.0" + key_param_,
-      pm->GetV4HashUrl("request_base64").spec());
-
-  // Additional query has no effect.
-  pm->set_additional_query(kAdditionalQuery);
-  EXPECT_EQ(
-      "https://safebrowsing.googleapis.com/v4/encodedFullHashes/request_base64?"
-      "alt=proto&client_id=unittest&client_version=1.0" + key_param_,
-      pm->GetV4HashUrl("request_base64").spec());
-}
-
-TEST_F(SafeBrowsingProtocolManagerTest, TestGetV4HashRequest) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  FindFullHashesRequest req;
-  ThreatInfo* info = req.mutable_threat_info();
-  info->add_threat_types(API_ABUSE);
-  info->add_platform_types(CHROME_PLATFORM);
-  info->add_threat_entry_types(URL_EXPRESSION);
-
-  SBPrefix one = 1u;
-  SBPrefix two = 2u;
-  SBPrefix three = 3u;
-  std::string hash(reinterpret_cast<const char*>(&one), sizeof(SBPrefix));
-  info->add_threat_entries()->set_hash(hash);
-  hash.clear();
-  hash.append(reinterpret_cast<const char*>(&two), sizeof(SBPrefix));
-  info->add_threat_entries()->set_hash(hash);
-  hash.clear();
-  hash.append(reinterpret_cast<const char*>(&three), sizeof(SBPrefix));
-  info->add_threat_entries()->set_hash(hash);
-
-  // Serialize and Base64 encode.
-  std::string req_data, req_base64;
-  req.SerializeToString(&req_data);
-  base::Base64Encode(req_data, &req_base64);
-
-  std::vector<PlatformType> platform;
-  platform.push_back(CHROME_PLATFORM);
-  std::vector<SBPrefix> prefixes;
-  prefixes.push_back(one);
-  prefixes.push_back(two);
-  prefixes.push_back(three);
-  EXPECT_EQ(
-      req_base64,
-      pm->GetV4HashRequest(prefixes, platform, API_ABUSE));
-}
-
-TEST_F(SafeBrowsingProtocolManagerTest, TestParseV4HashResponse) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  FindFullHashesResponse res;
-  res.mutable_negative_cache_duration()->set_seconds(600);
-  res.mutable_minimum_wait_duration()->set_seconds(400);
-  ThreatMatch* m = res.add_matches();
-  m->set_threat_type(API_ABUSE);
-  m->set_platform_type(CHROME_PLATFORM);
-  m->set_threat_entry_type(URL_EXPRESSION);
-  m->mutable_cache_duration()->set_seconds(300);
-  m->mutable_threat()->set_hash(SBFullHashToString(
-      SBFullHashForString("Everything's shiny, Cap'n.")));
-  ThreatEntryMetadata::MetadataEntry* e =
-      m->mutable_threat_entry_metadata()->add_entries();
-  e->set_key("permission");
-  e->set_value("NOTIFICATIONS");
-
-  // Serialize.
-  std::string res_data;
-  res.SerializeToString(&res_data);
-
-  Time now = Time::Now();
-  std::vector<SBFullHashResult> full_hashes;
-  base::TimeDelta cache_lifetime;
-  pm->ParseV4HashResponse(res_data, &full_hashes, &cache_lifetime);
-
-  EXPECT_EQ(base::TimeDelta::FromSeconds(600), cache_lifetime);
-  EXPECT_EQ(1ul, full_hashes.size());
-  EXPECT_TRUE(SBFullHashEqual(
-      SBFullHashForString("Everything's shiny, Cap'n."), full_hashes[0].hash));
-  EXPECT_EQ("NOTIFICATIONS,", full_hashes[0].metadata);
-  EXPECT_EQ(base::TimeDelta::FromSeconds(300), full_hashes[0].cache_duration);
-  EXPECT_LE(now + base::TimeDelta::FromSeconds(400), pm->next_gethash_v4_time_);
-}
-
-// Adds an entry with an ignored ThreatEntryType.
-TEST_F(SafeBrowsingProtocolManagerTest,
-    TestParseV4HashResponseWrongThreatEntryType) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  FindFullHashesResponse res;
-  res.mutable_negative_cache_duration()->set_seconds(600);
-  res.add_matches()->set_threat_entry_type(BINARY_DIGEST);
-
-  // Serialize.
-  std::string res_data;
-  res.SerializeToString(&res_data);
-
-  std::vector<SBFullHashResult> full_hashes;
-  base::TimeDelta cache_lifetime;
-  pm->ParseV4HashResponse(res_data, &full_hashes, &cache_lifetime);
-
-  EXPECT_EQ(base::TimeDelta::FromSeconds(600), cache_lifetime);
-  // THere should be no hash results.
-  EXPECT_EQ(0ul, full_hashes.size());
-}
-
-// Adds an entry with an SOCIAL_ENGINEERING threat type.
-TEST_F(SafeBrowsingProtocolManagerTest,
-    TestParseV4HashResponseSocialEngineeringThreatType) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  FindFullHashesResponse res;
-  res.mutable_negative_cache_duration()->set_seconds(600);
-  ThreatMatch* m = res.add_matches();
-  m->set_threat_type(SOCIAL_ENGINEERING);
-  m->set_platform_type(CHROME_PLATFORM);
-  m->set_threat_entry_type(URL_EXPRESSION);
-  m->mutable_threat()->set_hash(
-      SBFullHashToString(SBFullHashForString("Not to fret.")));
-  ThreatEntryMetadata::MetadataEntry* e =
-      m->mutable_threat_entry_metadata()->add_entries();
-  e->set_key("permission");
-  e->set_value("IGNORED");
-
-  // Serialize.
-  std::string res_data;
-  res.SerializeToString(&res_data);
-
-  std::vector<SBFullHashResult> full_hashes;
-  base::TimeDelta cache_lifetime;
-  pm->ParseV4HashResponse(res_data, &full_hashes, &cache_lifetime);
-
-  EXPECT_EQ(base::TimeDelta::FromSeconds(600), cache_lifetime);
-  EXPECT_EQ(0ul, full_hashes.size());
-}
-
-// Adds metadata with a key value that is not "permission".
-TEST_F(SafeBrowsingProtocolManagerTest,
-    TestParseV4HashResponseNonPermissionMetadata) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
-
-  FindFullHashesResponse res;
-  res.mutable_negative_cache_duration()->set_seconds(600);
-  ThreatMatch* m = res.add_matches();
-  m->set_threat_type(API_ABUSE);
-  m->set_platform_type(CHROME_PLATFORM);
-  m->set_threat_entry_type(URL_EXPRESSION);
-  m->mutable_threat()->set_hash(
-      SBFullHashToString(SBFullHashForString("Not to fret.")));
-  ThreatEntryMetadata::MetadataEntry* e =
-      m->mutable_threat_entry_metadata()->add_entries();
-  e->set_key("notpermission");
-  e->set_value("NOTGEOLOCATION");
-
-  // Serialize.
-  std::string res_data;
-  res.SerializeToString(&res_data);
-
-  std::vector<SBFullHashResult> full_hashes;
-  base::TimeDelta cache_lifetime;
-  pm->ParseV4HashResponse(res_data, &full_hashes, &cache_lifetime);
-
-  EXPECT_EQ(base::TimeDelta::FromSeconds(600), cache_lifetime);
-  EXPECT_EQ(1ul, full_hashes.size());
-
-  EXPECT_TRUE(SBFullHashEqual(
-      SBFullHashForString("Not to fret."), full_hashes[0].hash));
-  // Metadata should be empty.
-  EXPECT_EQ("", full_hashes[0].metadata);
-  EXPECT_EQ(base::TimeDelta::FromSeconds(0), full_hashes[0].cache_duration);
+      "https://prefix.com/foo/gethash?client=unittest&appver=1.0&"
+      "pver=3.0" +
+          key_param_ + "&additional_query&ext=2",
+      pm->GetHashUrl(SBER_LEVEL_SCOUT).spec());
 }
 
 TEST_F(SafeBrowsingProtocolManagerTest, TestUpdateUrl) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   EXPECT_EQ(
       "https://prefix.com/foo/downloads?client=unittest&appver=1.0&"
       "pver=3.0" +
           key_param_ + "&ext=1",
-      pm->UpdateUrl(true).spec());
+      pm->UpdateUrl(SBER_LEVEL_LEGACY).spec());
+
+  EXPECT_EQ(
+      "https://prefix.com/foo/downloads?client=unittest&appver=1.0&"
+      "pver=3.0" +
+          key_param_ + "&ext=2",
+      pm->UpdateUrl(SBER_LEVEL_SCOUT).spec());
 
   pm->set_additional_query(kAdditionalQuery);
   EXPECT_EQ(
       "https://prefix.com/foo/downloads?client=unittest&appver=1.0&"
       "pver=3.0" +
           key_param_ + "&additional_query&ext=0",
-      pm->UpdateUrl(false).spec());
+      pm->UpdateUrl(SBER_LEVEL_OFF).spec());
 }
 
 TEST_F(SafeBrowsingProtocolManagerTest, TestNextChunkUrl) {
-  scoped_ptr<SafeBrowsingProtocolManager> pm(CreateProtocolManager(NULL));
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
+      CreateProtocolManager(nullptr));
 
   std::string url_partial = "localhost:1234/foo/bar?foo";
   std::string url_http_full = "http://localhost:1234/foo/bar?foo";
@@ -576,16 +361,18 @@ class MockProtocolDelegate : public SafeBrowsingProtocolManagerDelegate {
   MOCK_METHOD0(ResetDatabase, void());
   MOCK_METHOD1(GetChunks, void(GetChunksCallback));
 
-  // gmock does not work with scoped_ptr<> at this time.  Add a local method to
+  // gmock does not work with std::unique_ptr<> at this time.  Add a local
+  // method to
   // mock, then call that from an override.  Beware of object ownership when
   // making changes here.
   MOCK_METHOD3(AddChunksRaw,
                void(const std::string& lists,
-                    const std::vector<scoped_ptr<SBChunkData>>& chunks,
+                    const std::vector<std::unique_ptr<SBChunkData>>& chunks,
                     AddChunksCallback));
-  void AddChunks(const std::string& list,
-                 scoped_ptr<std::vector<scoped_ptr<SBChunkData>>> chunks,
-                 AddChunksCallback callback) override {
+  void AddChunks(
+      const std::string& list,
+      std::unique_ptr<std::vector<std::unique_ptr<SBChunkData>>> chunks,
+      AddChunksCallback callback) override {
     AddChunksRaw(list, *chunks, callback);
   }
 
@@ -593,7 +380,7 @@ class MockProtocolDelegate : public SafeBrowsingProtocolManagerDelegate {
   MOCK_METHOD1(DeleteChunksRaw,
                void(const std::vector<SBChunkDelete>& chunk_deletes));
   void DeleteChunks(
-      scoped_ptr<std::vector<SBChunkDelete>> chunk_deletes) override {
+      std::unique_ptr<std::vector<SBChunkDelete>> chunk_deletes) override {
     DeleteChunksRaw(*chunk_deletes);
   }
 };
@@ -605,7 +392,7 @@ void InvokeGetChunksCallback(
     const std::vector<SBListChunkRanges>& ranges,
     bool database_error,
     SafeBrowsingProtocolManagerDelegate::GetChunksCallback callback) {
-  callback.Run(ranges, database_error, false);
+  callback.Run(ranges, database_error, SBER_LEVEL_OFF);
 }
 
 // |HandleAddChunks| deletes the chunks and asynchronously invokes
@@ -614,7 +401,7 @@ void InvokeGetChunksCallback(
 // SafeBrowsingProtocolManagerDelegate contract.
 void HandleAddChunks(
     const std::string& unused_list,
-    const std::vector<scoped_ptr<SBChunkData>>& chunks,
+    const std::vector<std::unique_ptr<SBChunkData>>& chunks,
     SafeBrowsingProtocolManagerDelegate::AddChunksCallback callback) {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner(
       base::ThreadTaskRunnerHandle::Get());
@@ -628,10 +415,6 @@ void HandleAddChunks(
 // Tests that the Update protocol will be skipped if there are problems
 // accessing the database.
 TEST_F(SafeBrowsingProtocolManagerTest, ProblemAccessingDatabase) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
-
   testing::StrictMock<MockProtocolDelegate> test_delegate;
   EXPECT_CALL(test_delegate, UpdateStarted()).Times(1);
   EXPECT_CALL(test_delegate, GetChunks(_)).WillOnce(
@@ -640,11 +423,11 @@ TEST_F(SafeBrowsingProtocolManagerTest, ProblemAccessingDatabase) {
                                     true)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
 }
@@ -653,9 +436,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, ProblemAccessingDatabase) {
 // local database. This is not exhaustive, as the actual list formatting
 // is covered by SafeBrowsingProtocolManagerTest.TestChunkStrings.
 TEST_F(SafeBrowsingProtocolManagerTest, ExistingDatabase) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   std::vector<SBListChunkRanges> ranges;
@@ -677,12 +457,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, ExistingDatabase) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -707,9 +487,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, ExistingDatabase) {
 }
 
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseBadBodyBackupSuccess) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -720,12 +497,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseBadBodyBackupSuccess) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -754,9 +531,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseBadBodyBackupSuccess) {
 // Tests what happens when there is an HTTP error response to the update
 // request, as well as an error response to the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupError) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -767,12 +541,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupError) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -801,9 +575,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupError) {
 // Tests what happens when there is an HTTP error response to the update
 // request, followed by a successful response to the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupSuccess) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -814,12 +585,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupSuccess) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -848,9 +619,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupSuccess) {
 // Tests what happens when there is an HTTP error response to the update
 // request, and a timeout on the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupTimeout) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -861,12 +629,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupTimeout) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -883,15 +651,21 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupTimeout) {
       url_fetcher_factory.GetFetcherByID(1);
   ValidateUpdateFetcherRequest(backup_url_fetcher, kBackupHttpUrlPrefix, "");
 
-  // Either one or two calls to RunPendingTasks are needed here. The first run
-  // of RunPendingTasks will run the canceled timeout task associated with
-  // the first Update request. Depending on timing, this will either directly
-  // call the timeout task from the backup request, or schedule another task
-  // to run that in the future.
-  // TODO(cbentzel): Less fragile approach.
-  runner->RunPendingTasks();
-  if (!pm->IsUpdateScheduled())
-    runner->RunPendingTasks();
+  // Confirm that no update is scheduled (still waiting on a response to the
+  // backup request).
+  EXPECT_FALSE(pm->IsUpdateScheduled());
+
+  // Force the timeout to fire. Need to fast forward by twice the timeout amount
+  // as issuing the backup request above restarted the timeout timer but that
+  // Timer's clock isn't mocked and its impl is such that it will re-use its
+  // initial delayed task and re-post by the remainder of the timeout when it
+  // fires (which is pretty much the full timeout in real time since we mock the
+  // wait). A cleaner solution would be to pass
+  // |mock_time_task_runner_->GetMockTickClock()| to the
+  // SafeBrowsingProtocolManager's Timers but such hooks were deemed overkill
+  // per this being the only use case at this point.
+  mock_time_task_runner_->FastForwardBy(
+      SafeBrowsingProtocolManager::GetUpdateTimeoutForTesting() * 2);
   EXPECT_TRUE(pm->IsUpdateScheduled());
 }
 
@@ -899,9 +673,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupTimeout) {
 // request, and an error with the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest,
        UpdateResponseConnectionErrorBackupError) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -912,12 +683,12 @@ TEST_F(SafeBrowsingProtocolManagerTest,
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -946,9 +717,6 @@ TEST_F(SafeBrowsingProtocolManagerTest,
 // request, and a successful response to the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest,
        UpdateResponseConnectionErrorBackupSuccess) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -959,12 +727,12 @@ TEST_F(SafeBrowsingProtocolManagerTest,
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -992,9 +760,6 @@ TEST_F(SafeBrowsingProtocolManagerTest,
 // update request, and an error with the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest,
        UpdateResponseNetworkErrorBackupError) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1005,12 +770,12 @@ TEST_F(SafeBrowsingProtocolManagerTest,
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1040,9 +805,6 @@ TEST_F(SafeBrowsingProtocolManagerTest,
 // update request, and a successful response to the backup update request.
 TEST_F(SafeBrowsingProtocolManagerTest,
        UpdateResponseNetworkErrorBackupSuccess) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1053,12 +815,12 @@ TEST_F(SafeBrowsingProtocolManagerTest,
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1086,9 +848,6 @@ TEST_F(SafeBrowsingProtocolManagerTest,
 
 // Tests what happens when there is a timeout before an update response.
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseTimeoutBackupSuccess) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1099,20 +858,20 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseTimeoutBackupSuccess) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // We should have an URLFetcher at this point in time.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
   ValidateUpdateFetcherRequest(url_fetcher);
 
-  // The first time RunPendingTasks is called above, the update timeout timer is
-  // not handled. This call of RunPendingTasks will handle the update.
-  runner->RunPendingTasks();
+  // Force the timeout to fire.
+  mock_time_task_runner_->FastForwardBy(
+      SafeBrowsingProtocolManager::GetUpdateTimeoutForTesting());
 
   // There should be a backup URLFetcher now.
   net::TestURLFetcher* backup_url_fetcher =
@@ -1130,9 +889,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseTimeoutBackupSuccess) {
 
 // Tests what happens when there is a reset command in the response.
 TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseReset) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1144,12 +900,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseReset) {
   EXPECT_CALL(test_delegate, ResetDatabase()).Times(1);
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
   ValidateUpdateFetcherRequest(url_fetcher);
@@ -1166,9 +922,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseReset) {
 // Tests a single valid update response, followed by a single redirect response
 // that has an valid, but empty body.
 TEST_F(SafeBrowsingProtocolManagerTest, EmptyRedirectResponse) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1179,12 +932,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, EmptyRedirectResponse) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // The update response contains a single redirect command.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1213,9 +966,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, EmptyRedirectResponse) {
 // Tests a single valid update response, followed by a single redirect response
 // that has an invalid body.
 TEST_F(SafeBrowsingProtocolManagerTest, InvalidRedirectResponse) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1226,12 +976,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, InvalidRedirectResponse) {
                                     false)));
   EXPECT_CALL(test_delegate, UpdateFinished(false)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // The update response contains a single redirect command.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1260,9 +1010,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, InvalidRedirectResponse) {
 // Tests a single valid update response, followed by a single redirect response
 // containing chunks.
 TEST_F(SafeBrowsingProtocolManagerTest, SingleRedirectResponseWithChunks) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1275,12 +1022,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, SingleRedirectResponseWithChunks) {
       Invoke(HandleAddChunks));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // The update response contains a single redirect command.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1306,7 +1053,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, SingleRedirectResponseWithChunks) {
   EXPECT_FALSE(pm->IsUpdateScheduled());
 
   // The AddChunksCallback needs to be invoked.
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
 }
@@ -1314,9 +1061,6 @@ TEST_F(SafeBrowsingProtocolManagerTest, SingleRedirectResponseWithChunks) {
 // Tests a single valid update response, followed by multiple redirect responses
 // containing chunks.
 TEST_F(SafeBrowsingProtocolManagerTest, MultipleRedirectResponsesWithChunks) {
-  scoped_refptr<base::TestSimpleTaskRunner> runner(
-      new base::TestSimpleTaskRunner());
-  base::ThreadTaskRunnerHandle runner_handler(runner);
   net::TestURLFetcherFactory url_fetcher_factory;
 
   testing::StrictMock<MockProtocolDelegate> test_delegate;
@@ -1329,12 +1073,12 @@ TEST_F(SafeBrowsingProtocolManagerTest, MultipleRedirectResponsesWithChunks) {
       WillRepeatedly(Invoke(HandleAddChunks));
   EXPECT_CALL(test_delegate, UpdateFinished(true)).Times(1);
 
-  scoped_ptr<SafeBrowsingProtocolManager> pm(
+  std::unique_ptr<SafeBrowsingProtocolManager> pm(
       CreateProtocolManager(&test_delegate));
 
   // Kick off initialization. This returns chunks from the DB synchronously.
   pm->ForceScheduleNextUpdate(TimeDelta());
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   // The update response contains multiple redirect commands.
   net::TestURLFetcher* url_fetcher = url_fetcher_factory.GetFetcherByID(0);
@@ -1360,7 +1104,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, MultipleRedirectResponsesWithChunks) {
       first_chunk_url_fetcher);
 
   // Invoke the AddChunksCallback to trigger the second request.
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   EXPECT_FALSE(pm->IsUpdateScheduled());
 
@@ -1378,7 +1122,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, MultipleRedirectResponsesWithChunks) {
   EXPECT_FALSE(pm->IsUpdateScheduled());
 
   // Invoke the AddChunksCallback to finish the update.
-  runner->RunPendingTasks();
+  mock_time_task_runner_->RunUntilIdle();
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
 }

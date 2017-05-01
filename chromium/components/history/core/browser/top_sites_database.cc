@@ -8,9 +8,10 @@
 #include <stdint.h>
 #include <utility>
 
+#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "components/history/core/browser/history_types.h"
@@ -220,7 +221,7 @@ void RecoverDatabaseOrRaze(sql::Connection* db, const base::FilePath& db_path) {
   int64_t original_size = 0;
   base::GetFileSize(db_path, &original_size);
 
-  scoped_ptr<sql::Recovery> recovery = sql::Recovery::Begin(db, db_path);
+  std::unique_ptr<sql::Recovery> recovery = sql::Recovery::Begin(db, db_path);
   if (!recovery) {
     RecordRecoveryEvent(RECOVERY_EVENT_FAILED_SCOPER);
     return;
@@ -281,9 +282,8 @@ void RecoverDatabaseOrRaze(sql::Connection* db, const base::FilePath& db_path) {
     return;
   }
 
-  // The |1| is because v2 [thumbnails] has one less column than v3 did.  In the
-  // v2 case the column will get default values.
-  if (!recovery->AutoRecoverTable("thumbnails", 1, &thumbnails_recovered)) {
+  // In the v2 case the missing column will get default values.
+  if (!recovery->AutoRecoverTable("thumbnails", &thumbnails_recovered)) {
     sql::Recovery::Rollback(std::move(recovery));
     RecordRecoveryEvent(RECOVERY_EVENT_FAILED_AUTORECOVER_THUMBNAILS);
     return;
@@ -350,7 +350,7 @@ void DatabaseErrorCallback(sql::Connection* db,
   // are seen.
 
   // The default handling is to assert on debug and to ignore on release.
-  if (!sql::Connection::ShouldIgnoreSqliteError(extended_error))
+  if (!sql::Connection::IsExpectedSqliteError(extended_error))
     DLOG(FATAL) << db->GetErrorMessage();
 }
 
@@ -729,7 +729,7 @@ bool TopSitesDatabase::RemoveURL(const MostVisitedURL& url) {
 }
 
 sql::Connection* TopSitesDatabase::CreateDB(const base::FilePath& db_name) {
-  scoped_ptr<sql::Connection> db(new sql::Connection());
+  std::unique_ptr<sql::Connection> db(new sql::Connection());
   // Settings copied from ThumbnailDatabase.
   db->set_histogram_tag("TopSites");
   db->set_error_callback(base::Bind(&DatabaseErrorCallback, db.get(), db_name));
@@ -758,7 +758,7 @@ bool TopSitesDatabase::DeleteDataExceptBookmarkThumbnails() {
 }
 
 namespace {
-const int kTopSitesExpireDays = 7;
+const int kTopSitesExpireDays = 3;
 }  // namespace
 
 bool TopSitesDatabase::TrimThumbnailData() {
@@ -786,6 +786,21 @@ void TopSitesDatabase::Vacuum() {
   DCHECK(db_->transaction_nesting() == 0)
       << "Can not have a transaction when vacuuming.";
   ignore_result(db_->Execute("VACUUM"));
+}
+
+bool TopSitesDatabase::RemoveThumbnailForUrl(const GURL& url) {
+  sql::Transaction transaction(db_.get());
+  transaction.Begin();
+
+  sql::Statement delete_statement(db_->GetCachedStatement(
+      SQL_FROM_HERE,
+      "DELETE FROM thumbnails WHERE thumbnail notnull and url = ?"));
+  delete_statement.BindString(0, url.spec());
+
+  if (!delete_statement.Run())
+    return false;
+
+  return transaction.Commit();
 }
 
 }  // namespace history

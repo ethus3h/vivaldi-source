@@ -5,8 +5,6 @@
 #include "net/ssl/openssl_ssl_util.h"
 
 #include <errno.h>
-#include <openssl/err.h>
-#include <openssl/ssl.h>
 #include <utility>
 
 #include "base/bind.h"
@@ -16,6 +14,10 @@
 #include "base/values.h"
 #include "crypto/openssl_util.h"
 #include "net/base/net_errors.h"
+#include "net/ssl/ssl_connection_status_flags.h"
+#include "third_party/boringssl/src/include/openssl/err.h"
+#include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "third_party/boringssl/src/include/openssl/x509.h"
 
 namespace net {
 
@@ -82,6 +84,7 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
     case SSL_R_SSLV3_ALERT_CERTIFICATE_UNKNOWN:
     case SSL_R_TLSV1_ALERT_ACCESS_DENIED:
     case SSL_R_TLSV1_ALERT_UNKNOWN_CA:
+    case SSL_R_TLSV1_CERTIFICATE_REQUIRED:
       return ERR_BAD_SSL_CLIENT_AUTH_CERT;
     case SSL_R_SSLV3_ALERT_DECOMPRESSION_FAILURE:
       return ERR_SSL_DECOMPRESSION_FAILURE_ALERT;
@@ -97,8 +100,6 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
       // The only way that the certificate verify callback can fail is if
       // the leaf certificate changed during a renegotiation.
       return ERR_SSL_SERVER_CERT_CHANGED;
-    case SSL_R_TLSV1_ALERT_INAPPROPRIATE_FALLBACK:
-      return ERR_SSL_INAPPROPRIATE_FALLBACK;
     // SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE may be returned from the server after
     // receiving ClientHello if there's no common supported cipher. Map that
     // specific case to ERR_SSL_VERSION_OR_CIPHER_MISMATCH to match the NSS
@@ -116,12 +117,12 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
   }
 }
 
-scoped_ptr<base::Value> NetLogOpenSSLErrorCallback(
+std::unique_ptr<base::Value> NetLogOpenSSLErrorCallback(
     int net_error,
     int ssl_error,
     const OpenSSLErrorInfo& error_info,
     NetLogCaptureMode /* capture_mode */) {
-  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetInteger("net_error", net_error);
   dict->SetInteger("ssl_error", ssl_error);
   if (error_info.error_code != 0) {
@@ -197,12 +198,53 @@ int MapOpenSSLErrorWithDetails(int err,
   }
 }
 
-NetLog::ParametersCallback CreateNetLogOpenSSLErrorCallback(
+NetLogParametersCallback CreateNetLogOpenSSLErrorCallback(
     int net_error,
     int ssl_error,
     const OpenSSLErrorInfo& error_info) {
   return base::Bind(&NetLogOpenSSLErrorCallback,
                     net_error, ssl_error, error_info);
+}
+
+int GetNetSSLVersion(SSL* ssl) {
+  switch (SSL_version(ssl)) {
+    case TLS1_VERSION:
+      return SSL_CONNECTION_VERSION_TLS1;
+    case TLS1_1_VERSION:
+      return SSL_CONNECTION_VERSION_TLS1_1;
+    case TLS1_2_VERSION:
+      return SSL_CONNECTION_VERSION_TLS1_2;
+    case TLS1_3_VERSION:
+      return SSL_CONNECTION_VERSION_TLS1_3;
+    default:
+      NOTREACHED();
+      return SSL_CONNECTION_VERSION_UNKNOWN;
+  }
+}
+
+bssl::UniquePtr<X509> OSCertHandleToOpenSSL(
+    X509Certificate::OSCertHandle os_handle) {
+#if defined(USE_OPENSSL_CERTS)
+  return bssl::UniquePtr<X509>(X509Certificate::DupOSCertHandle(os_handle));
+#else   // !defined(USE_OPENSSL_CERTS)
+  std::string der_encoded;
+  if (!X509Certificate::GetDEREncoded(os_handle, &der_encoded))
+    return bssl::UniquePtr<X509>();
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(der_encoded.data());
+  return bssl::UniquePtr<X509>(d2i_X509(NULL, &bytes, der_encoded.size()));
+#endif  // defined(USE_OPENSSL_CERTS)
+}
+
+bssl::UniquePtr<STACK_OF(X509)> OSCertHandlesToOpenSSL(
+    const X509Certificate::OSCertHandles& os_handles) {
+  bssl::UniquePtr<STACK_OF(X509)> stack(sk_X509_new_null());
+  for (size_t i = 0; i < os_handles.size(); i++) {
+    bssl::UniquePtr<X509> x509 = OSCertHandleToOpenSSL(os_handles[i]);
+    if (!x509)
+      return nullptr;
+    sk_X509_push(stack.get(), x509.release());
+  }
+  return stack;
 }
 
 }  // namespace net

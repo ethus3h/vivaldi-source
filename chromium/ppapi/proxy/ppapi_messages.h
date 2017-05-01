@@ -17,9 +17,10 @@
 #include "base/sync_socket.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/command_buffer.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
-#include "gpu/ipc/gpu_command_buffer_traits.h"
+#include "gpu/ipc/common/gpu_command_buffer_traits.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_message_utils.h"
@@ -93,18 +94,18 @@ IPC_ENUM_TRAITS_MAX_VALUE(ppapi::TCPSocketVersion,
                           ppapi::TCP_SOCKET_VERSION_1_1_OR_ABOVE)
 IPC_ENUM_TRAITS(PP_AudioSampleRate)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_BlendMode, PP_BLENDMODE_LAST)
-IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmExceptionCode, PP_CDMEXCEPTIONCODE_OUTPUTERROR)
-IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmKeyStatus, PP_CDMKEYSTATUS_STATUSPENDING)
-IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmMessageType, PP_CDMMESSAGETYPE_LICENSE_RELEASE)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmExceptionCode, PP_CDMEXCEPTIONCODE_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmKeyStatus, PP_CDMKEYSTATUS_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_CdmMessageType, PP_CDMMESSAGETYPE_MAX)
 IPC_ENUM_TRAITS(PP_DeviceType_Dev)
-IPC_ENUM_TRAITS(PP_DecryptorStreamType)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_DecryptorStreamType, PP_DECRYPTORSTREAMTYPE_MAX)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_FileSystemType, PP_FILESYSTEMTYPE_ISOLATED)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_FileType, PP_FILETYPE_OTHER)
 IPC_ENUM_TRAITS(PP_Flash_BrowserOperations_Permission)
 IPC_ENUM_TRAITS(PP_Flash_BrowserOperations_SettingType)
 IPC_ENUM_TRAITS(PP_FlashSetting)
 IPC_ENUM_TRAITS(PP_ImageDataFormat)
-IPC_ENUM_TRAITS_MAX_VALUE(PP_InitDataType, PP_INITDATATYPE_WEBM)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_InitDataType, PP_INITDATATYPE_MAX)
 IPC_ENUM_TRAITS(PP_InputEvent_MouseButton)
 IPC_ENUM_TRAITS(PP_InputEvent_Type)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_IsolatedFileSystemType_Private,
@@ -118,7 +119,7 @@ IPC_ENUM_TRAITS(PP_PrintOutputFormat_Dev)
 IPC_ENUM_TRAITS(PP_PrintScalingOption_Dev)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_PrivateDuplexMode_Dev, PP_PRIVATEDUPLEXMODE_LAST)
 IPC_ENUM_TRAITS(PP_PrivateFontCharset)
-IPC_ENUM_TRAITS_MAX_VALUE(PP_SessionType, PP_SESSIONTYPE_PERSISTENT_RELEASE)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_SessionType, PP_SESSIONTYPE_MAX)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_TCPSocket_Option,
                           PP_TCPSOCKET_OPTION_RECV_BUFFER_SIZE)
 IPC_ENUM_TRAITS(PP_TextInput_Type)
@@ -135,6 +136,7 @@ IPC_ENUM_TRAITS_MAX_VALUE(PP_VideoFrame_Format, PP_VIDEOFRAME_FORMAT_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_HardwareAcceleration, PP_HARDWAREACCELERATION_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_AudioProfile, PP_AUDIOPROFILE_MAX)
 IPC_ENUM_TRAITS_MAX_VALUE(PP_VideoProfile, PP_VIDEOPROFILE_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(PP_PrivateDirection, PP_PRIVATEDIRECTION_LAST)
 
 IPC_STRUCT_TRAITS_BEGIN(PP_Point)
   IPC_STRUCT_TRAITS_MEMBER(x)
@@ -216,6 +218,37 @@ IPC_STRUCT_TRAITS_BEGIN(PP_PdfPrintPresetOptions_Dev)
   IPC_STRUCT_TRAITS_MEMBER(duplex)
   IPC_STRUCT_TRAITS_MEMBER(is_page_size_uniform)
   IPC_STRUCT_TRAITS_MEMBER(uniform_page_size)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(PP_PrivateAccessibilityViewportInfo)
+  IPC_STRUCT_TRAITS_MEMBER(zoom)
+  IPC_STRUCT_TRAITS_MEMBER(scroll)
+  IPC_STRUCT_TRAITS_MEMBER(offset)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(PP_PrivateAccessibilityDocInfo)
+  IPC_STRUCT_TRAITS_MEMBER(page_count)
+  IPC_STRUCT_TRAITS_MEMBER(text_accessible)
+  IPC_STRUCT_TRAITS_MEMBER(text_copyable)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(PP_PrivateAccessibilityCharInfo)
+  IPC_STRUCT_TRAITS_MEMBER(unicode_character)
+  IPC_STRUCT_TRAITS_MEMBER(char_width)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(PP_PrivateAccessibilityTextRunInfo)
+  IPC_STRUCT_TRAITS_MEMBER(len)
+  IPC_STRUCT_TRAITS_MEMBER(font_size)
+  IPC_STRUCT_TRAITS_MEMBER(bounds)
+  IPC_STRUCT_TRAITS_MEMBER(direction)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(PP_PrivateAccessibilityPageInfo)
+  IPC_STRUCT_TRAITS_MEMBER(page_index)
+  IPC_STRUCT_TRAITS_MEMBER(bounds)
+  IPC_STRUCT_TRAITS_MEMBER(text_run_count)
+  IPC_STRUCT_TRAITS_MEMBER(char_count)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(PP_URLComponent_Dev)
@@ -489,6 +522,8 @@ IPC_MESSAGE_CONTROL2(PpapiMsg_LoadPlugin,
 
 // Creates a channel to talk to a renderer. The plugin will respond with
 // PpapiHostMsg_ChannelCreated.
+// If |renderer_pid| is base::kNullProcessId, this is a channel used by the
+// browser itself.
 IPC_MESSAGE_CONTROL3(PpapiMsg_CreateChannel,
                      base::ProcessId /* renderer_pid */,
                      int /* renderer_child_id */,
@@ -745,6 +780,8 @@ IPC_SYNC_MESSAGE_ROUTED1_2(
     PP_Instance /* instance */,
     PP_PdfPrintPresetOptions_Dev /* print preset options */,
     PP_Bool /* result */)
+IPC_MESSAGE_ROUTED1(PpapiMsg_PPPPdf_EnableAccessibility,
+                    PP_Instance /* instance */)
 
 // Find
 IPC_MESSAGE_ROUTED2(PpapiPluginMsg_PPPFind_StartFind,
@@ -954,9 +991,9 @@ IPC_MESSAGE_CONTROL0(PpapiHostMsg_StartupInitializationComplete)
 // this message must be processed by ppapi/proxy/nacl_message_scanner.cc.
 IPC_SYNC_MESSAGE_CONTROL1_3(PpapiHostMsg_OpenResource,
                             std::string /* key */,
-                            ppapi::proxy::SerializedHandle /* fd */,
                             uint64_t /* file_token_lo */,
-                            uint64_t /* file_token_hi */)
+                            uint64_t /* file_token_hi */,
+                            ppapi::proxy::SerializedHandle /* fd */)
 
 // Logs the given message to the console of all instances.
 IPC_MESSAGE_CONTROL4(PpapiHostMsg_LogWithSource,
@@ -1008,14 +1045,15 @@ IPC_MESSAGE_ROUTED1(PpapiHostMsg_PPBCore_ReleaseResource,
                     ppapi::HostResource)
 
 // PPB_Graphics3D.
-IPC_SYNC_MESSAGE_ROUTED3_4(PpapiHostMsg_PPBGraphics3D_Create,
-                           PP_Instance /* instance */,
-                           ppapi::HostResource /* share_context */,
-                           std::vector<int32_t> /* attrib_list */,
-                           ppapi::HostResource /* result */,
-                           gpu::Capabilities /* capabilities */,
-                           ppapi::proxy::SerializedHandle /* shared_state */,
-                           uint64_t /* command_buffer_id */)
+IPC_SYNC_MESSAGE_ROUTED3_4(
+    PpapiHostMsg_PPBGraphics3D_Create,
+    PP_Instance /* instance */,
+    ppapi::HostResource /* share_context */,
+    gpu::gles2::ContextCreationAttribHelper /* attrib_helper */,
+    ppapi::HostResource /* result */,
+    gpu::Capabilities /* capabilities */,
+    ppapi::proxy::SerializedHandle /* shared_state */,
+    gpu::CommandBufferId /* command_buffer_id */)
 IPC_SYNC_MESSAGE_ROUTED2_0(PpapiHostMsg_PPBGraphics3D_SetGetBuffer,
                            ppapi::HostResource /* context */,
                            int32_t /* transfer_buffer_id */)
@@ -1042,20 +1080,19 @@ IPC_SYNC_MESSAGE_ROUTED2_2(PpapiHostMsg_PPBGraphics3D_CreateTransferBuffer,
 IPC_SYNC_MESSAGE_ROUTED2_0(PpapiHostMsg_PPBGraphics3D_DestroyTransferBuffer,
                            ppapi::HostResource /* context */,
                            int32_t /* id */)
-IPC_MESSAGE_ROUTED2(PpapiHostMsg_PPBGraphics3D_SwapBuffers,
+// The receiver of this message takes ownership of the front buffer of the GL
+// context. Each call to PpapiHostMsg_PPBGraphics3D_SwapBuffers must be preceded
+// by exactly one call to PpapiHostMsg_PPBGraphics3D_TakeFrontBuffer. The
+// SyncToken passed to PpapiHostMsg_PPBGraphics3D_SwapBuffers must be generated
+// after this message is sent.
+IPC_MESSAGE_ROUTED1(PpapiHostMsg_PPBGraphics3D_TakeFrontBuffer,
+                    ppapi::HostResource /* graphics_3d */)
+IPC_MESSAGE_ROUTED3(PpapiHostMsg_PPBGraphics3D_SwapBuffers,
                     ppapi::HostResource /* graphics_3d */,
-                    gpu::SyncToken /* sync_token */)
-IPC_SYNC_MESSAGE_ROUTED1_1(PpapiHostMsg_PPBGraphics3D_InsertSyncPoint,
-                           ppapi::HostResource /* context */,
-                           uint32_t /* sync_point */)
-IPC_SYNC_MESSAGE_ROUTED1_1(PpapiHostMsg_PPBGraphics3D_InsertFutureSyncPoint,
-                           ppapi::HostResource /* context */,
-                           uint32_t /* sync_point */)
-IPC_MESSAGE_ROUTED2(PpapiHostMsg_PPBGraphics3D_RetireSyncPoint,
-                    ppapi::HostResource /* context */,
-                    uint32_t /* sync_point */)
-IPC_SYNC_MESSAGE_ROUTED1_0(PpapiHostMsg_PPBGraphics3D_EnsureWorkVisible,
-                           ppapi::HostResource /* context */)
+                    gpu::SyncToken /* sync_token */,
+                    gfx::Size /* size */)
+IPC_MESSAGE_ROUTED1(PpapiHostMsg_PPBGraphics3D_EnsureWorkVisible,
+                    ppapi::HostResource /* context */)
 
 // PPB_ImageData.
 IPC_SYNC_MESSAGE_ROUTED4_3(PpapiHostMsg_PPBImageData_CreatePlatform,
@@ -1663,6 +1700,9 @@ IPC_MESSAGE_CONTROL1(PpapiHostMsg_Graphics2D_ReplaceContents,
                      ppapi::HostResource /* image_data */)
 IPC_MESSAGE_CONTROL1(PpapiHostMsg_Graphics2D_SetScale,
                      float /* scale */)
+IPC_MESSAGE_CONTROL2(PpapiHostMsg_Graphics2D_SetLayerTransform,
+                     float /* scale */,
+                     PP_FloatPoint /* translate */)
 
 // Graphics2D, plugin -> host -> plugin
 IPC_MESSAGE_CONTROL0(PpapiHostMsg_Graphics2D_Flush)
@@ -1989,6 +2029,33 @@ IPC_MESSAGE_CONTROL3(PpapiPluginMsg_VideoSource_GetFrameReply,
                      PP_ImageDataDesc /* image_data_desc */,
                      PP_TimeTicks /* timestamp */)
 IPC_MESSAGE_CONTROL0(PpapiHostMsg_VideoSource_Close)
+
+// VpnProvider ----------------------------------------------------------------
+IPC_MESSAGE_CONTROL0(PpapiHostMsg_VpnProvider_Create)
+
+// VpnProvider plugin -> host -> plugin
+IPC_MESSAGE_CONTROL2(PpapiHostMsg_VpnProvider_Bind,
+                     std::string /* configuration_id */,
+                     std::string /* configuration_name */)
+IPC_MESSAGE_CONTROL3(PpapiPluginMsg_VpnProvider_BindReply,
+                     uint32_t /* queue_size */,
+                     uint32_t /* max_packet_size */,
+                     int32_t /* status */)
+IPC_MESSAGE_CONTROL2(PpapiHostMsg_VpnProvider_SendPacket,
+                     uint32_t /* packet_size */,
+                     uint32_t /* id */)
+IPC_MESSAGE_CONTROL1(PpapiPluginMsg_VpnProvider_SendPacketReply,
+                     uint32_t /* id */)
+
+// VpnProvider host -> plugin
+IPC_MESSAGE_CONTROL0(PpapiPluginMsg_VpnProvider_OnUnbind)
+
+// VpnProvider host -> plugin -> host
+IPC_MESSAGE_CONTROL2(PpapiPluginMsg_VpnProvider_OnPacketReceived,
+                     uint32_t /* packet_size */,
+                     uint32_t /* id */)
+IPC_MESSAGE_CONTROL1(PpapiHostMsg_VpnProvider_OnPacketReceivedReply,
+                     uint32_t /* id */)
 
 // WebSocket -------------------------------------------------------------------
 
@@ -2416,6 +2483,23 @@ IPC_MESSAGE_CONTROL1(PpapiHostMsg_PDF_SetSelectedText,
 IPC_MESSAGE_CONTROL1(PpapiHostMsg_PDF_SetLinkUnderCursor,
                      std::string /* url */)
 
+// Called by the plugin to describe the viewport for accessibility support.
+IPC_MESSAGE_CONTROL1(
+    PpapiHostMsg_PDF_SetAccessibilityViewportInfo,
+    PP_PrivateAccessibilityViewportInfo /* viewport_info */)
+
+// Send information about the whole document for accessibility support.
+IPC_MESSAGE_CONTROL1(
+    PpapiHostMsg_PDF_SetAccessibilityDocInfo,
+    PP_PrivateAccessibilityDocInfo /* doc_info */)
+
+// Send information about one page for accessibility support.
+IPC_MESSAGE_CONTROL3(
+    PpapiHostMsg_PDF_SetAccessibilityPageInfo,
+    PP_PrivateAccessibilityPageInfo /* page_info */,
+    std::vector<PP_PrivateAccessibilityTextRunInfo> /* text_runs */,
+    std::vector<PP_PrivateAccessibilityCharInfo> /* chars */)
+
 // VideoCapture ----------------------------------------------------------------
 
 // VideoCapture_Dev, plugin -> host
@@ -2444,5 +2528,8 @@ IPC_MESSAGE_CONTROL1(PpapiPluginMsg_VideoCapture_OnError,
                      uint32_t /* error */)
 IPC_MESSAGE_CONTROL1(PpapiPluginMsg_VideoCapture_OnBufferReady,
                      uint32_t /* buffer */)
+
+// Sent by the PPAPI process to indicate that a field trial has been activated.
+IPC_MESSAGE_CONTROL1(PpapiHostMsg_FieldTrialActivated, std::string /* name */)
 
 #endif  // !defined(OS_NACL) && !defined(NACL_WIN64)

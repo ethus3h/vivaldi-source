@@ -112,7 +112,7 @@ cr.define('extensions', function() {
       }.bind(this));
 
       this.addEventListener('keydown', function(e) {
-        if (e.keyIdentifier == 'Enter' && e.target != deleteButton)
+        if (e.key == 'Enter' && e.target != deleteButton)
           this.requestActive_();
       });
     },
@@ -146,7 +146,7 @@ cr.define('extensions', function() {
 
   /**
    * @param {!Element} root
-   * @param {?Node} boundary
+   * @param {?Element} boundary
    * @constructor
    * @extends {cr.ui.FocusRow}
    */

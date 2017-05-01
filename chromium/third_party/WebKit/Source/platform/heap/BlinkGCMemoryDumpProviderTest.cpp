@@ -4,20 +4,21 @@
 
 #include "platform/heap/BlinkGCMemoryDumpProvider.h"
 
+#include "base/trace_event/process_memory_dump.h"
 #include "public/platform/Platform.h"
-#include "public/platform/WebProcessMemoryDump.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "wtf/Threading.h"
 
 namespace blink {
 
-TEST(BlinkGCDumpProviderTest, MemoryDump)
-{
-    OwnPtr<WebProcessMemoryDump> dump = adoptPtr(Platform::current()->createProcessMemoryDump());
-    ASSERT(dump);
-    BlinkGCMemoryDumpProvider::instance()->onMemoryDump(WebMemoryDumpLevelOfDetail::Detailed, dump.get());
-    ASSERT(dump->getMemoryAllocatorDump(String::format("blink_gc")));
-    ASSERT(dump->getMemoryAllocatorDump(String::format("blink_gc/allocated_objects")));
+TEST(BlinkGCDumpProviderTest, MemoryDump) {
+  base::trace_event::MemoryDumpArgs args = {
+      base::trace_event::MemoryDumpLevelOfDetail::DETAILED};
+  std::unique_ptr<base::trace_event::ProcessMemoryDump> dump(
+      new base::trace_event::ProcessMemoryDump(nullptr, args));
+  BlinkGCMemoryDumpProvider::instance()->OnMemoryDump(args, dump.get());
+  DCHECK(dump->GetAllocatorDump("blink_gc"));
+  DCHECK(dump->GetAllocatorDump("blink_gc/allocated_objects"));
 }
 
-} // namespace blink
+}  // namespace blink

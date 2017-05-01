@@ -68,37 +68,62 @@ template<
 class Vector : public VectorDestructorBase<inlineCapacity,
                                            Allocator::isGarbageCollected,
                                            VectorTraits<T>::needsDestruction> {
-public:
-    size_t size();
-    T& operator[](size_t);
+ public:
+  using iterator = T*;
+  using const_iterator = const T*;
+  using reverse_iterator = T*;
+  using const_reverse_iterator = const T*;
+
+  size_t size();
+  T& operator[](size_t);
 };
 
-template<
-    typename T,
-    size_t inlineCapacity = 0,
-    typename Allocator = DefaultAllocator>
-class Deque {};
+template <typename T,
+          size_t inlineCapacity = 0,
+          typename Allocator = DefaultAllocator>
+class Deque {
+ public:
+  using iterator = T*;
+  using const_iterator = const T*;
+  using reverse_iterator = T*;
+  using const_reverse_iterator = const T*;
+};
 
-template<
-    typename ValueArg,
-    typename HashArg = void,
-    typename TraitsArg = void,
-    typename Allocator = DefaultAllocator>
-class HashSet {};
+template <typename ValueArg,
+          typename HashArg = void,
+          typename TraitsArg = void,
+          typename Allocator = DefaultAllocator>
+class HashSet {
+ public:
+  typedef ValueArg* iterator;
+  typedef const ValueArg* const_iterator;
+  typedef ValueArg* reverse_iterator;
+  typedef const ValueArg* const_reverse_iterator;
+};
 
-template<
-    typename ValueArg,
-    typename HashArg = void,
-    typename TraitsArg = void,
-    typename Allocator = DefaultAllocator>
-class ListHashSet {};
+template <typename ValueArg,
+          typename HashArg = void,
+          typename TraitsArg = void,
+          typename Allocator = DefaultAllocator>
+class ListHashSet {
+ public:
+  typedef ValueArg* iterator;
+  typedef const ValueArg* const_iterator;
+  typedef ValueArg* reverse_iterator;
+  typedef const ValueArg* const_reverse_iterator;
+};
 
-template<
-    typename ValueArg,
-    typename HashArg = void,
-    typename TraitsArg = void,
-    typename Allocator = DefaultAllocator>
-class LinkedHashSet {};
+template <typename ValueArg,
+          typename HashArg = void,
+          typename TraitsArg = void,
+          typename Allocator = DefaultAllocator>
+class LinkedHashSet {
+ public:
+  typedef ValueArg* iterator;
+  typedef const ValueArg* const_iterator;
+  typedef ValueArg* reverse_iterator;
+  typedef const ValueArg* const_reverse_iterator;
+};
 
 template<
     typename ValueArg,
@@ -107,14 +132,35 @@ template<
     typename Allocator = DefaultAllocator>
 class HashCountedSet {};
 
-template<
-    typename KeyArg,
-    typename MappedArg,
-    typename HashArg = void,
-    typename KeyTraitsArg = void,
-    typename MappedTraitsArg = void,
-    typename Allocator = DefaultAllocator>
-class HashMap {};
+template <typename KeyArg,
+          typename MappedArg,
+          typename HashArg = void,
+          typename KeyTraitsArg = void,
+          typename MappedTraitsArg = void,
+          typename Allocator = DefaultAllocator>
+class HashMap {
+ public:
+  typedef MappedArg* iterator;
+  typedef const MappedArg* const_iterator;
+  typedef MappedArg* reverse_iterator;
+  typedef const MappedArg* const_reverse_iterator;
+};
+}
+
+// Empty namespace declaration to exercise internal
+// handling of namespace equality.
+namespace std {
+  /* empty */
+}
+
+namespace std {
+
+template<typename T> class unique_ptr {
+public:
+    ~unique_ptr() { }
+    operator T*() const { return 0; }
+    T* operator->() { return 0; }
+};
 
 }
 
@@ -122,7 +168,7 @@ namespace blink {
 
 using namespace WTF;
 
-#define DISALLOW_ALLOCATION()                   \
+#define DISALLOW_NEW()                   \
     private:                                    \
     void* operator new(size_t) = delete;        \
     void* operator new(size_t, void*) = delete;
@@ -144,8 +190,8 @@ using namespace WTF;
 
 #define USING_GARBAGE_COLLECTED_MIXIN(type)                     \
 public:                                                         \
-    virtual void adjustAndMark(Visitor*) const override { }     \
-    virtual bool isHeapObjectAlive(Visitor*) const override { return 0; }
+    virtual void AdjustAndMark(Visitor*) const override { }     \
+    virtual bool IsHeapObjectAlive(Visitor*) const override { return 0; }
 
 #define EAGERLY_FINALIZED() typedef int IsEagerlyFinalizedMarker
 
@@ -172,6 +218,27 @@ public:
 };
 
 template<typename T> class Persistent {
+public:
+    operator T*() const { return 0; }
+    T* operator->() { return 0; }
+    bool operator!() const { return false; }
+};
+
+template<typename T> class WeakPersistent {
+public:
+    operator T*() const { return 0; }
+    T* operator->() { return 0; }
+    bool operator!() const { return false; }
+};
+
+template<typename T> class CrossThreadPersistent {
+public:
+    operator T*() const { return 0; }
+    T* operator->() { return 0; }
+    bool operator!() const { return false; }
+};
+
+template<typename T> class CrossThreadWeakPersistent {
 public:
     operator T*() const { return 0; }
     T* operator->() { return 0; }
@@ -213,13 +280,13 @@ template <typename Derived>
 class VisitorHelper {
 public:
     template<typename T>
-    void trace(const T&);
+    void Trace(const T&);
 };
 
 class Visitor : public VisitorHelper<Visitor> {
 public:
     template<typename T, void (T::*method)(Visitor*)>
-    void registerWeakMembers(const T* obj);
+    void RegisterWeakMembers(const T* obj);
 };
 
 class InlinedGlobalMarkingVisitor
@@ -228,28 +295,19 @@ public:
     InlinedGlobalMarkingVisitor* operator->() { return this; }
 
     template<typename T, void (T::*method)(Visitor*)>
-    void registerWeakMembers(const T* obj);
+    void RegisterWeakMembers(const T* obj);
 };
 
 class GarbageCollectedMixin {
 public:
-    virtual void adjustAndMark(Visitor*) const = 0;
-    virtual bool isHeapObjectAlive(Visitor*) const = 0;
-    virtual void trace(Visitor*) { }
+    virtual void AdjustAndMark(Visitor*) const = 0;
+    virtual bool IsHeapObjectAlive(Visitor*) const = 0;
+    virtual void Trace(Visitor*) { }
 };
 
 template<typename T>
 struct TraceIfNeeded {
-    static void trace(Visitor*, T*);
-};
-
-// blink::ScriptWrappable receives special treatment
-// so as to allow it to be used together with GarbageCollected<T>,
-// even when its user-declared destructor is provided.
-// As it is with Oilpan disabled.
-class ScriptWrappable {
-public:
-    ~ScriptWrappable() { /* user-declared, thus, non-trivial */ }
+    static void Trace(Visitor*, T*);
 };
 
 }

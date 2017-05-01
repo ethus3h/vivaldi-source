@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef IOS_INTERNAL_WEB_WEBUI_URL_DATA_MANAGER_BACKEND_IOS_H_
-#define IOS_INTERNAL_WEB_WEBUI_URL_DATA_MANAGER_BACKEND_IOS_H_
+#ifndef IOS_WEB_WEBUI_URL_DATA_MANAGER_IOS_BACKEND_H_
+#define IOS_WEB_WEBUI_URL_DATA_MANAGER_IOS_BACKEND_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,7 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
 
   // Invoked to create the protocol handler for chrome://. |is_incognito| should
   // be set for incognito browser states. Called on the UI thread.
-  static scoped_ptr<net::URLRequestJobFactory::ProtocolHandler>
+  static std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>
   CreateProtocolHandler(BrowserState* browser_state);
 
   // Adds a DataSource to the collection of data sources.
@@ -97,4 +98,4 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
 
 }  // namespace web
 
-#endif  // IOS_INTERNAL_WEB_WEBUI_URL_DATA_MANAGER_BACKEND_IOS_H_
+#endif  // IOS_WEB_WEBUI_URL_DATA_MANAGER_IOS_BACKEND_H_

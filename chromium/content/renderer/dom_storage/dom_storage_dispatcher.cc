@@ -299,11 +299,8 @@ bool DomStorageDispatcher::OnMessageReceived(const IPC::Message& msg) {
 
 void DomStorageDispatcher::OnStorageEvent(
     const DOMStorageMsg_Event_Params& params) {
-  RenderThreadImpl::current()->EnsureWebKitInitialized();
-
-  bool originated_in_process = params.connection_id != 0;
   WebStorageAreaImpl* originating_area = NULL;
-  if (originated_in_process) {
+  if (params.connection_id) {
     originating_area = WebStorageAreaImpl::FromConnectionId(
         params.connection_id);
   } else {
@@ -315,25 +312,19 @@ void DomStorageDispatcher::OnStorageEvent(
 
   if (params.namespace_id == kLocalStorageNamespaceId) {
     blink::WebStorageEventDispatcher::dispatchLocalStorageEvent(
-        params.key,
-        params.old_value,
-        params.new_value,
-        params.origin,
-        params.page_url,
-        originating_area,
-        originated_in_process);
+        blink::WebString::fromUTF16(params.key),
+        blink::WebString::fromUTF16(params.old_value),
+        blink::WebString::fromUTF16(params.new_value), params.origin,
+        params.page_url, originating_area);
   } else {
     WebStorageNamespaceImpl
         session_namespace_for_event_dispatch(params.namespace_id);
     blink::WebStorageEventDispatcher::dispatchSessionStorageEvent(
-        params.key,
-        params.old_value,
-        params.new_value,
-        params.origin,
-        params.page_url,
-        session_namespace_for_event_dispatch,
-        originating_area,
-        originated_in_process);
+        blink::WebString::fromUTF16(params.key),
+        blink::WebString::fromUTF16(params.old_value),
+        blink::WebString::fromUTF16(params.new_value), params.origin,
+        params.page_url, session_namespace_for_event_dispatch,
+        originating_area);
   }
 }
 

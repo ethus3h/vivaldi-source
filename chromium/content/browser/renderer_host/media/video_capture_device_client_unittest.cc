@@ -2,20 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/capture/video/video_capture_device_client.h"
+
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/bind.h"
+#include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
-#include "content/browser/renderer_host/media/video_capture_buffer_pool.h"
 #include "content/browser/renderer_host/media/video_capture_controller.h"
-#include "content/browser/renderer_host/media/video_capture_device_client.h"
+#include "content/browser/renderer_host/media/video_capture_gpu_jpeg_decoder.h"
+#include "content/browser/renderer_host/media/video_frame_receiver_on_io_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "media/base/limits.h"
+#include "media/capture/video/video_capture_buffer_pool_impl.h"
+#include "media/capture/video/video_capture_buffer_tracker_factory_impl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,38 +36,57 @@ namespace {
 
 class MockVideoCaptureController : public VideoCaptureController {
  public:
-  explicit MockVideoCaptureController(int max_buffers)
-      : VideoCaptureController(max_buffers) {}
+  explicit MockVideoCaptureController() : VideoCaptureController() {}
   ~MockVideoCaptureController() override {}
 
-  MOCK_METHOD1(MockDoIncomingCapturedVideoFrameOnIOThread,
-               void(const gfx::Size&));
-  MOCK_METHOD0(DoErrorOnIOThread, void());
-  MOCK_METHOD1(DoLogOnIOThread, void(const std::string& message));
-  MOCK_METHOD1(DoBufferDestroyedOnIOThread, void(int buffer_id_to_drop));
+  MOCK_METHOD1(MockOnIncomingCapturedVideoFrame, void(const gfx::Size&));
+  MOCK_METHOD0(OnError, void());
+  MOCK_METHOD1(OnLog, void(const std::string& message));
+  MOCK_METHOD1(OnBufferDestroyed, void(int buffer_id_to_drop));
 
-  void DoIncomingCapturedVideoFrameOnIOThread(
-      scoped_ptr<media::VideoCaptureDevice::Client::Buffer> buffer,
-      const scoped_refptr<media::VideoFrame>& frame,
-      const base::TimeTicks& timestamp) override {
-    MockDoIncomingCapturedVideoFrameOnIOThread(frame->coded_size());
+  void OnIncomingCapturedVideoFrame(
+      media::VideoCaptureDevice::Client::Buffer buffer,
+      scoped_refptr<media::VideoFrame> frame) override {
+    MockOnIncomingCapturedVideoFrame(frame->coded_size());
   }
 };
 
+std::unique_ptr<media::VideoCaptureJpegDecoder> CreateGpuJpegDecoder(
+    const media::VideoCaptureJpegDecoder::DecodeDoneCB& decode_done_cb) {
+  return base::MakeUnique<content::VideoCaptureGpuJpegDecoder>(decode_done_cb);
+}
+
+// Note that this test does not exercise the class VideoCaptureDeviceClient
+// in isolation. The "unit under test" is an instance of
+// VideoCaptureDeviceClient with some context that is specific to
+// renderer_host/media, and therefore this test must live here and not in
+// media/capture/video.
 class VideoCaptureDeviceClientTest : public ::testing::Test {
  public:
   VideoCaptureDeviceClientTest()
-      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
-        controller_(new MockVideoCaptureController(1)),
-        device_client_(controller_->NewDeviceClient()) {}
+      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP) {
+    scoped_refptr<media::VideoCaptureBufferPoolImpl> buffer_pool(
+        new media::VideoCaptureBufferPoolImpl(
+            base::MakeUnique<media::VideoCaptureBufferTrackerFactoryImpl>(),
+            1));
+    controller_ = base::MakeUnique<MockVideoCaptureController>();
+    device_client_ = base::MakeUnique<media::VideoCaptureDeviceClient>(
+        base::MakeUnique<VideoFrameReceiverOnIOThread>(
+            controller_->GetWeakPtrForIOThread()),
+        buffer_pool,
+        base::Bind(
+            &CreateGpuJpegDecoder,
+            base::Bind(&media::VideoFrameReceiver::OnIncomingCapturedVideoFrame,
+                       controller_->GetWeakPtrForIOThread())));
+  }
   ~VideoCaptureDeviceClientTest() override {}
 
   void TearDown() override { base::RunLoop().RunUntilIdle(); }
 
  protected:
   const content::TestBrowserThreadBundle thread_bundle_;
-  const scoped_ptr<MockVideoCaptureController> controller_;
-  const scoped_ptr<media::VideoCaptureDevice::Client> device_client_;
+  std::unique_ptr<MockVideoCaptureController> controller_;
+  std::unique_ptr<media::VideoCaptureDeviceClient> device_client_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(VideoCaptureDeviceClientTest);
@@ -79,11 +104,11 @@ TEST_F(VideoCaptureDeviceClientTest, Minimal) {
       media::PIXEL_FORMAT_I420,
       media::PIXEL_STORAGE_CPU);
   DCHECK(device_client_.get());
-  EXPECT_CALL(*controller_, MockDoIncomingCapturedVideoFrameOnIOThread(_))
-      .Times(1);
+  EXPECT_CALL(*controller_, OnLog(_)).Times(1);
+  EXPECT_CALL(*controller_, MockOnIncomingCapturedVideoFrame(_)).Times(1);
   device_client_->OnIncomingCapturedData(data, kScratchpadSizeInBytes,
                                          kFrameFormat, 0 /*clockwise rotation*/,
-                                         base::TimeTicks());
+                                         base::TimeTicks(), base::TimeDelta());
   base::RunLoop().RunUntilIdle();
   Mock::VerifyAndClearExpectations(controller_.get());
 }
@@ -100,11 +125,11 @@ TEST_F(VideoCaptureDeviceClientTest, FailsSilentlyGivenInvalidFrameFormat) {
       media::VideoPixelStorage::PIXEL_STORAGE_CPU);
   DCHECK(device_client_.get());
   // Expect the the call to fail silently inside the VideoCaptureDeviceClient.
-  EXPECT_CALL(*controller_, MockDoIncomingCapturedVideoFrameOnIOThread(_))
-      .Times(0);
+  EXPECT_CALL(*controller_, OnLog(_)).Times(1);
+  EXPECT_CALL(*controller_, MockOnIncomingCapturedVideoFrame(_)).Times(0);
   device_client_->OnIncomingCapturedData(data, kScratchpadSizeInBytes,
                                          kFrameFormat, 0 /*clockwise rotation*/,
-                                         base::TimeTicks());
+                                         base::TimeTicks(), base::TimeDelta());
   base::RunLoop().RunUntilIdle();
   Mock::VerifyAndClearExpectations(controller_.get());
 }
@@ -119,57 +144,61 @@ TEST_F(VideoCaptureDeviceClientTest, DropsFrameIfNoBuffer) {
       media::PIXEL_STORAGE_CPU);
   // We expect the second frame to be silently dropped, so these should
   // only be called once despite the two frames.
-  EXPECT_CALL(*controller_, MockDoIncomingCapturedVideoFrameOnIOThread(_))
-      .Times(1);
+  EXPECT_CALL(*controller_, OnLog(_)).Times(1);
+  EXPECT_CALL(*controller_, MockOnIncomingCapturedVideoFrame(_)).Times(1);
   // Pass two frames. The second will be dropped.
   device_client_->OnIncomingCapturedData(data, kScratchpadSizeInBytes,
                                          kFrameFormat, 0 /*clockwise rotation*/,
-                                         base::TimeTicks());
+                                         base::TimeTicks(), base::TimeDelta());
   device_client_->OnIncomingCapturedData(data, kScratchpadSizeInBytes,
                                          kFrameFormat, 0 /*clockwise rotation*/,
-                                         base::TimeTicks());
+                                         base::TimeTicks(), base::TimeDelta());
   base::RunLoop().RunUntilIdle();
   Mock::VerifyAndClearExpectations(controller_.get());
 }
 
-// Tests that buffer-based capture API accepts all memory-backed pixel formats.
-TEST_F(VideoCaptureDeviceClientTest, DataCaptureInEachVideoFormatInSequence) {
+// Tests that buffer-based capture API accepts some memory-backed pixel formats.
+TEST_F(VideoCaptureDeviceClientTest, DataCaptureGoodPixelFormats) {
   // The usual ReserveOutputBuffer() -> OnIncomingCapturedVideoFrame() cannot
   // be used since it does not accept all pixel formats. The memory backed
   // buffer OnIncomingCapturedData() is used instead, with a dummy scratchpad
   // buffer.
   const size_t kScratchpadSizeInBytes = 400;
   unsigned char data[kScratchpadSizeInBytes] = {};
-  const gfx::Size capture_resolution(10, 10);
-  ASSERT_GE(kScratchpadSizeInBytes, capture_resolution.GetArea() * 4u)
+  const gfx::Size kCaptureResolution(10, 10);
+  ASSERT_GE(kScratchpadSizeInBytes, kCaptureResolution.GetArea() * 4u)
       << "Scratchpad is too small to hold the largest pixel format (ARGB).";
 
-  for (int format = 0; format < media::PIXEL_FORMAT_MAX;
-       ++format) {
-    // Conversion from some formats are unsupported.
-    if (format == media::PIXEL_FORMAT_UNKNOWN ||
-        format == media::PIXEL_FORMAT_YV16 ||
-        format == media::PIXEL_FORMAT_YV12A ||
-        format == media::PIXEL_FORMAT_YV24 ||
-        format == media::PIXEL_FORMAT_ARGB ||
-        format == media::PIXEL_FORMAT_XRGB ||
-        format == media::PIXEL_FORMAT_MJPEG ||
-        format == media::PIXEL_FORMAT_MT21) {
-      continue;
-    }
-#if !defined(OS_LINUX) && !defined(OS_WIN)
-    if (format == media::PIXEL_FORMAT_RGB24){
-      continue;
-    }
+  media::VideoCaptureParams params;
+  params.requested_format = media::VideoCaptureFormat(
+      kCaptureResolution, 30.0f, media::PIXEL_FORMAT_UNKNOWN);
+
+  // Only use the VideoPixelFormats that we know supported. Do not add
+  // PIXEL_FORMAT_MJPEG since it would need a real JPEG header.
+  const media::VideoPixelFormat kSupportedFormats[] = {
+    media::PIXEL_FORMAT_I420,
+    media::PIXEL_FORMAT_YV12,
+    media::PIXEL_FORMAT_NV12,
+    media::PIXEL_FORMAT_NV21,
+    media::PIXEL_FORMAT_YUY2,
+    media::PIXEL_FORMAT_UYVY,
+#if defined(OS_WIN) || defined(OS_LINUX)
+    media::PIXEL_FORMAT_RGB24,
 #endif
-    media::VideoCaptureParams params;
-    params.requested_format = media::VideoCaptureFormat(
-        capture_resolution, 30.0f, media::VideoPixelFormat(format));
-    EXPECT_CALL(*controller_, MockDoIncomingCapturedVideoFrameOnIOThread(_))
-        .Times(1);
+    media::PIXEL_FORMAT_RGB32,
+    media::PIXEL_FORMAT_ARGB,
+    media::PIXEL_FORMAT_Y16,
+  };
+
+  for (media::VideoPixelFormat format : kSupportedFormats) {
+    params.requested_format.pixel_format = format;
+
+    EXPECT_CALL(*controller_, OnLog(_)).Times(1);
+    EXPECT_CALL(*controller_, MockOnIncomingCapturedVideoFrame(_)).Times(1);
     device_client_->OnIncomingCapturedData(
         data, params.requested_format.ImageAllocationSize(),
-        params.requested_format, 0 /* clockwise_rotation */, base::TimeTicks());
+        params.requested_format, 0 /* clockwise_rotation */, base::TimeTicks(),
+        base::TimeDelta());
     base::RunLoop().RunUntilIdle();
     Mock::VerifyAndClearExpectations(controller_.get());
   }
@@ -198,6 +227,8 @@ TEST_F(VideoCaptureDeviceClientTest, CheckRotationsAndCrops) {
   const size_t kScratchpadSizeInBytes = 400;
   unsigned char data[kScratchpadSizeInBytes] = {};
 
+  EXPECT_CALL(*controller_, OnLog(_)).Times(1);
+
   media::VideoCaptureParams params;
   for (const auto& size_and_rotation : kSizeAndRotations) {
     ASSERT_GE(kScratchpadSizeInBytes,
@@ -207,12 +238,13 @@ TEST_F(VideoCaptureDeviceClientTest, CheckRotationsAndCrops) {
         media::VideoCaptureFormat(size_and_rotation.input_resolution, 30.0f,
                                   media::PIXEL_FORMAT_ARGB);
     gfx::Size coded_size;
-    EXPECT_CALL(*controller_, MockDoIncomingCapturedVideoFrameOnIOThread(_))
+    EXPECT_CALL(*controller_, MockOnIncomingCapturedVideoFrame(_))
         .Times(1)
         .WillOnce(SaveArg<0>(&coded_size));
     device_client_->OnIncomingCapturedData(
         data, params.requested_format.ImageAllocationSize(),
-        params.requested_format, size_and_rotation.rotation, base::TimeTicks());
+        params.requested_format, size_and_rotation.rotation, base::TimeTicks(),
+        base::TimeDelta());
     base::RunLoop().RunUntilIdle();
 
     EXPECT_EQ(coded_size.width(), size_and_rotation.output_resolution.width());

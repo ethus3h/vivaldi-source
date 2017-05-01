@@ -7,6 +7,7 @@ package org.chromium.base;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.Notification;
 import android.app.PendingIntent;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -18,17 +19,26 @@ import android.content.res.Resources;
 import android.content.res.Resources.NotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.os.Process;
+import android.os.StatFs;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodSubtype;
+import android.widget.RemoteViews;
 import android.widget.TextView;
+
+import java.io.File;
+import java.lang.reflect.Method;
 
 /**
  * Utility class to use new APIs that were added after ICS (API level 14).
@@ -36,6 +46,22 @@ import android.widget.TextView;
 @TargetApi(Build.VERSION_CODES.LOLLIPOP)
 public class ApiCompatibilityUtils {
     private ApiCompatibilityUtils() {
+    }
+
+    /**
+     * Compares two long values numerically. The value returned is identical to what would be
+     * returned by {@link Long#compare(long, long)} which is available since API level 19.
+     */
+    public static int compareLong(long lhs, long rhs) {
+        return lhs < rhs ? -1 : (lhs == rhs ? 0 : 1);
+    }
+
+    /**
+     * Compares two boolean values. The value returned is identical to what would be returned by
+     * {@link Boolean#compare(boolean, boolean)} which is available since API level 19.
+     */
+    public static int compareBoolean(boolean lhs, boolean rhs) {
+        return lhs == rhs ? 0 : lhs ? 1 : -1;
     }
 
     /**
@@ -72,6 +98,14 @@ public class ApiCompatibilityUtils {
     }
 
     /**
+     * @return True if the running version of the Android supports elevation. Elevation of a view
+     * determines the visual appearance of its shadow.
+     */
+    public static boolean isElevationSupported() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP;
+    }
+
+    /**
      * @see android.view.View#setLayoutDirection(int)
      */
     public static void setLayoutDirection(View view, int layoutDirection) {
@@ -101,6 +135,17 @@ public class ApiCompatibilityUtils {
             view.setTextDirection(textDirection);
         } else {
             // Do nothing. RTL text isn't supported before JB MR1.
+        }
+    }
+
+    /**
+     * See {@link android.view.View#setLabelFor(int)}.
+     */
+    public static void setLabelFor(View labelView, int id) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            labelView.setLabelFor(id);
+        } else {
+            // Do nothing. #setLabelFor() isn't supported before JB MR1.
         }
     }
 
@@ -279,6 +324,17 @@ public class ApiCompatibilityUtils {
         }
     }
 
+    /**
+     * Set elevation if supported.
+     */
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    public static boolean setElevation(View view, float elevationValue) {
+        if (!isElevationSupported()) return false;
+
+        view.setElevation(elevationValue);
+        return true;
+    }
+
     private static class FinishAndRemoveTaskWithRetry implements Runnable {
         private static final long RETRY_DELAY_MS = 500;
         private static final long MAX_TRY_COUNT = 3;
@@ -444,6 +500,18 @@ public class ApiCompatibilityUtils {
     }
 
     /**
+     * @see android.graphics.drawable.Drawable#getColorFilter().
+     */
+    @SuppressWarnings("NewApi")
+    public static ColorFilter getColorFilter(Drawable drawable) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            return drawable.getColorFilter();
+        } else {
+            return null;
+        }
+    }
+
+    /**
      * @see android.content.res.Resources#getColorStateList(int id).
      */
     @SuppressWarnings("deprecation")
@@ -464,6 +532,147 @@ public class ApiCompatibilityUtils {
             view.setTextAppearance(id);
         } else {
             view.setTextAppearance(view.getContext(), id);
+        }
+    }
+
+    /**
+     * See {@link android.os.StatFs#getAvailableBlocksLong}.
+     */
+    @SuppressWarnings("deprecation")
+    public static long getAvailableBlocks(StatFs statFs) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            return statFs.getAvailableBlocksLong();
+        } else {
+            return statFs.getAvailableBlocks();
+        }
+    }
+
+    /**
+     * See {@link android.os.StatFs#getBlockCount}.
+     */
+    @SuppressWarnings("deprecation")
+    public static long getBlockCount(StatFs statFs) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            return statFs.getBlockCountLong();
+        } else {
+            return statFs.getBlockCount();
+        }
+    }
+
+    /**
+     * See {@link android.os.StatFs#getBlockSize}.
+     */
+    @SuppressWarnings("deprecation")
+    public static long getBlockSize(StatFs statFs) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            return statFs.getBlockSizeLong();
+        } else {
+            return statFs.getBlockSize();
+        }
+    }
+
+    /**
+     * @param context The Android context, used to retrieve the UserManager system service.
+     * @return Whether the device is running in demo mode.
+     */
+    public static boolean isDemoUser(Context context) {
+        // UserManager#isDemoUser() is only available in Android versions greater than N.
+        if (!BuildInfo.isGreaterThanN()) return false;
+
+        try {
+            UserManager userManager = (UserManager) context.getSystemService(Context.USER_SERVICE);
+            Method isDemoUserMethod = UserManager.class.getMethod("isDemoUser");
+            boolean isDemoUser = (boolean) isDemoUserMethod.invoke(userManager);
+            return isDemoUser;
+        } catch (RuntimeException e) {
+            // Ignore to avoid crashing on startup.
+        } catch (Exception e) {
+            // Ignore.
+        }
+
+        return false;
+    }
+
+    /**
+     * @see Context#checkPermission(String, int, int)
+     */
+    public static int checkPermission(Context context, String permission, int pid, int uid) {
+        try {
+            return context.checkPermission(permission, pid, uid);
+        } catch (RuntimeException e) {
+            // Some older versions of Android throw odd errors when checking for permissions, so
+            // just swallow the exception and treat it as the permission is denied.
+            // crbug.com/639099
+            return PackageManager.PERMISSION_DENIED;
+        }
+    }
+
+    /**
+     * @see android.app.Notification.Builder#setContent(RemoteViews)
+     */
+    @SuppressWarnings("deprecation")
+    public static void setContentViewForNotificationBuilder(
+            Notification.Builder builder, RemoteViews views) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            builder.setCustomContentView(views);
+        } else {
+            builder.setContent(views);
+        }
+    }
+
+    /**
+     * @see android.app.Notification#bigContentView
+     */
+    @SuppressWarnings("deprecation")
+    public static Notification notificationWithBigContentView(
+            Notification.Builder builder, RemoteViews view) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            return builder.setCustomBigContentView(view).build();
+        } else {
+            Notification notification = builder.build();
+            notification.bigContentView = view;
+            return notification;
+        }
+    }
+
+    /**
+     * @see android.view.inputmethod.InputMethodSubType#getLocate()
+     */
+    @SuppressWarnings("deprecation")
+    public static String getLocale(InputMethodSubtype inputMethodSubType) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            return inputMethodSubType.getLanguageTag();
+        } else {
+            return inputMethodSubType.getLocale();
+        }
+    }
+
+    /**
+     * Get a URI for |file| which has the image capture. This function assumes that path of |file|
+     * is based on the result of UiUtils.getDirectoryForImageCapture().
+     *
+     * @param context The application context.
+     * @param file image capture file.
+     * @return URI for |file|.
+     */
+    public static Uri getUriForImageCaptureFile(Context context, File file) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2
+                ? ContentUriUtils.getContentUriFromFile(context, file)
+                : Uri.fromFile(file);
+    }
+
+    /**
+     * @see android.view.Window#FEATURE_INDETERMINATE_PROGRESS
+     */
+    public static void setWindowIndeterminateProgress(Window window) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            @SuppressWarnings("deprecation")
+            int featureNumber = Window.FEATURE_INDETERMINATE_PROGRESS;
+
+            @SuppressWarnings("deprecation")
+            int featureValue = Window.PROGRESS_VISIBILITY_OFF;
+
+            window.setFeatureInt(featureNumber, featureValue);
         }
     }
 }

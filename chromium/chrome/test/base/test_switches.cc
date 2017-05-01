@@ -4,18 +4,14 @@
 
 #include "build/build_config.h"
 #include "chrome/test/base/test_switches.h"
+#include "ppapi/features/features.h"
 
 namespace switches {
 
 // Also emit full event trace logs for successful tests.
 const char kAlsoEmitSuccessLogs[] = "also-emit-success-logs";
 
-#if defined(OS_WIN)
-// Force browser tests to run in Ash/Metro on Windows 8.
-const char kAshBrowserTests[] = "ash-browsertests";
-#endif
-
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 // Makes browser pixel tests overwrite the reference if it does not match.
 const char kRebaselinePixelTests[] = "rebaseline-pixel-tests";
 #endif

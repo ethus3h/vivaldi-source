@@ -33,6 +33,9 @@ const char kBrowserStatesNumCreated[] = "profile.profiles_created";
 const char kBrowsingDataMigrationHasBeenPossible[] =
     "ios.browsing_data_migration_controller.migration_has_been_possible";
 
+const char kClearBrowsingDataHistoryNoticeShownTimes[] =
+    "browser.clear_data.history_notice_shown_times";
+
 // String indicating the Contextual Search enabled state.
 // "false" - opt-out (disabled)
 // "" (empty string) - undecided
@@ -61,9 +64,9 @@ const char kIosBookmarkFolderDefault[] = "ios.bookmark.default_folder";
 // the bookmark promo dialog.
 const char kIosBookmarkPromoAlreadySeen[] = "ios.bookmark.promo_already_seen";
 
-// Whether Chrome should attempt to hand off the current URL to other Apple
-// devices that share an iCloud account.
-const char kIosHandoffToOtherDevices[] = "ios.handoff_to_other_devices";
+// Whether the user has enabled the Physical Web feature to surface URLs
+// broadcast by nearby devices.
+const char kIosPhysicalWebEnabled[] = "ios.physical_web_enabled";
 
 // True if the previous session exited cleanly.
 // This can be different from kStabilityExitedCleanly, because the last run of
@@ -72,10 +75,6 @@ const char kIosHandoffToOtherDevices[] = "ios.handoff_to_other_devices";
 // session.
 const char kLastSessionExitedCleanly[] =
     "ios.user_experience_metrics.last_session_exited_cleanly";
-
-// True if the previous session was selected into the WKWebView control group.
-const char kLastSessionUsedWKWebViewControlGroup[] =
-    "ios.wkwebview_trial.was_control";
 
 // Preference that hold a boolean indicating whether metrics reporting should
 // be limited to wifi (when enabled).
@@ -106,12 +105,6 @@ const char kNtpShownBookmarksFolder[] = "ntp.shown_bookmarks_folder";
 
 // True if the memory debugging tools should be visible.
 const char kShowMemoryDebuggingTools[] = "ios.memory.show_debugging_tools";
-
-// User preferred speech input language for voice search.
-const char kVoiceSearchLocale[] = "ios.speechinput.voicesearch_locale";
-
-// Boolean which indicates if TTS after voice search is enabled.
-const char kVoiceSearchTTS[] = "ios.speechinput.voicesearch_tts";
 
 // List which contains the last known list of accounts.
 const char kSigninLastAccounts[] = "ios.signin.last_accounts";
@@ -145,22 +138,5 @@ const char kOmniboxGeolocationLastAuthorizationAlertVersion[] =
 // last shown.
 const char kRateThisAppDialogLastShownTime[] =
     "ios.ratethisapp.dialog_last_shown_time";
-
-// Boolean that is true when SafeBrowsing is enabled.
-const char kSafeBrowsingEnabled[] = "safebrowsing.enabled";
-
-// Boolean that tell us whether Safe Browsing extended reporting is enabled.
-const char kSafeBrowsingExtendedReportingEnabled[] =
-    "safebrowsing.extended_reporting_enabled";
-
-// Boolean that tells us whether users are given the option to opt in to Safe
-// Browsing extended reporting.
-const char kSafeBrowsingExtendedReportingOptInAllowed[] =
-    "safebrowsing.extended_reporting_opt_in_allowed";
-
-// Boolean that is true when the SafeBrowsing interstitial should not allow
-// users to proceed anyway.
-const char kSafeBrowsingProceedAnywayDisabled[] =
-    "safebrowsing.proceed_anyway_disabled";
 
 }  // namespace prefs

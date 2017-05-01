@@ -8,19 +8,16 @@
 
 namespace blink {
 
-v8::Local<v8::Object> DOMArrayBuffer::wrap(v8::Isolate* isolate, v8::Local<v8::Object> creationContext)
-{
-    // It's possible that no one except for the new wrapper owns this object at
-    // this moment, so we have to prevent GC to collect this object until the
-    // object gets associated with the wrapper.
-    RefPtr<DOMArrayBuffer> protect(this);
+v8::Local<v8::Object> DOMArrayBuffer::wrap(
+    v8::Isolate* isolate,
+    v8::Local<v8::Object> creationContext) {
+  DCHECK(!DOMDataStore::containsWrapper(this, isolate));
 
-    ASSERT(!DOMDataStore::containsWrapper(this, isolate));
+  const WrapperTypeInfo* wrapperTypeInfo = this->wrapperTypeInfo();
+  v8::Local<v8::Object> wrapper =
+      v8::ArrayBuffer::New(isolate, data(), byteLength());
 
-    const WrapperTypeInfo* wrapperTypeInfo = this->wrapperTypeInfo();
-    v8::Local<v8::Object> wrapper = v8::ArrayBuffer::New(isolate, data(), byteLength());
-
-    return associateWithWrapper(isolate, wrapperTypeInfo, wrapper);
+  return associateWithWrapper(isolate, wrapperTypeInfo, wrapper);
 }
 
-} // namespace blink
+}  // namespace blink

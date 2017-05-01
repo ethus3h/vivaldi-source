@@ -17,7 +17,6 @@ cr.define('options.contentSettings', function() {
   function isEditableType(contentType) {
     // Exceptions of the following lists are not editable for now.
     return !(contentType == 'location' ||
-             contentType == 'fullscreen' ||
              contentType == 'media-stream-mic' ||
              contentType == 'media-stream-camera' ||
              contentType == 'midi-sysex' ||
@@ -91,7 +90,7 @@ cr.define('options.contentSettings', function() {
       if (this.pattern) {
         var settingLabel = cr.doc.createElement('span');
         settingLabel.textContent = this.settingForDisplay();
-        settingLabel.className = 'exception-setting';
+        settingLabel.className = 'exception-setting overruleable';
         settingLabel.setAttribute('displaymode', 'static');
         this.contentElement.appendChild(settingLabel);
         this.settingLabel = settingLabel;
@@ -118,12 +117,10 @@ cr.define('options.contentSettings', function() {
         select.appendChild(optionSession);
       }
 
-      if (this.contentType != 'fullscreen') {
-        var optionBlock = cr.doc.createElement('option');
-        optionBlock.textContent = loadTimeData.getString('blockException');
-        optionBlock.value = 'block';
-        select.appendChild(optionBlock);
-      }
+      var optionBlock = cr.doc.createElement('option');
+      optionBlock.textContent = loadTimeData.getString('blockException');
+      optionBlock.value = 'block';
+      select.appendChild(optionBlock);
 
       if (this.isEmbeddingRule()) {
         this.patternLabel.classList.add('sublabel');
@@ -180,7 +177,7 @@ cr.define('options.contentSettings', function() {
       // already-existing exceptions (which we assume are valid).
       this.inputValidityKnown = this.pattern;
       // This one tracks the actual validity of the pattern in the input. This
-      // starts off as true so as not to annoy the user when he adds a new and
+      // starts off as true so as not to annoy the user when they add a new and
       // empty input.
       this.inputIsValid = true;
 
@@ -205,14 +202,7 @@ cr.define('options.contentSettings', function() {
 
       if (controlledBy == 'policy' || controlledBy == 'extension') {
         this.querySelector('.row-delete-button').hidden = true;
-        var indicator = new ControlledSettingIndicator();
-        indicator.setAttribute('content-exception', this.contentType);
-        // Create a synthetic pref change event decorated as
-        // CoreOptionsHandler::CreateValueForPref() does.
-        var event = new Event(this.contentType);
-        event.value = { controlledBy: controlledBy };
-        indicator.handlePrefChange(event);
-        this.appendChild(indicator);
+        this.appendIndicatorElement(controlledBy);
       }
 
       // If the exception comes from a hosted app, display the name and the
@@ -239,6 +229,22 @@ cr.define('options.contentSettings', function() {
       // Listen for edit events.
       this.addEventListener('canceledit', this.onEditCancelled_);
       this.addEventListener('commitedit', this.onEditCommitted_);
+    },
+
+    /**
+     * Appends an indicator element to the item. Should be called at most once.
+     *
+     * @param {string} controlledBy The source that controls the item.
+     */
+    appendIndicatorElement: function(controlledBy) {
+      var indicator = new ControlledSettingIndicator();
+      indicator.setAttribute('content-exception', this.contentType);
+      // Create a synthetic pref change event decorated as
+      // CoreOptionsHandler::CreateValueForPref() does.
+      var event = new Event(this.contentType);
+      event.value = {controlledBy: controlledBy};
+      indicator.handlePrefChange(event);
+      this.appendChild(indicator);
     },
 
     isEmbeddingRule: function() {
@@ -343,6 +349,16 @@ cr.define('options.contentSettings', function() {
           this.select.querySelector('[value=\'' + this.setting + '\']');
       if (settingOption)
         settingOption.selected = true;
+    },
+
+    /**
+     * Updates UI to indicate that the exception was overruled by a source.
+     *
+     * @param {string} overruledBy The source that overrules the exception.
+     */
+    setOverruledBy: function(overruledBy) {
+      this.classList.toggle('overruled', !!overruledBy);
+      this.appendIndicatorElement(overruledBy);
     },
 
     /** @override */
@@ -516,6 +532,19 @@ cr.define('options.contentSettings', function() {
                                                       this.mode);
         addRowItem.deletable = false;
         return addRowItem;
+      }
+    },
+
+    /**
+     * Updates UI to indicate that user exceptions were overruled by a source.
+     *
+     * @param {string} overruledBy The source that overrules user exceptions.
+     */
+    setOverruledBy: function(overruledBy) {
+      for (var index = 0; index < this.dataModel.length; ++index) {
+        var item = this.getListItemByIndex(index);
+        if (item.dataItem.source == 'preference')
+          item.setOverruledBy(overruledBy);
       }
     },
 

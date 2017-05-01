@@ -7,14 +7,14 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/persistent_pref_store.h"
-#include "base/prefs/pref_value_map.h"
+#include "components/prefs/persistent_pref_store.h"
+#include "components/prefs/pref_value_map.h"
 
 namespace base {
 class Value;
@@ -22,7 +22,7 @@ class Value;
 
 // A light-weight prefstore implementation that keeps preferences
 // in a memory backed store. This is not a persistent prefstore.
-// TODO(bengr): Move to base/prefs or some other shared location.
+// TODO(bengr): Move to components/prefs or some other shared location.
 class CronetInMemoryPrefStore : public PersistentPrefStore {
  public:
   CronetInMemoryPrefStore();
@@ -39,10 +39,10 @@ class CronetInMemoryPrefStore : public PersistentPrefStore {
   bool GetMutableValue(const std::string& key, base::Value** result) override;
   void ReportValueChanged(const std::string& key, uint32_t flags) override;
   void SetValue(const std::string& key,
-                scoped_ptr<base::Value> value,
+                std::unique_ptr<base::Value> value,
                 uint32_t flags) override;
   void SetValueSilently(const std::string& key,
-                        scoped_ptr<base::Value> value,
+                        std::unique_ptr<base::Value> value,
                         uint32_t flags) override;
   void RemoveValue(const std::string& key, uint32_t flags) override;
   bool ReadOnly() const override;
@@ -51,6 +51,7 @@ class CronetInMemoryPrefStore : public PersistentPrefStore {
   void ReadPrefsAsync(ReadErrorDelegate* error_delegate) override;
   void CommitPendingWrite() override {}
   void SchedulePendingLossyWrites() override {}
+  void ClearMutableValues() override {}
 
  private:
   ~CronetInMemoryPrefStore() override;

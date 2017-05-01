@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 #include "base/trace_event/trace_event.h"
@@ -27,7 +29,7 @@ const int kResampleMinDeltaMs = 2;
 // the last time delta.
 const int kResampleMaxPredictionMs = 8;
 
-typedef ScopedVector<MotionEventGeneric> MotionEventVector;
+using MotionEventVector = std::vector<std::unique_ptr<MotionEventGeneric>>;
 
 float Lerp(float a, float b, float alpha) {
   return a + alpha * (b - a);
@@ -59,34 +61,20 @@ bool ShouldResampleTool(MotionEvent::ToolType tool) {
          tool == MotionEvent::TOOL_TYPE_FINGER;
 }
 
-size_t CountSamplesNoLaterThan(const MotionEventVector& batch,
-                               base::TimeTicks time) {
-  size_t count = 0;
-  while (count < batch.size() && batch[count]->GetEventTime() <= time)
-    ++count;
-  return count;
-}
-
+// Splits a chunk of events from the front of the provided |batch| and returns
+// it. Requires that |batch| is sorted.
 MotionEventVector ConsumeSamplesNoLaterThan(MotionEventVector* batch,
                                             base::TimeTicks time) {
   DCHECK(batch);
-  size_t count = CountSamplesNoLaterThan(*batch, time);
-  DCHECK_GE(batch->size(), count);
-  if (count == 0)
-    return MotionEventVector();
-
-  if (count == batch->size())
-    return std::move(*batch);
-
-  // TODO(jdduke): Use a ScopedDeque to work around this mess.
-  MotionEventVector unconsumed_batch;
-  unconsumed_batch.insert(
-      unconsumed_batch.begin(), batch->begin() + count, batch->end());
-  batch->weak_erase(batch->begin() + count, batch->end());
-
-  unconsumed_batch.swap(*batch);
-  DCHECK_GE(unconsumed_batch.size(), 1U);
-  return unconsumed_batch;
+  auto first_kept_event = std::partition_point(
+      batch->begin(), batch->end(),
+      [time](const std::unique_ptr<MotionEventGeneric>& event) {
+        return event->GetEventTime() <= time;
+      });
+  MotionEventVector result(std::make_move_iterator(batch->begin()),
+                           std::make_move_iterator(first_kept_event));
+  batch->erase(batch->begin(), first_kept_event);
+  return result;
 }
 
 // Linearly interpolate the pointer position between two MotionEvent samples.
@@ -117,7 +105,7 @@ PointerProperties ResamplePointer(const MotionEvent& event0,
 
 // Linearly interpolate the pointers between two event samples using the
 // provided |resample_time|.
-scoped_ptr<MotionEventGeneric> ResampleMotionEvent(
+std::unique_ptr<MotionEventGeneric> ResampleMotionEvent(
     const MotionEvent& event0,
     const MotionEvent& event1,
     base::TimeTicks resample_time) {
@@ -132,7 +120,7 @@ scoped_ptr<MotionEventGeneric> ResampleMotionEvent(
   const float alpha = (resample_time - time0).InMillisecondsF() /
                       (time1 - time0).InMillisecondsF();
 
-  scoped_ptr<MotionEventGeneric> event;
+  std::unique_ptr<MotionEventGeneric> event;
   const size_t pointer_count = event0.GetPointerCount();
   DCHECK_EQ(pointer_count, event1.GetPointerCount());
   for (size_t event0_i = 0; event0_i < pointer_count; ++event0_i) {
@@ -156,12 +144,12 @@ scoped_ptr<MotionEventGeneric> ResampleMotionEvent(
 
 // Synthesize a compound MotionEventGeneric event from a sequence of events.
 // Events must be in non-decreasing (time) order.
-scoped_ptr<MotionEventGeneric> ConsumeSamples(MotionEventVector events) {
+std::unique_ptr<MotionEventGeneric> ConsumeSamples(MotionEventVector events) {
   DCHECK(!events.empty());
-  scoped_ptr<MotionEventGeneric> event(events.back());
-  for (size_t i = 0; i + 1 < events.size(); ++i)
-    event->PushHistoricalEvent(scoped_ptr<MotionEvent>(events[i]));
-  events.weak_clear();
+  std::unique_ptr<MotionEventGeneric> event = std::move(events.back());
+  events.pop_back();
+  for (auto& historic_event : events)
+    event->PushHistoricalEvent(std::move(historic_event));
   return event;
 }
 
@@ -174,7 +162,7 @@ scoped_ptr<MotionEventGeneric> ConsumeSamples(MotionEventVector events) {
 // are resampled or resampling is otherwise inconsistent, e.g., a 90hz input
 // and 60hz frame signal could phase-align such that even frames yield an
 // extrapolated event and odd frames are not resampled, crbug.com/399381.
-scoped_ptr<MotionEventGeneric> ConsumeSamplesAndTryResampling(
+std::unique_ptr<MotionEventGeneric> ConsumeSamplesAndTryResampling(
     base::TimeTicks resample_time,
     MotionEventVector events,
     const MotionEvent* next) {
@@ -183,12 +171,12 @@ scoped_ptr<MotionEventGeneric> ConsumeSamplesAndTryResampling(
   if (next) {
     DCHECK(resample_time < next->GetEventTime());
     // Interpolate between current sample and future sample.
-    event0 = events.back();
+    event0 = events.back().get();
     event1 = next;
   } else if (events.size() >= 2) {
     // Extrapolate future sample using current sample and past sample.
-    event0 = events[events.size() - 2];
-    event1 = events[events.size() - 1];
+    event0 = events[events.size() - 2].get();
+    event1 = events[events.size() - 1].get();
 
     const base::TimeTicks time1 = event1->GetEventTime();
     base::TimeTicks max_predict =
@@ -226,11 +214,10 @@ scoped_ptr<MotionEventGeneric> ConsumeSamplesAndTryResampling(
     return ConsumeSamples(std::move(events));
   }
 
-  scoped_ptr<MotionEventGeneric> resampled_event =
+  std::unique_ptr<MotionEventGeneric> resampled_event =
       ResampleMotionEvent(*event0, *event1, resample_time);
-  for (size_t i = 0; i < events.size(); ++i)
-    resampled_event->PushHistoricalEvent(scoped_ptr<MotionEvent>(events[i]));
-  events.weak_clear();
+  for (auto& historic_event : events)
+    resampled_event->PushHistoricalEvent(std::move(historic_event));
   return resampled_event;
 }
 
@@ -263,7 +250,8 @@ void MotionEventBuffer::OnMotionEvent(const MotionEvent& event) {
     last_extrapolated_event_time_ = base::TimeTicks();
   }
 
-  scoped_ptr<MotionEventGeneric> clone = MotionEventGeneric::CloneEvent(event);
+  std::unique_ptr<MotionEventGeneric> clone =
+      MotionEventGeneric::CloneEvent(event);
   if (buffered_events_.empty()) {
     buffered_events_.push_back(std::move(clone));
     client_->SetNeedsFlush();
@@ -271,6 +259,7 @@ void MotionEventBuffer::OnMotionEvent(const MotionEvent& event) {
   }
 
   if (CanAddSample(*buffered_events_.front(), *clone)) {
+    // Ensure that buffered_events_ is ordered.
     DCHECK(buffered_events_.back()->GetEventTime() <= clone->GetEventTime());
   } else {
     FlushWithoutResampling(std::move(buffered_events_));
@@ -291,8 +280,8 @@ void MotionEventBuffer::Flush(base::TimeTicks frame_time) {
 
   // TODO(jdduke): Use a persistent MotionEventVector vector for temporary
   // storage.
-  MotionEventVector events(
-      ConsumeSamplesNoLaterThan(&buffered_events_, frame_time));
+  MotionEventVector events =
+      ConsumeSamplesNoLaterThan(&buffered_events_, frame_time);
   if (events.empty()) {
     DCHECK(!buffered_events_.empty());
     client_->SetNeedsFlush();
@@ -314,9 +303,9 @@ void MotionEventBuffer::FlushWithResampling(MotionEventVector events,
   DCHECK(!events.empty());
   base::TimeTicks original_event_time = events.back()->GetEventTime();
   const MotionEvent* next_event =
-      !buffered_events_.empty() ? buffered_events_.front() : nullptr;
+      !buffered_events_.empty() ? buffered_events_.front().get() : nullptr;
 
-  scoped_ptr<MotionEventGeneric> resampled_event =
+  std::unique_ptr<MotionEventGeneric> resampled_event =
       ConsumeSamplesAndTryResampling(resample_time, std::move(events),
                                      next_event);
   DCHECK(resampled_event);

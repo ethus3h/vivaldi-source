@@ -13,11 +13,11 @@ binding.registerCustomHook(function(bindingsAPI) {
 
   var pendingRequests = {};
 
-  function onRequestResult(id, result) {
+  function onRequestResult(id, result, options) {
     if (id in pendingRequests) {
       var callback = pendingRequests[id];
       delete pendingRequests[id];
-      callback(result);
+      callback(result, options);
     }
   }
 
@@ -32,16 +32,16 @@ binding.registerCustomHook(function(bindingsAPI) {
     pendingRequests[id] = callback;
     sendRequest(this.name,
                 [id, sources, target_tab, onRequestResult.bind(null, id)],
-                this.definition.parameters, {});
+                this.definition.parameters);
     return id;
   });
 
   apiFunctions.setHandleRequest('cancelChooseDesktopMedia', function(id) {
     if (id in pendingRequests) {
       delete pendingRequests[id];
-      sendRequest(this.name, [id], this.definition.parameters, {});
+      sendRequest(this.name, [id], this.definition.parameters);
     }
   });
 });
 
-exports.binding = binding.generate();
+exports.$set('binding', binding.generate());

@@ -10,7 +10,6 @@
 
 #include "base/bind_helpers.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
@@ -86,7 +85,7 @@ PicasaFileUtil::PicasaFileUtil(MediaPathFilter* media_path_filter)
 PicasaFileUtil::~PicasaFileUtil() {}
 
 void PicasaFileUtil::GetFileInfoOnTaskRunnerThread(
-    scoped_ptr<storage::FileSystemOperationContext> context,
+    std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     const GetFileInfoCallback& callback) {
   PicasaDataProvider* data_provider = GetDataProvider();
@@ -106,7 +105,7 @@ void PicasaFileUtil::GetFileInfoOnTaskRunnerThread(
 }
 
 void PicasaFileUtil::ReadDirectoryOnTaskRunnerThread(
-    scoped_ptr<storage::FileSystemOperationContext> context,
+    std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     const ReadDirectoryCallback& callback) {
   PicasaDataProvider* data_provider = GetDataProvider();
@@ -152,7 +151,7 @@ base::File::Error PicasaFileUtil::GetFileInfoSync(
       break;
     case 2:
       if (components[0] == kPicasaDirAlbums) {
-        scoped_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
+        std::unique_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
         base::File::Error error =
             FindAlbumInfo(components[1], album_map.get(), NULL);
         if (error != base::File::FILE_OK)
@@ -215,7 +214,7 @@ base::File::Error PicasaFileUtil::ReadDirectorySync(
     }
     case 1:
       if (components[0] == kPicasaDirAlbums) {
-        scoped_ptr<AlbumMap> albums = GetDataProvider()->GetAlbums();
+        std::unique_ptr<AlbumMap> albums = GetDataProvider()->GetAlbums();
         if (!albums)
           return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -225,7 +224,7 @@ base::File::Error PicasaFileUtil::ReadDirectorySync(
               DirectoryEntry(it->first, DirectoryEntry::DIRECTORY));
         }
       } else if (components[0] == kPicasaDirFolders) {
-        scoped_ptr<AlbumMap> folders = GetDataProvider()->GetFolders();
+        std::unique_ptr<AlbumMap> folders = GetDataProvider()->GetFolders();
         if (!folders)
           return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -238,14 +237,14 @@ base::File::Error PicasaFileUtil::ReadDirectorySync(
       break;
     case 2:
       if (components[0] == kPicasaDirAlbums) {
-        scoped_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
+        std::unique_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
         AlbumInfo album_info;
         base::File::Error error =
             FindAlbumInfo(components[1], album_map.get(), &album_info);
         if (error != base::File::FILE_OK)
           return error;
 
-        scoped_ptr<AlbumImages> album_images =
+        std::unique_ptr<AlbumImages> album_images =
             GetDataProvider()->FindAlbumImages(album_info.uid, &error);
         if (error != base::File::FILE_OK)
           return error;
@@ -308,7 +307,7 @@ base::File::Error PicasaFileUtil::GetLocalFilePath(
   switch (components.size()) {
     case 2:
       if (components[0] == kPicasaDirFolders) {
-        scoped_ptr<AlbumMap> album_map = GetDataProvider()->GetFolders();
+        std::unique_ptr<AlbumMap> album_map = GetDataProvider()->GetFolders();
         AlbumInfo album_info;
         base::File::Error error =
             FindAlbumInfo(components[1], album_map.get(), &album_info);
@@ -321,14 +320,14 @@ base::File::Error PicasaFileUtil::GetLocalFilePath(
       break;
     case 3:
       if (components[0] == kPicasaDirAlbums) {
-        scoped_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
+        std::unique_ptr<AlbumMap> album_map = GetDataProvider()->GetAlbums();
         AlbumInfo album_info;
         base::File::Error error =
             FindAlbumInfo(components[1], album_map.get(), &album_info);
         if (error != base::File::FILE_OK)
           return error;
 
-        scoped_ptr<AlbumImages> album_images =
+        std::unique_ptr<AlbumImages> album_images =
             GetDataProvider()->FindAlbumImages(album_info.uid, &error);
         if (error != base::File::FILE_OK)
           return error;
@@ -342,7 +341,7 @@ base::File::Error PicasaFileUtil::GetLocalFilePath(
       }
 
       if (components[0] == kPicasaDirFolders) {
-        scoped_ptr<AlbumMap> album_map = GetDataProvider()->GetFolders();
+        std::unique_ptr<AlbumMap> album_map = GetDataProvider()->GetFolders();
         AlbumInfo album_info;
         base::File::Error error =
             FindAlbumInfo(components[1], album_map.get(), &album_info);
@@ -365,7 +364,7 @@ base::File::Error PicasaFileUtil::GetLocalFilePath(
 }
 
 void PicasaFileUtil::GetFileInfoWithFreshDataProvider(
-    scoped_ptr<storage::FileSystemOperationContext> context,
+    std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     const GetFileInfoCallback& callback,
     bool success) {
@@ -381,7 +380,7 @@ void PicasaFileUtil::GetFileInfoWithFreshDataProvider(
 }
 
 void PicasaFileUtil::ReadDirectoryWithFreshDataProvider(
-    scoped_ptr<storage::FileSystemOperationContext> context,
+    std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     const ReadDirectoryCallback& callback,
     bool success) {

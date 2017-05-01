@@ -27,7 +27,6 @@ namespace views {
 class Label;
 class LabelButton;
 class TreeView;
-class Widget;
 }
 
 // This is the Views implementation of the collected cookies dialog.
@@ -63,6 +62,7 @@ class CollectedCookiesViews : public views::DialogDelegateView,
 
   // views::View:
   gfx::Size GetMinimumSize() const override;
+  gfx::Size GetPreferredSize() const override;
   void ViewHierarchyChanged(
       const ViewHierarchyChangedDetails& details) override;
 
@@ -108,8 +108,8 @@ class CollectedCookiesViews : public views::DialogDelegateView,
   views::LabelButton* allow_blocked_button_;
   views::LabelButton* for_session_blocked_button_;
 
-  scoped_ptr<CookiesTreeModel> allowed_cookies_tree_model_;
-  scoped_ptr<CookiesTreeModel> blocked_cookies_tree_model_;
+  std::unique_ptr<CookiesTreeModel> allowed_cookies_tree_model_;
+  std::unique_ptr<CookiesTreeModel> blocked_cookies_tree_model_;
 
   CookieInfoView* cookie_info_view_;
 

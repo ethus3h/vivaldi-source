@@ -22,6 +22,8 @@
 #endif
 
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/vivaldi_ui_utils.h"
 
 using extensions::AppWindow;
 
@@ -215,9 +217,8 @@ void NativeAppWindowViews::RemoveObserver(
 }
 
 void NativeAppWindowViews::OnViewWasResized() {
-  FOR_EACH_OBSERVER(web_modal::ModalDialogHostObserver,
-                    observer_list_,
-                    OnPositionRequiresUpdate());
+  for (auto& observer : observer_list_)
+    observer.OnPositionRequiresUpdate();
 }
 
 // WidgetDelegate implementation.
@@ -275,10 +276,6 @@ const views::Widget* NativeAppWindowViews::GetWidget() const {
   return widget_;
 }
 
-views::View* NativeAppWindowViews::GetContentsView() {
-  return this;
-}
-
 bool NativeAppWindowViews::ShouldDescendIntoChildForEventHandling(
     gfx::NativeView child,
     const gfx::Point& location) {
@@ -312,11 +309,14 @@ bool NativeAppWindowViews::ExecuteWindowsCommand(int command_id) {
 }
 
 void NativeAppWindowViews::HandleKeyboardCode(ui::KeyboardCode code) {
-  if (s_current_webviewguest) {
-    content::NativeWebKeyboardEvent synth_event;
-    synth_event.type = blink::WebInputEvent::RawKeyDown;
+  extensions::WebViewGuest *current_webviewguest =
+      vivaldi::ui_tools::GetActiveWebViewGuest(this);
+  if (current_webviewguest) {
+    content::NativeWebKeyboardEvent synth_event(
+        blink::WebInputEvent::RawKeyDown, blink::WebInputEvent::NoModifiers,
+        ui::EventTimeForNow());
     synth_event.windowsKeyCode = code;
-    s_current_webviewguest->web_contents()->GetDelegate()
+    current_webviewguest->web_contents()->GetDelegate()
         ->HandleKeyboardEvent(web_view_->GetWebContents(), synth_event);
   }
 }
@@ -324,9 +324,8 @@ void NativeAppWindowViews::HandleKeyboardCode(ui::KeyboardCode code) {
 // WidgetObserver implementation.
 
 void NativeAppWindowViews::OnWidgetDestroying(views::Widget* widget) {
-  FOR_EACH_OBSERVER(web_modal::ModalDialogHostObserver,
-                    observer_list_,
-                    OnHostDestroying());
+  for (auto& observer : observer_list_)
+    observer.OnHostDestroying();
 }
 
 void NativeAppWindowViews::OnWidgetVisibilityChanged(views::Widget* widget,
@@ -422,7 +421,7 @@ SkRegion* NativeAppWindowViews::GetDraggableRegion() {
   return draggable_region_.get();
 }
 
-void NativeAppWindowViews::UpdateShape(scoped_ptr<SkRegion> region) {
+void NativeAppWindowViews::UpdateShape(std::unique_ptr<SkRegion> region) {
   // Stub implementation. See also ChromeNativeAppWindowViews.
 }
 

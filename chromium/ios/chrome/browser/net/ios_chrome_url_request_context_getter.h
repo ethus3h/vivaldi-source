@@ -5,8 +5,9 @@
 #ifndef IOS_CHROME_BROWSER_NET_IOS_CHROME_URL_REQUEST_CONTEXT_GETTER_H_
 #define IOS_CHROME_BROWSER_NET_IOS_CHROME_URL_REQUEST_CONTEXT_GETTER_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ios/chrome/browser/net/net_types.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -25,11 +26,11 @@ class IOSChromeURLRequestContextGetter : public net::URLRequestContextGetter {
   // Constructs a ChromeURLRequestContextGetter that will use |factory| to
   // create the URLRequestContext.
   explicit IOSChromeURLRequestContextGetter(
-      scoped_ptr<IOSChromeURLRequestContextFactory> factory);
+      std::unique_ptr<IOSChromeURLRequestContextFactory> factory);
 
   // Note that GetURLRequestContext() can only be called from the IO
   // thread (it will assert otherwise).
-  // GetIOMessageLoopProxy however can be called from any thread.
+  // GetIOTaskRunner however can be called from any thread.
   //
   // net::URLRequestContextGetter implementation.
   net::URLRequestContext* GetURLRequestContext() override;
@@ -58,7 +59,7 @@ class IOSChromeURLRequestContextGetter : public net::URLRequestContextGetter {
 
   // Deferred logic for creating a URLRequestContext.
   // Access only from the IO thread.
-  scoped_ptr<IOSChromeURLRequestContextFactory> factory_;
+  std::unique_ptr<IOSChromeURLRequestContextFactory> factory_;
 
   // NULL before initialization and after invalidation.
   // Otherwise, it is the URLRequestContext instance that

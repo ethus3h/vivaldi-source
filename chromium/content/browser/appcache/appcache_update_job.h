@@ -101,6 +101,7 @@ class CONTENT_EXPORT AppCacheUpdateJob
 
   struct UrlToFetch {
     UrlToFetch(const GURL& url, bool checked, AppCacheResponseInfo* info);
+    UrlToFetch(const UrlToFetch& other);
     ~UrlToFetch();
 
     GURL url;
@@ -142,14 +143,14 @@ class CONTENT_EXPORT AppCacheUpdateJob
     void OnReceivedRedirect(net::URLRequest* request,
                             const net::RedirectInfo& redirect_info,
                             bool* defer_redirect) override;
-    void OnResponseStarted(net::URLRequest* request) override;
+    void OnResponseStarted(net::URLRequest* request, int net_error) override;
     void OnReadCompleted(net::URLRequest* request, int bytes_read) override;
 
     void AddConditionalHeaders(const net::HttpResponseHeaders* headers);
     void OnWriteComplete(int result);
     void ReadResponseData();
     bool ConsumeResponseData(int bytes_read);
-    void OnResponseCompleted();
+    void OnResponseCompleted(int net_error);
     bool MaybeRetryRequest();
 
     GURL url_;
@@ -157,13 +158,13 @@ class CONTENT_EXPORT AppCacheUpdateJob
     FetchType fetch_type_;
     int retry_503_attempts_;
     scoped_refptr<net::IOBuffer> buffer_;
-    scoped_ptr<net::URLRequest> request_;
+    std::unique_ptr<net::URLRequest> request_;
     AppCacheEntry existing_entry_;
     scoped_refptr<net::HttpResponseHeaders> existing_response_headers_;
     std::string manifest_data_;
     ResultType result_;
     int redirect_response_code_;
-    scoped_ptr<AppCacheResponseWriter> response_writer_;
+    std::unique_ptr<AppCacheResponseWriter> response_writer_;
   };  // class URLFetcher
 
   AppCacheResponseWriter* CreateResponseWriter();
@@ -191,13 +192,13 @@ class CONTENT_EXPORT AppCacheUpdateJob
                           const GURL& failed_resource_url);
 
   void FetchManifest(bool is_first_fetch);
-  void HandleManifestFetchCompleted(URLFetcher* fetcher);
+  void HandleManifestFetchCompleted(URLFetcher* fetcher, int net_error);
   void ContinueHandleManifestFetchCompleted(bool changed);
 
-  void HandleUrlFetchCompleted(URLFetcher* fetcher);
-  void HandleMasterEntryFetchCompleted(URLFetcher* fetcher);
+  void HandleUrlFetchCompleted(URLFetcher* fetcher, int net_error);
+  void HandleMasterEntryFetchCompleted(URLFetcher* fetcher, int net_error);
 
-  void HandleManifestRefetchCompleted(URLFetcher* fetcher);
+  void HandleManifestRefetchCompleted(URLFetcher* fetcher, int net_error);
   void OnManifestInfoWriteComplete(int result);
   void OnManifestDataWriteComplete(int result);
 
@@ -316,11 +317,11 @@ class CONTENT_EXPORT AppCacheUpdateJob
 
   // Temporary storage of manifest response data for parsing and comparison.
   std::string manifest_data_;
-  scoped_ptr<net::HttpResponseInfo> manifest_response_info_;
-  scoped_ptr<AppCacheResponseWriter> manifest_response_writer_;
+  std::unique_ptr<net::HttpResponseInfo> manifest_response_info_;
+  std::unique_ptr<AppCacheResponseWriter> manifest_response_writer_;
   scoped_refptr<net::IOBuffer> read_manifest_buffer_;
   std::string loaded_manifest_data_;
-  scoped_ptr<AppCacheResponseReader> manifest_response_reader_;
+  std::unique_ptr<AppCacheResponseReader> manifest_response_reader_;
   bool manifest_has_valid_mime_type_;
 
   // New master entries added to the cache by this job, used to cleanup

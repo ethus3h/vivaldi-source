@@ -12,13 +12,17 @@ function test() {
     sanityCheck(window.localStorage);
     debug('Checking window.sessionStorage');
     sanityCheck(window.sessionStorage);
-    done();
+    window.setTimeout(done, 0);
   } catch(e) {
     fail(e);
   }
 }
 
 function sanityCheck(storage) {
+  storage["preload"] = "done";
+  checkEqual("done", storage["preload"],
+             "storage['preload'] != 'done' after addition");
+
   storage.clear();
 
   checkEqual(0, storage.length,

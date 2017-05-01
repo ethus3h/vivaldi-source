@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_POLICY_PROFILE_POLICY_CONNECTOR_H_
 #define CHROME_BROWSER_POLICY_PROFILE_POLICY_CONNECTOR_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
 
@@ -19,26 +19,29 @@ class User;
 
 namespace policy {
 
-class CloudPolicyManager;
+class CloudPolicyStore;
 class ConfigurationPolicyProvider;
 class PolicyService;
 class SchemaRegistry;
 
-// A KeyedService that creates and manages the per-Profile policy
-// components.
+// A KeyedService that creates and manages the per-Profile policy components.
 class ProfilePolicyConnector : public KeyedService {
  public:
   ProfilePolicyConnector();
   ~ProfilePolicyConnector() override;
 
-  void Init(
-#if defined(OS_CHROMEOS)
-      const user_manager::User* user,
-#endif
-      SchemaRegistry* schema_registry,
-      CloudPolicyManager* user_cloud_policy_manager);
+  // |user| is only used in Chrome OS builds and should be set to nullptr
+  // otherwise.  |configuration_policy_provider| and |policy_store| are nullptr
+  // for non-regular users.
+  // If |force_immediate_load| is true, DeviceLocalAccountPolicy is loaded
+  // synchronously.
+  void Init(const user_manager::User* user,
+            SchemaRegistry* schema_registry,
+            ConfigurationPolicyProvider* configuration_policy_provider,
+            const CloudPolicyStore* policy_store,
+            bool force_immediate_load);
 
-  void InitForTesting(scoped_ptr<PolicyService> service);
+  void InitForTesting(std::unique_ptr<PolicyService> service);
   void OverrideIsManagedForTesting(bool is_managed);
 
   // KeyedService:
@@ -47,41 +50,42 @@ class ProfilePolicyConnector : public KeyedService {
   // This is never NULL.
   PolicyService* policy_service() const { return policy_service_.get(); }
 
-  // Returns true if this Profile is under cloud policy management. You must
-  // call this method only when the policies system is fully initialized.
+  // Returns true if this Profile is under any kind of policy management. You
+  // must call this method only when the policies system is fully initialized.
   bool IsManaged() const;
 
-  // Returns the cloud policy management domain, if this Profile is under
-  // cloud policy management. Otherwise returns an empty string. You must call
-  // this method only when the policies system is fully initialized.
+  // Returns the cloud policy management domain or the Active Directory realm
+  // for managed Profiles or an empty string for unmanaged Profiles. You must
+  // call this method only when the policies system is fully initialized.
   std::string GetManagementDomain() const;
 
-  // Returns true if the |name| Chrome user policy is currently set via the
-  // CloudPolicyManager and isn't being overridden by a higher-level provider.
-  bool IsPolicyFromCloudPolicy(const char* name) const;
+  // Returns true if the |policy_key| user policy is currently set via the
+  // |configuration_policy_provider_| and isn't being overridden by a
+  // higher-level provider.
+  bool IsProfilePolicy(const char* policy_key) const;
 
  private:
-  // Find the policy provider that provides the |name| Chrome policy, if any. In
+  // Find the policy provider that provides the |policy_key| policy, if any. In
   // case of multiple providers sharing the same policy, the one with the
   // highest priority will be returned.
   const ConfigurationPolicyProvider* DeterminePolicyProviderForPolicy(
-      const char* name) const;
+      const char* policy_key) const;
 
-#if defined(ENABLE_CONFIGURATION_POLICY)
 #if defined(OS_CHROMEOS)
   // Some of the user policy configuration affects browser global state, and
   // can only come from one Profile. |is_primary_user_| is true if this
   // connector belongs to the first signed-in Profile, and in that case that
   // Profile's policy is the one that affects global policy settings in
   // local state.
-  bool is_primary_user_;
+  bool is_primary_user_ = false;
 
-  scoped_ptr<ConfigurationPolicyProvider> special_user_policy_provider_;
+  std::unique_ptr<ConfigurationPolicyProvider> special_user_policy_provider_;
 #endif  // defined(OS_CHROMEOS)
 
-  scoped_ptr<ConfigurationPolicyProvider> wrapped_platform_policy_provider_;
-  CloudPolicyManager* user_cloud_policy_manager_;
-#endif  // defined(ENABLE_CONFIGURATION_POLICY)
+  std::unique_ptr<ConfigurationPolicyProvider>
+      wrapped_platform_policy_provider_;
+  const ConfigurationPolicyProvider* configuration_policy_provider_ = nullptr;
+  const CloudPolicyStore* policy_store_ = nullptr;
 
   // |policy_providers_| contains a list of the policy providers available for
   // the PolicyService of this connector, in decreasing order of priority.
@@ -93,8 +97,8 @@ class ProfilePolicyConnector : public KeyedService {
   // result is true, so take care if a provider overrides that.
   std::vector<ConfigurationPolicyProvider*> policy_providers_;
 
-  scoped_ptr<PolicyService> policy_service_;
-  scoped_ptr<bool> is_managed_override_;
+  std::unique_ptr<PolicyService> policy_service_;
+  std::unique_ptr<bool> is_managed_override_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfilePolicyConnector);
 };

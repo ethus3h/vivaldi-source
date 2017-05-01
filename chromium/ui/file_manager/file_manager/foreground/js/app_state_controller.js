@@ -35,8 +35,15 @@ function AppStateController(dialogType) {
  */
 AppStateController.prototype.loadInitialViewOptions = function() {
   // Load initial view option.
-  return new Promise(function(fulfill) {
-    chrome.storage.local.get(this.viewOptionStorageKey_, fulfill);
+  return new Promise(function(fulfill, reject) {
+    chrome.storage.local.get(this.viewOptionStorageKey_, function(values) {
+      if (chrome.runtime.lastError) {
+        reject('Failed to load view options: ' +
+            chrome.runtime.lastError.message);
+      } else {
+        fulfill(values);
+      }
+    });
   }.bind(this)).then(function(values) {
     this.viewOptions_ = {};
     var value = values[this.viewOptionStorageKey_];
@@ -55,6 +62,9 @@ AppStateController.prototype.loadInitialViewOptions = function() {
           this.viewOptions_[key] = window.appState.viewOptions[key];
       }
     }
+  }.bind(this)).catch(function(error) {
+    this.viewOptions_ = {};
+    console.error(error);
   }.bind(this));
 };
 
@@ -97,14 +107,18 @@ AppStateController.prototype.saveViewOptions = function() {
     sortField: sortStatus.field,
     sortDirection: sortStatus.direction,
     columnConfig: {},
-    listType: this.ui_.listContainer.currentListType
+    listType: this.ui_.listContainer.currentListType,
   };
   var cm = this.ui_.listContainer.table.columnModel;
   prefs.columnConfig = cm.exportColumnConfig();
   // Save the global default.
   var items = {};
   items[this.viewOptionStorageKey_] = JSON.stringify(prefs);
-  chrome.storage.local.set(items);
+  chrome.storage.local.set(items, function() {
+    if (chrome.runtime.lastError)
+      console.error('Failed to save view options: ' +
+          chrome.runtime.lastError.message);
+  });
 
   // Save the window-specific preference.
   if (window.appState) {

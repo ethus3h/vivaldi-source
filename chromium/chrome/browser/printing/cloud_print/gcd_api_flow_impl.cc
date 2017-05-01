@@ -5,6 +5,8 @@
 #include "chrome/browser/printing/cloud_print/gcd_api_flow_impl.h"
 
 #include <stddef.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/json/json_reader.h"
@@ -14,6 +16,7 @@
 #include "chrome/browser/printing/cloud_print/gcd_constants.h"
 #include "chrome/common/cloud_print/cloud_print_constants.h"
 #include "components/cloud_devices/common/cloud_devices_urls.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/load_flags.h"
 #include "net/base/url_util.h"
@@ -34,7 +37,7 @@ GCDApiFlowImpl::GCDApiFlowImpl(net::URLRequestContextGetter* request_context,
 GCDApiFlowImpl::~GCDApiFlowImpl() {
 }
 
-void GCDApiFlowImpl::Start(scoped_ptr<Request> request) {
+void GCDApiFlowImpl::Start(std::unique_ptr<Request> request) {
   request_ = std::move(request);
   OAuth2TokenService::ScopeSet oauth_scopes;
   oauth_scopes.insert(request_->GetOAuthScope());
@@ -75,6 +78,8 @@ void GCDApiFlowImpl::CreateRequest(const GURL& url) {
     url_fetcher_->SetUploadData(upload_type, upload_data);
   }
 
+  data_use_measurement::DataUseUserData::AttachToFetcher(
+      url_fetcher_.get(), data_use_measurement::DataUseUserData::CLOUD_PRINT);
   url_fetcher_->SetRequestContext(request_context_.get());
 
   std::vector<std::string> extra_headers = request_->GetExtraRequestHeaders();
@@ -101,7 +106,7 @@ void GCDApiFlowImpl::OnURLFetchComplete(const net::URLFetcher* source) {
   }
 
   base::JSONReader reader;
-  scoped_ptr<const base::Value> value(reader.Read(response_str));
+  std::unique_ptr<const base::Value> value(reader.Read(response_str));
   const base::DictionaryValue* dictionary_value = NULL;
 
   if (!value || !value->GetAsDictionary(&dictionary_value)) {

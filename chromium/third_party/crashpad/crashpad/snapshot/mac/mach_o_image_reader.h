@@ -20,10 +20,10 @@
 #include <sys/types.h>
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "snapshot/mac/process_types.h"
 #include "util/misc/initialization_state_dcheck.h"
 #include "util/misc/uuid.h"
@@ -270,8 +270,9 @@ class MachOImageReader {
   //! \brief Obtains the module’s CrashpadInfo structure.
   //!
   //! \return `true` on success, `false` on failure. If the module does not have
-  //!     a `__crashpad_info` section, this will return `false` without logging
-  //!     any messages. Other failures will result in messages being logged.
+  //!     a `__DATA,crashpad_info` section, this will return `false` without
+  //!     logging any messages. Other failures will result in messages being
+  //!     logged.
   bool GetCrashpadInfo(process_types::CrashpadInfo* crashpad_info) const;
 
  private:
@@ -326,16 +327,16 @@ class MachOImageReader {
   mach_vm_size_t size_;
   mach_vm_size_t slide_;
   uint64_t source_version_;
-  scoped_ptr<process_types::symtab_command> symtab_command_;
-  scoped_ptr<process_types::dysymtab_command> dysymtab_command_;
+  std::unique_ptr<process_types::symtab_command> symtab_command_;
+  std::unique_ptr<process_types::dysymtab_command> dysymtab_command_;
 
   // symbol_table_ (and symbol_table_initialized_) are mutable in order to
   // maintain LookUpExternalDefinedSymbol() as a const interface while allowing
   // lazy initialization via InitializeSymbolTable(). This is logical
   // const-ness, not physical const-ness.
-  mutable scoped_ptr<MachOImageSymbolTableReader> symbol_table_;
+  mutable std::unique_ptr<MachOImageSymbolTableReader> symbol_table_;
 
-  scoped_ptr<process_types::dylib_command> id_dylib_command_;
+  std::unique_ptr<process_types::dylib_command> id_dylib_command_;
   ProcessReader* process_reader_;  // weak
   uint32_t file_type_;
   InitializationStateDcheck initialized_;

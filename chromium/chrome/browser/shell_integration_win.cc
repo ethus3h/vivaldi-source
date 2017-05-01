@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/shell_integration.h"
+#include "chrome/browser/shell_integration_win.h"
 
 #include <windows.h>
 #include <shlwapi.h>
@@ -11,21 +11,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "base/bind.h"
+#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/macros.h"
-#include "base/md5.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
 #include "base/path_service.h"
-#include "base/process/launch.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
@@ -33,15 +39,19 @@
 #include "base/win/shortcut.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/policy/policy_path_parser.h"
-#include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/shell_integration.h"
 #include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/win/settings_app_monitor.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/shell_handler_win.mojom.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/installer/setup/setup_util.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/create_reg_key_work_item.h"
 #include "chrome/installer/util/install_util.h"
+#include "chrome/installer/util/scoped_user_protocol_entry.h"
 #include "chrome/installer/util/set_reg_value_work_item.h"
 #include "chrome/installer/util/shell_util.h"
 #include "chrome/installer/util/util_constants.h"
@@ -49,29 +59,21 @@
 #include "chrome/installer/util/work_item_list.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/utility_process_mojo_client.h"
+#include "ui/base/l10n/l10n_util.h"
 
 #include "app/vivaldi_apptools.h"
 #include "app/vivaldi_constants.h"
+#include "base/md5.h"
 #include "browser/win/vivaldi_standalone.h"
 
 using content::BrowserThread;
 
+namespace shell_integration {
+
 namespace {
 
-const wchar_t kAppListAppNameSuffix[] = L"AppList";
-
-const char kAsyncSetAsDefaultExperimentName[] = "AsyncSetAsDefault";
-const char kAsyncSetAsDefaultEnabledGroupName[] = "Enabled";
-// For client in the Enabled group of the AsyncSetAsDefault experiment, if the
-// Windows build number of the user is greater or equal than this value, the
-// default browser choice won't be reset.
-const char kAsyncSetAsDefaultEnabledBuildNumberParamName[] =
-    "ResetOlderThanBuildNumber";
-
-const char kEnableAsyncSetAsDefault[] = "enable-async-set-as-default";
-const char kDisableAsyncSetAsDefault[] = "disable-async-set-as-default";
-
-// Helper function for ShellIntegration::GetAppId to generates profile id
+// Helper function for GetAppId to generates profile id
 // from profile path. "profile_id" is composed of sanitized basenames of
 // user data dir and profile dir joined by a ".".
 // For Vivaldi standalone, make a MD5 checksum of the profile path characters.
@@ -90,35 +92,36 @@ base::string16 GetProfileIdFromPath(const base::FilePath& profile_path) {
         &md5_digest);
     profile_id = base::ASCIIToUTF16(base::MD5DigestToBase16(md5_digest));
   } else {
-    base::FilePath default_user_data_dir;
-    // Return empty string if profile_path is in default user data
-    // dir and is the default profile.
-    if (chrome::GetDefaultUserDataDirectory(&default_user_data_dir) &&
-        profile_path.DirName() == default_user_data_dir &&
-        profile_path.BaseName().value() ==
+  base::FilePath default_user_data_dir;
+  // Return empty string if profile_path is in default user data
+  // dir and is the default profile.
+  if (chrome::GetDefaultUserDataDirectory(&default_user_data_dir) &&
+      profile_path.DirName() == default_user_data_dir &&
+      profile_path.BaseName().value() ==
           base::ASCIIToUTF16(chrome::kInitialProfile)) {
-      return base::string16();
-    }
-    // Get joined basenames of user data dir and profile.
-    base::string16 basenames = profile_path.DirName().BaseName().value() + L"."
-        + profile_path.BaseName().value();
+    return base::string16();
+  }
 
-    profile_id.reserve(basenames.size());
+  // Get joined basenames of user data dir and profile.
+  base::string16 basenames = profile_path.DirName().BaseName().value() +
+      L"." + profile_path.BaseName().value();
 
-    // Generate profile_id from sanitized basenames.
-    for (size_t i = 0; i < basenames.length(); ++i) {
-      if (base::IsAsciiAlpha(basenames[i]) ||
-          base::IsAsciiDigit(basenames[i]) ||
-          basenames[i] == L'.') {
-        profile_id += basenames[i];
-      }
-    }
+  profile_id.reserve(basenames.size());
+
+  // Generate profile_id from sanitized basenames.
+  for (size_t i = 0; i < basenames.length(); ++i) {
+    if (base::IsAsciiAlpha(basenames[i]) ||
+        base::IsAsciiDigit(basenames[i]) ||
+        basenames[i] == L'.')
+      profile_id += basenames[i];
+  }
   }
 
   return profile_id;
 }
 
 base::string16 GetAppListAppName() {
+  static const base::char16 kAppListAppNameSuffix[] = L"AppList";
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   base::string16 app_name(dist->GetBaseAppId());
   app_name.append(kAppListAppNameSuffix);
@@ -170,7 +173,7 @@ base::string16 GetExpectedAppId(const base::CommandLine& command_line,
   }
   DCHECK(!app_name.empty());
 
-  return ShellIntegration::GetAppModelIdForProfile(app_name, profile_path);
+  return win::GetAppModelIdForProfile(app_name, profile_path);
 }
 
 void MigrateTaskbarPinsCallback() {
@@ -188,7 +191,7 @@ void MigrateTaskbarPinsCallback() {
     return;
   }
 
-  ShellIntegration::MigrateShortcutsInPathInternal(chrome_exe, pins_path);
+  win::MigrateShortcutsInPathInternal(chrome_exe, pins_path);
 }
 
 // Windows 8 introduced a new protocol->executable binding system which cannot
@@ -220,117 +223,321 @@ base::string16 GetAppForProtocolUsingAssocQuery(const GURL& url) {
 }
 
 base::string16 GetAppForProtocolUsingRegistry(const GURL& url) {
-  const base::string16 cmd_key_path =
-      base::ASCIIToUTF16(url.scheme() + "\\shell\\open\\command");
-  base::win::RegKey cmd_key(HKEY_CLASSES_ROOT,
-                            cmd_key_path.c_str(),
-                            KEY_READ);
-  base::string16 application_to_launch;
-  if (cmd_key.ReadValue(NULL, &application_to_launch) == ERROR_SUCCESS) {
-    const base::string16 url_spec =
-        base::ASCIIToUTF16(url.possibly_invalid_spec());
-    base::ReplaceSubstringsAfterOffset(&application_to_launch,
-                                       0,
-                                       L"%1",
-                                       url_spec);
-    return application_to_launch;
+  base::string16 command_to_launch;
+
+  // First, try and extract the application's display name.
+  base::string16 cmd_key_path = base::ASCIIToUTF16(url.scheme());
+  base::win::RegKey cmd_key_name(HKEY_CLASSES_ROOT, cmd_key_path.c_str(),
+                                 KEY_READ);
+  if (cmd_key_name.ReadValue(NULL, &command_to_launch) == ERROR_SUCCESS &&
+      !command_to_launch.empty()) {
+    return command_to_launch;
   }
+
+  // Otherwise, parse the command line in the registry, and return the basename
+  // of the program path if it exists.
+  cmd_key_path = base::ASCIIToUTF16(url.scheme() + "\\shell\\open\\command");
+  base::win::RegKey cmd_key_exe(HKEY_CLASSES_ROOT, cmd_key_path.c_str(),
+                                KEY_READ);
+  if (cmd_key_exe.ReadValue(NULL, &command_to_launch) == ERROR_SUCCESS) {
+    base::CommandLine command_line(
+        base::CommandLine::FromString(command_to_launch));
+    return command_line.GetProgram().BaseName().value();
+  }
+
   return base::string16();
 }
 
-
-ShellIntegration::DefaultWebClientState
-    GetDefaultWebClientStateFromShellUtilDefaultState(
-        ShellUtil::DefaultState default_state) {
+DefaultWebClientState GetDefaultWebClientStateFromShellUtilDefaultState(
+    ShellUtil::DefaultState default_state) {
   switch (default_state) {
     case ShellUtil::NOT_DEFAULT:
-      return ShellIntegration::NOT_DEFAULT;
+      return DefaultWebClientState::NOT_DEFAULT;
     case ShellUtil::IS_DEFAULT:
-      return ShellIntegration::IS_DEFAULT;
+      return DefaultWebClientState::IS_DEFAULT;
     default:
       DCHECK_EQ(ShellUtil::UNKNOWN_DEFAULT, default_state);
-      return ShellIntegration::UNKNOWN_DEFAULT;
+      return DefaultWebClientState::UNKNOWN_DEFAULT;
   }
 }
 
-// Resets the default browser choice for the current user.
-void ResetDefaultBrowser() {
-  static const wchar_t* const kUrlAssociationKeyFormats[] = {
-      L"SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\"
-      L"%ls\\UserChoice",
-      L"SOFTWARE\\Microsoft\\Windows\\Roaming\\OpenWith\\UrlAssociations\\"
-      L"%ls\\UserChoice"};
-  static const wchar_t* const kProtocols[] = {L"http", L"https"};
+// A recorder of user actions in the Windows Settings app.
+class DefaultBrowserActionRecorder : public win::SettingsAppMonitor::Delegate {
+ public:
+  // Creates the recorder and the monitor that drives it. |continuation| will be
+  // run once the monitor's initialization completes (regardless of success or
+  // failure).
+  explicit DefaultBrowserActionRecorder(base::Closure continuation)
+      : continuation_(std::move(continuation)), settings_app_monitor_(this) {}
 
-  for (const wchar_t* format : kUrlAssociationKeyFormats) {
-    for (const wchar_t* protocol : kProtocols) {
-      base::win::RegKey registry_key(
-          HKEY_CURRENT_USER, base::StringPrintf(format, protocol).c_str(),
-          KEY_SET_VALUE);
-      registry_key.DeleteValue(L"Hash");
+ private:
+  // win::SettingsAppMonitor::Delegate:
+  void OnInitialized(HRESULT result) override {
+    UMA_HISTOGRAM_BOOLEAN("SettingsAppMonitor.InitializationResult",
+                          SUCCEEDED(result));
+    if (SUCCEEDED(result)) {
+      base::RecordAction(
+          base::UserMetricsAction("SettingsAppMonitor.Initialized"));
+    }
+    continuation_.Run();
+    continuation_ = base::Closure();
+  }
+
+  void OnAppFocused() override {
+    base::RecordAction(
+        base::UserMetricsAction("SettingsAppMonitor.AppFocused"));
+  }
+
+  void OnChooserInvoked() override {
+    base::RecordAction(
+        base::UserMetricsAction("SettingsAppMonitor.ChooserInvoked"));
+  }
+
+  void OnBrowserChosen(const base::string16& browser_name) override {
+    if (browser_name ==
+        BrowserDistribution::GetDistribution()->GetDisplayName()) {
+      base::RecordAction(
+          base::UserMetricsAction("SettingsAppMonitor.ChromeBrowserChosen"));
+    } else {
+      base::RecordAction(
+          base::UserMetricsAction("SettingsAppMonitor.OtherBrowserChosen"));
     }
   }
-}
 
-// Returns true if the AsyncSetAsDefault field trial is activated.
-bool IsAsyncSetAsDefaultEnabled() {
-  using base::CommandLine;
-
-  // Note: It's important to query the field trial state first, to ensure that
-  // UMA reports the correct group.
-  const std::string group_name =
-      base::FieldTrialList::FindFullName(kAsyncSetAsDefaultExperimentName);
-  if (CommandLine::ForCurrentProcess()->HasSwitch(kDisableAsyncSetAsDefault))
-    return false;
-  if (CommandLine::ForCurrentProcess()->HasSwitch(kEnableAsyncSetAsDefault))
-    return true;
-  // Vivaldi should not use the async set-as-default method.
-  if (vivaldi::IsVivaldiRunning())
-    return false;
-
-  return base::StartsWith(group_name, kAsyncSetAsDefaultEnabledGroupName,
-                          base::CompareCase::SENSITIVE);
-}
-
-// Returns true if the default browser choice should be reset for the current
-// user. Determined by an experiment parameter.
-bool ShouldResetDefaultBrowser() {
-  // Get the build number where it is no longer needed to reset the default
-  // browser.
-  std::string build_number_value = variations::GetVariationParamValue(
-      kAsyncSetAsDefaultExperimentName,
-      kAsyncSetAsDefaultEnabledBuildNumberParamName);
-  int build_number = 0;
-  // Don't reset the default browser on empty/invalid values.
-  if (!base::StringToInt(build_number_value, &build_number))
-    return false;
-  DCHECK_NE(0, build_number);
-
-  return base::win::OSInfo::GetInstance()->version_number().build <
-         build_number;
-}
-
-bool RegisterBrowser() {
-  base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
-    NOTREACHED() << "Error getting app exe path";
-    return false;
+  void OnPromoFocused() override {
+    base::RecordAction(
+        base::UserMetricsAction("SettingsAppMonitor.PromoFocused"));
   }
-  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
 
-  return ShellUtil::RegisterChromeBrowser(dist, chrome_exe, base::string16(),
-                                          true);
+  void OnPromoChoiceMade(bool accept_promo) override {
+    if (accept_promo) {
+      base::RecordAction(
+          base::UserMetricsAction("SettingsAppMonitor.CheckItOut"));
+    } else {
+      base::RecordAction(
+          base::UserMetricsAction("SettingsAppMonitor.SwitchAnyway"));
+    }
+  }
+
+  // A closure to be run once initialization completes.
+  base::Closure continuation_;
+
+  // Monitors user interaction with the Windows Settings app for the sake of
+  // reporting user actions.
+  win::SettingsAppMonitor settings_app_monitor_;
+
+  DISALLOW_COPY_AND_ASSIGN(DefaultBrowserActionRecorder);
+};
+
+// A function bound up in a callback with a DefaultBrowserActionRecorder and
+// a closure to keep the former alive until the time comes to run the latter.
+void OnSettingsAppFinished(
+    std::unique_ptr<DefaultBrowserActionRecorder> recorder,
+    const base::Closure& on_finished_callback) {
+  recorder.reset();
+  on_finished_callback.Run();
+}
+
+// There is no way to make sure the user is done with the system settings, but a
+// signal that the interaction is finished is needed for UMA. A timer of 2
+// minutes is used as a substitute. The registry keys for the protocol
+// association with an app are also monitored to signal the end of the
+// interaction early when it is clear that the user made a choice (e.g. http
+// and https for default browser).
+//
+// This helper class manages both the timer and the registry watchers and makes
+// sure the callback for the end of the settings interaction is only run once.
+// This class also manages its own lifetime.
+class OpenSystemSettingsHelper {
+ public:
+  // Begin the monitoring and will call |on_finished_callback| when done.
+  // Takes in a null-terminated array of |protocols| whose registry keys must be
+  // watched. The array must contain at least one element.
+  static void Begin(const wchar_t* const protocols[],
+                    const base::Closure& on_finished_callback) {
+    DCHECK_CURRENTLY_ON(BrowserThread::FILE);
+
+    delete instance_;
+    instance_ = new OpenSystemSettingsHelper(protocols, on_finished_callback);
+  }
+
+ private:
+  // The reason the settings interaction concluded. Do not modify the ordering
+  // because it is used for UMA.
+  enum ConcludeReason { REGISTRY_WATCHER, TIMEOUT, NUM_CONCLUDE_REASON_TYPES };
+
+  OpenSystemSettingsHelper(const wchar_t* const protocols[],
+                           const base::Closure& on_finished_callback)
+      : scoped_user_protocol_entry_(protocols[0]),
+        on_finished_callback_(on_finished_callback),
+        weak_ptr_factory_(this) {
+    static const wchar_t kUrlAssociationFormat[] =
+        L"SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\"
+        L"%ls\\UserChoice";
+
+    // Remember the start time.
+    start_time_ = base::TimeTicks::Now();
+
+    for (const wchar_t* const* scan = &protocols[0]; *scan != nullptr; ++scan) {
+      AddRegistryKeyWatcher(
+          base::StringPrintf(kUrlAssociationFormat, *scan).c_str());
+    }
+    // Only the watchers that were succesfully initialized are counted.
+    registry_watcher_count_ = registry_key_watchers_.size();
+
+    timer_.Start(
+        FROM_HERE, base::TimeDelta::FromMinutes(2),
+        base::Bind(&OpenSystemSettingsHelper::ConcludeInteraction,
+                   weak_ptr_factory_.GetWeakPtr(), ConcludeReason::TIMEOUT));
+  }
+
+  // Called when a change is detected on one of the registry keys being watched.
+  // Note: All types of modification to the registry key will trigger this
+  //       function even if the value change is the only one that matters. This
+  //       is good enough for now.
+  void OnRegistryKeyChanged() {
+    DCHECK_CURRENTLY_ON(BrowserThread::FILE);
+
+    // Make sure all the registry watchers have fired.
+    if (--registry_watcher_count_ == 0) {
+      UMA_HISTOGRAM_MEDIUM_TIMES(
+          "DefaultBrowser.SettingsInteraction.RegistryWatcherDuration",
+          base::TimeTicks::Now() - start_time_);
+
+      ConcludeInteraction(ConcludeReason::REGISTRY_WATCHER);
+    }
+  }
+
+  // Ends the monitoring with the system settings. Will call
+  // |on_finished_callback_| and then dispose of this class instance to make
+  // sure the callback won't get called subsequently.
+  void ConcludeInteraction(ConcludeReason conclude_reason) {
+    DCHECK_CURRENTLY_ON(BrowserThread::FILE);
+
+    UMA_HISTOGRAM_ENUMERATION(
+        "DefaultBrowser.SettingsInteraction.ConcludeReason", conclude_reason,
+        NUM_CONCLUDE_REASON_TYPES);
+    on_finished_callback_.Run();
+    delete instance_;
+    instance_ = nullptr;
+  }
+
+  // Helper function to create a registry watcher for a given |key_path|. Do
+  // nothing on initialization failure.
+  void AddRegistryKeyWatcher(const wchar_t* key_path) {
+    auto reg_key = base::MakeUnique<base::win::RegKey>(HKEY_CURRENT_USER,
+                                                       key_path, KEY_NOTIFY);
+
+    if (reg_key->Valid() &&
+        reg_key->StartWatching(
+            base::Bind(&OpenSystemSettingsHelper::OnRegistryKeyChanged,
+                       weak_ptr_factory_.GetWeakPtr()))) {
+      registry_key_watchers_.push_back(std::move(reg_key));
+    }
+  }
+
+  // Used to make sure only one instance is alive at the same time.
+  static OpenSystemSettingsHelper* instance_;
+
+  // This is needed to make sure that Windows displays an entry for the protocol
+  // inside the "Choose default apps by protocol" settings page.
+  ScopedUserProtocolEntry scoped_user_protocol_entry_;
+
+  // The function to call when the interaction with the system settings is
+  // finished.
+  base::Closure on_finished_callback_;
+
+  // The number of time the registry key watchers must fire.
+  int registry_watcher_count_ = 0;
+
+  // There can be multiple registry key watchers as some settings modify
+  // multiple protocol associations. e.g. Changing the default browser modifies
+  // the http and https associations.
+  std::vector<std::unique_ptr<base::win::RegKey>> registry_key_watchers_;
+
+  base::OneShotTimer timer_;
+
+  // Records the time it takes for the final registry watcher to get signaled.
+  base::TimeTicks start_time_;
+
+  // Weak ptrs are used to bind this class to the callbacks of the timer and the
+  // registry watcher. This makes it possible to self-delete after one of the
+  // callbacks is executed to cancel the remaining ones.
+  base::WeakPtrFactory<OpenSystemSettingsHelper> weak_ptr_factory_;
+
+  DISALLOW_COPY_AND_ASSIGN(OpenSystemSettingsHelper);
+};
+
+OpenSystemSettingsHelper* OpenSystemSettingsHelper::instance_ = nullptr;
+
+// Helper class to determine if Chrome is pinned to the taskbar. Hides the
+// complexity of managing the lifetime of a UtilityProcessMojoClient.
+class IsPinnedToTaskbarHelper {
+ public:
+  using ResultCallback = win::IsPinnedToTaskbarCallback;
+  using ErrorCallback = win::ConnectionErrorCallback;
+  static void GetState(const ErrorCallback& error_callback,
+                       const ResultCallback& result_callback);
+
+ private:
+  IsPinnedToTaskbarHelper(const ErrorCallback& error_callback,
+                          const ResultCallback& result_callback);
+
+  void OnConnectionError();
+  void OnIsPinnedToTaskbarResult(bool succeeded, bool is_pinned_to_taskbar);
+
+  content::UtilityProcessMojoClient<chrome::mojom::ShellHandler> shell_handler_;
+
+  ErrorCallback error_callback_;
+  ResultCallback result_callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(IsPinnedToTaskbarHelper);
+};
+
+// static
+void IsPinnedToTaskbarHelper::GetState(const ErrorCallback& error_callback,
+                                       const ResultCallback& result_callback) {
+  // Self-deleting when the ShellHandler completes.
+  new IsPinnedToTaskbarHelper(error_callback, result_callback);
+}
+
+IsPinnedToTaskbarHelper::IsPinnedToTaskbarHelper(
+    const ErrorCallback& error_callback,
+    const ResultCallback& result_callback)
+    : shell_handler_(
+          l10n_util::GetStringUTF16(IDS_UTILITY_PROCESS_SHELL_HANDLER_NAME)),
+      error_callback_(error_callback),
+      result_callback_(result_callback) {
+  DCHECK(error_callback_);
+  DCHECK(result_callback_);
+
+  // |shell_handler_| owns the callbacks and is guaranteed to be destroyed
+  // before |this|, therefore making base::Unretained() safe to use.
+  shell_handler_.set_error_callback(base::Bind(
+      &IsPinnedToTaskbarHelper::OnConnectionError, base::Unretained(this)));
+  shell_handler_.set_disable_sandbox();
+  shell_handler_.Start();
+
+  shell_handler_.service()->IsPinnedToTaskbar(
+      base::Bind(&IsPinnedToTaskbarHelper::OnIsPinnedToTaskbarResult,
+                 base::Unretained(this)));
+}
+
+void IsPinnedToTaskbarHelper::OnConnectionError() {
+  error_callback_.Run();
+  delete this;
+}
+
+void IsPinnedToTaskbarHelper::OnIsPinnedToTaskbarResult(
+    bool succeeded,
+    bool is_pinned_to_taskbar) {
+  result_callback_.Run(succeeded, is_pinned_to_taskbar);
+  delete this;
 }
 
 }  // namespace
 
-// static
-bool ShellIntegration::IsSetAsDefaultAsynchronous() {
-  return base::win::GetVersion() >= base::win::VERSION_WIN10 &&
-         IsAsyncSetAsDefaultEnabled();
-}
-
-bool ShellIntegration::SetAsDefaultBrowser() {
+bool SetAsDefaultBrowser() {
   base::FilePath chrome_exe;
   if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
     LOG(ERROR) << "Error getting app exe path";
@@ -349,24 +556,7 @@ bool ShellIntegration::SetAsDefaultBrowser() {
   return true;
 }
 
-bool ShellIntegration::SetAsDefaultBrowserInteractive() {
-  base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
-    NOTREACHED() << "Error getting app exe path";
-    return false;
-  }
-
-  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  if (!ShellUtil::ShowMakeChromeDefaultSystemUI(dist, chrome_exe)) {
-    LOG(ERROR) << "Failed to launch the set-default-browser Windows UI.";
-    return false;
-  }
-
-  VLOG(1) << "Set-default-browser Windows UI completed.";
-  return true;
-}
-
-bool ShellIntegration::SetAsDefaultProtocolClient(const std::string& protocol) {
+bool SetAsDefaultProtocolClient(const std::string& protocol) {
   if (protocol.empty())
     return false;
 
@@ -389,53 +579,35 @@ bool ShellIntegration::SetAsDefaultProtocolClient(const std::string& protocol) {
   return true;
 }
 
-bool ShellIntegration::SetAsDefaultProtocolClientInteractive(
-    const std::string& protocol) {
-  base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
-    NOTREACHED() << "Error getting app exe path";
-    return false;
-  }
-
-  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  base::string16 wprotocol(base::UTF8ToUTF16(protocol));
-  if (!ShellUtil::ShowMakeChromeDefaultProtocolClientSystemUI(dist, chrome_exe,
-                                                              wprotocol)) {
-    LOG(ERROR) << "Failed to launch the set-default-client Windows UI.";
-    return false;
-  }
-
-  VLOG(1) << "Set-default-client Windows UI completed.";
-  return true;
-}
-
-ShellIntegration::DefaultWebClientSetPermission
-    ShellIntegration::CanSetAsDefaultBrowser() {
+DefaultWebClientSetPermission GetDefaultWebClientSetPermission() {
   BrowserDistribution* distribution = BrowserDistribution::GetDistribution();
   if (distribution->GetDefaultBrowserControlPolicy() !=
           BrowserDistribution::DEFAULT_BROWSER_FULL_CONTROL)
     return SET_DEFAULT_NOT_ALLOWED;
   if (ShellUtil::CanMakeChromeDefaultUnattended())
     return SET_DEFAULT_UNATTENDED;
-  if (IsSetAsDefaultAsynchronous())
-    return SET_DEFAULT_ASYNCHRONOUS;
+  // Windows 8 and 10 both introduced a new way to set the default web client
+  // which require user interaction.
   return SET_DEFAULT_INTERACTIVE;
 }
 
-bool ShellIntegration::IsElevationNeededForSettingDefaultProtocolClient() {
+bool IsElevationNeededForSettingDefaultProtocolClient() {
   return base::win::GetVersion() < base::win::VERSION_WIN8;
 }
 
-base::string16 ShellIntegration::GetApplicationNameForProtocol(
-    const GURL& url) {
-  // Windows 8 or above requires a new protocol association query.
-  if (base::win::GetVersion() >= base::win::VERSION_WIN8)
-    return GetAppForProtocolUsingAssocQuery(url);
-  else
-    return GetAppForProtocolUsingRegistry(url);
+base::string16 GetApplicationNameForProtocol(const GURL& url) {
+  base::string16 application_name;
+  // Windows 8 or above has a new protocol association query.
+  if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+    application_name = GetAppForProtocolUsingAssocQuery(url);
+    if (!application_name.empty())
+      return application_name;
+  }
+
+  return GetAppForProtocolUsingRegistry(url);
 }
 
-ShellIntegration::DefaultWebClientState ShellIntegration::GetDefaultBrowser() {
+DefaultWebClientState GetDefaultBrowser() {
   return GetDefaultWebClientStateFromShellUtilDefaultState(
       ShellUtil::GetChromeDefaultState());
 }
@@ -447,11 +619,11 @@ ShellIntegration::DefaultWebClientState ShellIntegration::GetDefaultBrowser() {
 // - HKCR\http\shell\open\command (XP)
 // - HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\
 //   http\UserChoice (Vista)
-// This method checks if Firefox is defualt browser by checking these
+// This method checks if Firefox is default browser by checking these
 // locations and returns true if Firefox traces are found there. In case of
 // error (or if Firefox is not found)it returns the default value which
 // is false.
-bool ShellIntegration::IsFirefoxDefaultBrowser() {
+bool IsFirefoxDefaultBrowser() {
   bool ff_default = false;
   if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
     base::string16 app_cmd;
@@ -473,14 +645,6 @@ bool ShellIntegration::IsFirefoxDefaultBrowser() {
   return ff_default;
 }
 
-ShellIntegration::DefaultWebClientState
-    ShellIntegration::IsDefaultProtocolClient(const std::string& protocol) {
-  return GetDefaultWebClientStateFromShellUtilDefaultState(
-      ShellUtil::GetChromeDefaultProtocolClientState(
-          base::UTF8ToUTF16(protocol)));
-}
-
-
 // There is no reliable way to say which browser is default on a machine (each
 // browser can have some of the protocols/shortcuts). So we look for only HTTP
 // protocol handler. Even this handler is located at different places in
@@ -492,7 +656,7 @@ ShellIntegration::DefaultWebClientState
 // locations and returns true if Chrome traces are found there. In case of
 // error (or if Chrome is not found) it returns the default value which
 // is false.
-bool ShellIntegration::IsChromeDefaultBrowser() {
+bool IsChromeDefaultBrowser() {
   bool chrome_default = false;
   if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
     base::string16 app_cmd;
@@ -501,8 +665,7 @@ bool ShellIntegration::IsChromeDefaultBrowser() {
     if (key.Valid() && (key.ReadValue(L"Progid", &app_cmd) == ERROR_SUCCESS) &&
       app_cmd == L"chrome")
       chrome_default = true;
-  }
-  else {
+  } else {
     base::string16 key_path(L"http");
     key_path.append(ShellUtil::kRegShellOpen);
     base::win::RegKey key(HKEY_CLASSES_ROOT, key_path.c_str(), KEY_READ);
@@ -526,7 +689,7 @@ bool ShellIntegration::IsChromeDefaultBrowser() {
 // locations and returns true if Firefox traces are found there. In case of
 // error (or if Opera is not found)it returns the default value which
 // is false.
-bool ShellIntegration::IsOperaDefaultBrowser() {
+bool IsOperaDefaultBrowser() {
   bool opera_default = false;
   if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
     base::string16 app_cmd;
@@ -547,9 +710,103 @@ bool ShellIntegration::IsOperaDefaultBrowser() {
   return opera_default;
 }
 
-base::string16 ShellIntegration::GetAppModelIdForProfile(
-    const base::string16& app_name,
-    const base::FilePath& profile_path) {
+
+DefaultWebClientState IsDefaultProtocolClient(const std::string& protocol) {
+  return GetDefaultWebClientStateFromShellUtilDefaultState(
+      ShellUtil::GetChromeDefaultProtocolClientState(
+          base::UTF8ToUTF16(protocol)));
+}
+
+namespace win {
+
+bool SetAsDefaultBrowserUsingIntentPicker() {
+  base::FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    return false;
+  }
+
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  if (!ShellUtil::ShowMakeChromeDefaultSystemUI(dist, chrome_exe)) {
+    LOG(ERROR) << "Failed to launch the set-default-browser Windows UI.";
+    return false;
+  }
+
+  VLOG(1) << "Set-default-browser Windows UI completed.";
+  return true;
+}
+
+void SetAsDefaultBrowserUsingSystemSettings(
+    const base::Closure& on_finished_callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::FILE);
+
+  base::FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    on_finished_callback.Run();
+    return;
+  }
+
+  // Create an action recorder that will open the settings app once it has
+  // initialized.
+  std::unique_ptr<DefaultBrowserActionRecorder> recorder(
+      new DefaultBrowserActionRecorder(base::Bind(
+          base::IgnoreResult(&ShellUtil::ShowMakeChromeDefaultSystemUI),
+          base::Unretained(BrowserDistribution::GetDistribution()),
+          chrome_exe)));
+
+  // The helper manages its own lifetime. Bind the action recorder
+  // into the finished callback to keep it alive throughout the
+  // interaction.
+  static const wchar_t* const kProtocols[] = {L"http", L"https", nullptr};
+  OpenSystemSettingsHelper::Begin(
+      kProtocols, base::Bind(&OnSettingsAppFinished, base::Passed(&recorder),
+                             on_finished_callback));
+}
+
+bool SetAsDefaultProtocolClientUsingIntentPicker(const std::string& protocol) {
+  base::FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    return false;
+  }
+
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  base::string16 wprotocol(base::UTF8ToUTF16(protocol));
+  if (!ShellUtil::ShowMakeChromeDefaultProtocolClientSystemUI(dist, chrome_exe,
+                                                              wprotocol)) {
+    LOG(ERROR) << "Failed to launch the set-default-client Windows UI.";
+    return false;
+  }
+
+  VLOG(1) << "Set-default-client Windows UI completed.";
+  return true;
+}
+
+void SetAsDefaultProtocolClientUsingSystemSettings(
+    const std::string& protocol,
+    const base::Closure& on_finished_callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::FILE);
+
+  base::FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    on_finished_callback.Run();
+    return;
+  }
+
+  // The helper manages its own lifetime.
+  base::string16 wprotocol(base::UTF8ToUTF16(protocol));
+  const wchar_t* const kProtocols[] = {wprotocol.c_str(), nullptr};
+  OpenSystemSettingsHelper::Begin(kProtocols, on_finished_callback);
+
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  ShellUtil::ShowMakeChromeDefaultProtocolClientSystemUI(dist, chrome_exe,
+                                                         wprotocol);
+}
+
+base::string16 GetAppModelIdForProfile(const base::string16& app_name,
+                                       const base::FilePath& profile_path) {
   std::vector<base::string16> components;
   components.push_back(app_name);
   const base::string16 profile_id(GetProfileIdFromPath(profile_path));
@@ -558,7 +815,7 @@ base::string16 ShellIntegration::GetAppModelIdForProfile(
   return ShellUtil::BuildAppModelId(components);
 }
 
-base::string16 ShellIntegration::GetChromiumModelIdForProfile(
+base::string16 GetChromiumModelIdForProfile(
     const base::FilePath& profile_path) {
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   base::FilePath chrome_exe;
@@ -572,12 +829,7 @@ base::string16 ShellIntegration::GetChromiumModelIdForProfile(
       profile_path);
 }
 
-base::string16 ShellIntegration::GetAppListAppModelIdForProfile(
-    const base::FilePath& profile_path) {
-  return GetAppModelIdForProfile(GetAppListAppName(), profile_path);
-}
-
-void ShellIntegration::MigrateTaskbarPins() {
+void MigrateTaskbarPins() {
   if (base::win::GetVersion() < base::win::VERSION_WIN7)
     return;
 
@@ -591,9 +843,14 @@ void ShellIntegration::MigrateTaskbarPins() {
       base::TimeDelta::FromSeconds(kMigrateTaskbarPinsDelaySeconds));
 }
 
-int ShellIntegration::MigrateShortcutsInPathInternal(
-    const base::FilePath& chrome_exe,
-    const base::FilePath& path) {
+void GetIsPinnedToTaskbarState(
+    const ConnectionErrorCallback& on_error_callback,
+    const IsPinnedToTaskbarCallback& result_callback) {
+  IsPinnedToTaskbarHelper::GetState(on_error_callback, result_callback);
+}
+
+int MigrateShortcutsInPathInternal(const base::FilePath& chrome_exe,
+                                   const base::FilePath& path) {
   DCHECK(base::win::GetVersion() >= base::win::VERSION_WIN7);
 
   // Enumerate all pinned shortcuts in the given path directly.
@@ -700,16 +957,14 @@ int ShellIntegration::MigrateShortcutsInPathInternal(
   return shortcuts_migrated;
 }
 
-base::FilePath ShellIntegration::GetStartMenuShortcut(
-    const base::FilePath& chrome_exe) {
+base::FilePath GetStartMenuShortcut(const base::FilePath& chrome_exe) {
   static const int kFolderIds[] = {
     base::DIR_COMMON_START_MENU,
     base::DIR_START_MENU,
   };
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  const base::string16 shortcut_name(
-      dist->GetShortcutName(BrowserDistribution::SHORTCUT_CHROME) +
-      installer::kLnkExt);
+  const base::string16 shortcut_name(dist->GetShortcutName() +
+                                     installer::kLnkExt);
   base::FilePath programs_folder;
   base::FilePath shortcut;
 
@@ -730,75 +985,6 @@ base::FilePath ShellIntegration::GetStartMenuShortcut(
   return base::FilePath();
 }
 
-bool ShellIntegration::DefaultBrowserWorker::InitializeSetAsDefault() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+}  // namespace win
 
-  if (!IsSetAsDefaultAsynchronous())
-    return false;
-
-  // On Windows 10+, there is no official way to prompt the user to set a
-  // default browser. This is the workaround:
-  // 1. Unregister the default browser.
-  // 2. Open "How to make Chrome my default browser" link with openwith.exe.
-  // 3. Windows will prompt the user with "How would you like to open this?".
-  // 4. If Chrome is selected, we intercept the attempt to open the URL and
-  //    instead call OnSetAsDefaultAttemptComplete(), passing true to indicate
-  //    success.
-  // 5. If Chrome is not selected, the url is opened in the selected browser.
-  //    After a certain amount of time, we notify the observer that the
-  //    process failed.
-
-  if (!StartupBrowserCreator::SetDefaultBrowserCallback(
-          base::Bind(&DefaultBrowserWorker::OnSetAsDefaultAttemptComplete, this,
-                     AttemptResult::SUCCESS))) {
-    // Another worker is currently processing. Note that this will still cause
-    // SetAsDefaultBrowserAsynchronous() to be invoked in SetAsDefault() but
-    // the other worker will happily intercept the attempt.
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
-        base::Bind(&DefaultBrowserWorker::OnSetAsDefaultAttemptComplete, this,
-                   AttemptResult::OTHER_WORKER));
-    return false;
-  }
-
-  // Start the timer.
-  if (!async_timer_)
-    async_timer_.reset(new base::OneShotTimer());
-  std::string value = variations::GetVariationParamValue(
-      kAsyncSetAsDefaultExperimentName, "TimerDuration");
-  int seconds = 0;
-  if (!value.empty())
-    base::StringToInt(value, &seconds);
-  if (!seconds)
-    seconds = 120;  // Default value of 2 minutes.
-  async_timer_->Start(
-      FROM_HERE, base::TimeDelta::FromSeconds(seconds),
-      base::Bind(&DefaultBrowserWorker::OnSetAsDefaultAttemptComplete, this,
-                 AttemptResult::FAILURE));
-  return true;
-}
-
-void ShellIntegration::DefaultBrowserWorker::FinalizeSetAsDefault() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(set_as_default_initialized());
-
-  async_timer_.reset();
-  StartupBrowserCreator::ClearDefaultBrowserCallback();
-}
-
-// static
-bool ShellIntegration::DefaultBrowserWorker::SetAsDefaultBrowserAsynchronous() {
-  DCHECK(IsSetAsDefaultAsynchronous());
-
-  // Registers chrome.exe as a browser on Windows to make sure it will be shown
-  // in the "How would you like to open this?" prompt.
-  if (!RegisterBrowser())
-    return false;
-
-  if (ShouldResetDefaultBrowser())
-    ResetDefaultBrowser();
-
-  base::CommandLine cmdline(base::FilePath(L"openwith.exe"));
-  cmdline.AppendArgNative(StartupBrowserCreator::GetDefaultBrowserUrl());
-  return base::LaunchProcess(cmdline, base::LaunchOptions()).IsValid();
-}
+}  // namespace shell_integration

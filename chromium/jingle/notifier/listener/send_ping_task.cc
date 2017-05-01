@@ -4,16 +4,16 @@
 
 #include "jingle/notifier/listener/send_ping_task.h"
 
+#include <memory>
 #include <string>
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "jingle/notifier/listener/xml_element_util.h"
-#include "third_party/webrtc/libjingle/xmllite/qname.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
-#include "webrtc/libjingle/xmpp/constants.h"
-#include "webrtc/libjingle/xmpp/jid.h"
-#include "webrtc/libjingle/xmpp/xmppclient.h"
+#include "third_party/libjingle_xmpp/xmllite/qname.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmpp/constants.h"
+#include "third_party/libjingle_xmpp/xmpp/jid.h"
+#include "third_party/libjingle_xmpp/xmpp/xmppclient.h"
 
 namespace notifier {
 
@@ -30,7 +30,7 @@ SendPingTask::~SendPingTask() {
 
 int SendPingTask::ProcessStart() {
   ping_task_id_ = task_id();
-  scoped_ptr<buzz::XmlElement> stanza(MakePingStanza(ping_task_id_));
+  std::unique_ptr<buzz::XmlElement> stanza(MakePingStanza(ping_task_id_));
   DVLOG(1) << "Sending ping stanza " << XmlElementToString(*stanza);
   if (SendStanza(stanza.get()) != buzz::XMPP_RETURN_OK) {
     DLOG(WARNING) << "Could not send stanza " << XmlElementToString(*stanza);

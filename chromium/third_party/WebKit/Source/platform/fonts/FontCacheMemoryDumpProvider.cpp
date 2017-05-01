@@ -6,22 +6,21 @@
 
 #include "platform/fonts/FontCache.h"
 #include "wtf/Assertions.h"
-#include "wtf/MainThread.h"
 
 namespace blink {
 
-FontCacheMemoryDumpProvider* FontCacheMemoryDumpProvider::instance()
-{
-    DEFINE_STATIC_LOCAL(FontCacheMemoryDumpProvider, instance, ());
-    return &instance;
+FontCacheMemoryDumpProvider* FontCacheMemoryDumpProvider::instance() {
+  DEFINE_STATIC_LOCAL(FontCacheMemoryDumpProvider, instance, ());
+  return &instance;
 }
 
-bool FontCacheMemoryDumpProvider::onMemoryDump(WebMemoryDumpLevelOfDetail levelOfDetail, WebProcessMemoryDump* memoryDump)
-{
-    ASSERT(isMainThread());
-    FontCache::fontCache()->dumpFontPlatformDataCache(memoryDump);
-    FontCache::fontCache()->dumpShapeResultCache(memoryDump);
-    return true;
+bool FontCacheMemoryDumpProvider::OnMemoryDump(
+    const base::trace_event::MemoryDumpArgs&,
+    base::trace_event::ProcessMemoryDump* memoryDump) {
+  ASSERT(isMainThread());
+  FontCache::fontCache()->dumpFontPlatformDataCache(memoryDump);
+  FontCache::fontCache()->dumpShapeResultCache(memoryDump);
+  return true;
 }
 
-} // namespace blink
+}  // namespace blink

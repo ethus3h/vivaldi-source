@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "base/macros.h"
+#include "ui/events/event.h"
 #include "ui/events/gestures/gesture_recognizer.h"
 
 namespace ui {
@@ -24,10 +25,10 @@ class GestureRecognizerImplMac : public GestureRecognizer {
     return false;
   }
 
-  Gestures* AckTouchEvent(uint32_t unique_event_id,
-                          ui::EventResult result,
-                          GestureConsumer* consumer) override {
-    return NULL;
+  Gestures AckTouchEvent(uint32_t unique_event_id,
+                         ui::EventResult result,
+                         GestureConsumer* consumer) override {
+    return {};
   }
   bool CleanupStateForConsumer(GestureConsumer* consumer) override {
     return false;
@@ -41,7 +42,8 @@ class GestureRecognizerImplMac : public GestureRecognizer {
   }
   void CancelActiveTouchesExcept(GestureConsumer* not_cancelled) override {}
   void TransferEventsTo(GestureConsumer* current_consumer,
-                        GestureConsumer* new_consumer) override {}
+                        GestureConsumer* new_consumer,
+                        ShouldCancelTouches should_cancel_touches) override {}
   bool GetLastTouchPointForTarget(GestureConsumer* consumer,
                                   gfx::PointF* point) override {
     return false;

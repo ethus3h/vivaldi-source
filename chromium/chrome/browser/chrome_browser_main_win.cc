@@ -4,14 +4,15 @@
 
 #include "chrome/browser/chrome_browser_main_win.h"
 
-#include <windows.h>
 #include <shellapi.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <windows.h>
 
 #include <algorithm>
+#include <memory>
 
 #include "base/base_switches.h"
-#include "base/base64.h"
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/files/file_enumerator.h"
@@ -20,31 +21,35 @@
 #include "base/i18n/rtl.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/pe_image.h"
 #include "base/win/registry.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "base/win/wrapped_window_proc.h"
-#include "chrome/browser/browser_util_win.h"
-#include "chrome/browser/chrome_elf_init_win.h"
+#include "chrome/browser/conflicts/module_database_win.h"
+#include "chrome/browser/conflicts/module_event_sink_impl_win.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/install_verification/win/install_verification.h"
-#include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/uninstall_browser_prompt.h"
+#include "chrome/browser/win/browser_util.h"
+#include "chrome/browser/win/chrome_elf_init.h"
 #include "chrome/chrome_watcher/chrome_watcher_main_api.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_utility_messages.h"
+#include "chrome/common/conflicts/module_watcher_win.h"
+#include "chrome/common/crash_keys.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -58,9 +63,7 @@
 #include "content/public/browser/utility_process_host.h"
 #include "content/public/browser/utility_process_host_client.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/dwrite_font_platform_win.h"
 #include "content/public/common/main_function_params.h"
-#include "third_party/zlib/zlib.h"
 #include "ui/base/cursor/cursor_loader_win.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
@@ -68,7 +71,6 @@
 #include "ui/base/win/message_box_win.h"
 #include "ui/gfx/platform_font_win.h"
 #include "ui/gfx/switches.h"
-#include "ui/gfx/win/direct_write.h"
 #include "ui/strings/grit/app_locale_settings.h"
 
 #if defined(GOOGLE_CHROME_BUILD)
@@ -88,10 +90,9 @@ typedef HRESULT (STDAPICALLTYPE* RegisterApplicationRestartProc)(
 void InitializeWindowProcExceptions() {
   // Get the breakpad pointer from chrome.exe
   base::win::WinProcExceptionFilter exception_filter =
-      reinterpret_cast<base::win::WinProcExceptionFilter>(
-          ::GetProcAddress(::GetModuleHandle(
-                               chrome::kBrowserProcessExecutableName),
-                           "CrashForException"));
+      reinterpret_cast<base::win::WinProcExceptionFilter>(::GetProcAddress(
+          ::GetModuleHandle(chrome::kChromeElfDllName), "CrashForException"));
+  CHECK(exception_filter);
   exception_filter = base::win::SetWinProcExceptionFilter(exception_filter);
   DCHECK(!exception_filter);
 }
@@ -112,16 +113,6 @@ class TranslationDelegate : public installer::TranslationDelegate {
  public:
   base::string16 GetLocalizedString(int installer_string_id) override;
 };
-
-void ExecuteFontCacheBuildTask(const base::FilePath& path) {
-  base::WeakPtr<content::UtilityProcessHost> utility_process_host(
-      content::UtilityProcessHost::Create(NULL, NULL)->AsWeakPtr());
-  utility_process_host->SetName(
-      l10n_util::GetStringUTF16(IDS_UTILITY_PROCESS_FONT_CACHE_BUILDER_NAME));
-  utility_process_host->DisableSandbox();
-  utility_process_host->Send(
-      new ChromeUtilityHostMsg_BuildDirectWriteFontCache(path));
-}
 
 #if BUILDFLAG(ENABLE_KASKO)
 void ObserveFailedCrashReportDirectory(const base::FilePath& path, bool error) {
@@ -217,18 +208,72 @@ void DetectFaultTolerantHeap() {
   UMA_HISTOGRAM_ENUMERATION("FaultTolerantHeap", detected, FTH_FLAGS_COUNT);
 }
 
+// Helper function for getting the time date stamp associated with a module in
+// this process.
+uint32_t GetModuleTimeDateStamp(const void* module_load_address) {
+  base::win::PEImage pe_image(module_load_address);
+  return pe_image.GetNTHeaders()->FileHeader.TimeDateStamp;
+}
+
+// Used as the callback for ModuleWatcher events in this process. Dispatches
+// them to the ModuleDatabase.
+void OnModuleEvent(uint32_t process_id,
+                   uint64_t creation_time,
+                   const ModuleWatcher::ModuleEvent& event) {
+  auto* module_database = ModuleDatabase::GetInstance();
+  uintptr_t load_address =
+      reinterpret_cast<uintptr_t>(event.module_load_address);
+
+  switch (event.event_type) {
+    case mojom::ModuleEventType::MODULE_ALREADY_LOADED:
+    case mojom::ModuleEventType::MODULE_LOADED: {
+      module_database->OnModuleLoad(
+          process_id, creation_time, event.module_path, event.module_size,
+          GetModuleTimeDateStamp(event.module_load_address), load_address);
+      return;
+    }
+
+    case mojom::ModuleEventType::MODULE_UNLOADED: {
+      module_database->OnModuleUnload(process_id, creation_time, load_address);
+      return;
+    }
+  }
+}
+
+// Helper function for initializing the module database subsystem. Populates
+// the provided |module_watcher|.
+void SetupModuleDatabase(std::unique_ptr<ModuleWatcher>* module_watcher) {
+  uint64_t creation_time = 0;
+  ModuleEventSinkImpl::GetProcessCreationTime(::GetCurrentProcess(),
+                                              &creation_time);
+  ModuleDatabase::SetInstance(base::MakeUnique<ModuleDatabase>(
+      content::BrowserThread::GetTaskRunnerForThread(
+          content::BrowserThread::UI)));
+  auto* module_database = ModuleDatabase::GetInstance();
+  uint32_t process_id = ::GetCurrentProcessId();
+
+  // The ModuleWatcher will immediately start emitting module events, but the
+  // ModuleDatabase expects an OnProcessStarted event prior to that. For child
+  // processes this is handled via the ModuleEventSinkImpl. For the browser
+  // process a manual notification is sent before wiring up the ModuleWatcher.
+  module_database->OnProcessStarted(process_id, creation_time,
+                                    content::PROCESS_TYPE_BROWSER);
+  *module_watcher = ModuleWatcher::Create(
+      base::Bind(&OnModuleEvent, process_id, creation_time));
+}
+
 }  // namespace
 
 void ShowCloseBrowserFirstMessageBox() {
   int message_id = IDS_UNINSTALL_CLOSE_APP;
   if (base::win::GetVersion() >= base::win::VERSION_WIN8 &&
-      (ShellIntegration::GetDefaultBrowser() == ShellIntegration::IS_DEFAULT)) {
+      (shell_integration::GetDefaultBrowser() ==
+       shell_integration::IS_DEFAULT)) {
     message_id = IDS_UNINSTALL_CLOSE_APP_IMMERSIVE;
   }
-  chrome::ShowMessageBox(NULL,
-                         l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
-                         l10n_util::GetStringUTF16(message_id),
-                         chrome::MESSAGE_BOX_TYPE_WARNING);
+  chrome::ShowWarningMessageBox(NULL,
+                                l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
+                                l10n_util::GetStringUTF16(message_id));
 }
 
 int DoUninstallTasks(bool chrome_still_running) {
@@ -305,15 +350,19 @@ void ChromeBrowserMainPartsWin::PreMainMessageLoopStart() {
 }
 
 int ChromeBrowserMainPartsWin::PreCreateThreads() {
+// Record whether the machine is domain joined in a crash key. This will be used
+// to better identify whether crashes are from enterprise users.
+  base::debug::SetCrashKeyValue(crash_keys::kEnrolledToDomain,
+                                base::win::IsEnrolledToDomain() ? "yes" : "no");
+
   int rv = ChromeBrowserMainParts::PreCreateThreads();
 
   // TODO(viettrungluu): why don't we run this earlier?
   if (!parsed_command_line().HasSwitch(switches::kNoErrorDialogs) &&
       base::win::GetVersion() < base::win::VERSION_XP) {
-    chrome::ShowMessageBox(NULL,
-        l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
-        l10n_util::GetStringUTF16(IDS_UNSUPPORTED_OS_PRE_WIN_XP),
-        chrome::MESSAGE_BOX_TYPE_WARNING);
+    chrome::ShowWarningMessageBox(
+        NULL, l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
+        l10n_util::GetStringUTF16(IDS_UNSUPPORTED_OS_PRE_WIN_XP));
   }
 
   return rv;
@@ -329,36 +378,20 @@ void ChromeBrowserMainPartsWin::ShowMissingLocaleMessageBox() {
 void ChromeBrowserMainPartsWin::PostProfileInit() {
   ChromeBrowserMainParts::PostProfileInit();
 
-  // DirectWrite support is mainly available Windows 7 and up.
-  // Skip loading the font cache if we are using the font proxy field trial.
-  if (gfx::win::ShouldUseDirectWrite() &&
-      !content::ShouldUseDirectWriteFontProxyFieldTrial()) {
-    base::FilePath path(
-      profile()->GetPath().AppendASCII(content::kFontCacheSharedSectionName));
-    // This function will create a read only section if cache file exists
-    // otherwise it will spawn utility process to build cache file, which will
-    // be used during next browser start/postprofileinit.
-    if (!content::LoadFontCache(path)) {
-      // We delay building of font cache until first startup page loads.
-      // During first renderer start there are lot of things happening
-      // simultaneously some of them are:
-      // - Renderer is going through all font files on the system to create a
-      //   font collection.
-      // - Renderer loading up startup URL, accessing HTML/JS File cache, net
-      //   activity etc.
-      // - Extension initialization.
-      // We delay building of cache mainly to avoid parallel font file loading
-      // along with Renderer. Some systems have significant number of font files
-      // which takes long time to process.
-      // Related information is at http://crbug.com/436195.
-      const int kBuildFontCacheDelaySec = 30;
-      content::BrowserThread::PostDelayedTask(
-          content::BrowserThread::IO,
-          FROM_HERE,
-          base::Bind(ExecuteFontCacheBuildTask, path),
-          base::TimeDelta::FromSeconds(kBuildFontCacheDelaySec));
-    }
-  }
+  // TODO(kulshin): remove this cleanup code in 2017. http://crbug.com/603718
+  // Attempt to delete the font cache and ignore any errors.
+  base::FilePath path(
+      profile()->GetPath().AppendASCII("ChromeDWriteFontCache"));
+  content::BrowserThread::PostAfterStartupTask(
+      FROM_HERE, content::BrowserThread::GetTaskRunnerForThread(
+                     content::BrowserThread::FILE),
+      base::Bind(base::IgnoreResult(&base::DeleteFile), path, false));
+
+  // Create the module database and hook up the in-process module watcher. This
+  // needs to be done before any child processes are initialized as the
+  // ModuleDatabase is an endpoint for IPC from child processes.
+  if (base::FeatureList::IsEnabled(features::kModuleDatabase))
+    SetupModuleDatabase(&module_watcher_);
 }
 
 void ChromeBrowserMainPartsWin::PostBrowserStart() {
@@ -398,7 +431,7 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
 void ChromeBrowserMainPartsWin::PrepareRestartOnCrashEnviroment(
     const base::CommandLine& parsed_command_line) {
   // Clear this var so child processes don't show the dialog by default.
-  scoped_ptr<base::Environment> env(base::Environment::Create());
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
   env->UnSetVar(env_vars::kShowRestart);
 
   // For non-interactive tests we don't restart on crash.
@@ -448,51 +481,14 @@ void ChromeBrowserMainPartsWin::RegisterApplicationRestart(
   if (!command_line.HasSwitch(switches::kRestoreLastSession))
     command_line.AppendSwitch(switches::kRestoreLastSession);
 
-  base::CommandLine::StringType cstring= command_line.GetCommandLineString();
-  if (cstring.length() > 900) {
-    base::CommandLine compressed_command_line(base::CommandLine::NO_PROGRAM);
-
-    std::string cstring8= base::UTF16ToASCII(cstring);
-    std::string zstring;
-
-    zstring.resize(cstring.length()+200);
-
-    z_stream stream = {0};
-    int result = deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
-                            // windowBits = 15 is default, 16 is added to
-                            // produce a gzip header + trailer.
-                            15 + 16,
-                            8,  // memLevel = 8 is default.
-                            Z_DEFAULT_STRATEGY);
-    DCHECK_EQ(Z_OK, result);
-    stream.next_in = reinterpret_cast<unsigned char*>(&cstring8[0]);
-    stream.avail_in = cstring8.length();
-    stream.next_out = reinterpret_cast<unsigned char*>(&zstring[0]);
-    stream.avail_out = zstring.size();
-    result = deflate(&stream, Z_SYNC_FLUSH);
-    DCHECK_EQ(Z_OK, result);
-    result = deflate(&stream, Z_FINISH);
-    DCHECK_EQ(Z_STREAM_END, result);
-    result = deflateEnd(&stream);
-    DCHECK_EQ(Z_OK, result);
-    zstring.resize(zstring.size()-stream.avail_out);
-
-    std::string bstring;
-
-    base::Base64Encode(zstring, &bstring);
-
-    cstring= base::UTF8ToUTF16(std::string("compressed-args=")+bstring);
-  }
-
   // Restart Chrome if the computer is restarted as the result of an update.
   // This could be extended to handle crashes, hangs, and patches.
   HRESULT hr = register_application_restart(
-      cstring.c_str(),
+      command_line.GetCommandLineString().c_str(),
       RESTART_NO_CRASH | RESTART_NO_HANG | RESTART_NO_PATCH);
   if (FAILED(hr)) {
     if (hr == E_INVALIDARG) {
-      LOG(WARNING) << "Command line too long for RegisterApplicationRestart" <<
-                      ", command_line: " << command_line.GetCommandLineString();
+      LOG(WARNING) << "Command line too long for RegisterApplicationRestart";
     } else {
       NOTREACHED() << "RegisterApplicationRestart failed. hr: " << hr <<
                       ", command_line: " << command_line.GetCommandLineString();
@@ -530,10 +526,8 @@ int ChromeBrowserMainPartsWin::HandleIconsCommands(
 
 // static
 bool ChromeBrowserMainPartsWin::CheckMachineLevelInstall() {
-  // TODO(tommi): Check if using the default distribution is always the right
-  // thing to do.
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  Version version;
+  base::Version version;
   InstallUtil::GetChromeVersion(dist, true, &version);
   if (version.IsValid()) {
     base::FilePath exe_path;
@@ -542,7 +536,7 @@ bool ChromeBrowserMainPartsWin::CheckMachineLevelInstall() {
     base::FilePath user_exe_path(installer::GetChromeInstallPath(false, dist));
     if (base::FilePath::CompareEqualIgnoreCase(exe, user_exe_path.value())) {
       base::CommandLine uninstall_cmd(
-          InstallUtil::GetChromeUninstallCmd(false, dist->GetType()));
+          InstallUtil::GetChromeUninstallCmd(false));
       if (!uninstall_cmd.GetProgram().empty()) {
         uninstall_cmd.AppendSwitch(installer::switches::kSelfDestruct);
         uninstall_cmd.AppendSwitch(installer::switches::kForceUninstall);

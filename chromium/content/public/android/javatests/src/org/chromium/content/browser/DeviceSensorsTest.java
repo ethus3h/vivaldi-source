@@ -9,8 +9,8 @@ import android.hardware.Sensor;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Handler;
+import android.support.test.filters.SmallTest;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -528,7 +528,7 @@ public class DeviceSensorsTest extends AndroidTestCase {
         private String mCalls = "";
 
         private DeviceSensorsForTests(Context context) {
-            super(context, true);
+            super(context);
         }
 
         static DeviceSensorsForTests getInstance(Context context) {

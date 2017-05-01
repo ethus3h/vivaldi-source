@@ -9,13 +9,13 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <queue>
 #include <set>
 #include <string>
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/time/time.h"
 #include "url/gurl.h"
 
@@ -91,6 +91,7 @@ class ExtensionWebRequestTimeTracker {
     base::TimeDelta block_duration;
     std::map<std::string, base::TimeDelta> extension_block_durations;
     RequestTimeLog();
+    RequestTimeLog(const RequestTimeLog& other);
     ~RequestTimeLog();
   };
 
@@ -114,7 +115,7 @@ class ExtensionWebRequestTimeTracker {
   std::set<int64_t> moderate_delays_;
 
   // Defaults to a delegate that sets warnings in the extension service.
-  scoped_ptr<ExtensionWebRequestTimeTrackerDelegate> delegate_;
+  std::unique_ptr<ExtensionWebRequestTimeTrackerDelegate> delegate_;
 
   FRIEND_TEST_ALL_PREFIXES(ExtensionWebRequestTimeTrackerTest, Basic);
   FRIEND_TEST_ALL_PREFIXES(ExtensionWebRequestTimeTrackerTest,

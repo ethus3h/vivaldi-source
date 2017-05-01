@@ -180,9 +180,15 @@ int main(int argc, char** argv) {
     PrintUsage();
     PrintJsonFileInfo();
     PrintAuthCodeInfo();
+#if defined(OS_IOS)
+    return base::LaunchUnitTests(
+        argc, argv,
+        base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#else
     return base::LaunchUnitTestsSerially(
         argc, argv,
         base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#endif
   }
 
   remoting::test::AppRemotingTestDriverEnvironment::EnvironmentOptions options;
@@ -227,7 +233,7 @@ int main(int argc, char** argv) {
   // retrieving an access token for the user and spinning up VMs.
   // The GTest framework will own the lifetime of this object once
   // it is registered below.
-  scoped_ptr<remoting::test::AppRemotingTestDriverEnvironment> shared_data(
+  std::unique_ptr<remoting::test::AppRemotingTestDriverEnvironment> shared_data(
       remoting::test::CreateAppRemotingTestDriverEnvironment(options));
 
   if (!shared_data->Initialize(auth_code)) {
@@ -249,7 +255,13 @@ int main(int argc, char** argv) {
 
   // Because many tests may access the same remoting host(s), we need to run
   // the tests sequentially so they do not interfere with each other.
+#if defined(OS_IOS)
+  return base::LaunchUnitTests(
+      argc, argv,
+      base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#else
   return base::LaunchUnitTestsSerially(
       argc, argv,
       base::Bind(&base::TestSuite::Run, base::Unretained(&test_suite)));
+#endif
 }

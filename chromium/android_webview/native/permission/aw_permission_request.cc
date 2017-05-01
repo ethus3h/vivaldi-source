@@ -12,13 +12,14 @@
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
+using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace android_webview {
 
 // static
 base::android::ScopedJavaLocalRef<jobject> AwPermissionRequest::Create(
-    scoped_ptr<AwPermissionRequestDelegate> delegate,
+    std::unique_ptr<AwPermissionRequestDelegate> delegate,
     base::WeakPtr<AwPermissionRequest>* weak_ptr) {
   base::android::ScopedJavaLocalRef<jobject> java_peer;
   AwPermissionRequest* permission_request =
@@ -28,7 +29,7 @@ base::android::ScopedJavaLocalRef<jobject> AwPermissionRequest::Create(
 }
 
 AwPermissionRequest::AwPermissionRequest(
-    scoped_ptr<AwPermissionRequestDelegate> delegate,
+    std::unique_ptr<AwPermissionRequestDelegate> delegate,
     ScopedJavaLocalRef<jobject>* java_peer)
     : delegate_(std::move(delegate)), processed_(false), weak_factory_(this) {
   DCHECK(delegate_.get());
@@ -37,7 +38,7 @@ AwPermissionRequest::AwPermissionRequest(
   JNIEnv* env = AttachCurrentThread();
   *java_peer = Java_AwPermissionRequest_create(
       env, reinterpret_cast<jlong>(this),
-      ConvertUTF8ToJavaString(env, GetOrigin().spec()).obj(), GetResources());
+      ConvertUTF8ToJavaString(env, GetOrigin().spec()), GetResources());
   java_ref_ = JavaObjectWeakGlobalRef(env, java_peer->obj());
 }
 
@@ -62,8 +63,7 @@ void AwPermissionRequest::DeleteThis() {
   ScopedJavaLocalRef<jobject> j_request = GetJavaObject();
   if (j_request.is_null())
     return;
-  Java_AwPermissionRequest_destroyNative(AttachCurrentThread(),
-                                         j_request.obj());
+  Java_AwPermissionRequest_destroyNative(AttachCurrentThread(), j_request);
 }
 
 void AwPermissionRequest::Destroy(JNIEnv* env,

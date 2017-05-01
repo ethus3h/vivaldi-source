@@ -27,6 +27,11 @@ class DummyPrintBackend : public PrintBackend {
     return std::string();
   }
 
+  bool GetPrinterBasicInfo(const std::string& printer_name,
+                           PrinterBasicInfo* printer_info) override {
+    return false;
+  }
+
   bool GetPrinterSemanticCapsAndDefaults(
       const std::string& printer_name,
       PrinterSemanticCapsAndDefaults* printer_info) override {
@@ -54,7 +59,8 @@ class DummyPrintBackend : public PrintBackend {
   DISALLOW_COPY_AND_ASSIGN(DummyPrintBackend);
 };
 
-scoped_refptr<PrintBackend> PrintBackend::CreateInstance(
+// static
+scoped_refptr<PrintBackend> PrintBackend::CreateInstanceImpl(
     const base::DictionaryValue* print_backend_settings) {
   return new DummyPrintBackend();
 }

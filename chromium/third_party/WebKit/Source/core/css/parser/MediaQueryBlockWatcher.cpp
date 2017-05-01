@@ -8,20 +8,15 @@
 
 namespace blink {
 
-MediaQueryBlockWatcher::MediaQueryBlockWatcher()
-    : m_blockLevel(0)
-{
+MediaQueryBlockWatcher::MediaQueryBlockWatcher() : m_blockLevel(0) {}
+
+void MediaQueryBlockWatcher::handleToken(const CSSParserToken& token) {
+  if (token.getBlockType() == CSSParserToken::BlockStart) {
+    ++m_blockLevel;
+  } else if (token.getBlockType() == CSSParserToken::BlockEnd) {
+    ASSERT(m_blockLevel);
+    --m_blockLevel;
+  }
 }
 
-void MediaQueryBlockWatcher::handleToken(const CSSParserToken& token)
-{
-    if (token.blockType() == CSSParserToken::BlockStart) {
-        ++m_blockLevel;
-    } else if (token.blockType() == CSSParserToken::BlockEnd) {
-        ASSERT(m_blockLevel);
-        --m_blockLevel;
-    }
-}
-
-} // namespace
-
+}  // namespace blink

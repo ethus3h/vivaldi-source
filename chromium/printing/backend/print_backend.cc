@@ -4,11 +4,21 @@
 
 #include "printing/backend/print_backend.h"
 
+namespace {
+bool g_native_cups_enabled = false;
+
+// PrintBackend override for testing.
+printing::PrintBackend* g_print_backend_for_test = nullptr;
+
+}  // namespace
+
 namespace printing {
 
 PrinterBasicInfo::PrinterBasicInfo()
     : printer_status(0),
       is_default(false) {}
+
+PrinterBasicInfo::PrinterBasicInfo(const PrinterBasicInfo& other) = default;
 
 PrinterBasicInfo::~PrinterBasicInfo() {}
 
@@ -24,12 +34,41 @@ PrinterSemanticCapsAndDefaults::PrinterSemanticCapsAndDefaults()
       bw_model(UNKNOWN_COLOR_MODEL)
 {}
 
+PrinterSemanticCapsAndDefaults::PrinterSemanticCapsAndDefaults(
+    const PrinterSemanticCapsAndDefaults& other) = default;
+
 PrinterSemanticCapsAndDefaults::~PrinterSemanticCapsAndDefaults() {}
 
 PrinterCapsAndDefaults::PrinterCapsAndDefaults() {}
 
+PrinterCapsAndDefaults::PrinterCapsAndDefaults(
+    const PrinterCapsAndDefaults& other) = default;
+
 PrinterCapsAndDefaults::~PrinterCapsAndDefaults() {}
 
 PrintBackend::~PrintBackend() {}
+
+// static
+scoped_refptr<PrintBackend> PrintBackend::CreateInstance(
+    const base::DictionaryValue* print_backend_settings) {
+  return g_print_backend_for_test
+             ? g_print_backend_for_test
+             : PrintBackend::CreateInstanceImpl(print_backend_settings);
+}
+
+// static
+void PrintBackend::SetPrintBackendForTesting(PrintBackend* backend) {
+  g_print_backend_for_test = backend;
+}
+
+// static
+bool PrintBackend::GetNativeCupsEnabled() {
+  return g_native_cups_enabled;
+}
+
+// static
+void PrintBackend::SetNativeCupsEnabled(bool enabled) {
+  g_native_cups_enabled = enabled;
+}
 
 }  // namespace printing

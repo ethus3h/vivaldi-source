@@ -6,10 +6,14 @@ package org.chromium.chrome.browser.init;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
-import android.preference.PreferenceManager;
+import android.os.StrictMode;
+
+import com.squareup.leakcanary.LeakCanary;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
@@ -17,28 +21,35 @@ import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.base.BaseSwitches;
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContentUriUtils;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.PathUtils;
 import org.chromium.base.ResourceExtractor;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
+import org.chromium.base.annotations.RemovableInRelease;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.chrome.browser.ChromeApplication;
 import org.chromium.chrome.browser.ChromeStrictMode;
 import org.chromium.chrome.browser.ChromeSwitches;
-import org.chromium.chrome.browser.ChromeVersionInfo;
 import org.chromium.chrome.browser.FileProviderHelper;
+import org.chromium.chrome.browser.crash.MinidumpDirectoryObserver;
 import org.chromium.chrome.browser.device.DeviceClassManager;
+import org.chromium.chrome.browser.download.DownloadManagerService;
 import org.chromium.chrome.browser.services.GoogleServicesManager;
 import org.chromium.chrome.browser.tabmodel.document.DocumentTabModelImpl;
-import org.chromium.chrome.browser.util.FeatureUtilities;
+import org.chromium.chrome.browser.webapps.ActivityAssigner;
+import org.chromium.chrome.browser.webapps.ChromeWebApkHost;
 import org.chromium.content.app.ContentApplication;
 import org.chromium.content.browser.BrowserStartupController;
+import org.chromium.content.browser.ChildProcessCreationParams;
 import org.chromium.content.browser.DeviceUtils;
 import org.chromium.content.browser.SpeechRecognition;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.policy.CombinedPolicyProvider;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.LinkedList;
 import java.util.Locale;
@@ -50,7 +61,7 @@ import java.util.Locale;
  */
 public class ChromeBrowserInitializer {
     private static final String TAG = "BrowserInitializer";
-    private static ChromeBrowserInitializer sChromeBrowserInitiliazer;
+    private static ChromeBrowserInitializer sChromeBrowserInitializer;
 
     private final Handler mHandler;
     private final ChromeApplication mApplication;
@@ -59,6 +70,11 @@ public class ChromeBrowserInitializer {
     private boolean mPreInflationStartupComplete;
     private boolean mPostInflationStartupComplete;
     private boolean mNativeInitializationComplete;
+
+    private MinidumpDirectoryObserver mMinidumpDirectoryObserver;
+
+    // Public to allow use in ChromeBackupAgent
+    public static final String PRIVATE_DATA_DIRECTORY_SUFFIX = "chrome";
 
     /**
      * A callback to be executed when there is a new version available in Play Store.
@@ -77,15 +93,23 @@ public class ChromeBrowserInitializer {
      * @return The singleton instance of {@link ChromeBrowserInitializer}.
      */
     public static ChromeBrowserInitializer getInstance(Context context) {
-        if (sChromeBrowserInitiliazer == null) {
-            sChromeBrowserInitiliazer = new ChromeBrowserInitializer(context);
+        if (sChromeBrowserInitializer == null) {
+            sChromeBrowserInitializer = new ChromeBrowserInitializer(context);
         }
-        return sChromeBrowserInitiliazer;
+        return sChromeBrowserInitializer;
     }
 
     private ChromeBrowserInitializer(Context context) {
         mApplication = (ChromeApplication) context.getApplicationContext();
         mHandler = new Handler(Looper.getMainLooper());
+        initLeakCanary();
+    }
+
+    @RemovableInRelease
+    private void initLeakCanary() {
+        // Watch that Activity objects are not retained after their onDestroy() has been called.
+        // This is a no-op in release builds.
+        LeakCanary.install(mApplication);
     }
 
     /**
@@ -96,10 +120,9 @@ public class ChromeBrowserInitializer {
     public void handleSynchronousStartup() throws ProcessInitException {
         assert ThreadUtils.runningOnUiThread() : "Tried to start the browser on the wrong thread";
 
-        ChromeBrowserInitializer initializer = ChromeBrowserInitializer.getInstance(mApplication);
         BrowserParts parts = new EmptyBrowserParts();
-        initializer.handlePreNativeStartup(parts);
-        initializer.handlePostNativeStartup(false, parts);
+        handlePreNativeStartup(parts);
+        handlePostNativeStartup(false, parts);
     }
 
     /**
@@ -111,8 +134,11 @@ public class ChromeBrowserInitializer {
     public void handlePreNativeStartup(final BrowserParts parts) {
         assert ThreadUtils.runningOnUiThread() : "Tried to start the browser on the wrong thread";
 
+        ProcessInitializationHandler.getInstance().initializePreNative();
         preInflationStartup();
         parts.preInflationStartup();
+        if (parts.isActivityFinishing()) return;
+
         preInflationStartupDone();
         parts.setContentViewAndLoadLibrary();
         postInflationStartup();
@@ -133,17 +159,33 @@ public class ChromeBrowserInitializer {
     }
 
     /**
-     * Pre-load shared prefs to avoid being blocked on the
-     * disk access async task in the future.
+     * Pre-load shared prefs to avoid being blocked on the disk access async task in the future.
+     * Running in an AsyncTask as pre-loading itself may cause I/O.
      */
     private void warmUpSharedPrefs() {
-        PreferenceManager.getDefaultSharedPreferences(mApplication);
-        DocumentTabModelImpl.warmUpSharedPrefs(mApplication);
+        if (Build.VERSION.CODENAME.equals("N") || Build.VERSION.SDK_INT > Build.VERSION_CODES.M) {
+            new AsyncTask<Void, Void, Void>() {
+                @Override
+                protected Void doInBackground(Void... params) {
+                    ContextUtils.getAppSharedPreferences();
+                    DocumentTabModelImpl.warmUpSharedPrefs(mApplication);
+                    ActivityAssigner.warmUpSharedPrefs(mApplication);
+                    DownloadManagerService.warmUpSharedPrefs(mApplication);
+                    return null;
+                }
+            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        } else {
+            ContextUtils.getAppSharedPreferences();
+            DocumentTabModelImpl.warmUpSharedPrefs(mApplication);
+            ActivityAssigner.warmUpSharedPrefs(mApplication);
+            DownloadManagerService.warmUpSharedPrefs(mApplication);
+        }
     }
 
     private void preInflationStartup() {
         ThreadUtils.assertOnUiThread();
         if (mPreInflationStartupComplete) return;
+        PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
 
         // Ensure critical files are available, so they aren't blocked on the file-system
         // behind long-running accesses in next phase.
@@ -151,12 +193,13 @@ public class ChromeBrowserInitializer {
         ContentApplication.initCommandLine(mApplication);
         waitForDebuggerIfNeeded();
         ChromeStrictMode.configureStrictMode();
+        ChromeWebApkHost.init();
 
         warmUpSharedPrefs();
 
         DeviceUtils.addDeviceSpecificUserAgentSwitch(mApplication);
         ApplicationStatus.registerStateListenerForAllActivities(
-                createLocaleActivityStateListener());
+                createActivityStateListener());
 
         mPreInflationStartupComplete = true;
     }
@@ -168,7 +211,7 @@ public class ChromeBrowserInitializer {
         // Check to see if we need to extract any new resources from the APK. This could
         // be on first run when we need to extract all the .pak files we need, or after
         // the user has switched locale, in which case we want new locale resources.
-        ResourceExtractor.get(mApplication).startExtractingResources();
+        ResourceExtractor.get().startExtractingResources();
 
         mPostInflationStartupComplete = true;
     }
@@ -185,13 +228,7 @@ public class ChromeBrowserInitializer {
             throws ProcessInitException {
         assert ThreadUtils.runningOnUiThread() : "Tried to start the browser on the wrong thread";
 
-        // This has to be called to stop mmap in sql connection before any db initialized.
-        // It applies to Work Chrome only as mmap doesn't work properly.
-        if (ChromeVersionInfo.isWorkBuild()) {
-            FeatureUtilities.nativeSetSqlMmapDisabledByDefault();
-        }
-
-        final LinkedList<Runnable> initQueue = new LinkedList<Runnable>();
+        final LinkedList<Runnable> initQueue = new LinkedList<>();
 
         abstract class NativeInitTask implements Runnable {
             @Override
@@ -215,7 +252,7 @@ public class ChromeBrowserInitializer {
         initQueue.add(new NativeInitTask() {
             @Override
             public void initFunction() {
-                mApplication.initializeProcess();
+                ProcessInitializationHandler.getInstance().initializePostNative();
             }
         });
 
@@ -273,11 +310,21 @@ public class ChromeBrowserInitializer {
             }
         });
 
+        // See crbug.com/593250. This can be removed after N SDK is released, crbug.com/592722.
+        ChildProcessCreationParams creationParams = mApplication.getChildProcessCreationParams();
+        // WebAPK uses this code path to initialize Chrome's native code, and the
+        // ChildProcessCreationParams has been set in {@link WebApkActivity}. We have to prevent
+        // resetting with a wrong parameter here. TODO(hanxi): Remove the entire if block after
+        // N SDK is released, since it breaks WebAPKs on N+.
+        if (creationParams != null && ChildProcessCreationParams.get() != null) {
+            ChildProcessCreationParams.set(creationParams);
+        }
         if (isAsync) {
             // We want to start this queue once the C++ startup tasks have run; allow the
             // C++ startup to run asynchonously, and set it up to start the Java queue once
             // it has finished.
             startChromeBrowserProcessesAsync(
+                    delegate.shouldStartGpuProcess(),
                     new BrowserStartupController.StartupCallback() {
                         @Override
                         public void onFailure() {
@@ -297,12 +344,12 @@ public class ChromeBrowserInitializer {
     }
 
     private void startChromeBrowserProcessesAsync(
+            boolean startGpuProcess,
             BrowserStartupController.StartupCallback callback) throws ProcessInitException {
         try {
             TraceEvent.begin("ChromeBrowserInitializer.startChromeBrowserProcessesAsync");
-            mApplication.registerPolicyProviders(CombinedPolicyProvider.get());
             BrowserStartupController.get(mApplication, LibraryProcessType.PROCESS_BROWSER)
-                    .startBrowserProcessesAsync(callback);
+                    .startBrowserProcessesAsync(startGpuProcess, callback);
         } finally {
             TraceEvent.end("ChromeBrowserInitializer.startChromeBrowserProcessesAsync");
         }
@@ -314,11 +361,10 @@ public class ChromeBrowserInitializer {
             ThreadUtils.assertOnUiThread();
             mApplication.initCommandLine();
             LibraryLoader libraryLoader = LibraryLoader.get(LibraryProcessType.PROCESS_BROWSER);
-            libraryLoader.ensureInitialized(mApplication);
+            StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskReads();
+            libraryLoader.ensureInitialized();
+            StrictMode.setThreadPolicy(oldPolicy);
             libraryLoader.asyncPrefetchLibrariesToMemory();
-            // The policies are used by browser startup, so we need to register the policy providers
-            // before starting the browser process.
-            mApplication.registerPolicyProviders(CombinedPolicyProvider.get());
             BrowserStartupController.get(mApplication, LibraryProcessType.PROCESS_BROWSER)
                     .startBrowserProcessesSync(false);
             GoogleServicesManager.get(mApplication);
@@ -339,6 +385,10 @@ public class ChromeBrowserInitializer {
     private void onStartNativeInitialization() {
         ThreadUtils.assertOnUiThread();
         if (mNativeInitializationComplete) return;
+        // The policies are used by browser startup, so we need to register the policy providers
+        // before starting the browser process.
+        mApplication.registerPolicyProviders(CombinedPolicyProvider.get());
+
         SpeechRecognition.initialize(mApplication);
     }
 
@@ -347,6 +397,20 @@ public class ChromeBrowserInitializer {
 
         mNativeInitializationComplete = true;
         ContentUriUtils.setFileProviderUtil(new FileProviderHelper());
+
+        // Start the file observer to watch the minidump directory.
+        new AsyncTask<Void, Void, MinidumpDirectoryObserver>() {
+            @Override
+            protected MinidumpDirectoryObserver doInBackground(Void... params) {
+                return new MinidumpDirectoryObserver();
+            }
+
+            @Override
+            protected void onPostExecute(MinidumpDirectoryObserver minidumpDirectoryObserver) {
+                mMinidumpDirectoryObserver = minidumpDirectoryObserver;
+                mMinidumpDirectoryObserver.startWatching();
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     private void waitForDebuggerIfNeeded() {
@@ -357,7 +421,7 @@ public class ChromeBrowserInitializer {
         }
     }
 
-    private ActivityStateListener createLocaleActivityStateListener() {
+    private ActivityStateListener createActivityStateListener() {
         return new ActivityStateListener() {
             @Override
             public void onActivityStateChange(Activity activity, int newState) {
@@ -369,8 +433,18 @@ public class ChromeBrowserInitializer {
                         Log.e(TAG, "Killing process because of locale change.");
                         Process.killProcess(Process.myPid());
                     }
+
+                    DeviceFormFactor.resetValuesIfNeeded(mApplication);
                 }
             }
         };
+    }
+
+    /**
+     * For unit testing of clients.
+     * @param initializer The (dummy or mocked) initializer to use.
+     */
+    public static void setForTesting(ChromeBrowserInitializer initializer) {
+        sChromeBrowserInitializer = initializer;
     }
 }

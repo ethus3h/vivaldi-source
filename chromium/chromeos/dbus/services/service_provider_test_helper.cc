@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/run_loop.h"
 #include "dbus/message.h"
 #include "dbus/mock_bus.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -101,7 +102,7 @@ void ServiceProviderTestHelper::SetUpReturnSignal(
                                       signal_callback, on_connected_callback);
 }
 
-scoped_ptr<dbus::Response> ServiceProviderTestHelper::CallMethod(
+std::unique_ptr<dbus::Response> ServiceProviderTestHelper::CallMethod(
     dbus::MethodCall* method_call) {
   return mock_object_proxy_->CallMethodAndBlock(
       method_call,
@@ -133,7 +134,7 @@ dbus::Response* ServiceProviderTestHelper::MockCallMethodAndBlock(
                                   base::Unretained(this)));
   // Check for a response.
   if (!response_received_)
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
   // Return response.
   return response_.release();
 }
@@ -156,7 +157,7 @@ void ServiceProviderTestHelper::MockSendSignal(dbus::Signal* signal) {
 }
 
 void ServiceProviderTestHelper::OnResponse(
-    scoped_ptr<dbus::Response> response) {
+    std::unique_ptr<dbus::Response> response) {
   response_ = std::move(response);
   response_received_ = true;
   if (base::MessageLoop::current()->is_running())

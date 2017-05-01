@@ -60,8 +60,8 @@
 #include <stdint.h>
 
 #include <string>
+#include <unordered_map>
 
-#include "base/containers/hash_tables.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "content/browser/download/save_types.h"
@@ -83,15 +83,21 @@ class SaveFile;
 class SavePackage;
 struct Referrer;
 
-class SaveFileManager : public base::RefCountedThreadSafe<SaveFileManager> {
+class CONTENT_EXPORT SaveFileManager
+    : public base::RefCountedThreadSafe<SaveFileManager> {
  public:
+   // Returns the singleton instance of the SaveFileManager.
+  static SaveFileManager* Get();
+
   SaveFileManager();
 
   // Lifetime management.
-  CONTENT_EXPORT void Shutdown();
+  void Shutdown();
 
-  // Save the specified URL. Called on the UI thread and forwarded to the
-  // ResourceDispatcherHostImpl on the IO thread.
+  // Save the specified URL.  Caller has to guarantee that |save_package| will
+  // be alive until the call to RemoveSaveFile.  Called on the UI thread (and in
+  // case of network downloads forwarded to the ResourceDispatcherHostImpl on
+  // the IO thread).
   void SaveURL(SaveItemId save_item_id,
                const GURL& url,
                const Referrer& referrer,
@@ -204,13 +210,12 @@ class SaveFileManager : public base::RefCountedThreadSafe<SaveFileManager> {
   void ExecuteCancelSaveRequest(int render_process_id, int request_id);
 
   // A map from save_item_id into SaveFiles.
-  typedef base::hash_map<SaveItemId, SaveFile*> SaveFileMap;
-  SaveFileMap save_file_map_;
+  std::unordered_map<SaveItemId, std::unique_ptr<SaveFile>, SaveItemId::Hasher>
+      save_file_map_;
 
   // Tracks which SavePackage to send data to, called only on UI thread.
   // SavePackageMap maps save item ids to their SavePackage.
-  typedef base::hash_map<SaveItemId, SavePackage*> SavePackageMap;
-  SavePackageMap packages_;
+  std::unordered_map<SaveItemId, SavePackage*, SaveItemId::Hasher> packages_;
 
   DISALLOW_COPY_AND_ASSIGN(SaveFileManager);
 };

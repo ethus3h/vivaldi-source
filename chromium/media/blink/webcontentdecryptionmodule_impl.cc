@@ -12,14 +12,16 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "media/base/cdm_promise.h"
+#include "media/base/content_decryption_module.h"
 #include "media/base/key_systems.h"
-#include "media/base/media_keys.h"
 #include "media/blink/cdm_result_promise.h"
 #include "media/blink/cdm_session_adapter.h"
 #include "media/blink/webcontentdecryptionmodulesession_impl.h"
+#include "third_party/WebKit/public/platform/URLConversion.h"
+#include "third_party/WebKit/public/platform/WebSecurityOrigin.h"
 #include "third_party/WebKit/public/platform/WebString.h"
-#include "third_party/WebKit/public/web/WebSecurityOrigin.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace media {
 
@@ -28,7 +30,7 @@ void WebContentDecryptionModuleImpl::Create(
     const base::string16& key_system,
     const blink::WebSecurityOrigin& security_origin,
     const CdmConfig& cdm_config,
-    scoped_ptr<blink::WebContentDecryptionModuleResult> result) {
+    std::unique_ptr<blink::WebContentDecryptionModuleResult> result) {
   DCHECK(!security_origin.isNull());
   DCHECK(!key_system.empty());
 
@@ -62,7 +64,7 @@ void WebContentDecryptionModuleImpl::Create(
     return;
   }
 
-  GURL security_origin_as_gurl(security_origin.toString());
+  GURL security_origin_as_gurl(url::Origin(security_origin).GetURL());
 
   // CdmSessionAdapter::CreateCdm() will keep a reference to |adapter|. Then
   // if WebContentDecryptionModuleImpl is successfully created (returned in
@@ -95,12 +97,13 @@ void WebContentDecryptionModuleImpl::setServerCertificate(
   adapter_->SetServerCertificate(
       std::vector<uint8_t>(server_certificate,
                            server_certificate + server_certificate_length),
-      scoped_ptr<SimpleCdmPromise>(
+      std::unique_ptr<SimpleCdmPromise>(
           new CdmResultPromise<>(result, std::string())));
 }
 
-CdmContext* WebContentDecryptionModuleImpl::GetCdmContext() {
-  return adapter_->GetCdmContext();
+scoped_refptr<ContentDecryptionModule>
+WebContentDecryptionModuleImpl::GetCdm() {
+  return adapter_->GetCdm();
 }
 
 }  // namespace media

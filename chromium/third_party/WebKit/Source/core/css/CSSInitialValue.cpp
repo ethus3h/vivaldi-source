@@ -20,13 +20,17 @@
 
 #include "core/css/CSSInitialValue.h"
 
+#include "core/css/CSSValuePool.h"
 #include "wtf/text/WTFString.h"
 
 namespace blink {
 
-String CSSInitialValue::customCSSText() const
-{
-    return "initial";
+CSSInitialValue* CSSInitialValue::create() {
+  return cssValuePool().initialValue();
 }
 
-} // namespace blink
+String CSSInitialValue::customCSSText() const {
+  return "initial";
+}
+
+}  // namespace blink

@@ -6,68 +6,48 @@
  * @fileoverview
  * `settings-input` is a single-line text field for user input associated
  * with a pref value.
- *
- * @element settings-input
  */
 Polymer({
   is: 'settings-input',
 
-  behaviors: [CrPolicyPrefBehavior],
+  behaviors: [CrPolicyPrefBehavior, PrefControlBehavior],
 
   properties: {
     /**
      * The preference object to control.
      * @type {!chrome.settingsPrivate.PrefObject|undefined}
+     * @override
      */
     pref: {
-      type: Object,
-      notify: true,
       observer: 'prefChanged_'
     },
 
-    /**
-     * The current value of the input, reflected to/from |pref|.
-     */
+    /* The current value of the input, reflected to/from |pref|. */
     value: {
       type: String,
       value: '',
       notify: true,
     },
 
-    /**
-     * Set to true to disable editing the input.
-     */
+    /* Set to true to disable editing the input. */
     disabled: {
       type: Boolean,
       value: false,
       reflectToAttribute: true
     },
 
-    /** Propagate the errorMessage property. */
+    canTab: Boolean,
+
+    /* Properties for paper-input. This is not strictly necessary.
+     * Though it does define the types for the closure compiler. */
     errorMessage: { type: String },
-
-    /** Propagate the label property. */
     label: { type: String },
-
-    /** Propagate the no-label-float property. */
     noLabelFloat: { type: Boolean, value: false },
-
-    /** Propagate the pattern property. */
     pattern: { type: String },
-
-    /** Propagate the readonly property. */
     readonly: { type: Boolean, value: false },
-
-    /** Propagate the required property. */
     required: { type: Boolean, value: false },
-
-    /** Propagate the type property. */
+    stopKeyboardEventPropagation: { type: Boolean, value: false },
     type: { type: String },
-  },
-
-  /** @override */
-  ready: function() {
-    this.$.events.forward(this.$.input, ['change']);
   },
 
   /**
@@ -100,10 +80,21 @@ Polymer({
   },
 
   /**
-   * Blur method for paper-input. Only update the pref value on a blur event.
+   * Gets a tab index for this control if it can be tabbed to.
+   * @param {boolean} canTab
+   * @return {number}
    * @private
    */
-  onBlur_: function() {
+  getTabindex_: function(canTab) {
+    return canTab ? 0 : -1;
+  },
+
+  /**
+   * Change event handler for paper-input. Updates the pref value.
+   * settings-input uses the change event because it is fired by the Enter key.
+   * @private
+   */
+  onChange_: function() {
     if (!this.pref)
       return;
 

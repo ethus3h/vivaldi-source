@@ -15,6 +15,15 @@ cr.exportPath('print_preview');
  */
 print_preview.PreviewSettings;
 
+/**
+ * @typedef {{
+ *   printerId: string,
+ *   success: boolean,
+ *   capabilities: Object,
+ * }}
+*/
+print_preview.PrinterSetupResponse;
+
 cr.define('print_preview', function() {
   'use strict';
 
@@ -67,8 +76,6 @@ cr.define('print_preview', function() {
         this.onEnableManipulateSettingsForTest_.bind(this);
     global.printPresetOptionsFromDocument =
         this.onPrintPresetOptionsFromDocument_.bind(this);
-   global.allowDistillPage =
-        this.allowDistillPage_.bind(this);
     global.onProvisionalPrinterResolved =
         this.onProvisionalDestinationResolved_.bind(this);
     global.failedToResolveProvisionalPrinter =
@@ -82,7 +89,6 @@ cr.define('print_preview', function() {
    */
   NativeLayer.EventType = {
     ACCESS_TOKEN_READY: 'print_preview.NativeLayer.ACCESS_TOKEN_READY',
-    ALLOW_DISTILL_PAGE: 'print_preview.NativeLayer.ALLOW_DISTILL_PAGE',
     CAPABILITIES_SET: 'print_preview.NativeLayer.CAPABILITIES_SET',
     CLOUD_PRINT_ENABLE: 'print_preview.NativeLayer.CLOUD_PRINT_ENABLE',
     DESTINATIONS_RELOAD: 'print_preview.NativeLayer.DESTINATIONS_RELOAD',
@@ -235,6 +241,15 @@ cr.define('print_preview', function() {
     },
 
     /**
+     * Requests that Chrome peform printer setup for the given printer.
+     * @param {string} printerId
+     * @return {!Promise<!print_preview.PrinterSetupResponse>}
+     */
+    setupPrinter: function(printerId) {
+      return cr.sendWithPromise('setupPrinter', printerId);
+    },
+
+    /**
      * @param {!print_preview.Destination} destination Destination to print to.
      * @param {!print_preview.ticket_items.Color} color Color ticket item.
      * @return {number} Native layer color model.
@@ -276,7 +291,6 @@ cr.define('print_preview', function() {
         'landscape': printTicketStore.landscape.getValue(),
         'color': this.getNativeColorModel_(destination, printTicketStore.color),
         'headerFooterEnabled': printTicketStore.headerFooter.getValue(),
-        'distillPage': printTicketStore.distillPage.getValue(),
         'marginsType': printTicketStore.marginsType.getValue(),
         'isFirstRequest': requestId == 0,
         'requestID': requestId,
@@ -291,7 +305,8 @@ cr.define('print_preview', function() {
         'deviceName': destination == null ? 'foo' : destination.id,
         'generateDraftData': documentInfo.isModifiable,
         'fitToPageEnabled': printTicketStore.fitToPage.getValue(),
-
+        'scaleFactor': printTicketStore.scaling.getValueAsNumber(),
+        'rasterizePDF': printTicketStore.rasterize.getValue(),
         // NOTE: Even though the following fields don't directly relate to the
         // preview, they still need to be included.
         'duplex': printTicketStore.duplex.getValue() ?
@@ -357,7 +372,6 @@ cr.define('print_preview', function() {
         'landscape': printTicketStore.landscape.getValue(),
         'color': this.getNativeColorModel_(destination, printTicketStore.color),
         'headerFooterEnabled': printTicketStore.headerFooter.getValue(),
-        'distillPage': printTicketStore.distillPage.getValue(),
         'marginsType': printTicketStore.marginsType.getValue(),
         'generateDraftData': true, // TODO(rltoscano): What should this be?
         'duplex': printTicketStore.duplex.getValue() ?
@@ -372,6 +386,8 @@ cr.define('print_preview', function() {
         'printWithCloudPrint': !destination.isLocal,
         'printWithPrivet': destination.isPrivet,
         'printWithExtension': destination.isExtension,
+        'rasterizePDF': printTicketStore.rasterize.getValue(),
+        'scaleFactor': printTicketStore.scaling.getValueAsNumber(),
         'deviceName': destination.id,
         'isFirstRequest': false,
         'requestID': -1,
@@ -481,7 +497,6 @@ cr.define('print_preview', function() {
       var nativeInitialSettings = new print_preview.NativeInitialSettings(
           initialSettings['printAutomaticallyInKioskMode'] || false,
           initialSettings['appKioskMode'] || false,
-          initialSettings['hidePrintWithSystemDialogLink'] || false,
           numberFormatSymbols[0] || ',',
           numberFormatSymbols[1] || '.',
           unitType,
@@ -666,13 +681,17 @@ cr.define('print_preview', function() {
      * @param {number} pageCount The number of pages.
      * @param {number} previewResponseId The preview request id that resulted in
      *      this response.
+     * @param {number} fitToPageScaling The scaling percentage required to fit
+     *      the document to page, rounded to the nearest integer.
      * @private
      */
-    onDidGetPreviewPageCount_: function(pageCount, previewResponseId) {
+    onDidGetPreviewPageCount_: function(pageCount, previewResponseId,
+                                        fitToPageScaling) {
       var pageCountChangeEvent = new Event(
           NativeLayer.EventType.PAGE_COUNT_READY);
       pageCountChangeEvent.pageCount = pageCount;
       pageCountChangeEvent.previewResponseId = previewResponseId;
+      pageCountChangeEvent.fitToPageScaling = fitToPageScaling;
       this.dispatchEvent(pageCountChangeEvent);
     },
 
@@ -740,16 +759,6 @@ cr.define('print_preview', function() {
       printPresetOptionsEvent.optionsFromDocument = options;
       this.dispatchEvent(printPresetOptionsEvent);
     },
-
-    /**
-      * Updates the interface to show the "Simplify Page" option.
-      * @private
-      */
-     allowDistillPage_: function() {
-       var allowDistillPageEvent = new Event(
-           NativeLayer.EventType.ALLOW_DISTILL_PAGE);
-       this.dispatchEvent(allowDistillPageEvent);
-     },
 
     /**
      * Simulates a user click on the print preview dialog cancel button. Used
@@ -938,7 +947,6 @@ cr.define('print_preview', function() {
   function NativeInitialSettings(
       isInKioskAutoPrintMode,
       isInAppKioskMode,
-      hidePrintWithSystemDialogLink,
       thousandsDelimeter,
       decimalDelimeter,
       unitType,
@@ -963,13 +971,6 @@ cr.define('print_preview', function() {
      * @private
      */
     this.isInAppKioskMode_ = isInAppKioskMode;
-
-    /**
-     * Whether we should hide the link which shows the system print dialog.
-     * @type {boolean}
-     * @private
-     */
-    this.hidePrintWithSystemDialogLink_ = hidePrintWithSystemDialogLink;
 
     /**
      * Character delimeter of thousands digits.
@@ -1057,14 +1058,6 @@ cr.define('print_preview', function() {
      */
     get isInAppKioskMode() {
       return this.isInAppKioskMode_;
-    },
-
-    /**
-     * @return {boolean} Whether we should hide the link which shows the
-           system print dialog.
-     */
-    get hidePrintWithSystemDialogLink() {
-      return this.hidePrintWithSystemDialogLink_;
     },
 
     /** @return {string} Character delimeter of thousands digits. */

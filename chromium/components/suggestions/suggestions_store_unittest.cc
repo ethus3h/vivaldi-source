@@ -6,14 +6,17 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
-#include "components/pref_registry/testing_pref_service_syncable.h"
 #include "components/suggestions/proto/suggestions.pb.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using user_prefs::TestingPrefServiceSyncable;
+using sync_preferences::TestingPrefServiceSyncable;
 
 namespace suggestions {
 
@@ -79,7 +82,7 @@ void ValidateSuggestions(const SuggestionsProfile& expected,
 class SuggestionsStoreTest : public testing::Test {
  public:
   SuggestionsStoreTest()
-    : pref_service_(new user_prefs::TestingPrefServiceSyncable) {}
+      : pref_service_(new sync_preferences::TestingPrefServiceSyncable) {}
 
   void SetUp() override {
     SuggestionsStore::RegisterProfilePrefs(pref_service_->registry());
@@ -88,12 +91,12 @@ class SuggestionsStoreTest : public testing::Test {
     base::SimpleTestClock* test_clock(new base::SimpleTestClock());
     current_time = base::Time::FromInternalValue(13063394337546738);
     test_clock->SetNow(current_time);
-    suggestions_store_->SetClockForTesting(scoped_ptr<base::Clock>(test_clock));
+    suggestions_store_->SetClockForTesting(base::WrapUnique(test_clock));
   }
 
  protected:
-  scoped_ptr<user_prefs::TestingPrefServiceSyncable> pref_service_;
-  scoped_ptr<SuggestionsStore> suggestions_store_;
+  std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> pref_service_;
+  std::unique_ptr<SuggestionsStore> suggestions_store_;
   base::Time current_time;
 
   DISALLOW_COPY_AND_ASSIGN(SuggestionsStoreTest);

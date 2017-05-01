@@ -19,6 +19,7 @@ class MockLoginDisplayHost : public LoginDisplayHost {
 
   MOCK_METHOD1(CreateLoginDisplay, LoginDisplay*(LoginDisplay::Delegate*));
   MOCK_CONST_METHOD0(GetNativeWindow, gfx::NativeWindow(void));
+  MOCK_CONST_METHOD0(GetOobeUI, OobeUI*(void));
   MOCK_CONST_METHOD0(GetWebUILoginView, WebUILoginView*(void));
   MOCK_METHOD0(BeforeSessionStart, void(void));
   MOCK_METHOD0(Finalize, void(void));
@@ -27,16 +28,18 @@ class MockLoginDisplayHost : public LoginDisplayHost {
   MOCK_METHOD1(SetStatusAreaVisible, void(bool));
   MOCK_METHOD0(ShowBackground, void(void));
   MOCK_METHOD0(GetAutoEnrollmentController, AutoEnrollmentController*(void));
-  MOCK_METHOD1(StartWizard, void(const std::string&));
+  MOCK_METHOD1(StartWizard, void(OobeScreen));
   MOCK_METHOD0(GetWizardController, WizardController*(void));
   MOCK_METHOD0(GetAppLaunchController, AppLaunchController*(void));
   MOCK_METHOD1(StartUserAdding, void(const base::Closure&));
+  MOCK_METHOD0(CancelUserAdding, void(void));
   MOCK_METHOD1(StartSignInScreen, void(const LoginScreenContext&));
   MOCK_METHOD0(ResumeSignInScreen, void(void));
   MOCK_METHOD0(OnPreferencesChanged, void(void));
   MOCK_METHOD0(PrewarmAuthentication, void(void));
   MOCK_METHOD3(StartAppLaunch, void(const std::string&, bool, bool));
   MOCK_METHOD0(StartDemoAppLaunch, void(void));
+  MOCK_METHOD1(StartArcKiosk, void(const AccountId&));
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockLoginDisplayHost);

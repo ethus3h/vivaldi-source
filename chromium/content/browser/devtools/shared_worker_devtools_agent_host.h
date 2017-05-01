@@ -20,10 +20,11 @@ class SharedWorkerDevToolsAgentHost : public WorkerDevToolsAgentHost {
                                 const SharedWorkerInstance& shared_worker);
 
   // DevToolsAgentHost override.
-  Type GetType() override;
+  std::string GetType() override;
   std::string GetTitle() override;
   GURL GetURL() override;
   bool Activate() override;
+  void Reload() override;
   bool Close() override;
 
   bool Matches(const SharedWorkerInstance& other);
@@ -32,7 +33,7 @@ class SharedWorkerDevToolsAgentHost : public WorkerDevToolsAgentHost {
   friend class SharedWorkerDevToolsManagerTest;
 
   ~SharedWorkerDevToolsAgentHost() override;
-  scoped_ptr<SharedWorkerInstance> shared_worker_;
+  std::unique_ptr<SharedWorkerInstance> shared_worker_;
 
   DISALLOW_COPY_AND_ASSIGN(SharedWorkerDevToolsAgentHost);
 };

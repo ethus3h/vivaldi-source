@@ -31,59 +31,66 @@
 
 #include "bindings/core/v8/ScriptWrappable.h"
 #include "core/CoreExport.h"
-#include "wtf/RefCounted.h"
 #include "wtf/Vector.h"
 #include "wtf/text/WTFString.h"
 
 namespace blink {
 
 class ContextMenuItem;
-class Event;
 class FrontendMenuProvider;
 class InspectorFrontendClient;
 class LocalFrame;
 
-class CORE_EXPORT DevToolsHost final : public RefCountedWillBeGarbageCollectedFinalized<DevToolsHost>, public ScriptWrappable {
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    static PassRefPtrWillBeRawPtr<DevToolsHost> create(InspectorFrontendClient* client, LocalFrame* frontendFrame)
-    {
-        return adoptRefWillBeNoop(new DevToolsHost(client, frontendFrame));
-    }
+class CORE_EXPORT DevToolsHost final
+    : public GarbageCollectedFinalized<DevToolsHost>,
+      public ScriptWrappable {
+  DEFINE_WRAPPERTYPEINFO();
 
-    ~DevToolsHost();
-    DECLARE_TRACE();
-    void disconnectClient();
+ public:
+  static DevToolsHost* create(InspectorFrontendClient* client,
+                              LocalFrame* frontendFrame) {
+    return new DevToolsHost(client, frontendFrame);
+  }
 
-    float zoomFactor();
+  ~DevToolsHost();
+  DECLARE_TRACE();
+  void disconnectClient();
 
-    float convertLengthForEmbedder(float length);
+  float zoomFactor();
 
-    void setInjectedScriptForOrigin(const String& origin, const String& script);
+  float convertLengthForEmbedder(float length);
 
-    void copyText(const String& text);
+  void setInjectedScriptForOrigin(const String& origin, const String& script);
 
-    void showContextMenu(LocalFrame* targetFrame, float x, float y, const Vector<ContextMenuItem>& items);
-    void sendMessageToEmbedder(const String& message);
+  void copyText(const String& text);
 
-    String getSelectionBackgroundColor();
-    String getSelectionForegroundColor();
+  void showContextMenu(LocalFrame* targetFrame,
+                       float x,
+                       float y,
+                       const Vector<ContextMenuItem>& items);
+  void sendMessageToEmbedder(const String& message);
 
-    bool isUnderTest();
-    bool isHostedMode();
+  String getSelectionBackgroundColor();
+  String getSelectionForegroundColor();
 
-    LocalFrame* frontendFrame() { return m_frontendFrame; }
+  bool isUnderTest();
+  bool isHostedMode();
 
-    void clearMenuProvider() { m_menuProvider = nullptr; }
+  LocalFrame* frontendFrame() { return m_frontendFrame; }
 
-private:
-    DevToolsHost(InspectorFrontendClient*, LocalFrame* frontendFrame);
+  void clearMenuProvider() { m_menuProvider = nullptr; }
 
-    InspectorFrontendClient* m_client;
-    RawPtrWillBeMember<LocalFrame> m_frontendFrame;
-    RawPtrWillBeMember<FrontendMenuProvider> m_menuProvider;
+ private:
+  friend class FrontendMenuProvider;
+
+  DevToolsHost(InspectorFrontendClient*, LocalFrame* frontendFrame);
+  void evaluateScript(const String&);
+
+  InspectorFrontendClient* m_client;
+  Member<LocalFrame> m_frontendFrame;
+  Member<FrontendMenuProvider> m_menuProvider;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // DevToolsHost_h
+#endif  // DevToolsHost_h

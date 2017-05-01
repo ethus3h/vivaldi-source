@@ -13,17 +13,19 @@
 #include "google/cacheinvalidation/types.pb.h"
 #include "jingle/notifier/listener/push_client.h"
 
+#include "sync/vivaldi_sync_urls.h"
+
 namespace syncer {
 
 namespace {
 
-const char kBotJid[] = "tango@bot.talk.google.com";
+const char kBotJid[] = "tango@" SYNC_SERVERNAME;
 const char kChannelName[] = "tango_raw";
 
 }  // namespace
 
 PushClientChannel::PushClientChannel(
-    scoped_ptr<notifier::PushClient> push_client)
+    std::unique_ptr<notifier::PushClient> push_client)
     : push_client_(std::move(push_client)),
       scheduling_hash_(0),
       sent_messages_count_(0) {
@@ -155,8 +157,9 @@ bool PushClientChannel::DecodeMessage(const std::string& data,
   return true;
 }
 
-scoped_ptr<base::DictionaryValue> PushClientChannel::CollectDebugData() const {
-  scoped_ptr<base::DictionaryValue> status(new base::DictionaryValue);
+std::unique_ptr<base::DictionaryValue> PushClientChannel::CollectDebugData()
+    const {
+  std::unique_ptr<base::DictionaryValue> status(new base::DictionaryValue);
   status->SetString("PushClientChannel.NetworkChannel", "Push Client");
   status->SetInteger("PushClientChannel.SentMessages", sent_messages_count_);
   status->SetInteger("PushClientChannel.ReceivedMessages",

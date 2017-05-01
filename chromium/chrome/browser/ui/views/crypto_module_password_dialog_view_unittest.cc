@@ -25,11 +25,11 @@ class CryptoModulePasswordDialogViewTest : public testing::Test {
 
   void CreateCryptoDialog(const CryptoModulePasswordCallback& callback) {
     dialog_.reset(new CryptoModulePasswordDialogView("slot",
-        kCryptoModulePasswordKeygen, "server", callback));
+        kCryptoModulePasswordCertEnrollment, "server", callback));
   }
 
   std::string text_;
-  scoped_ptr<CryptoModulePasswordDialogView> dialog_;
+  std::unique_ptr<CryptoModulePasswordDialogView> dialog_;
 };
 
 TEST_F(CryptoModulePasswordDialogViewTest, TestAccept) {

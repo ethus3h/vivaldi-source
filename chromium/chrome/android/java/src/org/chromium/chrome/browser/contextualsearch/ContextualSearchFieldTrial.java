@@ -4,12 +4,12 @@
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import android.content.Context;
 import android.text.TextUtils;
 
 import org.chromium.base.CommandLine;
 import org.chromium.base.SysUtils;
 import org.chromium.base.VisibleForTesting;
+import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.components.variations.VariationsAssociatedData;
 
@@ -21,6 +21,10 @@ public class ContextualSearchFieldTrial {
     private static final String DISABLED_PARAM = "disabled";
     private static final String ENABLED_VALUE = "true";
 
+    static final String MANDATORY_PROMO_ENABLED = "mandatory_promo_enabled";
+    static final String MANDATORY_PROMO_LIMIT = "mandatory_promo_limit";
+    static final int MANDATORY_PROMO_DEFAULT_LIMIT = 10;
+
     private static final String PEEK_PROMO_FORCED = "peek_promo_forced";
     @VisibleForTesting
     static final String PEEK_PROMO_ENABLED = "peek_promo_enabled";
@@ -28,9 +32,7 @@ public class ContextualSearchFieldTrial {
     private static final int PEEK_PROMO_DEFAULT_MAX_SHOW_COUNT = 10;
 
     private static final String DISABLE_SEARCH_TERM_RESOLUTION = "disable_search_term_resolution";
-    private static final String DISABLE_EXTRA_SEARCH_BAR_ANIMATIONS =
-            "disable_extra_search_bar_animations";
-    private static final String ENABLE_DIGIT_BLACKLIST = "enable_digit_blacklist";
+    private static final String ENABLE_BLACKLIST = "enable_blacklist";
 
     // Translation.  All these members are private, except for usage by testing.
     // Master switch, needed to enable any translate code for Contextual Search.
@@ -50,19 +52,45 @@ public class ContextualSearchFieldTrial {
     private static final String DISABLE_ACCEPT_LANGUAGES_FOR_TRANSLATION =
             "disable_accept_languages_for_translation";
     // Enables usage of English as the target language even when it's the primary UI language.
-    private static final String ENABLE_ENGLISH_TARGET_TRANSLATION =
+    @VisibleForTesting
+    static final String ENABLE_ENGLISH_TARGET_TRANSLATION =
             "enable_english_target_translation";
     // Enables relying on the server to control whether the onebox is actually shown, rather
     // than checking if translation is needed client-side based on source/target languages.
     @VisibleForTesting
     static final String ENABLE_SERVER_CONTROLLED_ONEBOX = "enable_server_controlled_onebox";
 
+    /** Hide Contextual Cards data.*/
+    private static final String HIDE_CONTEXTUAL_CARDS_DATA = "hide_contextual_cards_data";
+
     // Quick Answers.
     private static final String ENABLE_QUICK_ANSWERS = "enable_quick_answers";
+
+    // Enables collection of recent scroll seen/unseen histograms.
+    // TODO(donnd): remove all supporting code once short-lived data collection is done.
+    private static final String ENABLE_RECENT_SCROLL_COLLECTION = "enable_recent_scroll_collection";
+    // Set non-zero to establish an recent scroll suppression threshold for taps.
+    private static final String RECENT_SCROLL_DURATION_MS = "recent_scroll_duration_ms";
+    // TODO(donnd): remove all supporting code once short-lived data collection is done.
+    private static final String SCREEN_TOP_SUPPRESSION_DPS = "screen_top_suppression_dps";
+    private static final String ENABLE_BAR_OVERLAP_COLLECTION = "enable_bar_overlap_collection";
+    private static final String BAR_OVERLAP_SUPPRESSION_ENABLED = "enable_bar_overlap_suppression";
+
+    // Safety switch for disabling online-detection.  Also used to disable detection when running
+    // tests.
+    @VisibleForTesting
+    static final String ONLINE_DETECTION_DISABLED = "disable_online_detection";
+
+    private static final String ENABLE_AMP_AS_SEPARATE_TAB = "enable_amp_as_separate_tab";
+
+    // Privacy-related flags
+    private static final String ENABLE_SEND_HOME_COUNTRY = "enable_send_home_country";
 
     // Cached values to avoid repeated and redundant JNI operations.
     private static Boolean sEnabled;
     private static Boolean sDisableSearchTermResolution;
+    private static Boolean sIsMandatoryPromoEnabled;
+    private static Integer sMandatoryPromoLimit;
     private static Boolean sIsPeekPromoEnabled;
     private static Integer sPeekPromoMaxCount;
     private static Boolean sIsTranslationEnabled;
@@ -73,6 +101,17 @@ public class ContextualSearchFieldTrial {
     private static Boolean sIsEnglishTargetTranslationEnabled;
     private static Boolean sIsServerControlledOneboxEnabled;
     private static Boolean sIsQuickAnswersEnabled;
+    private static Boolean sIsRecentScrollCollectionEnabled;
+    private static Integer sRecentScrollDurationMs;
+    private static Integer sScreenTopSuppressionDps;
+    private static Boolean sIsBarOverlapCollectionEnabled;
+    private static Boolean sIsBarOverlapSuppressionEnabled;
+    private static Boolean sShouldHideContextualCardsData;
+    private static Boolean sIsContextualCardsBarIntegrationEnabled;
+    private static Boolean sIsOnlineDetectionDisabled;
+    private static Boolean sIsAmpAsSeparateTabEnabled;
+    private static Boolean sContextualSearchSingleActionsEnabled;
+    private static Boolean sCanSendHomeCountry;
 
     /**
      * Don't instantiate.
@@ -82,28 +121,18 @@ public class ContextualSearchFieldTrial {
     /**
      * Checks the current Variations parameters associated with the active group as well as the
      * Chrome preference to determine if the service is enabled.
-     * @param context Context used to determine whether the device is a tablet or a phone.
      * @return Whether Contextual Search is enabled or not.
      */
-    public static boolean isEnabled(Context context) {
+    public static boolean isEnabled() {
         if (sEnabled == null) {
-            sEnabled = detectEnabled(context);
+            sEnabled = detectEnabled();
         }
         return sEnabled.booleanValue();
     }
 
-    private static boolean detectEnabled(Context context) {
+    private static boolean detectEnabled() {
         if (SysUtils.isLowEndDevice()) {
             return false;
-        }
-
-        // This is used for instrumentation tests (i.e. it is not a user-flippable flag). We cannot
-        // use Variations params because in the test harness, the initialization comes before any
-        // native methods are available. And the ContextualSearchManager is initialized very early
-        // in the Chrome initialization.
-        if (CommandLine.getInstance().hasSwitch(
-                    ChromeSwitches.ENABLE_CONTEXTUAL_SEARCH_FOR_TESTING)) {
-            return true;
         }
 
         // Allow this user-flippable flag to disable the feature.
@@ -140,6 +169,28 @@ public class ContextualSearchFieldTrial {
     }
 
     /**
+     * @return Whether the Mandatory Promo is enabled.
+     */
+    static boolean isMandatoryPromoEnabled() {
+        if (sIsMandatoryPromoEnabled == null) {
+            sIsMandatoryPromoEnabled = getBooleanParam(MANDATORY_PROMO_ENABLED);
+        }
+        return sIsMandatoryPromoEnabled.booleanValue();
+    }
+
+    /**
+     * @return The number of times the Promo should be seen before it becomes mandatory.
+     */
+    static int getMandatoryPromoLimit() {
+        if (sMandatoryPromoLimit == null) {
+            sMandatoryPromoLimit = getIntParamValueOrDefault(
+                    MANDATORY_PROMO_LIMIT,
+                    MANDATORY_PROMO_DEFAULT_LIMIT);
+        }
+        return sMandatoryPromoLimit.intValue();
+    }
+
+    /**
      * @return Whether the Peek Promo is forcibly enabled (used for testing).
      */
     static boolean isPeekPromoForced() {
@@ -157,17 +208,10 @@ public class ContextualSearchFieldTrial {
     }
 
     /**
-     * @return Whether extra search bar animations are disabled.
+     * @return Whether the blacklist is enabled.
      */
-    static boolean areExtraSearchBarAnimationsDisabled() {
-        return getBooleanParam(DISABLE_EXTRA_SEARCH_BAR_ANIMATIONS);
-    }
-
-    /**
-     * @return Whether the digit blacklist is enabled.
-     */
-    static boolean isDigitBlacklistEnabled() {
-        return getBooleanParam(ENABLE_DIGIT_BLACKLIST);
+    static boolean isBlacklistEnabled() {
+        return getBooleanParam(ENABLE_BLACKLIST);
     }
 
     /**
@@ -264,6 +308,124 @@ public class ContextualSearchFieldTrial {
             sIsQuickAnswersEnabled = getBooleanParam(ENABLE_QUICK_ANSWERS);
         }
         return sIsQuickAnswersEnabled.booleanValue();
+    }
+
+    /**
+     * @return Whether collecting metrics for tap triggering after a scroll is enabled.
+     */
+    static boolean isRecentScrollCollectionEnabled() {
+        if (sIsRecentScrollCollectionEnabled == null) {
+            sIsRecentScrollCollectionEnabled = getBooleanParam(ENABLE_RECENT_SCROLL_COLLECTION);
+        }
+        return sIsRecentScrollCollectionEnabled.booleanValue();
+    }
+
+    /**
+     * Gets the duration to use for suppressing Taps after a recent scroll, or {@code 0} if no
+     * suppression is configured.
+     * @return The period of time after a scroll when tap triggering is suppressed.
+     */
+    static int getRecentScrollSuppressionDurationMs() {
+        if (sRecentScrollDurationMs == null) {
+            sRecentScrollDurationMs = getIntParamValueOrDefault(RECENT_SCROLL_DURATION_MS, 0);
+        }
+        return sRecentScrollDurationMs.intValue();
+    }
+
+    /**
+     * Gets a Y value limit that will suppress a Tap near the top of the screen.
+     * Any Y value less than the limit will suppress the Tap trigger.
+     * @return The Y value triggering limit in DPs, a value of zero will not limit.
+     */
+    static int getScreenTopSuppressionDps() {
+        if (sScreenTopSuppressionDps == null) {
+            sScreenTopSuppressionDps = getIntParamValueOrDefault(SCREEN_TOP_SUPPRESSION_DPS, 0);
+        }
+        return sScreenTopSuppressionDps.intValue();
+    }
+
+    /**
+     * @return Whether collecting data on Bar overlap is enabled.
+     */
+    static boolean isBarOverlapCollectionEnabled() {
+        if (sIsBarOverlapCollectionEnabled == null) {
+            sIsBarOverlapCollectionEnabled = getBooleanParam(ENABLE_BAR_OVERLAP_COLLECTION);
+        }
+        return sIsBarOverlapCollectionEnabled.booleanValue();
+    }
+
+    /**
+     * @return Whether triggering is suppressed by a selection nearly overlapping the normal
+     *         Bar peeking location.
+     */
+    static boolean isBarOverlapSuppressionEnabled() {
+        if (sIsBarOverlapSuppressionEnabled == null) {
+            sIsBarOverlapSuppressionEnabled = getBooleanParam(BAR_OVERLAP_SUPPRESSION_ENABLED);
+        }
+        return sIsBarOverlapSuppressionEnabled.booleanValue();
+    }
+
+    /**
+     * @return Whether to auto-promote clicks in the AMP carousel into a separate Tab.
+     */
+    static boolean isAmpAsSeparateTabEnabled() {
+        if (sIsAmpAsSeparateTabEnabled == null) {
+            sIsAmpAsSeparateTabEnabled = getBooleanParam(ENABLE_AMP_AS_SEPARATE_TAB);
+        }
+        return sIsAmpAsSeparateTabEnabled;
+    }
+
+    // TODO(donnd): Remove once bar-integration is fully landed if still unused (native only).
+    static boolean isContextualCardsBarIntegrationEnabled() {
+        if (sIsContextualCardsBarIntegrationEnabled == null) {
+            sIsContextualCardsBarIntegrationEnabled = getBooleanParam(
+                    ChromeSwitches.CONTEXTUAL_SEARCH_CONTEXTUAL_CARDS_BAR_INTEGRATION);
+        }
+        return sIsContextualCardsBarIntegrationEnabled;
+    }
+
+    static boolean shouldHideContextualCardsData() {
+        if (sShouldHideContextualCardsData == null) {
+            sShouldHideContextualCardsData = getBooleanParam(HIDE_CONTEXTUAL_CARDS_DATA);
+        }
+        return sShouldHideContextualCardsData;
+    }
+
+    /**
+     * @return Whether detection of device-online should be disabled (default false).
+     */
+    static boolean isOnlineDetectionDisabled() {
+        // TODO(donnd): Convert to test-only after launch and we have confidence it's robust.
+        if (sIsOnlineDetectionDisabled == null) {
+            sIsOnlineDetectionDisabled = getBooleanParam(ONLINE_DETECTION_DISABLED);
+        }
+        return sIsOnlineDetectionDisabled;
+    }
+
+    /**
+     * @return Whether sending the "home country" to Google is enabled.
+     */
+    static boolean isSendHomeCountryEnabled() {
+        if (sCanSendHomeCountry == null) {
+            sCanSendHomeCountry = getBooleanParam(ENABLE_SEND_HOME_COUNTRY);
+        }
+        return sCanSendHomeCountry.booleanValue();
+    }
+
+    // ---------------
+    // Features.
+    // ---------------
+
+    /**
+     * @return Whether or not single actions based on Contextual Cards is enabled.
+     */
+    static boolean isContextualSearchSingleActionsEnabled() {
+        if (sContextualSearchSingleActionsEnabled == null) {
+            sContextualSearchSingleActionsEnabled =
+                    ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXTUAL_SEARCH_SINGLE_ACTIONS);
+        }
+
+        return sContextualSearchSingleActionsEnabled;
     }
 
     // --------------------------------------------------------------------------------------------

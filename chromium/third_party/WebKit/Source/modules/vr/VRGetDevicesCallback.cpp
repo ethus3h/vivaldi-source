@@ -5,28 +5,20 @@
 #include "modules/vr/VRGetDevicesCallback.h"
 
 #include "bindings/core/v8/ScriptPromiseResolver.h"
-#include "modules/vr/VRHardwareUnitCollection.h"
 
 namespace blink {
 
-VRGetDevicesCallback::VRGetDevicesCallback(ScriptPromiseResolver* resolver, VRHardwareUnitCollection* hardwareUnits)
-    : m_resolver(resolver)
-    , m_hardwareUnits(hardwareUnits)
-{
+VRGetDevicesCallback::VRGetDevicesCallback(ScriptPromiseResolver* resolver)
+    : m_resolver(resolver) {}
+
+VRGetDevicesCallback::~VRGetDevicesCallback() {}
+
+void VRGetDevicesCallback::onSuccess(VRDisplayVector displays) {
+  m_resolver->resolve(displays);
 }
 
-VRGetDevicesCallback::~VRGetDevicesCallback()
-{
+void VRGetDevicesCallback::onError() {
+  m_resolver->reject();
 }
 
-void VRGetDevicesCallback::onSuccess(const WebVector<WebVRDevice>& devices)
-{
-    m_resolver->resolve(m_hardwareUnits->updateVRHardwareUnits(devices));
-}
-
-void VRGetDevicesCallback::onError()
-{
-    m_resolver->reject();
-}
-
-} // namespace blink
+}  // namespace blink

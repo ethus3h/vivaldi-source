@@ -9,11 +9,10 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
-#include "base/message_loop/message_loop.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "build/build_config.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_prefs.h"
@@ -21,7 +20,8 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/syncable_prefs/testing_pref_service_syncable.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/download_interrupt_reasons.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -36,6 +36,10 @@
 #include "chrome/browser/safe_browsing/download_protection_service.h"
 #endif
 
+#if !defined(OS_ANDROID)
+#include "content/public/browser/plugin_service.h"
+#endif
+
 using ::testing::AtMost;
 using ::testing::Invoke;
 using ::testing::Ref;
@@ -47,6 +51,7 @@ using ::testing::SetArgPointee;
 using ::testing::WithArg;
 using ::testing::_;
 using content::DownloadItem;
+using safe_browsing::DownloadFileType;
 
 namespace {
 
@@ -68,12 +73,13 @@ class MockWebContentsDelegate : public content::WebContentsDelegate {
 //   EXPECT_CALL(mock_fooclass_instance, Foo(callback))
 //     .WillOnce(ScheduleCallback(false));
 ACTION_P(ScheduleCallback, result) {
-  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(arg0, result));
+  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
+                                                base::Bind(arg0, result));
 }
 
 // Similar to ScheduleCallback, but binds 2 arguments.
 ACTION_P2(ScheduleCallback2, result0, result1) {
-  base::MessageLoop::current()->PostTask(
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(arg0, result0, result1));
 }
 
@@ -157,7 +163,8 @@ class ChromeDownloadManagerDelegateTest
   void VerifyAndClearExpectations();
 
   // Creates MockDownloadItem and sets up default expectations.
-  scoped_ptr<content::MockDownloadItem> CreateActiveDownloadItem(int32_t id);
+  std::unique_ptr<content::MockDownloadItem> CreateActiveDownloadItem(
+      int32_t id);
 
   // Given the relative path |path|, returns the full path under the temporary
   // downloads directory.
@@ -181,10 +188,10 @@ class ChromeDownloadManagerDelegateTest
   DownloadPrefs* download_prefs();
 
  private:
-  syncable_prefs::TestingPrefServiceSyncable* pref_service_;
+  sync_preferences::TestingPrefServiceSyncable* pref_service_;
   base::ScopedTempDir test_download_dir_;
-  scoped_ptr<content::MockDownloadManager> download_manager_;
-  scoped_ptr<TestChromeDownloadManagerDelegate> delegate_;
+  std::unique_ptr<content::MockDownloadManager> download_manager_;
+  std::unique_ptr<TestChromeDownloadManagerDelegate> delegate_;
   MockWebContentsDelegate web_contents_delegate_;
 };
 
@@ -202,7 +209,7 @@ void ChromeDownloadManagerDelegateTest::SetUp() {
   web_contents()->SetDelegate(&web_contents_delegate_);
 
   ASSERT_TRUE(test_download_dir_.CreateUniqueTempDir());
-  SetDefaultDownloadPath(test_download_dir_.path());
+  SetDefaultDownloadPath(test_download_dir_.GetPath());
 }
 
 void ChromeDownloadManagerDelegateTest::TearDown() {
@@ -215,9 +222,9 @@ void ChromeDownloadManagerDelegateTest::VerifyAndClearExpectations() {
   ::testing::Mock::VerifyAndClearExpectations(delegate_.get());
 }
 
-scoped_ptr<content::MockDownloadItem>
+std::unique_ptr<content::MockDownloadItem>
 ChromeDownloadManagerDelegateTest::CreateActiveDownloadItem(int32_t id) {
-  scoped_ptr<content::MockDownloadItem> item(
+  std::unique_ptr<content::MockDownloadItem> item(
       new ::testing::NiceMock<content::MockDownloadItem>());
   ON_CALL(*item, GetBrowserContext())
       .WillByDefault(Return(profile()));
@@ -257,7 +264,7 @@ ChromeDownloadManagerDelegateTest::CreateActiveDownloadItem(int32_t id) {
 base::FilePath ChromeDownloadManagerDelegateTest::GetPathInDownloadDir(
     const char* relative_path) {
   base::FilePath full_path =
-      test_download_dir_.path().AppendASCII(relative_path);
+      test_download_dir_.GetPath().AppendASCII(relative_path);
   return full_path.NormalizePathSeparators();
 }
 
@@ -310,7 +317,7 @@ bool ChromeDownloadManagerDelegateTest::CheckForFileExistence(
 
 const base::FilePath& ChromeDownloadManagerDelegateTest::default_download_path()
     const {
-  return test_download_dir_.path();
+  return test_download_dir_.GetPath();
 }
 
 TestChromeDownloadManagerDelegate*
@@ -329,10 +336,12 @@ DownloadPrefs* ChromeDownloadManagerDelegateTest::download_prefs() {
 
 }  // namespace
 
+// There is no "save as" context menu option on Android.
+#if !defined(OS_ANDROID)
 TEST_F(ChromeDownloadManagerDelegateTest, StartDownload_LastSavePath) {
   GURL download_url("http://example.com/foo.txt");
 
-  scoped_ptr<content::MockDownloadItem> save_as_download =
+  std::unique_ptr<content::MockDownloadItem> save_as_download =
       CreateActiveDownloadItem(0);
   EXPECT_CALL(*save_as_download, GetURL())
       .Times(::testing::AnyNumber())
@@ -341,7 +350,7 @@ TEST_F(ChromeDownloadManagerDelegateTest, StartDownload_LastSavePath) {
       .Times(::testing::AnyNumber())
       .WillRepeatedly(Return(DownloadItem::TARGET_DISPOSITION_PROMPT));
 
-  scoped_ptr<content::MockDownloadItem> automatic_download =
+  std::unique_ptr<content::MockDownloadItem> automatic_download =
       CreateActiveDownloadItem(1);
   EXPECT_CALL(*automatic_download, GetURL())
       .Times(::testing::AnyNumber())
@@ -401,11 +410,16 @@ TEST_F(ChromeDownloadManagerDelegateTest, StartDownload_LastSavePath) {
     VerifyAndClearExpectations();
   }
 }
+#endif  // !defined(OS_ANDROID)
 
 TEST_F(ChromeDownloadManagerDelegateTest, MaybeDangerousContent) {
+#if !defined(OS_ANDROID)
+  content::PluginService::GetInstance()->Init();
+#endif
+
   GURL url("http://example.com/foo");
 
-  scoped_ptr<content::MockDownloadItem> download_item =
+  std::unique_ptr<content::MockDownloadItem> download_item =
       CreateActiveDownloadItem(0);
   EXPECT_CALL(*download_item, GetURL()).WillRepeatedly(ReturnRef(url));
   EXPECT_CALL(*download_item, GetTargetDisposition())
@@ -422,7 +436,7 @@ TEST_F(ChromeDownloadManagerDelegateTest, MaybeDangerousContent) {
     DownloadTargetInfo target_info;
     DetermineDownloadTarget(download_item.get(), &target_info);
 
-    EXPECT_EQ(download_util::DANGEROUS,
+    EXPECT_EQ(DownloadFileType::DANGEROUS,
               DownloadItemModel(download_item.get()).GetDangerLevel());
     EXPECT_EQ(content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
               target_info.danger_type);
@@ -435,7 +449,7 @@ TEST_F(ChromeDownloadManagerDelegateTest, MaybeDangerousContent) {
         .WillRepeatedly(Return(kSafeContentDisposition));
     DownloadTargetInfo target_info;
     DetermineDownloadTarget(download_item.get(), &target_info);
-    EXPECT_EQ(download_util::NOT_DANGEROUS,
+    EXPECT_EQ(DownloadFileType::NOT_DANGEROUS,
               DownloadItemModel(download_item.get()).GetDangerLevel());
     EXPECT_EQ(content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
               target_info.danger_type);
@@ -448,7 +462,7 @@ TEST_F(ChromeDownloadManagerDelegateTest, MaybeDangerousContent) {
         .WillRepeatedly(Return(kModerateContentDisposition));
     DownloadTargetInfo target_info;
     DetermineDownloadTarget(download_item.get(), &target_info);
-    EXPECT_EQ(download_util::ALLOW_ON_USER_GESTURE,
+    EXPECT_EQ(DownloadFileType::ALLOW_ON_USER_GESTURE,
               DownloadItemModel(download_item.get()).GetDangerLevel());
     EXPECT_EQ(content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
               target_info.danger_type);
@@ -463,7 +477,7 @@ TEST_F(ChromeDownloadManagerDelegateTest, CheckForFileExistence) {
       default_download_path().AppendASCII("bar");
   base::WriteFile(existing_path, kData, kDataLength);
 
-  scoped_ptr<content::MockDownloadItem> download_item =
+  std::unique_ptr<content::MockDownloadItem> download_item =
       CreateActiveDownloadItem(1);
   EXPECT_CALL(*download_item, GetTargetFilePath())
       .WillRepeatedly(ReturnRef(existing_path));
@@ -480,7 +494,7 @@ namespace {
 
 struct SafeBrowsingTestParameters {
   content::DownloadDangerType initial_danger_type;
-  download_util::DownloadDangerLevel initial_danger_level;
+  DownloadFileType::DangerLevel initial_danger_level;
   safe_browsing::DownloadProtectionService::DownloadCheckResult verdict;
 
   content::DownloadDangerType expected_danger_type;
@@ -489,8 +503,7 @@ struct SafeBrowsingTestParameters {
 class TestDownloadProtectionService
     : public safe_browsing::DownloadProtectionService {
  public:
-  TestDownloadProtectionService()
-      : DownloadProtectionService(nullptr, nullptr) {}
+  TestDownloadProtectionService() : DownloadProtectionService(nullptr) {}
 
   void CheckClientDownload(DownloadItem* download_item,
                            const CheckDownloadCallback& callback) override {
@@ -511,7 +524,8 @@ class ChromeDownloadManagerDelegateTestWithSafeBrowsing
   }
 
  private:
-  scoped_ptr<TestDownloadProtectionService> test_download_protection_service_;
+  std::unique_ptr<TestDownloadProtectionService>
+      test_download_protection_service_;
 };
 
 void ChromeDownloadManagerDelegateTestWithSafeBrowsing::SetUp() {
@@ -529,100 +543,106 @@ void ChromeDownloadManagerDelegateTestWithSafeBrowsing::TearDown() {
 
 const SafeBrowsingTestParameters kSafeBrowsingTestCases[] = {
     // SAFE verdict for a safe file.
-    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, download_util::NOT_DANGEROUS,
+    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+     DownloadFileType::NOT_DANGEROUS,
      safe_browsing::DownloadProtectionService::SAFE,
 
      content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS},
 
     // UNKNOWN verdict for a safe file.
-    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, download_util::NOT_DANGEROUS,
+    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+     DownloadFileType::NOT_DANGEROUS,
      safe_browsing::DownloadProtectionService::UNKNOWN,
 
      content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS},
 
     // DANGEROUS verdict for a safe file.
-    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, download_util::NOT_DANGEROUS,
+    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+     DownloadFileType::NOT_DANGEROUS,
      safe_browsing::DownloadProtectionService::DANGEROUS,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT},
 
     // UNCOMMON verdict for a safe file.
-    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, download_util::NOT_DANGEROUS,
+    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+     DownloadFileType::NOT_DANGEROUS,
      safe_browsing::DownloadProtectionService::UNCOMMON,
 
      content::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT},
 
     // POTENTIALLY_UNWANTED verdict for a safe file.
-    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, download_util::NOT_DANGEROUS,
+    {content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+     DownloadFileType::NOT_DANGEROUS,
      safe_browsing::DownloadProtectionService::POTENTIALLY_UNWANTED,
 
      content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED},
 
     // SAFE verdict for a potentially dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::ALLOW_ON_USER_GESTURE,
+     DownloadFileType::ALLOW_ON_USER_GESTURE,
      safe_browsing::DownloadProtectionService::SAFE,
 
      content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS},
 
     // UNKNOWN verdict for a potentially dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::ALLOW_ON_USER_GESTURE,
+     DownloadFileType::ALLOW_ON_USER_GESTURE,
      safe_browsing::DownloadProtectionService::UNKNOWN,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE},
 
     // DANGEROUS verdict for a potentially dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::ALLOW_ON_USER_GESTURE,
+     DownloadFileType::ALLOW_ON_USER_GESTURE,
      safe_browsing::DownloadProtectionService::DANGEROUS,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT},
 
     // UNCOMMON verdict for a potentially dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::ALLOW_ON_USER_GESTURE,
+     DownloadFileType::ALLOW_ON_USER_GESTURE,
      safe_browsing::DownloadProtectionService::UNCOMMON,
 
      content::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT},
 
     // POTENTIALLY_UNWANTED verdict for a potentially dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::ALLOW_ON_USER_GESTURE,
+     DownloadFileType::ALLOW_ON_USER_GESTURE,
      safe_browsing::DownloadProtectionService::POTENTIALLY_UNWANTED,
 
      content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED},
 
     // SAFE verdict for a dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::DANGEROUS, safe_browsing::DownloadProtectionService::SAFE,
+     DownloadFileType::DANGEROUS,
+     safe_browsing::DownloadProtectionService::SAFE,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE},
 
     // UNKNOWN verdict for a dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::DANGEROUS,
+     DownloadFileType::DANGEROUS,
      safe_browsing::DownloadProtectionService::UNKNOWN,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE},
 
     // DANGEROUS verdict for a dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::DANGEROUS,
+     DownloadFileType::DANGEROUS,
      safe_browsing::DownloadProtectionService::DANGEROUS,
 
      content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT},
 
     // UNCOMMON verdict for a dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::DANGEROUS,
+     DownloadFileType::DANGEROUS,
      safe_browsing::DownloadProtectionService::UNCOMMON,
 
      content::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT},
 
     // POTENTIALLY_UNWANTED verdict for a dangerous file.
     {content::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT,
-     download_util::DANGEROUS,
+     DownloadFileType::DANGEROUS,
      safe_browsing::DownloadProtectionService::POTENTIALLY_UNWANTED,
 
      content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED},
@@ -637,7 +657,7 @@ INSTANTIATE_TEST_CASE_P(_,
 TEST_P(ChromeDownloadManagerDelegateTestWithSafeBrowsing, CheckClientDownload) {
   const SafeBrowsingTestParameters& kParameters = GetParam();
 
-  scoped_ptr<content::MockDownloadItem> download_item =
+  std::unique_ptr<content::MockDownloadItem> download_item =
       CreateActiveDownloadItem(0);
   EXPECT_CALL(*delegate(), GetDownloadProtectionService());
   EXPECT_CALL(*download_protection_service(), MockCheckClientDownload())
@@ -645,7 +665,7 @@ TEST_P(ChromeDownloadManagerDelegateTestWithSafeBrowsing, CheckClientDownload) {
   EXPECT_CALL(*download_item, GetDangerType())
       .WillRepeatedly(Return(kParameters.initial_danger_type));
 
-  if (kParameters.initial_danger_level != download_util::NOT_DANGEROUS) {
+  if (kParameters.initial_danger_level != DownloadFileType::NOT_DANGEROUS) {
     DownloadItemModel(download_item.get())
         .SetDangerLevel(kParameters.initial_danger_level);
   }

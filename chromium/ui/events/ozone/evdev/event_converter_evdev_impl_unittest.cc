@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/events/ozone/evdev/event_converter_evdev_impl.h"
+
 #include <linux/input.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/message_loop/message_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -16,10 +19,10 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/ozone/device/device_manager.h"
 #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
-#include "ui/events/ozone/evdev/event_converter_evdev_impl.h"
 #include "ui/events/ozone/evdev/event_converter_test_util.h"
 #include "ui/events/ozone/evdev/event_factory_evdev.h"
 #include "ui/events/ozone/evdev/keyboard_evdev.h"
+#include "ui/events/ozone/evdev/scoped_input_device.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 
 namespace ui {
@@ -28,10 +31,10 @@ const char kTestDevicePath[] = "/dev/input/test-device";
 
 class MockEventConverterEvdevImpl : public EventConverterEvdevImpl {
  public:
-  MockEventConverterEvdevImpl(int fd,
+  MockEventConverterEvdevImpl(ScopedInputDevice fd,
                               CursorDelegateEvdev* cursor,
                               DeviceEventDispatcherEvdev* dispatcher)
-      : EventConverterEvdevImpl(fd,
+      : EventConverterEvdevImpl(std::move(fd),
                                 base::FilePath(kTestDevicePath),
                                 1,
                                 EventDeviceInfo(),
@@ -71,7 +74,7 @@ class MockCursorEvdev : public CursorDelegateEvdev {
     return gfx::Rect();
   }
   gfx::PointF GetLocation() override { return cursor_location_; }
-
+  void InitializeOnEvdev() override {}
  private:
   // The location of the mock cursor.
   gfx::PointF cursor_location_;
@@ -92,8 +95,8 @@ class EventConverterEvdevImplTest : public testing::Test {
     int evdev_io[2];
     if (pipe(evdev_io))
       PLOG(FATAL) << "failed pipe";
-    events_in_ = evdev_io[0];
-    events_out_ = evdev_io[1];
+    ui::ScopedInputDevice events_in(evdev_io[0]);
+    events_out_.reset(evdev_io[1]);
 
     cursor_.reset(new ui::MockCursorEvdev());
 
@@ -105,15 +108,14 @@ class EventConverterEvdevImplTest : public testing::Test {
                    base::Unretained(this)));
     dispatcher_ =
         ui::CreateDeviceEventDispatcherEvdevForTest(event_factory_.get());
-    device_.reset(new ui::MockEventConverterEvdevImpl(events_in_, cursor_.get(),
-                                                      dispatcher_.get()));
+    device_.reset(new ui::MockEventConverterEvdevImpl(
+        std::move(events_in), cursor_.get(), dispatcher_.get()));
   }
 
   void TearDown() override {
     device_.reset();
     cursor_.reset();
-    close(events_in_);
-    close(events_out_);
+    events_out_.reset();
   }
 
   ui::MockCursorEvdev* cursor() { return cursor_.get(); }
@@ -124,13 +126,13 @@ class EventConverterEvdevImplTest : public testing::Test {
     DCHECK_GT(dispatched_events_.size(), index);
     ui::Event* ev = dispatched_events_[index].get();
     DCHECK(ev->IsKeyEvent());
-    return static_cast<ui::KeyEvent*>(ev);
+    return ev->AsKeyEvent();
   }
   ui::MouseEvent* dispatched_mouse_event(unsigned index) {
     DCHECK_GT(dispatched_events_.size(), index);
     ui::Event* ev = dispatched_events_[index].get();
     DCHECK(ev->IsMouseEvent());
-    return static_cast<ui::MouseEvent*>(ev);
+    return ev->AsMouseEvent();
   }
 
   void ClearDispatchedEvents() {
@@ -141,22 +143,21 @@ class EventConverterEvdevImplTest : public testing::Test {
 
  private:
   void DispatchEventForTest(ui::Event* event) {
-    scoped_ptr<ui::Event> cloned_event = ui::Event::Clone(*event);
+    std::unique_ptr<ui::Event> cloned_event = ui::Event::Clone(*event);
     dispatched_events_.push_back(std::move(cloned_event));
   }
 
   base::MessageLoopForUI ui_loop_;
 
-  scoped_ptr<ui::MockCursorEvdev> cursor_;
-  scoped_ptr<ui::DeviceManager> device_manager_;
-  scoped_ptr<ui::EventFactoryEvdev> event_factory_;
-  scoped_ptr<ui::DeviceEventDispatcherEvdev> dispatcher_;
-  scoped_ptr<ui::MockEventConverterEvdevImpl> device_;
+  std::unique_ptr<ui::MockCursorEvdev> cursor_;
+  std::unique_ptr<ui::DeviceManager> device_manager_;
+  std::unique_ptr<ui::EventFactoryEvdev> event_factory_;
+  std::unique_ptr<ui::DeviceEventDispatcherEvdev> dispatcher_;
+  std::unique_ptr<ui::MockEventConverterEvdevImpl> device_;
 
-  std::vector<scoped_ptr<ui::Event>> dispatched_events_;
+  std::vector<std::unique_ptr<ui::Event>> dispatched_events_;
 
-  int events_out_;
-  int events_in_;
+  ui::ScopedInputDevice events_out_;
 
   DISALLOW_COPY_AND_ASSIGN(EventConverterEvdevImplTest);
 };

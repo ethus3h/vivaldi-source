@@ -55,23 +55,23 @@ enum DisplayLinkInstallationStatus {
 
 // Returns the display link driver version or an invalid version if it is
 // not installed.
-Version DisplayLinkVersion() {
+base::Version DisplayLinkVersion() {
   base::win::RegKey key;
 
   if (key.Open(HKEY_LOCAL_MACHINE, L"SOFTWARE", KEY_READ | KEY_WOW64_64KEY))
-    return Version();
+    return base::Version();
 
   if (key.OpenKey(L"DisplayLink", KEY_READ | KEY_WOW64_64KEY))
-    return Version();
+    return base::Version();
 
   if (key.OpenKey(L"Core", KEY_READ | KEY_WOW64_64KEY))
-    return Version();
+    return base::Version();
 
   base::string16 version;
   if (key.ReadValue(L"Version", &version))
-    return Version();
+    return base::Version();
 
-  return Version(base::UTF16ToASCII(version));
+  return base::Version(base::UTF16ToASCII(version));
 }
 
 // Returns whether Lenovo dCute is installed.
@@ -238,7 +238,7 @@ CollectInfoResult CollectDriverInfoD3D(const std::wstring& device_id,
   SetupDiDestroyDeviceInfoList(device_info);
   bool found = false;
   if (found_amd && found_intel) {
-    // AMD Switchable system found.
+    // Potential AMD Switchable system found.
     for (const auto& driver : drivers) {
       if (driver.device.vendor_id == 0x8086) {
         gpu_info->gpu = driver.device;
@@ -253,16 +253,22 @@ CollectInfoResult CollectDriverInfoD3D(const std::wstring& device_id,
     GetAMDVideocardInfo(gpu_info);
 
     if (!gpu_info->amd_switchable) {
-      // Some machines aren't properly detected as AMD switchable, but count
-      // them anyway.
-      gpu_info->amd_switchable = true;
-      for (const auto& driver : drivers) {
+      bool amd_is_primary = false;
+      for (size_t i = 0; i < drivers.size(); ++i) {
+        const GPUDriver& driver = drivers[i];
         if (driver.device.vendor_id == 0x1002) {
+          if (static_cast<int>(i) == primary_device)
+            amd_is_primary = true;
           gpu_info->gpu = driver.device;
         } else {
           gpu_info->secondary_gpus.push_back(driver.device);
         }
       }
+      // Some machines aren't properly detected as AMD switchable, but count
+      // them anyway. This may erroneously count machines where there are
+      // independent AMD and Intel cards and the AMD isn't hooked up to
+      // anything, but that should be rare.
+      gpu_info->amd_switchable = !amd_is_primary;
     }
     found = true;
   } else {
@@ -326,7 +332,6 @@ CollectInfoResult CollectContextGraphicsInfo(GPUInfo* gpu_info) {
                         " ps_(\\d+)_(\\d+)",
                         &pixel_shader_major_version,
                         &pixel_shader_minor_version)) {
-    gpu_info->can_lose_context = direct3d_version == "9";
     gpu_info->vertex_shader_version =
         base::StringPrintf("%d.%d",
                            vertex_shader_major_version,
@@ -339,9 +344,8 @@ CollectInfoResult CollectContextGraphicsInfo(GPUInfo* gpu_info) {
     // ANGLE's EGL vendor strings are of the form:
     // Google, Inc. (adapter LUID: 0123456789ABCDEF)
     // The LUID is optional and identifies the GPU adapter ANGLE is using.
-    const char* egl_vendor = eglQueryString(
-        gfx::GLSurfaceEGL::GetHardwareDisplay(),
-        EGL_VENDOR);
+    const char* egl_vendor =
+        eglQueryString(gl::GLSurfaceEGL::GetHardwareDisplay(), EGL_VENDOR);
     RE2::PartialMatch(egl_vendor,
                       " \\(adapter LUID: ([0-9A-Fa-f]{16})\\)",
                       RE2::Hex(&gpu_info->adapter_luid));
@@ -361,7 +365,7 @@ CollectInfoResult CollectGpuID(uint32_t* vendor_id, uint32_t* device_id) {
   *vendor_id = 0;
   *device_id = 0;
 
-  // Taken from http://developer.nvidia.com/object/device_ids.html
+  // Taken from http://www.nvidia.com/object/device_ids.html
   DISPLAY_DEVICE dd;
   dd.cb = sizeof(DISPLAY_DEVICE);
   std::wstring id;
@@ -397,7 +401,7 @@ CollectInfoResult CollectBasicGraphicsInfo(GPUInfo* gpu_info) {
     UMA_HISTOGRAM_ENUMERATION("GPU.DisplayLinkInstallationStatus",
                               DISPLAY_LINK_NOT_INSTALLED,
                               DISPLAY_LINK_INSTALLATION_STATUS_MAX);
-  } else if (gpu_info->display_link_version.IsOlderThan("7.2")) {
+  } else if (gpu_info->display_link_version < base::Version("7.2")) {
     UMA_HISTOGRAM_ENUMERATION("GPU.DisplayLinkInstallationStatus",
                               DISPLAY_LINK_7_1_OR_EARLIER,
                               DISPLAY_LINK_INSTALLATION_STATUS_MAX);
@@ -407,7 +411,7 @@ CollectInfoResult CollectBasicGraphicsInfo(GPUInfo* gpu_info) {
                               DISPLAY_LINK_INSTALLATION_STATUS_MAX);
   }
 
-  // Taken from http://developer.nvidia.com/object/device_ids.html
+  // Taken from http://www.nvidia.com/object/device_ids.html
   DISPLAY_DEVICE dd;
   dd.cb = sizeof(DISPLAY_DEVICE);
   std::wstring id;
@@ -419,8 +423,11 @@ CollectInfoResult CollectBasicGraphicsInfo(GPUInfo* gpu_info) {
   }
 
   if (id.length() <= 20) {
-    gpu_info->basic_info_state = kCollectInfoNonFatalFailure;
-    return kCollectInfoNonFatalFailure;
+    // Check if it is the RDP mirror driver "RDPUDD Chained DD"
+    if (wcscmp(dd.DeviceString, L"RDPUDD Chained DD") != 0) {
+      gpu_info->basic_info_state = kCollectInfoNonFatalFailure;
+      return kCollectInfoNonFatalFailure;
+    }
   }
 
   DeviceIDToVendorAndDevice(id, &gpu_info->gpu.vendor_id,

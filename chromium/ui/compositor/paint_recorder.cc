@@ -7,22 +7,22 @@
 #include "cc/playback/display_item_list.h"
 #include "cc/playback/drawing_display_item.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/compositor/paint_cache.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/gfx/skia_util.h"
 
 namespace ui {
 
+// This class records a reference to the context, the canvas returned
+// by its recorder_, and the cache. Thus all 3 of these must remain
+// valid for the lifetime of this object.
 PaintRecorder::PaintRecorder(const PaintContext& context,
                              const gfx::Size& recording_size,
                              PaintCache* cache)
     : context_(context),
-      // The SkCanvas reference returned by beginRecording is shared with
-      // the recorder_ so no need to store a RefPtr to it on this class, we just
-      // store the gfx::Canvas.
-      canvas_(skia::SharePtr(context.recorder_->beginRecording(
-                                 gfx::RectToSkRect(gfx::Rect(recording_size))))
-                  .get(),
+      canvas_(context.recorder_->beginRecording(
+                  gfx::RectToSkRect(gfx::Rect(recording_size))),
               context.device_scale_factor_),
       cache_(cache),
       bounds_in_layer_(context.ToLayerSpaceBounds(recording_size)) {
@@ -42,9 +42,8 @@ PaintRecorder::~PaintRecorder() {
   context_.inside_paint_recorder_ = false;
 #endif
   const auto& item =
-      context_.list_->CreateAndAppendItem<cc::DrawingDisplayItem>(
-          bounds_in_layer_,
-          skia::AdoptRef(context_.recorder_->endRecordingAsPicture()));
+      context_.list_->CreateAndAppendDrawingItem<cc::DrawingDisplayItem>(
+          bounds_in_layer_, context_.recorder_->finishRecordingAsPicture());
   if (cache_)
     cache_->SetCache(item);
 }

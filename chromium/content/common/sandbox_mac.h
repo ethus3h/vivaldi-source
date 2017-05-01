@@ -18,14 +18,6 @@ namespace base {
 class FilePath;
 }
 
-#if __OBJC__
-@class NSArray;
-@class NSString;
-#else
-class NSArray;
-class NSString;
-#endif
-
 namespace content {
 
 // This class wraps the C-style sandbox APIs in a class to ensure proper
@@ -50,9 +42,6 @@ class CONTENT_EXPORT SandboxCompiler {
   bool CompileAndApplyProfile(std::string* error);
 
  private:
-  // Frees all of the system resources allocated for the sandbox.
-  void FreeSandboxResources(void* profile, void* params, char* error);
-
   // Storage of the key/value pairs of strings that are used in the sandbox
   // profile.
   std::map<std::string, std::string> params_map_;

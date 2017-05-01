@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chromeos/network/geolocation_handler.h"
+
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/shill_manager_client.h"
-#include "chromeos/network/geolocation_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -32,7 +35,7 @@ class GeolocationHandlerTest : public testing::Test {
     ASSERT_TRUE(manager_test_);
     geolocation_handler_.reset(new GeolocationHandler());
     geolocation_handler_->Init();
-    message_loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   void TearDown() override {
@@ -59,12 +62,12 @@ class GeolocationHandlerTest : public testing::Test {
     properties.SetStringWithoutPathExpansion(
         shill::kGeoSignalStrengthProperty, strength);
     manager_test_->AddGeoNetwork(shill::kTypeWifi, properties);
-    message_loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
  protected:
   base::MessageLoopForUI message_loop_;
-  scoped_ptr<GeolocationHandler> geolocation_handler_;
+  std::unique_ptr<GeolocationHandler> geolocation_handler_;
   ShillManagerClient::TestInterface* manager_test_;
   WifiAccessPointVector wifi_access_points_;
 
@@ -75,7 +78,7 @@ class GeolocationHandlerTest : public testing::Test {
 TEST_F(GeolocationHandlerTest, NoAccessPoints) {
   // Inititial call should return false.
   EXPECT_FALSE(GetWifiAccessPoints());
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   // Second call should return false since there are no devices.
   EXPECT_FALSE(GetWifiAccessPoints());
 }
@@ -83,10 +86,10 @@ TEST_F(GeolocationHandlerTest, NoAccessPoints) {
 TEST_F(GeolocationHandlerTest, OneAccessPoint) {
   // Add an acces point.
   AddAccessPoint(1);
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   // Inititial call should return false and request access points.
   EXPECT_FALSE(GetWifiAccessPoints());
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   // Second call should return true since we have an access point.
   EXPECT_TRUE(GetWifiAccessPoints());
   ASSERT_EQ(1u, wifi_access_points_.size());
@@ -99,10 +102,10 @@ TEST_F(GeolocationHandlerTest, MultipleAccessPoints) {
   AddAccessPoint(1);
   AddAccessPoint(2);
   AddAccessPoint(3);
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   // Inititial call should return false and request access points.
   EXPECT_FALSE(GetWifiAccessPoints());
-  message_loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   // Second call should return true since we have an access point.
   EXPECT_TRUE(GetWifiAccessPoints());
   ASSERT_EQ(3u, wifi_access_points_.size());

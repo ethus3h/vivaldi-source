@@ -38,47 +38,53 @@
 
 namespace blink {
 
-class SVGPath : public SVGPropertyBase {
-public:
-    typedef void TearOffType;
+class SVGPath final : public SVGPropertyBase {
+ public:
+  typedef void TearOffType;
 
-    static PassRefPtrWillBeRawPtr<SVGPath> create()
-    {
-        return adoptRefWillBeNoop(new SVGPath());
-    }
-    static PassRefPtrWillBeRawPtr<SVGPath> create(PassRefPtrWillBeRawPtr<CSSPathValue> pathValue)
-    {
-        return adoptRefWillBeNoop(new SVGPath(pathValue));
-    }
+  static SVGPath* create() { return new SVGPath(); }
+  static SVGPath* create(CSSPathValue* pathValue) {
+    return new SVGPath(pathValue);
+  }
 
-    ~SVGPath() override;
+  ~SVGPath() override;
 
-    const SVGPathByteStream& byteStream() const { return m_pathValue->byteStream(); }
-    CSSPathValue* pathValue() const { return m_pathValue.get(); }
+  const SVGPathByteStream& byteStream() const {
+    return m_pathValue->byteStream();
+  }
+  StylePath* stylePath() const { return m_pathValue->stylePath(); }
+  CSSPathValue* pathValue() const { return m_pathValue.get(); }
 
-    // SVGPropertyBase:
-    PassRefPtrWillBeRawPtr<SVGPath> clone() const;
-    PassRefPtrWillBeRawPtr<SVGPropertyBase> cloneForAnimation(const String&) const override;
-    String valueAsString() const override;
-    SVGParsingError setValueAsString(const String&);
+  // SVGPropertyBase:
+  SVGPath* clone() const;
+  SVGPropertyBase* cloneForAnimation(const String&) const override;
+  String valueAsString() const override;
+  SVGParsingError setValueAsString(const String&);
 
-    void add(PassRefPtrWillBeRawPtr<SVGPropertyBase>, SVGElement*) override;
-    void calculateAnimatedValue(SVGAnimationElement*, float percentage, unsigned repeatCount, PassRefPtrWillBeRawPtr<SVGPropertyBase> fromValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toValue, PassRefPtrWillBeRawPtr<SVGPropertyBase> toAtEndOfDurationValue, SVGElement*) override;
-    float calculateDistance(PassRefPtrWillBeRawPtr<SVGPropertyBase> to, SVGElement*) override;
+  void add(SVGPropertyBase*, SVGElement*) override;
+  void calculateAnimatedValue(SVGAnimationElement*,
+                              float percentage,
+                              unsigned repeatCount,
+                              SVGPropertyBase* fromValue,
+                              SVGPropertyBase* toValue,
+                              SVGPropertyBase* toAtEndOfDurationValue,
+                              SVGElement*) override;
+  float calculateDistance(SVGPropertyBase* to, SVGElement*) override;
 
-    static AnimatedPropertyType classType() { return AnimatedPath; }
+  static AnimatedPropertyType classType() { return AnimatedPath; }
+  AnimatedPropertyType type() const override { return classType(); }
 
-    DECLARE_VIRTUAL_TRACE();
+  DECLARE_VIRTUAL_TRACE();
 
-private:
-    SVGPath();
-    explicit SVGPath(PassRefPtrWillBeRawPtr<CSSPathValue>);
+ private:
+  SVGPath();
+  explicit SVGPath(CSSPathValue*);
 
-    RefPtrWillBeMember<CSSPathValue> m_pathValue;
+  Member<CSSPathValue> m_pathValue;
 };
 
 DEFINE_SVG_PROPERTY_TYPE_CASTS(SVGPath);
 
-} // namespace blink
+}  // namespace blink
 
 #endif

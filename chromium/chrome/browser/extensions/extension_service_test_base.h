@@ -7,16 +7,17 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 
 #include "base/at_exit.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -34,10 +35,13 @@ namespace content {
 class BrowserContext;
 }
 
+namespace sync_preferences {
+class TestingPrefServiceSyncable;
+}
+
 namespace extensions {
 
 class ExtensionRegistry;
-class ManagementPolicy;
 
 // A unittest infrastructure which creates an ExtensionService. Whenever
 // possible, use this instead of creating a browsertest.
@@ -51,13 +55,14 @@ class ExtensionServiceTestBase : public testing::Test {
     base::FilePath profile_path;
     base::FilePath pref_file;
     base::FilePath extensions_install_dir;
-    bool autoupdate_enabled;    // defaults to false.
-    bool is_first_run;          // defaults to true.
-    bool profile_is_supervised; // defaults to false.
+    bool autoupdate_enabled;     // defaults to false.
+    bool is_first_run;           // defaults to true.
+    bool profile_is_supervised;  // defaults to false.
 
     // Though you could use this constructor, you probably want to use
     // CreateDefaultInitParams(), and then make a change or two.
     ExtensionServiceInitParams();
+    ExtensionServiceInitParams(const ExtensionServiceInitParams& other);
   };
 
   // Public because parameterized test cases need it to be, or else the compiler
@@ -116,6 +121,7 @@ class ExtensionServiceTestBase : public testing::Test {
 
   content::BrowserContext* browser_context();
   Profile* profile();
+  sync_preferences::TestingPrefServiceSyncable* testing_pref_service();
   ExtensionService* service() { return service_; }
   ExtensionRegistry* registry() { return registry_; }
   const base::FilePath& extensions_install_dir() const {
@@ -133,7 +139,10 @@ class ExtensionServiceTestBase : public testing::Test {
   // after thread_bundle_ in the destruction order.
   base::ShadowingAtExitManager at_exit_manager_;
 
-  scoped_ptr<content::TestBrowserThreadBundle> thread_bundle_;
+  // Enable creation of WebContents without initializing a renderer.
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+
+  std::unique_ptr<content::TestBrowserThreadBundle> thread_bundle_;
 
  protected:
   // It's unfortunate that these are exposed to subclasses (rather than used
@@ -141,7 +150,7 @@ class ExtensionServiceTestBase : public testing::Test {
   // directly.
 
   // The associated testing profile.
-  scoped_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfile> profile_;
 
   // The ExtensionService, whose lifetime is managed by |profile|'s
   // ExtensionSystem.

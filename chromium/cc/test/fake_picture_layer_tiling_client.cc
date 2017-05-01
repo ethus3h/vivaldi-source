@@ -8,15 +8,15 @@
 
 #include <limits>
 
-#include "base/thread_task_runner_handle.h"
-#include "cc/test/fake_display_list_raster_source.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "cc/test/fake_raster_source.h"
 #include "cc/test/fake_tile_manager.h"
 
 namespace cc {
 
 FakePictureLayerTilingClient::FakePictureLayerTilingClient()
     : tile_manager_(new FakeTileManager(&tile_manager_client_)),
-      raster_source_(FakeDisplayListRasterSource::CreateInfiniteFilled()),
+      raster_source_(FakeRasterSource::CreateInfiniteFilled()),
       twin_set_(nullptr),
       twin_tiling_(nullptr),
       has_valid_tile_priorities_(true) {}
@@ -25,10 +25,12 @@ FakePictureLayerTilingClient::FakePictureLayerTilingClient(
     ResourceProvider* resource_provider)
     : resource_pool_(
           ResourcePool::Create(resource_provider,
-                               base::ThreadTaskRunnerHandle::Get().get())),
+                               base::ThreadTaskRunnerHandle::Get().get(),
+                               ResourceProvider::TEXTURE_HINT_IMMUTABLE,
+                               ResourcePool::kDefaultExpirationDelay)),
       tile_manager_(
           new FakeTileManager(&tile_manager_client_, resource_pool_.get())),
-      raster_source_(FakeDisplayListRasterSource::CreateInfiniteFilled()),
+      raster_source_(FakeRasterSource::CreateInfiniteFilled()),
       twin_set_(nullptr),
       twin_tiling_(nullptr),
       has_valid_tile_priorities_(true) {}
@@ -36,7 +38,7 @@ FakePictureLayerTilingClient::FakePictureLayerTilingClient(
 FakePictureLayerTilingClient::~FakePictureLayerTilingClient() {
 }
 
-ScopedTilePtr FakePictureLayerTilingClient::CreateTile(
+std::unique_ptr<Tile> FakePictureLayerTilingClient::CreateTile(
     const Tile::CreateInfo& info) {
   return tile_manager_->CreateTile(info, 0, 0, 0);
 }

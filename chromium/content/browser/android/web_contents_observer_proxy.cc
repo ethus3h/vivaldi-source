@@ -9,13 +9,19 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/optional.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/android/media_metadata_android.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/common/media_metadata.h"
 #include "jni/WebContentsObserverProxy_jni.h"
 
 using base::android::AttachCurrentThread;
+using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ConvertUTF16ToJavaString;
@@ -57,13 +63,13 @@ void WebContentsObserverProxy::WebContentsDestroyed() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   // The java side will destroy |this|
-  Java_WebContentsObserverProxy_destroy(env, obj.obj());
+  Java_WebContentsObserverProxy_destroy(env, obj);
 }
 
 void WebContentsObserverProxy::RenderViewReady() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_renderViewReady(env, obj.obj());
+  Java_WebContentsObserverProxy_renderViewReady(env, obj);
 }
 
 void WebContentsObserverProxy::RenderProcessGone(
@@ -72,8 +78,7 @@ void WebContentsObserverProxy::RenderProcessGone(
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   jboolean was_oom_protected =
       termination_status == base::TERMINATION_STATUS_OOM_PROTECTED;
-  Java_WebContentsObserverProxy_renderProcessGone(env, obj.obj(),
-                                                  was_oom_protected);
+  Java_WebContentsObserverProxy_renderProcessGone(env, obj, was_oom_protected);
 }
 
 void WebContentsObserverProxy::DidStartLoading() {
@@ -81,11 +86,10 @@ void WebContentsObserverProxy::DidStartLoading() {
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   ScopedJavaLocalRef<jstring> jstring_url(
       ConvertUTF8ToJavaString(env, web_contents()->GetVisibleURL().spec()));
-  if (auto entry = web_contents()->GetController().GetPendingEntry()) {
+  if (auto* entry = web_contents()->GetController().GetPendingEntry()) {
     base_url_of_last_started_data_url_ = entry->GetBaseURLForDataURL();
   }
-  Java_WebContentsObserverProxy_didStartLoading(env, obj.obj(),
-                                                jstring_url.obj());
+  Java_WebContentsObserverProxy_didStartLoading(env, obj, jstring_url);
 }
 
 void WebContentsObserverProxy::DidStopLoading() {
@@ -97,8 +101,7 @@ void WebContentsObserverProxy::DidStopLoading() {
   base_url_of_last_started_data_url_ = GURL::EmptyGURL();
   ScopedJavaLocalRef<jstring> jstring_url(ConvertUTF8ToJavaString(
       env, url_string));
-  Java_WebContentsObserverProxy_didStopLoading(env, obj.obj(),
-                                               jstring_url.obj());
+  Java_WebContentsObserverProxy_didStopLoading(env, obj, jstring_url);
 }
 
 void WebContentsObserverProxy::DidFailProvisionalLoad(
@@ -144,8 +147,9 @@ void WebContentsObserverProxy::DidNavigateMainFrame(
   // that would also be valid for a fragment navigation.
   bool is_fragment_navigation =
       urls_same_ignoring_fragment && details.is_in_page;
+
   Java_WebContentsObserverProxy_didNavigateMainFrame(
-      env, obj.obj(), jstring_url.obj(), jstring_base_url.obj(),
+      env, obj, jstring_url, jstring_base_url,
       details.is_navigation_to_different_page(), is_fragment_navigation,
       details.http_status_code);
 }
@@ -164,21 +168,19 @@ void WebContentsObserverProxy::DidNavigateAnyFrame(
       params.transition, ui::PAGE_TRANSITION_RELOAD);
 
   Java_WebContentsObserverProxy_didNavigateAnyFrame(
-      env, obj.obj(), jstring_url.obj(), jstring_base_url.obj(),
-      jboolean_is_reload);
+      env, obj, jstring_url, jstring_base_url, jboolean_is_reload);
 }
 
 void WebContentsObserverProxy::DocumentAvailableInMainFrame() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_documentAvailableInMainFrame(env, obj.obj());
+  Java_WebContentsObserverProxy_documentAvailableInMainFrame(env, obj);
 }
 
 void WebContentsObserverProxy::DidStartProvisionalLoadForFrame(
     RenderFrameHost* render_frame_host,
     const GURL& validated_url,
-    bool is_error_page,
-    bool is_iframe_srcdoc) {
+    bool is_error_page) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   ScopedJavaLocalRef<jstring> jstring_url(
@@ -186,12 +188,11 @@ void WebContentsObserverProxy::DidStartProvisionalLoadForFrame(
   // TODO(dcheng): Does Java really need the parent frame ID? It doesn't appear
   // to be used at all, and it just adds complexity here.
   Java_WebContentsObserverProxy_didStartProvisionalLoadForFrame(
-      env, obj.obj(), render_frame_host->GetRoutingID(),
+      env, obj, render_frame_host->GetRoutingID(),
       render_frame_host->GetParent()
           ? render_frame_host->GetParent()->GetRoutingID()
           : -1,
-      !render_frame_host->GetParent(), jstring_url.obj(), is_error_page,
-      is_iframe_srcdoc);
+      !render_frame_host->GetParent(), jstring_url, is_error_page);
 }
 
 void WebContentsObserverProxy::DidCommitProvisionalLoadForFrame(
@@ -203,8 +204,35 @@ void WebContentsObserverProxy::DidCommitProvisionalLoadForFrame(
   ScopedJavaLocalRef<jstring> jstring_url(
       ConvertUTF8ToJavaString(env, url.spec()));
   Java_WebContentsObserverProxy_didCommitProvisionalLoadForFrame(
-      env, obj.obj(), render_frame_host->GetRoutingID(),
-      !render_frame_host->GetParent(), jstring_url.obj(), transition_type);
+      env, obj, render_frame_host->GetRoutingID(),
+      !render_frame_host->GetParent(), jstring_url, transition_type);
+}
+
+void WebContentsObserverProxy::DidStartNavigation(
+    NavigationHandle* navigation_handle) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj(java_observer_);
+  ScopedJavaLocalRef<jstring> jstring_url(
+      ConvertUTF8ToJavaString(env, navigation_handle->GetURL().spec()));
+  Java_WebContentsObserverProxy_didStartNavigation(
+      env, obj, jstring_url, navigation_handle->IsInMainFrame(),
+      navigation_handle->IsErrorPage());
+}
+
+void WebContentsObserverProxy::DidFinishNavigation(
+    NavigationHandle* navigation_handle) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj(java_observer_);
+  ScopedJavaLocalRef<jstring> jstring_url(
+      ConvertUTF8ToJavaString(env, navigation_handle->GetURL().spec()));
+
+  Java_WebContentsObserverProxy_didFinishNavigation(
+      env, obj, jstring_url, navigation_handle->IsInMainFrame(),
+      navigation_handle->IsErrorPage(), navigation_handle->HasCommitted(),
+      navigation_handle->IsSamePage(),
+      navigation_handle->HasCommitted() ? navigation_handle->GetPageTransition()
+                                        : -1,
+      navigation_handle->GetNetErrorCode());
 }
 
 void WebContentsObserverProxy::DidFinishLoad(RenderFrameHost* render_frame_host,
@@ -218,7 +246,7 @@ void WebContentsObserverProxy::DidFinishLoad(RenderFrameHost* render_frame_host,
   ScopedJavaLocalRef<jstring> jstring_url(
       ConvertUTF8ToJavaString(env, url_string));
   Java_WebContentsObserverProxy_didFinishLoad(
-      env, obj.obj(), render_frame_host->GetRoutingID(), jstring_url.obj(),
+      env, obj, render_frame_host->GetRoutingID(), jstring_url,
       !render_frame_host->GetParent());
 }
 
@@ -227,7 +255,7 @@ void WebContentsObserverProxy::DocumentLoadedInFrame(
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   Java_WebContentsObserverProxy_documentLoadedInFrame(
-      env, obj.obj(), render_frame_host->GetRoutingID(),
+      env, obj, render_frame_host->GetRoutingID(),
       !render_frame_host->GetParent());
 }
 
@@ -235,25 +263,25 @@ void WebContentsObserverProxy::NavigationEntryCommitted(
     const LoadCommittedDetails& load_details) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_navigationEntryCommitted(env, obj.obj());
+  Java_WebContentsObserverProxy_navigationEntryCommitted(env, obj);
 }
 
 void WebContentsObserverProxy::DidAttachInterstitialPage() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_didAttachInterstitialPage(env, obj.obj());
+  Java_WebContentsObserverProxy_didAttachInterstitialPage(env, obj);
 }
 
 void WebContentsObserverProxy::DidDetachInterstitialPage() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_didDetachInterstitialPage(env, obj.obj());
+  Java_WebContentsObserverProxy_didDetachInterstitialPage(env, obj);
 }
 
 void WebContentsObserverProxy::DidChangeThemeColor(SkColor color) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_didChangeThemeColor(env, obj.obj(), color);
+  Java_WebContentsObserverProxy_didChangeThemeColor(env, obj, color);
 }
 
 void WebContentsObserverProxy::DidFailLoadInternal(
@@ -271,37 +299,48 @@ void WebContentsObserverProxy::DidFailLoadInternal(
       ConvertUTF8ToJavaString(env, url.spec()));
 
   Java_WebContentsObserverProxy_didFailLoad(
-      env, obj.obj(), is_provisional_load, is_main_frame, error_code,
-      jstring_error_description.obj(), jstring_url.obj(),
-      was_ignored_by_handler);
+      env, obj, is_provisional_load, is_main_frame, error_code,
+      jstring_error_description, jstring_url, was_ignored_by_handler);
 }
 
 void WebContentsObserverProxy::DidFirstVisuallyNonEmptyPaint() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
-  Java_WebContentsObserverProxy_didFirstVisuallyNonEmptyPaint(env, obj.obj());
+  Java_WebContentsObserverProxy_didFirstVisuallyNonEmptyPaint(env, obj);
+}
+
+void WebContentsObserverProxy::WasShown() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj(java_observer_);
+  Java_WebContentsObserverProxy_wasShown(env, obj);
+}
+
+void WebContentsObserverProxy::WasHidden() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj(java_observer_);
+  Java_WebContentsObserverProxy_wasHidden(env, obj);
+}
+
+void WebContentsObserverProxy::TitleWasSet(NavigationEntry* entry,
+                                           bool explicit_set) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj(java_observer_);
+  ScopedJavaLocalRef<jstring> jstring_title = ConvertUTF8ToJavaString(
+      env,
+      base::UTF16ToUTF8(web_contents()->GetTitle()));
+  Java_WebContentsObserverProxy_titleWasSet(env, obj, jstring_title);
 }
 
 void WebContentsObserverProxy::DidStartNavigationToPendingEntry(
     const GURL& url,
-    NavigationController::ReloadType reload_type) {
+    ReloadType reload_type) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj(java_observer_);
   ScopedJavaLocalRef<jstring> jstring_url(
       ConvertUTF8ToJavaString(env, url.spec()));
 
-  Java_WebContentsObserverProxy_didStartNavigationToPendingEntry(
-      env, obj.obj(), jstring_url.obj());
-}
-
-void WebContentsObserverProxy::MediaSessionStateChanged(bool is_controllable,
-                                                        bool is_suspended) {
-  JNIEnv* env = AttachCurrentThread();
-
-  ScopedJavaLocalRef<jobject> obj(java_observer_);
-
-  Java_WebContentsObserverProxy_mediaSessionStateChanged(
-      env, obj.obj(), is_controllable, is_suspended);
+  Java_WebContentsObserverProxy_didStartNavigationToPendingEntry(env, obj,
+                                                                 jstring_url);
 }
 
 void WebContentsObserverProxy::SetToBaseURLForDataURLIfNeeded(

@@ -21,14 +21,27 @@ WebContents* NavigationHandle::GetWebContents() {
 }
 
 // static
-scoped_ptr<NavigationHandle> NavigationHandle::CreateNavigationHandleForTesting(
+std::unique_ptr<NavigationHandle>
+NavigationHandle::CreateNavigationHandleForTesting(
     const GURL& url,
-    RenderFrameHost* render_frame_host) {
-  scoped_ptr<NavigationHandleImpl> handle_impl = NavigationHandleImpl::Create(
-      url,
-      static_cast<RenderFrameHostImpl*>(render_frame_host)->frame_tree_node(),
-      base::TimeTicks::Now());
-  return scoped_ptr<NavigationHandle>(std::move(handle_impl));
+    RenderFrameHost* render_frame_host,
+    bool committed,
+    net::Error error) {
+  std::unique_ptr<NavigationHandleImpl> handle_impl =
+      NavigationHandleImpl::Create(
+          url, static_cast<RenderFrameHostImpl*>(render_frame_host)
+                   ->frame_tree_node(),
+          true,   // is_renderer_initiated
+          false,  // is_same_page
+          base::TimeTicks::Now(), 0,
+          false);  // started_from_context_menu
+  handle_impl->set_render_frame_host(
+      static_cast<RenderFrameHostImpl*>(render_frame_host));
+  if (error != net::OK)
+    handle_impl->set_net_error_code(error);
+  if (committed)
+    handle_impl->CallDidCommitNavigationForTesting(url);
+  return std::unique_ptr<NavigationHandle>(std::move(handle_impl));
 }
 
 }  // namespace content

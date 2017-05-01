@@ -14,7 +14,7 @@ import org.chromium.base.annotations.JNINamespace;
  * Wrapper class for the underlying platform's SurfaceTexture in order to
  * provide a stable JNI API.
  */
-@JNINamespace("gfx")
+@JNINamespace("gl")
 class SurfaceTexturePlatformWrapper {
 
     private static final String TAG = "SurfaceTexturePlatformWrapper";
@@ -59,5 +59,15 @@ class SurfaceTexturePlatformWrapper {
     @CalledByNative
     private static void detachFromGLContext(SurfaceTexture surfaceTexture) {
         surfaceTexture.detachFromGLContext();
+    }
+
+    @CalledByNative
+    private static void release(SurfaceTexture surfaceTexture) {
+        surfaceTexture.release();
+    }
+
+    @CalledByNative
+    private static void setDefaultBufferSize(SurfaceTexture surfaceTexture, int width, int height) {
+        surfaceTexture.setDefaultBufferSize(width, height);
     }
 }

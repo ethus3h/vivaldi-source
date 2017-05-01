@@ -6,12 +6,11 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/login/login_prompt.h"
+#include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -22,9 +21,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test_utils.h"
-#include "net/base/test_data_directory.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/spawned_test_server/spawned_test_server.h"
+#include "net/test/test_data_directory.h"
 
 namespace {
 
@@ -98,7 +97,6 @@ class ProxyBrowserTest : public InProcessBrowserTest {
   net::SpawnedTestServer proxy_server_;
 
  private:
-
   DISALLOW_COPY_AND_ASSIGN(ProxyBrowserTest);
 };
 
@@ -251,7 +249,7 @@ IN_PROC_BROWSER_TEST_F(DataProxyScriptBrowserTest, Verify) {
   VerifyProxyScript(browser());
 }
 
-// Fetch PAC script via a data: URL and run out-of-process using Mojo.
+// Fetch PAC script via a data: URL.
 class OutOfProcessProxyResolverBrowserTest : public InProcessBrowserTest {
  public:
   OutOfProcessProxyResolverBrowserTest() {}
@@ -266,7 +264,6 @@ class OutOfProcessProxyResolverBrowserTest : public InProcessBrowserTest {
         &contents));
     command_line->AppendSwitchASCII(
         switches::kProxyPacUrl, "data:," + contents);
-    command_line->AppendSwitch(switches::kV8PacMojoOutOfProcess);
   }
 
  private:

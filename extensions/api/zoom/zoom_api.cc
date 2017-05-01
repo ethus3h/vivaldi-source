@@ -66,17 +66,17 @@ void ZoomEventRouter::DefaultZoomChanged() {
   double zoom_level = profile_->GetZoomLevelPrefs()->GetDefaultZoomLevelPref();
   double zoom_factor = content::ZoomLevelToZoomFactor(zoom_level);
 
-  scoped_ptr<base::ListValue> args =
+  std::unique_ptr<base::ListValue> args =
     vivaldi::zoom::OnDefaultZoomChanged::Create(zoom_factor);
   DispatchEvent(vivaldi::zoom::OnDefaultZoomChanged::kEventName, std::move(args));
 }
 
 // Helper to actually dispatch an event to extension listeners.
 void ZoomEventRouter::DispatchEvent(const std::string &event_name,
-  scoped_ptr<base::ListValue> event_args) {
+  std::unique_ptr<base::ListValue> event_args) {
   EventRouter* event_router = EventRouter::Get(profile_);
   if (event_router) {
-    event_router->BroadcastEvent(make_scoped_ptr(
+    event_router->BroadcastEvent(base::WrapUnique(
       new extensions::Event(extensions::events::VIVALDI_EXTENSION_EVENT,
       event_name, std::move(event_args))));
   }
@@ -95,10 +95,7 @@ ZoomSetVivaldiUIZoomFunction::~ZoomSetVivaldiUIZoomFunction() {
 }
 
 bool ZoomSetVivaldiUIZoomFunction::RunAsync() {
-  Browser* browser = chrome::FindLastActiveWithHostDesktopType(
-    chrome::GetActiveDesktop());
-
-  scoped_ptr<vivaldi::zoom::SetVivaldiUIZoom::Params> params(
+  std::unique_ptr<vivaldi::zoom::SetVivaldiUIZoom::Params> params(
     vivaldi::zoom::SetVivaldiUIZoom::Params::Create(*args_));
 
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -106,8 +103,8 @@ bool ZoomSetVivaldiUIZoomFunction::RunAsync() {
   WebContents* web_contents =
     dispatcher()->GetAssociatedWebContents();
 
-  ui_zoom::ZoomController* zoom_controller =
-    ui_zoom::ZoomController::FromWebContents(web_contents);
+  zoom::ZoomController* zoom_controller =
+    zoom::ZoomController::FromWebContents(web_contents);
   DCHECK(zoom_controller);
 
   double zoom_level = content::ZoomFactorToZoomLevel(params->zoom_factor);
@@ -126,9 +123,6 @@ ZoomGetVivaldiUIZoomFunction::~ZoomGetVivaldiUIZoomFunction() {
 }
 
 bool ZoomGetVivaldiUIZoomFunction::RunAsync() {
-  Browser* browser = chrome::FindLastActiveWithHostDesktopType(
-    chrome::GetActiveDesktop());
-
   WebContents* web_contents =
     dispatcher()->GetAssociatedWebContents();
 
@@ -138,8 +132,8 @@ bool ZoomGetVivaldiUIZoomFunction::RunAsync() {
     return true;
   }
 
-  ui_zoom::ZoomController* zoom_controller =
-    ui_zoom::ZoomController::FromWebContents(web_contents);
+  zoom::ZoomController* zoom_controller =
+    zoom::ZoomController::FromWebContents(web_contents);
   DCHECK(zoom_controller);
 
   double zoom_Level = zoom_controller->GetZoomLevel();
@@ -158,13 +152,14 @@ ZoomSetDefaultZoomFunction::~ZoomSetDefaultZoomFunction() {
 }
 
 bool ZoomSetDefaultZoomFunction::RunAsync() {
-  scoped_ptr<vivaldi::zoom::SetDefaultZoom::Params> params(
+  std::unique_ptr<vivaldi::zoom::SetDefaultZoom::Params> params(
     vivaldi::zoom::SetDefaultZoom::Params::Create(*args_));
 
   EXTENSION_FUNCTION_VALIDATE(params.get());
   Profile* profile = GetProfile();
   double zoom_factor = content::ZoomFactorToZoomLevel(params->zoom_factor);
   profile->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(zoom_factor);
+  SendResponse(true);
   return true;
 }
 

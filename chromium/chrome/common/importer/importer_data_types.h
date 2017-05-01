@@ -33,7 +33,8 @@ enum ImportItem {
   AUTOFILL_FORM_DATA = 1 << 6,
   NOTES              = 1 << 7,
   MASTER_PASSWORD    = 1 << 8, // Requires a master password
-  ALL                = (1 << 8) - 1  // All the bits should be 1, hence the -1.
+  SPEED_DIAL         = 1 << 9, // Speed Dials
+  ALL                = (1 << 9) - 1  // All the bits should be 1, hence the -1.
 };
 
 // Contains information needed for importing bookmarks/search engine urls, etc.
@@ -45,6 +46,7 @@ struct ChromeProfileInfo {
 // Information about a profile needed by an importer to do import work.
 struct SourceProfile {
   SourceProfile();
+  SourceProfile(const SourceProfile& other);
   ~SourceProfile();
 
   base::string16 importer_name;
@@ -71,16 +73,15 @@ struct SearchEngineInfo {
   base::string16 display_name;
 };
 
-
-
-#if defined(OS_WIN)
 // Contains the information read from the IE7/IE8 Storage2 key in the registry.
 struct ImporterIE7PasswordInfo {
   ImporterIE7PasswordInfo();
+  ImporterIE7PasswordInfo(const ImporterIE7PasswordInfo& other);
   ~ImporterIE7PasswordInfo();
+  ImporterIE7PasswordInfo& operator=(const ImporterIE7PasswordInfo& other);
 
   // Hash of the url.
-  std::wstring url_hash;
+  base::string16 url_hash;
 
   // Encrypted data containing the username, password and some more
   // undocumented fields.
@@ -89,7 +90,6 @@ struct ImporterIE7PasswordInfo {
   // When the login was imported.
   base::Time date_created;
 };
-#endif
 
 // Mapped to history::VisitSource after import in the browser.
 enum VisitSource {

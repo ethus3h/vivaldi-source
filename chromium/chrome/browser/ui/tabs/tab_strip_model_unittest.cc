@@ -7,11 +7,11 @@
 #include <stddef.h>
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -149,7 +149,8 @@ class TabBlockedStateTestBrowser
 
  private:
   // TabStripModelObserver
-  void TabInsertedAt(WebContents* contents,
+  void TabInsertedAt(TabStripModel* tab_strip_model,
+                     WebContents* contents,
                      int index,
                      bool foreground) override {
     web_modal::WebContentsModalDialogManager* manager =
@@ -347,7 +348,8 @@ class MockTabStripModelObserver : public TabStripModelObserver {
   }
 
   // TabStripModelObserver implementation:
-  void TabInsertedAt(WebContents* contents,
+  void TabInsertedAt(TabStripModel* tab_strip_model,
+                     WebContents* contents,
                      int index,
                      bool foreground) override {
     empty_ = false;
@@ -401,7 +403,9 @@ class MockTabStripModelObserver : public TabStripModelObserver {
     s.src_contents = old_contents;
     states_.push_back(s);
   }
-  void TabPinnedStateChanged(WebContents* contents, int index) override {
+  void TabPinnedStateChanged(TabStripModel* tab_strip_model,
+                             WebContents* contents,
+                             int index) override {
     states_.push_back(State(contents, index, PINNED));
   }
   void TabStripEmpty() override { empty_ = true; }
@@ -2477,7 +2481,8 @@ TEST_F(TabStripModelTest, TabBlockedState) {
           reinterpret_cast<gfx::NativeWindow>(0), modal_dialog_manager);
   modal_dialog_manager->ShowDialogWithManager(
       reinterpret_cast<gfx::NativeWindow>(0),
-      scoped_ptr<web_modal::SingleWebContentsDialogManager>(native_manager));
+      std::unique_ptr<web_modal::SingleWebContentsDialogManager>(
+          native_manager));
   EXPECT_TRUE(strip_src.IsTabBlocked(1));
 
   // Detach the tab.

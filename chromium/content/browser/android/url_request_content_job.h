@@ -24,10 +24,6 @@ namespace base {
 class TaskRunner;
 }
 
-namespace file_util {
-struct FileInfo;
-}
-
 namespace net {
 class FileStream;
 }
@@ -88,7 +84,7 @@ class CONTENT_EXPORT URLRequestContentJob : public net::URLRequestJob {
   // The full path of the content URI.
   base::FilePath content_path_;
 
-  scoped_ptr<net::FileStream> stream_;
+  std::unique_ptr<net::FileStream> stream_;
   ContentMetaInfo meta_info_;
   const scoped_refptr<base::TaskRunner> content_task_runner_;
 

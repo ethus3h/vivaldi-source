@@ -13,11 +13,9 @@
 
 #include "base/macros.h"
 #include "chrome/browser/media/router/issues_observer.h"
-#include "chrome/browser/media/router/media_router.mojom.h"
-#include "chrome/browser/media/router/media_router_mojo_impl.h"
 #include "chrome/browser/media/router/media_routes_observer.h"
 #include "chrome/browser/media/router/media_sinks_observer.h"
-#include "extensions/browser/event_page_tracker.h"
+#include "content/public/browser/presentation_service_delegate.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace media_router {
@@ -41,38 +39,14 @@ MATCHER_P(SequenceEquals, other, "") {
   return true;
 }
 
-// Matcher for checking all fields in Issue objects except the ID.
-MATCHER_P(EqualsIssue, other, "") {
-  if (arg.title() != other.title())
-    return false;
+// Matcher for IssueInfo title.
+MATCHER_P(IssueTitleEquals, title, "") {
+  return arg.title == title;
+}
 
-  if (arg.message() != other.message())
-    return false;
-
-  if (!arg.default_action().Equals(other.default_action()))
-    return false;
-
-  if (arg.secondary_actions().size() != other.secondary_actions().size())
-    return false;
-
-  for (size_t i = 0; i < arg.secondary_actions().size(); ++i) {
-    if (!arg.secondary_actions()[i].Equals(other.secondary_actions()[i]))
-      return false;
-  }
-
-  if (arg.route_id() != other.route_id())
-    return false;
-
-  if (arg.severity() != other.severity())
-    return false;
-
-  if (arg.is_blocking() != other.is_blocking())
-    return false;
-
-  if (arg.help_url() != other.help_url())
-    return false;
-
-  return true;
+MATCHER_P(StateChangeInfoEquals, other, "") {
+  return arg.state == other.state && arg.close_reason == other.close_reason &&
+         arg.message == other.message;
 }
 
 class MockIssuesObserver : public IssuesObserver {
@@ -80,69 +54,15 @@ class MockIssuesObserver : public IssuesObserver {
   explicit MockIssuesObserver(MediaRouter* router);
   ~MockIssuesObserver() override;
 
-  MOCK_METHOD1(OnIssueUpdated, void(const Issue* issue));
-};
-
-class MockMediaRouteProvider : public interfaces::MediaRouteProvider {
- public:
-  MockMediaRouteProvider();
-  ~MockMediaRouteProvider() override;
-
-  MOCK_METHOD6(CreateRoute,
-               void(const mojo::String& source_urn,
-                    const mojo::String& sink_id,
-                    const mojo::String& presentation_id,
-                    const mojo::String& origin,
-                    int tab_id,
-                    const CreateRouteCallback& callback));
-  MOCK_METHOD5(JoinRoute,
-               void(const mojo::String& source_urn,
-                    const mojo::String& presentation_id,
-                    const mojo::String& origin,
-                    int tab_id,
-                    const JoinRouteCallback& callback));
-  MOCK_METHOD6(ConnectRouteByRouteId,
-               void(const mojo::String& source_urn,
-                    const mojo::String& route_id,
-                    const mojo::String& presentation_id,
-                    const mojo::String& origin,
-                    int tab_id,
-                    const JoinRouteCallback& callback));
-  MOCK_METHOD1(DetachRoute, void(const mojo::String& route_id));
-  MOCK_METHOD1(TerminateRoute, void(const mojo::String& route_id));
-  MOCK_METHOD1(StartObservingMediaSinks, void(const mojo::String& source));
-  MOCK_METHOD1(StopObservingMediaSinks, void(const mojo::String& source));
-  MOCK_METHOD3(SendRouteMessage,
-               void(const mojo::String& media_route_id,
-                    const mojo::String& message,
-                    const SendRouteMessageCallback& callback));
-  void SendRouteBinaryMessage(
-      const mojo::String& media_route_id,
-      mojo::Array<uint8_t> data,
-      const SendRouteMessageCallback& callback) override {
-    SendRouteBinaryMessageInternal(media_route_id, data.storage(), callback);
-  }
-  MOCK_METHOD3(SendRouteBinaryMessageInternal,
-               void(const mojo::String& media_route_id,
-                    const std::vector<uint8_t>& data,
-                    const SendRouteMessageCallback& callback));
-  MOCK_METHOD2(ListenForRouteMessages,
-               void(const mojo::String& route_id,
-                    const ListenForRouteMessagesCallback& callback));
-  MOCK_METHOD1(StopListeningForRouteMessages,
-               void(const mojo::String& route_id));
-  MOCK_METHOD1(OnPresentationSessionDetached,
-               void(const mojo::String& route_id));
-  MOCK_METHOD1(StartObservingMediaRoutes, void(const mojo::String& source));
-  MOCK_METHOD1(StopObservingMediaRoutes, void(const mojo::String& source));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockMediaRouteProvider);
+  MOCK_METHOD1(OnIssue, void(const Issue& issue));
+  MOCK_METHOD0(OnIssuesCleared, void());
 };
 
 class MockMediaSinksObserver : public MediaSinksObserver {
  public:
-  MockMediaSinksObserver(MediaRouter* router, const MediaSource& source);
+  MockMediaSinksObserver(MediaRouter* router,
+                         const MediaSource& source,
+                         const GURL& origin);
   ~MockMediaSinksObserver() override;
 
   MOCK_METHOD1(OnSinksReceived, void(const std::vector<MediaSink>& sinks));
@@ -158,22 +78,12 @@ class MockMediaRoutesObserver : public MediaRoutesObserver {
       const std::vector<MediaRoute::Id>& joinable_route_ids));
 };
 
-class MockEventPageTracker : public extensions::EventPageTracker {
- public:
-  MockEventPageTracker();
-  ~MockEventPageTracker();
-
-  MOCK_METHOD1(IsEventPageSuspended, bool(const std::string& extension_id));
-  MOCK_METHOD2(WakeEventPage,
-               bool(const std::string& extension_id,
-                    const base::Callback<void(bool)>& callback));
-};
-
 class MockPresentationConnectionStateChangedCallback {
  public:
   MockPresentationConnectionStateChangedCallback();
   ~MockPresentationConnectionStateChangedCallback();
-  MOCK_METHOD1(Run, void(content::PresentationConnectionState));
+  MOCK_METHOD1(Run,
+               void(const content::PresentationConnectionStateChangeInfo&));
 };
 
 }  // namespace media_router

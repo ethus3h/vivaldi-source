@@ -15,6 +15,7 @@
 #include "base/logging.h"
 #include "base/mac/mach_logging.h"
 #include "base/mac/scoped_mach_port.h"
+#include "base/memory/ptr_util.h"
 #include "base/sys_info.h"
 
 #if !defined(TASK_POWER_INFO)
@@ -79,10 +80,10 @@ bool IsAddressInSharedRegion(mach_vm_address_t addr, cpu_type_t type) {
 
 }  // namespace
 
-SystemMemoryInfoKB::SystemMemoryInfoKB() {
-  total = 0;
-  free = 0;
-}
+SystemMemoryInfoKB::SystemMemoryInfoKB() : total(0), free(0) {}
+
+SystemMemoryInfoKB::SystemMemoryInfoKB(const SystemMemoryInfoKB& other) =
+    default;
 
 // Getting a mach task from a pid for another process requires permissions in
 // general, so there doesn't really seem to be a way to do these (and spinning
@@ -91,10 +92,10 @@ SystemMemoryInfoKB::SystemMemoryInfoKB() {
 // otherwise return 0.
 
 // static
-ProcessMetrics* ProcessMetrics::CreateProcessMetrics(
+std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
     ProcessHandle process,
     PortProvider* port_provider) {
-  return new ProcessMetrics(process, port_provider);
+  return WrapUnique(new ProcessMetrics(process, port_provider));
 }
 
 size_t ProcessMetrics::GetPagefileUsage() const {
@@ -142,7 +143,7 @@ bool ProcessMetrics::GetMemoryBytes(size_t* private_bytes,
 
   // The same region can be referenced multiple times. To avoid double counting
   // we need to keep track of which regions we've already counted.
-  base::hash_set<int> seen_objects;
+  hash_set<int> seen_objects;
 
   // We iterate through each VM region in the task's address map. For shared
   // memory we add up all the pages that are marked as shared. Like libtop we

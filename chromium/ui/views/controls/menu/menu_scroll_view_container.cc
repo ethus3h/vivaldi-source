@@ -5,9 +5,10 @@
 #include "ui/views/controls/menu/menu_scroll_view_container.h"
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "ui/accessibility/ax_view_state.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/border.h"
@@ -76,7 +77,6 @@ class MenuScrollButton : public View {
     // The background.
     gfx::Rect item_bounds(0, 0, width(), height());
     NativeTheme::ExtraParams extra;
-    extra.menu_item.is_selected = false;
     GetNativeTheme()->Paint(canvas->sk_canvas(),
                             NativeTheme::kMenuItemBackground,
                             NativeTheme::kNormal, item_bounds, extra);
@@ -256,16 +256,10 @@ void MenuScrollViewContainer::OnPaintBackground(gfx::Canvas* canvas) {
       NativeTheme::kMenuPopupBackground, NativeTheme::kNormal, bounds, extra);
 }
 
-void MenuScrollViewContainer::GetAccessibleState(
-    ui::AXViewState* state) {
+void MenuScrollViewContainer::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   // Get the name from the submenu view.
-  content_view_->GetAccessibleState(state);
-
-  // Now change the role.
-  state->role = ui::AX_ROLE_MENU_BAR;
-  // Some AT (like NVDA) will not process focus events on menu item children
-  // unless a parent claims to be focused.
-  state->AddStateFlag(ui::AX_STATE_FOCUSED);
+  content_view_->GetAccessibleNodeData(node_data);
+  node_data->role = ui::AX_ROLE_MENU_BAR;
 }
 
 void MenuScrollViewContainer::OnBoundsChanged(
@@ -286,21 +280,22 @@ void MenuScrollViewContainer::CreateDefaultBorder() {
                     ? kBorderPaddingDueToRoundedCorners
                     : 0;
 
-  int top = menu_config.menu_vertical_border_size + padding;
-  int left = menu_config.menu_horizontal_border_size + padding;
-  int bottom = menu_config.menu_vertical_border_size + padding;
-  int right = menu_config.menu_horizontal_border_size + padding;
+  const int vertical_inset = menu_config.menu_vertical_border_size + padding;
+  const int horizontal_inset =
+      menu_config.menu_horizontal_border_size + padding;
 
   if (menu_config.use_outer_border) {
     SkColor color = GetNativeTheme()
                         ? GetNativeTheme()->GetSystemColor(
                               ui::NativeTheme::kColorId_MenuBorderColor)
                         : gfx::kPlaceholderColor;
-    SetBorder(views::Border::CreateBorderPainter(
-        new views::RoundRectPainter(color, menu_config.corner_radius),
-        gfx::Insets(top, left, bottom, right)));
+    SetBorder(views::CreateBorderPainter(
+        base::MakeUnique<views::RoundRectPainter>(color,
+                                                  menu_config.corner_radius),
+        gfx::Insets(vertical_inset, horizontal_inset)));
   } else {
-    SetBorder(Border::CreateEmptyBorder(top, left, bottom, right));
+    SetBorder(CreateEmptyBorder(vertical_inset, horizontal_inset,
+                                vertical_inset, horizontal_inset));
   }
 }
 
@@ -308,7 +303,7 @@ void MenuScrollViewContainer::CreateBubbleBorder() {
   bubble_border_ = new BubbleBorder(arrow_,
                                     BubbleBorder::SMALL_SHADOW,
                                     SK_ColorWHITE);
-  SetBorder(scoped_ptr<Border>(bubble_border_));
+  SetBorder(std::unique_ptr<Border>(bubble_border_));
   set_background(new BubbleBackground(bubble_border_));
 }
 

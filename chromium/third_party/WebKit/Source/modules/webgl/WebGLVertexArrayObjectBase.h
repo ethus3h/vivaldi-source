@@ -5,6 +5,7 @@
 #ifndef WebGLVertexArrayObjectBase_h
 #define WebGLVertexArrayObjectBase_h
 
+#include "bindings/core/v8/TraceWrapperMember.h"
 #include "modules/webgl/WebGLBuffer.h"
 #include "modules/webgl/WebGLContextObject.h"
 #include "platform/heap/Handle.h"
@@ -12,47 +13,61 @@
 namespace blink {
 
 class WebGLVertexArrayObjectBase : public WebGLContextObject {
-public:
-    enum VaoType {
-        VaoTypeDefault,
-        VaoTypeUser,
-    };
+ public:
+  enum VaoType {
+    VaoTypeDefault,
+    VaoTypeUser,
+  };
 
-    ~WebGLVertexArrayObjectBase() override;
+  ~WebGLVertexArrayObjectBase() override;
 
-    Platform3DObject object() const { return m_object; }
+  GLuint object() const { return m_object; }
 
-    bool isDefaultObject() const { return m_type == VaoTypeDefault; }
+  bool isDefaultObject() const { return m_type == VaoTypeDefault; }
 
-    bool hasEverBeenBound() const { return object() && m_hasEverBeenBound; }
-    void setHasEverBeenBound() { m_hasEverBeenBound = true; }
+  bool hasEverBeenBound() const { return object() && m_hasEverBeenBound; }
+  void setHasEverBeenBound() { m_hasEverBeenBound = true; }
 
-    WebGLBuffer* boundElementArrayBuffer() const { return m_boundElementArrayBuffer; }
-    void setElementArrayBuffer(WebGLBuffer*);
+  WebGLBuffer* boundElementArrayBuffer() const {
+    return m_boundElementArrayBuffer;
+  }
+  void setElementArrayBuffer(WebGLBuffer*);
 
-    WebGLBuffer* getArrayBufferForAttrib(size_t);
-    void setArrayBufferForAttrib(GLuint, WebGLBuffer*);
-    void unbindBuffer(WebGLBuffer*);
+  WebGLBuffer* getArrayBufferForAttrib(size_t);
+  void setArrayBufferForAttrib(GLuint, WebGLBuffer*);
+  void setAttribEnabled(GLuint, bool);
+  bool getAttribEnabled(GLuint) const;
+  bool isAllEnabledAttribBufferBound() const {
+    return m_isAllEnabledAttribBufferBound;
+  }
+  void unbindBuffer(WebGLBuffer*);
 
-    DECLARE_VIRTUAL_TRACE();
+  virtual void visitChildDOMWrappers(v8::Isolate*,
+                                     const v8::Persistent<v8::Object>&);
 
-protected:
-    WebGLVertexArrayObjectBase(WebGLRenderingContextBase*, VaoType);
+  DECLARE_VIRTUAL_TRACE();
+  DECLARE_VIRTUAL_TRACE_WRAPPERS();
 
-private:
-    void dispatchDetached(WebGraphicsContext3D*);
-    bool hasObject() const override { return m_object != 0; }
-    void deleteObjectImpl(WebGraphicsContext3D*) override;
+ protected:
+  WebGLVertexArrayObjectBase(WebGLRenderingContextBase*, VaoType);
 
-    Platform3DObject m_object;
+ private:
+  void dispatchDetached(gpu::gles2::GLES2Interface*);
+  bool hasObject() const override { return m_object != 0; }
+  void deleteObjectImpl(gpu::gles2::GLES2Interface*) override;
 
-    VaoType m_type;
-    bool m_hasEverBeenBound;
-    bool m_destructionInProgress;
-    Member<WebGLBuffer> m_boundElementArrayBuffer;
-    HeapVector<Member<WebGLBuffer>> m_arrayBufferList;
+  void updateAttribBufferBoundStatus();
+
+  GLuint m_object;
+
+  VaoType m_type;
+  bool m_hasEverBeenBound;
+  TraceWrapperMember<WebGLBuffer> m_boundElementArrayBuffer;
+  HeapVector<TraceWrapperMember<WebGLBuffer>> m_arrayBufferList;
+  Vector<bool> m_attribEnabled;
+  bool m_isAllEnabledAttribBufferBound;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // WebGLVertexArrayObjectBase_h
+#endif  // WebGLVertexArrayObjectBase_h

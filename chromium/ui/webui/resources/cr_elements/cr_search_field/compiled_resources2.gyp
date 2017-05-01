@@ -4,7 +4,7 @@
 {
   'targets': [
     {
-      'target_name': 'cr_search_field',
+      'target_name': 'cr_search_field_behavior',
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
       ],

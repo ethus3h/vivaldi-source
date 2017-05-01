@@ -19,7 +19,7 @@ public class AwContentsStatics {
 
     private static String sUnreachableWebDataUrl;
 
-    private static boolean sRecordFullDocument = false;
+    private static boolean sRecordFullDocument;
 
     /**
      * Return the client certificate lookup table.
@@ -45,22 +45,6 @@ public class AwContentsStatics {
     private static void clientCertificatesCleared(Runnable callback) {
         if (callback == null) return;
         callback.run();
-    }
-
-    /**
-     * Set Data Reduction Proxy key for authentication.
-     */
-    public static void setDataReductionProxyKey(String key) {
-        ThreadUtils.assertOnUiThread();
-        nativeSetDataReductionProxyKey(key);
-    }
-
-    /*
-     * Enable or disable data reduction proxy.
-     */
-    public static void setDataReductionProxyEnabled(boolean enabled) {
-        ThreadUtils.assertOnUiThread();
-        nativeSetDataReductionProxyEnabled(enabled);
     }
 
     public static String getUnreachableWebDataUrl() {
@@ -95,15 +79,23 @@ public class AwContentsStatics {
         nativeSetServiceWorkerIoThreadClient(ioThreadClient, browserContext);
     }
 
+    public static boolean getSafeBrowsingEnabled() {
+        return nativeGetSafeBrowsingEnabled();
+    }
+
+    public static void setSafeBrowsingEnabled(boolean enable) {
+        nativeSetSafeBrowsingEnabled(enable);
+    }
+
     //--------------------------------------------------------------------------------------------
     //  Native methods
     //--------------------------------------------------------------------------------------------
     private static native void nativeClearClientCertPreferences(Runnable callback);
-    private static native void nativeSetDataReductionProxyKey(String key);
-    private static native void nativeSetDataReductionProxyEnabled(boolean enabled);
     private static native String nativeGetUnreachableWebDataUrl();
     private static native void nativeSetLegacyCacheRemovalDelayForTest(long timeoutMs);
     private static native String nativeGetProductVersion();
     private static native void nativeSetServiceWorkerIoThreadClient(
             AwContentsIoThreadClient ioThreadClient, AwBrowserContext browserContext);
+    private static native boolean nativeGetSafeBrowsingEnabled();
+    private static native void nativeSetSafeBrowsingEnabled(boolean enable);
 }

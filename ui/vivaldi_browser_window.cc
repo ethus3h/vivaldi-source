@@ -4,17 +4,19 @@
 
 #include "ui/vivaldi_browser_window.h"
 
+#include <memory>
+#include <string>
+
 #include "app/vivaldi_constants.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
-#include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/download/download_shelf_view.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/notification_service.h"
@@ -24,7 +26,8 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#include "chrome/browser/jumplist_win.h"
+#include "chrome/browser/win/jumplist.h"
+#include "chrome/browser/win/jumplist_factory.h"
 #include "ui/views/win/scoped_fullscreen_visibility.h"
 #endif
 
@@ -33,22 +36,10 @@
 // VivaldiBrowserWindow --------------------------------------------------------
 
 VivaldiBrowserWindow::VivaldiBrowserWindow() :
-  is_active_(false),
-  bounds_(gfx::Rect()){
-#if defined(OS_WIN)
-  jumplist_ = NULL;
-#endif
+  bounds_(gfx::Rect()) {
 }
 
 VivaldiBrowserWindow::~VivaldiBrowserWindow() {
-#if defined(OS_WIN)
-  // Terminate the jumplist (must be called before browser_->profile() is
-  // destroyed.
-  if (jumplist_) {
-    jumplist_->Terminate();
-  }
-#endif
-
   // Explicitly set browser_ to NULL.
   browser_.reset();
 }
@@ -57,10 +48,9 @@ void VivaldiBrowserWindow::Init(Browser* browser) {
   browser_.reset(browser);
   SetBounds(browser->override_bounds());
 #if defined(OS_WIN)
-  DCHECK(!jumplist_);
-  jumplist_ = new JumpList(browser_->profile());
+  DCHECK(!jumplist_.get());
+  jumplist_ = JumpListFactory::GetForProfile(browser_->profile());
 #endif
-
 }
 
 // static
@@ -77,6 +67,19 @@ VivaldiBrowserWindow* VivaldiBrowserWindow::CreateVivaldiBrowserWindow(
   VivaldiBrowserWindow* vview = new VivaldiBrowserWindow();
   vview->Init(browser);
   return vview;
+}
+
+void VivaldiBrowserWindow::Show() {
+#if !defined(OS_WIN)
+  // The Browser associated with this browser window must become the active
+  // browser at the time |Show()| is called. This is the natural behavior under
+  // Windows and Ash, but other platforms will not trigger
+  // OnWidgetActivationChanged() until we return to the runloop. Therefore any
+  // calls to Browser::GetLastActive() will return the wrong result if we do not
+  // explicitly set it here.
+  // A similar block also appears in BrowserWindowCocoa::Show().
+  BrowserList::SetLastActive(browser());
+#endif
 }
 
 void VivaldiBrowserWindow::SetBounds(const gfx::Rect& bounds) {
@@ -116,29 +119,19 @@ void VivaldiBrowserWindow::Close() {
 }
 
 void VivaldiBrowserWindow::Activate() {
-#if defined(OS_LINUX)
-  // Never activate an active window. It triggers problems in focus follows
-  // mouse window manager mode. See VB-11947
-  if (is_active_)
-    return;
-#endif
-
   extensions::AppWindow* app_window = GetAppWindow();
   if (app_window) {
     app_window->GetBaseWindow()->Activate();
   }
-
-  is_active_ = true;
-
   BrowserList::SetLastActive(browser_.get());
 }
 
 void VivaldiBrowserWindow::Deactivate() {
-  is_active_ = false;
 }
 
 bool VivaldiBrowserWindow::IsActive() const {
-  return is_active_;
+  Browser* active = BrowserList::GetInstance()->GetLastActive();
+  return (active && active->window() == this);
 }
 
 bool VivaldiBrowserWindow::IsAlwaysOnTop() const {
@@ -168,7 +161,7 @@ extensions::AppWindow* VivaldiBrowserWindow::GetAppWindow() const {
   }
   if(!app_window){
 
-    scoped_ptr<base::Value> value(base::JSONReader::Read(browser_->ext_data()));
+    std::unique_ptr<base::Value> value(base::JSONReader::Read(browser_->ext_data()));
     base::DictionaryValue* dictionary;
     if (value && value->GetAsDictionary(&dictionary)) {
       std::string windowid;
@@ -224,20 +217,6 @@ bool VivaldiBrowserWindow::IsFullscreen() const {
   return false;
 }
 
-bool VivaldiBrowserWindow::SupportsFullscreenWithToolbar() const {
-  return false;
-}
-
-bool VivaldiBrowserWindow::IsFullscreenWithToolbar() const {
-  return false;
-}
-
-#if defined(OS_WIN)
-bool VivaldiBrowserWindow::IsInMetroSnapMode() const {
-  return false;
-}
-#endif
-
 bool VivaldiBrowserWindow::IsFullscreenBubbleVisible() const {
   return false;
 }
@@ -272,26 +251,18 @@ bool VivaldiBrowserWindow::IsToolbarVisible() const {
   return false;
 }
 
-gfx::Rect VivaldiBrowserWindow::GetRootWindowResizerRect() const {
-  return gfx::Rect();
-}
-
 bool VivaldiBrowserWindow::IsDownloadShelfVisible() const {
   return false;
 }
 
 DownloadShelf* VivaldiBrowserWindow::GetDownloadShelf() {
-  if (!download_shelf_.get()) {
-    download_shelf_.reset(new DownloadShelfView(browser_.get(), NULL));
-    download_shelf_->set_owned_by_client();
-  }
-  return download_shelf_.get();
+  return NULL;
 }
 
 void VivaldiBrowserWindow::ShowWebsiteSettings(Profile* profile,
         content::WebContents* web_contents,
         const GURL& url,
-        const security_state::SecurityStateModel::SecurityInfo& security_info) {
+        const security_state::SecurityInfo& security_info) {
 
   // For Vivaldi we reroute this back to javascript site, for either
   // display a javascript siteinfo or call back to us (via webview) using
@@ -307,7 +278,7 @@ void VivaldiBrowserWindow::ShowWebsiteSettings(Profile* profile,
 void VivaldiBrowserWindow::VivaldiShowWebsiteSettingsAt(Profile* profile,
         content::WebContents* web_contents,
         const GURL& url,
-        const security_state::SecurityStateModel::SecurityInfo& security_info,
+        const security_state::SecurityInfo& security_info,
         gfx::Point pos) {
 #if defined(USE_AURA)
   // This is only for AURA.  Mac is done in VivaldiBrowserCocoa.
@@ -320,12 +291,11 @@ void VivaldiBrowserWindow::VivaldiShowWebsiteSettingsAt(Profile* profile,
     browser_.get(),
     GetAppWindow()->GetNativeWindow());
 #endif
-
 }
 
 WindowOpenDisposition VivaldiBrowserWindow::GetDispositionForPopupBounds(
   const gfx::Rect& bounds) {
-  return NEW_POPUP;
+  return WindowOpenDisposition::NEW_POPUP;
 }
 
 FindBar* VivaldiBrowserWindow::CreateFindBar() {
@@ -347,13 +317,13 @@ void VivaldiBrowserWindow::ExecuteExtensionCommand(
   const extensions::Command& command) {}
 
 ExclusiveAccessContext* VivaldiBrowserWindow::GetExclusiveAccessContext() {
-  return NULL;
+  return this;
 }
 
 autofill::SaveCardBubbleView* VivaldiBrowserWindow::ShowSaveCreditCardBubble(
       content::WebContents* contents,
       autofill::SaveCardBubbleController* controller,
-      bool is_user_gesture){
+      bool is_user_gesture) {
   return NULL;
 }
 
@@ -361,6 +331,46 @@ void VivaldiBrowserWindow::DestroyBrowser() {
   delete this;
 }
 
-bool VivaldiBrowserWindow::ShouldHideFullscreenToolbar() const {
+gfx::Size VivaldiBrowserWindow::GetContentsSize() const {
+  return gfx::Size();
+}
+
+std::string VivaldiBrowserWindow::GetWorkspace() const {
+  return std::string();
+}
+
+bool VivaldiBrowserWindow::IsVisibleOnAllWorkspaces() const {
   return false;
+}
+
+Profile* VivaldiBrowserWindow::GetProfile() {
+  return browser_->profile();
+}
+
+void VivaldiBrowserWindow::EnterFullscreen(
+    const GURL& url,
+    ExclusiveAccessBubbleType bubble_type) {}
+
+void VivaldiBrowserWindow::ExitFullscreen() {}
+
+void VivaldiBrowserWindow::UpdateExclusiveAccessExitBubbleContent(
+    const GURL& url,
+    ExclusiveAccessBubbleType bubble_type) {}
+
+void VivaldiBrowserWindow::OnExclusiveAccessUserInput() {}
+
+content::WebContents* VivaldiBrowserWindow::GetActiveWebContents() {
+  return browser_->tab_strip_model()->GetActiveWebContents();
+}
+
+void VivaldiBrowserWindow::UnhideDownloadShelf() {}
+
+void VivaldiBrowserWindow::HideDownloadShelf() {}
+
+ShowTranslateBubbleResult VivaldiBrowserWindow::ShowTranslateBubble(
+    content::WebContents* contents,
+    translate::TranslateStep step,
+    translate::TranslateErrors::Type error_type,
+    bool is_user_gesture) {
+  return ShowTranslateBubbleResult::BROWSER_WINDOW_NOT_VALID;
 }

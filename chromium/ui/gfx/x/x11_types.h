@@ -7,11 +7,15 @@
 
 #include <stdint.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "ui/gfx/gfx_export.h"
 
 typedef unsigned long XAtom;
 typedef unsigned long XID;
+typedef unsigned long VisualID;
+typedef struct _XcursorImage XcursorImage;
+typedef union _XEvent XEvent;
 typedef struct _XImage XImage;
 typedef struct _XGC *GC;
 typedef struct _XDisplay XDisplay;
@@ -31,7 +35,7 @@ struct XObjectDeleter {
 };
 
 template <class T, class D = XObjectDeleter<void, int, XFree>>
-using XScopedPtr = scoped_ptr<T, D>;
+using XScopedPtr = std::unique_ptr<T, D>;
 
 // TODO(oshima|evan): This assume there is one display and doesn't work
 // undef multiple displays/monitor environment. Remove this and change the
@@ -79,4 +83,3 @@ GFX_EXPORT void PutARGBImage(XDisplay* display,
 }  // namespace gfx
 
 #endif  // UI_GFX_X_X11_UTIL_H_
-

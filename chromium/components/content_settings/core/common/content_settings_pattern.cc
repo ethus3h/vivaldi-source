@@ -6,14 +6,13 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "components/content_settings/core/common/content_settings_pattern_parser.h"
-#include "net/base/net_util.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 
@@ -21,6 +20,19 @@ namespace {
 
 // The component supports only one scheme for simplicity.
 const char* non_port_non_domain_wildcard_scheme = NULL;
+
+// Keep it consistent with enum SchemeType in content_settings_pattern.h.
+const char* const kSchemeNames[] = {
+  "wildcard",
+  "other",
+  url::kHttpScheme,
+  url::kHttpsScheme,
+  url::kFileScheme,
+  "chrome-extension",
+};
+
+static_assert(arraysize(kSchemeNames) == ContentSettingsPattern::SCHEME_MAX,
+              "kSchemeNames should have SCHEME_MAX elements");
 
 std::string GetDefaultPort(const std::string& scheme) {
   if (scheme == url::kHttpScheme)
@@ -30,7 +42,7 @@ std::string GetDefaultPort(const std::string& scheme) {
   return std::string();
 }
 
-// Returns true if |sub_domain| is a sub domain or equls |domain|.  E.g.
+// Returns true if |sub_domain| is a sub domain or equals |domain|.  E.g.
 // "mail.google.com" is a sub domain of "google.com" but "evilhost.com" is not a
 // subdomain of "host.com".
 bool IsSubDomainOrEqual(const std::string& sub_domain,
@@ -334,6 +346,9 @@ ContentSettingsPattern::PatternParts::PatternParts()
           is_port_wildcard(false),
           is_path_wildcard(false) {}
 
+ContentSettingsPattern::PatternParts::PatternParts(const PatternParts& other) =
+    default;
+
 ContentSettingsPattern::PatternParts::~PatternParts() {}
 
 // ////////////////////////////////////////////////////////////////////////////
@@ -359,17 +374,18 @@ BuilderInterface* ContentSettingsPattern::CreateBuilder(
 
 // static
 ContentSettingsPattern ContentSettingsPattern::Wildcard() {
-  scoped_ptr<ContentSettingsPattern::BuilderInterface> builder(
-      ContentSettingsPattern::CreateBuilder(true));
-  builder->WithSchemeWildcard()->WithDomainWildcard()->WithPortWildcard()->
-           WithPathWildcard();
-  return builder->Build();
+  PatternParts parts;
+  parts.is_scheme_wildcard = true;
+  parts.has_domain_wildcard = true;
+  parts.is_port_wildcard = true;
+  parts.is_path_wildcard = true;
+  return ContentSettingsPattern(parts, true);
 }
 
 // static
 ContentSettingsPattern ContentSettingsPattern::FromURL(
     const GURL& url) {
-  scoped_ptr<ContentSettingsPattern::BuilderInterface> builder(
+  std::unique_ptr<ContentSettingsPattern::BuilderInterface> builder(
       ContentSettingsPattern::CreateBuilder(false));
   const GURL* local_url = &url;
   if (url.SchemeIsFileSystem() && url.inner_url()) {
@@ -406,7 +422,7 @@ ContentSettingsPattern ContentSettingsPattern::FromURL(
 // static
 ContentSettingsPattern ContentSettingsPattern::FromURLNoWildcard(
     const GURL& url) {
-  scoped_ptr<ContentSettingsPattern::BuilderInterface> builder(
+  std::unique_ptr<ContentSettingsPattern::BuilderInterface> builder(
       ContentSettingsPattern::CreateBuilder(false));
 
   const GURL* local_url = &url;
@@ -429,11 +445,65 @@ ContentSettingsPattern ContentSettingsPattern::FromURLNoWildcard(
 // static
 ContentSettingsPattern ContentSettingsPattern::FromString(
     const std::string& pattern_spec) {
-  scoped_ptr<ContentSettingsPattern::BuilderInterface> builder(
+  std::unique_ptr<ContentSettingsPattern::BuilderInterface> builder(
       ContentSettingsPattern::CreateBuilder(false));
   content_settings::PatternParser::Parse(pattern_spec,
                                          builder.get());
   return builder->Build();
+}
+
+// static
+bool ContentSettingsPattern::MigrateFromDomainToOrigin(
+    const ContentSettingsPattern& domain_pattern,
+    ContentSettingsPattern* origin_pattern) {
+  DCHECK(origin_pattern);
+
+  // Generated patterns with ::FromURL (which we want to migrate) must either
+  // have a scheme wildcard or be https.
+  if (domain_pattern.parts_.scheme != url::kHttpsScheme &&
+      !domain_pattern.parts_.is_scheme_wildcard) {
+    return false;
+  }
+
+  // Generated patterns using ::FromURL with the HTTPs scheme can not have a
+  // port wildcard.
+  if (domain_pattern.parts_.is_port_wildcard &&
+      domain_pattern.parts_.scheme == url::kHttpsScheme) {
+    return false;
+  }
+
+  // Patterns generated with ::FromURL will always have a domain wildcard. Those
+  // generated with ::FromURLNoWildcard don't.
+  if (!domain_pattern.parts_.has_domain_wildcard)
+    return false;
+
+  // Generated patterns with ::FromURL will always have a host.
+  if (domain_pattern.parts_.host.empty())
+    return false;
+
+  std::unique_ptr<ContentSettingsPattern::BuilderInterface> builder(
+      ContentSettingsPattern::CreateBuilder(false));
+
+  if (domain_pattern.parts_.is_scheme_wildcard)
+    builder->WithScheme(url::kHttpScheme);
+  else
+    builder->WithScheme(domain_pattern.parts_.scheme);
+
+  builder->WithHost(domain_pattern.parts_.host);
+
+  if (domain_pattern.parts_.is_port_wildcard) {
+    if (domain_pattern.parts_.scheme == url::kHttpsScheme) {
+      builder->WithPort(GetDefaultPort(url::kHttpsScheme));
+    } else {
+      builder->WithPort(GetDefaultPort(url::kHttpScheme));
+    }
+  } else {
+    builder->WithPort(domain_pattern.parts_.port);
+  }
+
+  *origin_pattern = builder->Build();
+
+  return true;
 }
 
 // static
@@ -532,6 +602,22 @@ std::string ContentSettingsPattern::ToString() const {
     return content_settings::PatternParser::ToString(parts_);
   else
     return std::string();
+}
+
+ContentSettingsPattern::SchemeType ContentSettingsPattern::GetScheme() const {
+  if (parts_.is_scheme_wildcard)
+    return SCHEME_WILDCARD;
+
+  for (size_t i = 2; i < arraysize(kSchemeNames); ++i) {
+    if (parts_.scheme == kSchemeNames[i])
+      return static_cast<SchemeType>(i);
+  }
+  return SCHEME_OTHER;
+}
+
+bool ContentSettingsPattern::HasPath() const {
+  DCHECK_EQ(GetScheme(), SCHEME_FILE);
+  return !parts_.is_path_wildcard && !parts_.path.empty();
 }
 
 ContentSettingsPattern::Relation ContentSettingsPattern::Compare(

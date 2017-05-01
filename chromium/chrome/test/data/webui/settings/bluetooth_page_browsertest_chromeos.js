@@ -11,15 +11,12 @@ var bluetoothPage = bluetoothPage || {};
 /**
  * @constructor
  * @extends {SettingsPageBrowserTest}
-*/
+ */
 function SettingsBluetoothPageBrowserTest() {
 }
 
 SettingsBluetoothPageBrowserTest.prototype = {
   __proto__: SettingsPageBrowserTest.prototype,
-
-  /** @override */
-  browsePreload: 'chrome://md-settings/advanced',
 
   /** @override */
   extraLibraries: PolymerTest.getLibraries(ROOT_PATH).concat([
@@ -62,9 +59,10 @@ TEST_F('SettingsBluetoothPageBrowserTest', 'MAYBE_Bluetooth', function() {
   // comment at the top of mocha_adapter.js.
   var self = this;
 
-  var advanced = self.getPage('advanced');
-  assertTrue(!!advanced);
-  advanced.set('pageVisibility.bluetooth', true);
+  self.toggleAdvanced();
+  var page = self.getPage('basic');
+  assertTrue(!!page);
+  page.set('pageVisibility.bluetooth', true);
   Polymer.dom.flush();
 
   /** @type {!Array<!chrome.bluetooth.Device>} */ var fakeDevices_ = [
@@ -96,12 +94,12 @@ TEST_F('SettingsBluetoothPageBrowserTest', 'MAYBE_Bluetooth', function() {
   suite('SettingsBluetoothPage', function() {
     test('enable', function() {
       assertFalse(self.bluetoothApi_.adapterState.powered);
-      var bluetoothSection = self.getSection(advanced, 'bluetooth');
+      var bluetoothSection = self.getSection(page, 'bluetooth');
       assertTrue(!!bluetoothSection);
       var bluetooth =
           bluetoothSection.querySelector('settings-bluetooth-page');
       assertTrue(!!bluetooth);
-      expectFalse(bluetooth.bluetoothEnabled);
+      expectFalse(bluetooth.bluetoothEnabled_);
       var enable = bluetooth.$.enableBluetooth;
       assertTrue(!!enable);
       expectFalse(enable.checked);
@@ -112,16 +110,16 @@ TEST_F('SettingsBluetoothPageBrowserTest', 'MAYBE_Bluetooth', function() {
       expectTrue(enable.checked);
       expectTrue(self.bluetoothApi_.adapterState.powered);
       // Confirm that 'bluetoothEnabled' remains set to true.
-      expectTrue(bluetooth.bluetoothEnabled);
+      expectTrue(bluetooth.bluetoothEnabled_);
       // Set 'bluetoothEnabled' directly and confirm that the checkbox
       // toggles.
-      bluetooth.bluetoothEnabled = false;
+      bluetooth.bluetoothEnabled_ = false;
       Polymer.dom.flush();
       expectFalse(enable.checked);
     });
 
     test('device list', function() {
-      var bluetoothSection = self.getSection(advanced, 'bluetooth');
+      var bluetoothSection = self.getSection(page, 'bluetooth');
       var bluetooth =
           bluetoothSection.querySelector('settings-bluetooth-page');
       assertTrue(!!bluetooth);
@@ -130,14 +128,19 @@ TEST_F('SettingsBluetoothPageBrowserTest', 'MAYBE_Bluetooth', function() {
       // Set enabled, with default (empty) device list.
       self.bluetoothApi_.setEnabled(true);
       Polymer.dom.flush();
-      // Ensure that initially the 'device list empty' span is visible.
+      // Ensure that initially the 'no devices' element is visible.
       expectFalse(deviceList.hidden);
-      var noDevices = deviceList.querySelector('span');
+      var noDevices = deviceList.querySelector('.no-devices');
       assertTrue(!!noDevices);
       expectFalse(noDevices.hidden);
-      // Set some devices (triggers onDeviceAdded events). 'empty' span should
-      // be hidden.
+      // Set some devices (triggers onDeviceAdded events). 'no devices' element
+      // should be hidden.
       self.bluetoothApi_.setDevicesForTest(fakeDevices_);
+      Polymer.dom.flush();
+      assertEquals(bluetooth.deviceList_.length, 4);
+      var devicesIronList = bluetooth.$$('#deviceList iron-list');
+      assertTrue(!!devicesIronList);
+      devicesIronList.notifyResize();
       Polymer.dom.flush();
       expectTrue(noDevices.hidden);
       // Confirm that there are two paired devices in the list.
@@ -150,45 +153,43 @@ TEST_F('SettingsBluetoothPageBrowserTest', 'MAYBE_Bluetooth', function() {
     });
 
     test('device dialog', function() {
-      var bluetoothSection = self.getSection(advanced, 'bluetooth');
+      var bluetoothSection = self.getSection(page, 'bluetooth');
       var bluetooth =
           bluetoothSection.querySelector('settings-bluetooth-page');
       assertTrue(!!bluetooth);
       self.bluetoothApi_.setEnabled(true);
 
       // Tap the 'add device' button.
-      MockInteractions.tap(bluetooth.$.addDevice);
+      MockInteractions.tap(bluetooth.$$('.primary-button'));
       Polymer.dom.flush();
       // Ensure the dialog appears.
-      var dialog = bluetooth.$.deviceDialog;
+      var dialog = bluetooth.$$('#deviceDialog');
       assertTrue(!!dialog);
-      assertTrue(dialog.opened);
-      var addDialog = bluetooth.$$('settings-bluetooth-add-device-dialog');
-      assertTrue(!!addDialog);
+      assertTrue(dialog.$.dialog.open);
+      assertEquals(dialog.deviceList.length, 4);
+
       // Ensure the dialog has the expected devices.
-      var devicesDiv = addDialog.$.dialogDeviceList;
-      var devices = devicesDiv.querySelectorAll('bluetooth-device-list-item');
-      assertEquals(2, devices.length);
+      var devicesIronList = dialog.$$('#dialogDeviceList iron-list');
+      assertTrue(!!devicesIronList);
+      devicesIronList.notifyResize();
+      Polymer.dom.flush();
+      var devices =
+          devicesIronList.querySelectorAll('bluetooth-device-list-item');
+      assertEquals(devices.length, 2);
 
       // Select a device.
       MockInteractions.tap(devices[0].$$('div'));
       Polymer.dom.flush();
       // Ensure the pairing dialog is shown.
-      var pairDialog = bluetooth.$$('settings-bluetooth-pair-device-dialog');
-      assertTrue(!!pairDialog);
-      // Ensure the device is connected to.
+      assertTrue(!!dialog.$$('#pairing'));
+
+      // Ensure the device wass connected to.
       expectEquals(1, self.bluetoothPrivateApi_.connectedDevices_.size);
-      var deviceAddress =
-          self.bluetoothPrivateApi_.connectedDevices_.keys().next().value;
 
       // Close the dialog.
-      MockInteractions.tap(pairDialog.$.close);
+      dialog.close();
       Polymer.dom.flush();
-      expectFalse(dialog.opened);
-      var response = self.bluetoothPrivateApi_.pairingResponses_[deviceAddress];
-      assertTrue(!!response);
-      expectEquals(chrome.bluetoothPrivate.PairingResponse.CANCEL,
-                   response.response);
+      assertFalse(dialog.$.dialog.open);
     });
   });
 

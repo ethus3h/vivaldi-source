@@ -2,14 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-module arc;
+module arc.mojom;
 
+import "video_accelerator.mojom";
+
+// Next MinVersion: 5
+// Deprecated method IDs: 0
+// Next method ID: 2
 interface VideoHost {
-  // Notifies Chrome a request for ipc channel of video acceleration.
-  OnRequestArcVideoAcceleratorChannel() => (handle channel_handle);
+  // Requests an IPC channel from Chrome's browser process to bootstrap a new
+  // mojo child process and a token which can be used to create a message pipe
+  // connected to a new VideoAcceleratorFactory.
+  [MinVersion=4]
+  OnBootstrapVideoAcceleratorFactory@1() => (handle channel_handle,
+                                             string token);
 };
 
 interface VideoInstance {
   // Establishes full-duplex communication with the host.
-  Init(VideoHost host_ptr);
+  Init@0(VideoHost host_ptr);
+};
+
+interface VideoAcceleratorFactory {
+  Create@0(VideoAcceleratorService& accelerator);
 };

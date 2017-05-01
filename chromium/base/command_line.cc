@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <ostream>
 
-#include "base/base64.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/macros.h"
@@ -15,7 +14,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "third_party/zlib/zlib.h"
 
 #if defined(OS_WIN)
 #include <windows.h>
@@ -199,6 +197,17 @@ void CommandLine::set_slash_is_not_a_switch() {
   DCHECK_EQ(wcscmp(kSwitchPrefixes[arraysize(kSwitchPrefixes) - 1], L"/"), 0);
   switch_prefix_count = arraysize(kSwitchPrefixes) - 1;
 }
+
+// static
+void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+  DCHECK(!current_process_commandline_);
+  current_process_commandline_ = new CommandLine(NO_PROGRAM);
+  // On Windows we need to convert the command line arguments to string16.
+  base::CommandLine::StringVector argv_vector;
+  for (int i = 0; i < argc; ++i)
+    argv_vector.push_back(UTF8ToUTF16(argv[i]));
+  current_process_commandline_->InitFromArgv(argv_vector);
+}
 #endif
 
 // static
@@ -347,39 +356,6 @@ void CommandLine::AppendSwitchNative(const std::string& switch_string,
     combined_switch_string = kSwitchPrefixes[0] + combined_switch_string;
   if (!value.empty())
     combined_switch_string += kSwitchValueSeparator + value;
-#if defined(OS_WIN)
-  if (switch_key.compare("--commpressed-args") == 0) {
-    std::string zstring;
-    std::string cstring;
-
-    base::Base64Decode(base::UTF16ToASCII(value), &zstring);
-
-    cstring.resize(zstring.length()+200);
-
-    z_stream stream = {0};
-    int result = inflateInit2(&stream, 
-                            // windowBits = 15 is default, 16 is added to
-                            // produce a gzip header + trailer.
-                            15 + 16);
-    DCHECK_EQ(Z_OK, result);
-    stream.next_out= reinterpret_cast<unsigned char*>(&cstring[0]);
-    stream.avail_out= (uInt) cstring.length();
-    stream.next_in = reinterpret_cast<unsigned char*>(&zstring[0]);
-    stream.avail_in = (uInt) zstring.size();
-    result = inflate(&stream, Z_SYNC_FLUSH);
-    DCHECK_EQ(Z_OK, result);
-    result = inflate(&stream, Z_FINISH);
-    DCHECK_EQ(Z_STREAM_END, result);
-    result = inflateEnd(&stream);
-    DCHECK_EQ(Z_OK, result);
-    cstring.resize(cstring.size()-stream.avail_out);
-
-    CommandLine decompressed_command_line = FromString(base::UTF8ToUTF16(cstring));
-
-    AppendArguments(decompressed_command_line, false);
-    return;
-  }
-#endif
   // Append the switch and update the switches/arguments divider |begin_args_|.
   argv_.insert(argv_.begin() + begin_args_++, combined_switch_string);
 }

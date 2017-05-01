@@ -4,7 +4,7 @@
 
 'use strict';
 
-const DESKTOP_MEDIA = ['screen', 'window'];
+const DESKTOP_MEDIA = ['screen', 'window', 'tab', 'audio'];
 
 var pending_request_id = null;
 var pc1 = null;
@@ -29,17 +29,25 @@ document.querySelector('#startFromBackgroundPage')
     });
 
 // Launch webkitGetUserMedia() based on selected media id.
-function onAccessApproved(id) {
+function onAccessApproved(id, options) {
   if (!id) {
     console.log('Access rejected.');
     return;
   }
 
-  navigator.webkitGetUserMedia({
-    audio:{
+  var audioConstraint = {
       mandatory: {
         chromeMediaSource: 'desktop',
-        chromeMediaSourceId: id} },
+        chromeMediaSourceId: id
+      }
+  };
+
+  console.log(options.canRequestAudioTrack);
+  if (!options.canRequestAudioTrack)
+    audioConstraint = false;
+
+  navigator.webkitGetUserMedia({
+    audio: audioConstraint,
     video: {
       mandatory: {
         chromeMediaSource: 'desktop',
@@ -60,12 +68,11 @@ function gotStream(stream) {
   video.src = URL.createObjectURL(stream);
   stream.onended = function() { console.log('Ended'); };
 
-  var servers = null;
-  pc1 = new webkitRTCPeerConnection(servers);
+  pc1 = new RTCPeerConnection();
   pc1.onicecandidate = function(event) {
     onIceCandidate(pc1, event);
   };
-  pc2 = new webkitRTCPeerConnection(servers);
+  pc2 = new RTCPeerConnection();
   pc2.onicecandidate = function(event) {
     onIceCandidate(pc2, event);
   };
@@ -79,7 +86,7 @@ function gotStream(stream) {
 
   pc1.addStream(stream);
 
-  pc1.createOffer(onCreateOfferSuccess);
+  pc1.createOffer(onCreateOfferSuccess, function() {});
 }
 
 function onCreateOfferSuccess(desc) {

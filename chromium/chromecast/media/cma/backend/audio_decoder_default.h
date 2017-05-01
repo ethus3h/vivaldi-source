@@ -5,16 +5,26 @@
 #ifndef CHROMECAST_MEDIA_CMA_BACKEND_AUDIO_DECODER_DEFAULT_H_
 #define CHROMECAST_MEDIA_CMA_BACKEND_AUDIO_DECODER_DEFAULT_H_
 
+#include <memory>
+
 #include "base/macros.h"
+#include "base/time/time.h"
 #include "chromecast/public/media/media_pipeline_backend.h"
 
 namespace chromecast {
 namespace media {
 
+class MediaSinkDefault;
+
 class AudioDecoderDefault : public MediaPipelineBackend::AudioDecoder {
  public:
   AudioDecoderDefault();
   ~AudioDecoderDefault() override;
+
+  void Start(base::TimeDelta start_pts);
+  void Stop();
+  void SetPlaybackRate(float rate);
+  base::TimeDelta GetCurrentPts();
 
   // MediaPipelineBackend::AudioDecoder implementation:
   void SetDelegate(Delegate* delegate) override;
@@ -27,7 +37,7 @@ class AudioDecoderDefault : public MediaPipelineBackend::AudioDecoder {
 
  private:
   Delegate* delegate_;
-
+  std::unique_ptr<MediaSinkDefault> sink_;
   DISALLOW_COPY_AND_ASSIGN(AudioDecoderDefault);
 };
 

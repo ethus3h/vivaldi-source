@@ -3,9 +3,11 @@
 #include <string>
 #include <vector>
 
+#include <openssl/crypto.h>
+#include <openssl/digest.h>
+#include <openssl/evp.h>
+
 #include "base/files/file_util.h"
-#include "base/md5.h"
-#include "base/sha1.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -14,10 +16,6 @@
 #include "chrome/common/importer/importer_data_types.h"
 
 #include "components/autofill/core/common/password_form.h"
-
-#include "crypto/symmetric_key.h"
-#include "crypto/encryptor.h"
-//#include "third_party\nss\nss\lib\pk11wrap\secpkcs5.h"
 
 #include "importer/viv_importer_utils.h"
 #include "importer/viv_importer.h"
@@ -76,43 +74,57 @@ bool DecryptMasterPasswordKeys(const std::string &password,
                                const std::string &salt,
                                const std::string &in_data,
                                std::string &out_data) {
-  base::MD5Digest res1;
+  uint8_t buffer[EVP_MAX_MD_SIZE];
+  unsigned int len = 0;
+  unsigned int count = 0;
   unsigned char key[24];
   unsigned char iv[8];
 
-  base::MD5Context ctx;
+  EVP_MD_CTX  ctx;
+  EVP_MD_CTX_init(&ctx);
 
-  base::MD5Init(&ctx);
-  base::MD5Update(&ctx, base::StringPiece(password));
-  base::MD5Update(&ctx, salt);
-  base::MD5Final(&res1, &ctx);
+  EVP_DigestInit(&ctx, EVP_md5());
+  EVP_DigestUpdate(&ctx, password.c_str(), password.size());
+  EVP_DigestUpdate(&ctx, salt.c_str(), salt.size());
+  EVP_DigestFinal(&ctx, buffer, &len);
+  DCHECK(len == 16);
 
-  memcpy(key, res1.a, sizeof(res1.a));
+  memcpy(key, buffer, len);
+  count += len;
 
-  base::MD5Init(&ctx);
-  base::MD5Update(&ctx,
-            base::StringPiece((const char *) res1.a, sizeof(res1.a)));
-  base::MD5Update(&ctx, base::StringPiece(password));
-  base::MD5Update(&ctx, salt);
-  base::MD5Final(&res1, &ctx);
+  EVP_DigestInit(&ctx, EVP_md5());
+  EVP_DigestUpdate(&ctx, buffer, len);
+  EVP_DigestUpdate(&ctx, password.c_str(), password.size());
+  EVP_DigestUpdate(&ctx, salt.c_str(), salt.size());
+  EVP_DigestFinal(&ctx, buffer, &len);
+  DCHECK(len == 16);
+  EVP_MD_CTX_cleanup(&ctx);
 
-  memcpy(key+sizeof(res1.a), res1.a, 8);
-  memcpy(iv, res1.a+8, 8);
-  memset(res1.a,0,sizeof(res1.a));
+  memcpy(key+count, buffer, 8);
+  memcpy(iv, buffer+8, 8);
 
-  scoped_ptr<crypto::SymmetricKey> dec_key(
-    crypto::SymmetricKey::Import(crypto::SymmetricKey::DES_EDE3,
-                                 key, sizeof(key)));
-  memset(key,0,sizeof(key));
+  OPENSSL_cleanse(buffer, sizeof(buffer));
 
-  crypto::Encryptor decryptor;
-  if (!decryptor.Init(dec_key.get(), crypto::Encryptor::CBC, iv, sizeof(iv))) {
-    memset(iv, 0, sizeof(iv));
-    return true;
-  }
+  EVP_CIPHER_CTX decryptor;
+  EVP_CipherInit(&decryptor, EVP_des_ede3_cbc(), key, iv, 0);
 
-  if(!decryptor.Decrypt(in_data, &out_data))
-    return false;
+  OPENSSL_cleanse(key, sizeof(key));
+  OPENSSL_cleanse(iv, sizeof(iv));
+  out_data.resize(in_data.length());
+
+  int out_len = 0;
+  int total_len = 0;
+  EVP_CipherUpdate(&decryptor,
+      reinterpret_cast<uint8_t*>(const_cast<char*>(out_data.data())), &out_len,
+      reinterpret_cast<const uint8_t*>(in_data.data()), in_data.length());
+  total_len += out_len;
+  EVP_CipherFinal_ex(&decryptor,
+    reinterpret_cast<uint8_t*>(const_cast<char*>(out_data.data()+total_len)),
+    &out_len);
+  EVP_CIPHER_CTX_cleanup(&decryptor);
+  total_len += out_len;
+  out_data.resize(total_len);
+  OPENSSL_cleanse(iv, sizeof(iv));
 
   return true;
 }
@@ -123,15 +135,21 @@ bool ValidatePasswordBlock(const std::string &password, const std::string &salt,
   if (salt.length() != 8)
     return false;
 
-  base::SecureHashAlgorithm ctx;
+  uint8_t buffer[EVP_MAX_MD_SIZE];
+  unsigned int  len=0;
 
-  ctx.Init();
-  ctx.Update(password.c_str(), password.size());
-  ctx.Update(validation_string.c_str(), validation_string.size());
-  ctx.Update(in_data.c_str(), in_data.size());
-  ctx.Final();
+  EVP_MD_CTX  ctx;
+  EVP_MD_CTX_init(&ctx);
 
-  return (memcmp(salt.c_str(), ctx.Digest(), 8) == 0);
+  EVP_DigestInit(&ctx, EVP_sha1());
+  EVP_DigestUpdate(&ctx, password.c_str(), password.size());
+  EVP_DigestUpdate(&ctx, validation_string.c_str(), validation_string.size());
+  EVP_DigestUpdate(&ctx, in_data.c_str(), in_data.size());
+  EVP_DigestFinal(&ctx, buffer, &len);
+  EVP_MD_CTX_cleanup(&ctx);
+  bool ret = (memcmp(salt.c_str(), buffer, 8) == 0);
+  OPENSSL_cleanse(buffer, sizeof(buffer));
+  return ret;
 }
 
 bool WandReadUint32(std::string::iterator &buffer,
@@ -156,9 +174,9 @@ bool WandReadUintX(std::string::iterator &buffer,
                    std::string::iterator &buffer_end, uint32_t int_len,
                    uint32_t &result, bool check_msb = false) {
   uint32_t temp_result = 0;
-  int i;
+  uint32_t i;
 
-  if (int_len>32)
+  if (int_len > 32)
     return false;
 
   bool msb = false;
@@ -173,11 +191,11 @@ bool WandReadUintX(std::string::iterator &buffer,
     temp_result = (temp_result << 8) | uint32_t(b1);
   }
 
-  if (i>0)
+  if (i > 0)
     return false;
 
   if (check_msb && msb)
-    temp_result |= TAG_MSB; // Set MSB if it is stored
+    temp_result |= TAG_MSB;  // Set MSB if it is stored
 
   result = temp_result;
   return true;
@@ -235,8 +253,8 @@ bool WandReadEncryptedField(std::string::iterator &buffer,
                             base::string16 &result,
                             binary_string *master_password = NULL) {
   uint32_t len = 0;
-  uint32_t iv_len=0;
-  uint32_t data_len=0;
+  uint32_t iv_len = 0;
+  uint32_t data_len = 0;
   binary_string iv;
   binary_string in_data;
   binary_string out_data;
@@ -266,37 +284,45 @@ bool WandReadEncryptedField(std::string::iterator &buffer,
                                "Opera Email Password Verification", out_data))
       return false;
   } else {
-    base::MD5Digest res1, res2;
+    uint8_t buffer[EVP_MAX_MD_SIZE*2];
+    unsigned int len = 0;
 
-    base::MD5Context ctx;
+    EVP_MD_CTX  ctx;
+    EVP_MD_CTX_init(&ctx);
 
-    base::MD5Init(&ctx);
-    base::MD5Update(&ctx, base::StringPiece((char *) OperaObfuscationPass,
-                                            sizeof(OperaObfuscationPass)));
-    base::MD5Update(&ctx, iv);
-    base::MD5Final(&res1, &ctx);
+    EVP_DigestInit(&ctx, EVP_md5());
+    EVP_DigestUpdate(&ctx, OperaObfuscationPass, sizeof(OperaObfuscationPass));
+    EVP_DigestUpdate(&ctx, reinterpret_cast<const uint8_t*>(iv.data()),
+                           iv.size());
+    EVP_DigestFinal(&ctx, buffer, &len);
 
-    base::MD5Init(&ctx);
-    base::MD5Update(&ctx, base::StringPiece((char *) res1.a, sizeof(res1.a)));
-    base::MD5Update(&ctx, base::StringPiece((char *) OperaObfuscationPass,
-                                            sizeof(OperaObfuscationPass)));
-    base::MD5Update(&ctx, iv);
-    base::MD5Final(&res2, &ctx);
+    EVP_DigestInit(&ctx, EVP_md5());
+    EVP_DigestUpdate(&ctx, buffer, len);
+    EVP_DigestUpdate(&ctx, OperaObfuscationPass, sizeof(OperaObfuscationPass));
+    EVP_DigestUpdate(&ctx, reinterpret_cast<const uint8_t*>(iv.data()),
+      iv.size());
+    EVP_DigestFinal(&ctx, buffer+len, &len);
 
-    std::string key;
-    key.append((char *) res1.a, sizeof(res1.a));
-    key.append((char *) res2.a, 3*8-sizeof(res2.a));
+    EVP_MD_CTX_cleanup(&ctx);
 
-    scoped_ptr<crypto::SymmetricKey> dec_key(
-          crypto::SymmetricKey::Import(crypto::SymmetricKey::DES_EDE3, key));
+    EVP_CIPHER_CTX decryptor;
+    EVP_CipherInit(&decryptor, EVP_des_ede3_cbc(), buffer, buffer+24, 0);
 
-    crypto::Encryptor decryptor;
-    if(!decryptor.Init(dec_key.get(), crypto::Encryptor::CBC,
-          base::StringPiece((char *) res2.a+8, 8)))
-      return true;
+    OPENSSL_cleanse(buffer, sizeof(buffer));
+    out_data.resize(in_data.length());
 
-    if(!decryptor.Decrypt(in_data, &out_data))
-      return false;
+    int out_len = 0;
+    int total_len = 0;
+    EVP_CipherUpdate(&decryptor,
+      reinterpret_cast<uint8_t*>(const_cast<char*>(out_data.data())), &out_len,
+      reinterpret_cast<const uint8_t*>(in_data.data()), in_data.length());
+    total_len += out_len;
+    EVP_CipherFinal_ex(&decryptor,
+      reinterpret_cast<uint8_t*>(const_cast<char*>(out_data.data() + total_len)),
+      &out_len);
+    EVP_CIPHER_CTX_cleanup(&decryptor);
+    total_len += out_len;
+    out_data.resize(total_len);
   }
   result.clear();
   for (binary_string::iterator it = out_data.begin(); it < out_data.end();) {
@@ -317,7 +343,7 @@ bool WandReadEncryptedField(std::string::iterator &buffer,
     result.push_back(wchar_t(c1));
   }
 
-  // TODO bigendian vs littleendian
+  // TODO(yngve): bigendian vs littleendian
   return true;
 }
 
@@ -327,20 +353,20 @@ bool WandReadEncryptedNameAndField(std::string::iterator &buffer,
                                    bool &is_password,
                                    binary_string *master_password = NULL) {
   is_password = false;
-  buffer++; // Ignore flag byte
+  buffer++;  // Ignore flag byte
   if (buffer >= buffer_end)
     return false;
 
   // Read fieldname
-  if(!WandReadEncryptedField(buffer, buffer_end,name))
+  if (!WandReadEncryptedField(buffer, buffer_end, name))
     return false;
 
   base::string16 temp_val1;
   base::string16 temp_val2;
 
-  if(!WandReadEncryptedField(buffer, buffer_end,temp_val1))
+  if (!WandReadEncryptedField(buffer, buffer_end, temp_val1))
     return false;
-  if(!WandReadEncryptedField(buffer, buffer_end,temp_val2,master_password))
+  if (!WandReadEncryptedField(buffer, buffer_end, temp_val2, master_password))
     return false;
 
   if (!temp_val1.empty() || temp_val2.empty()) {
@@ -367,9 +393,9 @@ bool OperaImporter::ImportWand_ReadEntryHTML(
   base::string16 submit_button;
   base::string16 submit_value;
   base::string16 domain;
-  uint32_t field_count=0;
+  uint32_t field_count = 0;
   std::vector<wand_field_entry> fields;
-  uint32_t dummy=0;
+  uint32_t dummy = 0;
 
   if (wand_version_ == 6) {
     if (!WandReadUint32(buffer, buffer_end, dummy))
@@ -411,9 +437,9 @@ bool OperaImporter::ImportWand_ReadEntryHTML(
             fields[i].is_password, &master_password_block_))
       return false;
     if (first_pass < 0 && fields[i].is_password)
-      first_pass = (int)i;
+      first_pass = static_cast<int>(i);
     else if (first_field && !fields[i].is_password)
-      first_field = (int)i;
+      first_field = static_cast<int>(i);
   }
 
   GURL::Replacements rep;
@@ -429,11 +455,10 @@ bool OperaImporter::ImportWand_ReadEntryHTML(
   password.submit_element = submit_button;
   password.origin = GURL(url).ReplaceComponents(rep);
   if (!password.origin.is_valid())
-    return true; // Ignore this entry, no URL
+    return true;  // Ignore this entry, no URL
 
   password.signon_realm = password.origin.GetOrigin().spec();
   password.blacklisted_by_user = (field_count == 0);
-  password.ssl_valid = password.origin.SchemeIs("https");
 
   if (first_field >= 0) {
     password.username_element = fields[first_field].fieldname;
@@ -446,7 +471,8 @@ bool OperaImporter::ImportWand_ReadEntryHTML(
   }
 
   for (uint32_t i = 0; i < field_count; i++) {
-    if (i != first_field && i != first_pass && !fields[first_pass].is_password)
+    if ((int) i != first_field && (int) i != first_pass &&
+        !fields[first_pass].is_password)
       password.other_possible_usernames.push_back(
           fields[first_pass].fieldvalue);
   }
@@ -462,9 +488,9 @@ bool OperaImporter::ImportWand_ReadEntryAuth(
   base::string16 date_used;
   base::string16 url;
   base::string16 domain;
-  uint32_t field_count=0;
+  uint32_t field_count = 0;
   std::vector<wand_field_entry> fields;
-  uint32_t dummy=0;
+  uint32_t dummy = 0;
 
   if (wand_version_ == 6) {
     if (!WandReadUint32(buffer, buffer_end, dummy))
@@ -491,7 +517,7 @@ bool OperaImporter::ImportWand_ReadEntryAuth(
   field_count = 2;
   fields.resize(field_count);
 
-  if(!WandReadEncryptedField(buffer, buffer_end,fields[0].fieldvalue))
+  if (!WandReadEncryptedField(buffer, buffer_end, fields[0].fieldvalue))
     return false;
 
   if (!WandReadEncryptedField(buffer, buffer_end, fields[1].fieldvalue,
@@ -526,7 +552,6 @@ bool OperaImporter::ImportWand_ReadEntryAuth(
   password.origin = GURL(url8).ReplaceComponents(rep);
   password.signon_realm = password.origin.GetOrigin().spec();
   password.blacklisted_by_user = (field_count == 0);
-  password.ssl_valid = password.origin.SchemeIs("https");
 
   if (first_field >= 0) {
     password.username_element = fields[first_field].fieldname;
@@ -539,7 +564,7 @@ bool OperaImporter::ImportWand_ReadEntryAuth(
   }
 
   for (uint32_t i = 0; i < field_count; i++) {
-    if (i != first_field && i != first_pass &&
+    if ((int)i != first_field && (int) i != first_pass &&
         !fields[first_pass].is_password) {
       password.other_possible_usernames.push_back(
           fields[first_pass].fieldvalue);
@@ -574,14 +599,14 @@ bool OperaImporter::GetMasterPasswordInfo() {
     return false;
 
   uint32_t tag_len = 0;
-  if(!WandReadUintX(sec_buffer, sec_buffer_end, 2, tag_len) || tag_len < 1)
+  if (!WandReadUintX(sec_buffer, sec_buffer_end, 2, tag_len) || tag_len < 1)
     return false;
 
   uint32_t len_len = 0;
-  if(!WandReadUintX(sec_buffer, sec_buffer_end, 2, len_len) || tag_len < 1)
+  if (!WandReadUintX(sec_buffer, sec_buffer_end, 2, len_len) || tag_len < 1)
     return false;
 
-  uint32_t tag=0;
+  uint32_t tag = 0;
   binary_string master_sec_block;
 
   if (!WandReadTagLenDataVector(sec_buffer, sec_buffer_end, tag_len, len_len,
@@ -616,10 +641,11 @@ bool OperaImporter::GetMasterPasswordInfo() {
   master_password8 = base::UTF16ToUTF8(master_password_);
   binary_string master_sec_decrypted;
 
-  if(!DecryptMasterPasswordKeys(master_password8, master_sec_salt,
-              master_sec_encrypted, master_sec_decrypted) ||
-    !ValidatePasswordBlock(master_password8, master_sec_salt,
-              "Opera SSL Password Verification", master_sec_decrypted))
+  if (!DecryptMasterPasswordKeys(master_password8, master_sec_salt,
+                                 master_sec_encrypted, master_sec_decrypted) ||
+      !ValidatePasswordBlock(master_password8, master_sec_salt,
+                             "Opera SSL Password Verification",
+                             master_sec_decrypted))
     return false;
 
   master_password_block_.assign(master_password8);
@@ -628,17 +654,28 @@ bool OperaImporter::GetMasterPasswordInfo() {
   return true;
 }
 
-void OperaImporter::ImportWand() {
-  if (wandfilename_.empty())
-    return;
+namespace {
+bool WandFormatError(std::string& error) {
+  error = "Password file can't be read and might be corrupt";
+  return false;
+}
+}
 
-  if (master_password_required_ && !GetMasterPasswordInfo())
-    return;
-
+bool OperaImporter::ImportWand(std::string& error) {
+  if (wandfilename_.empty()) {
+    error = "No notes filename provided.";
+    return false;
+  }
+  if (master_password_required_ && !GetMasterPasswordInfo()) {
+    error = "Master password required but none was supplied.";
+    return false;
+  }
   base::FilePath file(wandfilename_);
 
-  if (!base::PathExists(file))
-    return;
+  if (!base::PathExists(file)) {
+    error = "Password (wand) file does not exist.";
+    return false;
+  }
 
   std::string wand_data;
   base::ReadFileToString(file, &wand_data);
@@ -647,19 +684,19 @@ void OperaImporter::ImportWand() {
   std::string::iterator wand_buffer_end = wand_data.end();
 
   if (!WandReadUint32(wand_buffer, wand_buffer_end, wand_version_))
-    return;
+    return WandFormatError(error);
 
   if (wand_version_ < 5 || wand_version_ > 6)
-    return;
+    return WandFormatError(error);
 
   std::vector<autofill::PasswordForm> passwords;
 
   uint32_t masterpass_used = 0;
   if (!WandReadUint32(wand_buffer, wand_buffer_end, masterpass_used))
-    return;
+    return WandFormatError(error);
   if (masterpass_used != 0 && !master_password_block_.empty() &&
       !GetMasterPasswordInfo())
-    return;
+    return WandFormatError(error);
 
   uint32_t dummy;
   base::string16 dummy_str;
@@ -668,56 +705,58 @@ void OperaImporter::ImportWand() {
   for (i = 0; i < 6; i++) {
     dummy = 0xffffffff;
     if (!WandReadUint32(wand_buffer, wand_buffer_end, dummy))
-      return;
+      return WandFormatError(error);
     if (dummy != 0)
-      return;
+      return WandFormatError(error);
   }
 
   entry_count = 0;
   if (!WandReadUint32(wand_buffer, wand_buffer_end, entry_count))
-    return;
+    return WandFormatError(error);
   if (entry_count != 1)
-    return;
+    return WandFormatError(error);
   dummy_str.clear();
   if (!WandReadEncryptedField(wand_buffer, wand_buffer_end, dummy_str))
-    return;
+    return WandFormatError(error);
 
   if (*(wand_buffer++) != 0x01 || wand_buffer >= wand_buffer_end)
-    return;
+    return WandFormatError(error);
 
   if (!WandReadUint32(wand_buffer, wand_buffer_end, entry_count))
-    return;
+    return WandFormatError(error);
 
   if (entry_count != 1)
-    return;
+    return WandFormatError(error);
 
   if (!ImportWand_ReadEntryHTML(wand_buffer, wand_buffer_end, passwords, true))
-    return;
+    return WandFormatError(error);
 
   dummy_str.clear();
   if (!WandReadEncryptedField(wand_buffer, wand_buffer_end, dummy_str))
-    return;
+    return WandFormatError(error);
 
-  // TODO: parse older files
+  // TODO(yngve): parse older files
 
   if (*(wand_buffer++) != 0x00 || wand_buffer >= wand_buffer_end)
-    return;
+    return WandFormatError(error);
 
   if (!WandReadUint32(wand_buffer, wand_buffer_end, entry_count))
-    return;
+    return WandFormatError(error);
 
   for (i = 0; i < entry_count; i++) {
-    if (!ImportWand_ReadEntryHTML(wand_buffer, wand_buffer_end, passwords))
-      return;
+    if (!ImportWand_ReadEntryHTML(wand_buffer, wand_buffer_end, passwords)) {
+      LOG(ERROR) << "Failed to import password entry " << i;
+      return WandFormatError(error);
+    }
   }
 
   entry_count = 0;
   if (!WandReadUint32(wand_buffer, wand_buffer_end, entry_count))
-    return;
+    return WandFormatError(error);
 
   for (i = 0; i < entry_count; i++) {
     if (!ImportWand_ReadEntryAuth(wand_buffer, wand_buffer_end, passwords))
-      return;
+      return WandFormatError(error);
   }
 
   if (!cancelled()) {
@@ -725,4 +764,5 @@ void OperaImporter::ImportWand() {
          it < passwords.end(); it++)
       bridge_->SetPasswordForm(*it);
   }
+  return true;
 }

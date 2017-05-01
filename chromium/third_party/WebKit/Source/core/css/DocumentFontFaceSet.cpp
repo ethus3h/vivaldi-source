@@ -29,9 +29,8 @@
 
 namespace blink {
 
-PassRefPtrWillBeRawPtr<FontFaceSet> DocumentFontFaceSet::fonts(Document& document)
-{
-    return FontFaceSet::from(document);
+FontFaceSet* DocumentFontFaceSet::fonts(Document& document) {
+  return FontFaceSet::from(document);
 }
 
-} // namespace blink
+}  // namespace blink

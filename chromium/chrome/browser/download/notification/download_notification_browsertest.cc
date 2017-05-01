@@ -9,7 +9,6 @@
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
@@ -26,15 +25,17 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/chromeos_switches.h"
+#include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/core/browser/signin_manager_base.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/test/download_test_observer.h"
-#include "grit/theme_resources.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/url_request/url_request_slow_download_job.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -105,7 +106,7 @@ class MessageCenterChangeObserver
   }
 
  private:
-  scoped_ptr<base::RunLoop> run_loop_;
+  std::unique_ptr<base::RunLoop> run_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(MessageCenterChangeObserver);
 };
@@ -285,31 +286,23 @@ class DownloadNotificationTestBase : public InProcessBrowserTest {
 
     GetMessageCenter()->DisableTimersForTest();
 
-    // Set up the temporary download folder.
-    ASSERT_TRUE(CreateAndSetDownloadsDirectory(browser()));
+    ASSERT_TRUE(downloads_directory_.CreateUniqueTempDir());
+    ASSERT_TRUE(SetDownloadsDirectory(browser()));
   }
 
  protected:
-  // Must be called after browser creation.  Creates a temporary
-  // directory for downloads that is auto-deleted on destruction.
-  // Returning false indicates a failure of the function, and should be asserted
-  // in the caller.
-  bool CreateAndSetDownloadsDirectory(Browser* browser) {
+  // Must be called after browser creation. Assumes that |downloads_directory_|
+  // is created and sets its path to be used for downloads by |browser|.
+  // Returning false indicates a failure of the function, and should be
+  // asserted in the caller.
+  bool SetDownloadsDirectory(Browser* browser) {
     if (!browser)
       return false;
 
-    if (!downloads_directory_.path().empty())
-      return true;  // already created
-
-    if (!downloads_directory_.CreateUniqueTempDir())
-      return false;
-
     browser->profile()->GetPrefs()->SetFilePath(
-        prefs::kDownloadDefaultDirectory,
-        downloads_directory_.path());
+        prefs::kDownloadDefaultDirectory, downloads_directory_.GetPath());
     browser->profile()->GetPrefs()->SetFilePath(
-        prefs::kSaveFileDefaultDirectory,
-        downloads_directory_.path());
+        prefs::kSaveFileDefaultDirectory, downloads_directory_.GetPath());
 
     return true;
   }
@@ -334,7 +327,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
   void SetUpOnMainThread() override {
     Profile* profile = browser()->profile();
 
-    scoped_ptr<TestChromeDownloadManagerDelegate> test_delegate;
+    std::unique_ptr<TestChromeDownloadManagerDelegate> test_delegate;
     test_delegate.reset(new TestChromeDownloadManagerDelegate(profile));
     test_delegate->GetDownloadIdReceiverCallback().Run(
         content::DownloadItem::kInvalidId + 1);
@@ -354,9 +347,9 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
     incognito_browser_ = CreateIncognitoBrowser();
     Profile* incognito_profile = incognito_browser_->profile();
 
-    ASSERT_TRUE(CreateAndSetDownloadsDirectory(incognito_browser_));
+    ASSERT_TRUE(SetDownloadsDirectory(incognito_browser_));
 
-    scoped_ptr<TestChromeDownloadManagerDelegate> incognito_test_delegate;
+    std::unique_ptr<TestChromeDownloadManagerDelegate> incognito_test_delegate;
     incognito_test_delegate.reset(
         new TestChromeDownloadManagerDelegate(incognito_profile));
     DownloadServiceFactory::GetForBrowserContext(incognito_profile)
@@ -819,7 +812,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest, DownloadMultipleFiles) {
   EXPECT_EQ(2u, visible_notifications.size());
 
   std::string notification_id2;
-  for (auto notification : visible_notifications) {
+  for (auto* notification : visible_notifications) {
     if (notification->id() == notification_id1) {
       continue;
     } else if (notification->type() ==
@@ -1191,13 +1184,13 @@ class MultiProfileDownloadNotificationTest
 
   // Adds a new user for testing to the current session.
   void AddUser(const TestAccountInfo& info, bool log_in) {
-    user_manager::UserManager* const user_manager =
-        user_manager::UserManager::Get();
-    if (log_in)
-      user_manager->UserLoggedIn(AccountId::FromUserEmail(info.email),
-                                 info.hash, false);
-    user_manager->SaveUserDisplayName(AccountId::FromUserEmail(info.email),
-                                      base::UTF8ToUTF16(info.display_name));
+    if (log_in) {
+      session_manager::SessionManager::Get()->CreateSession(
+          AccountId::FromUserEmailGaiaId(info.email, info.gaia_id), info.hash);
+    }
+    user_manager::UserManager::Get()->SaveUserDisplayName(
+        AccountId::FromUserEmailGaiaId(info.email, info.gaia_id),
+        base::UTF8ToUTF16(info.display_name));
     SigninManagerFactory::GetForProfile(
         chromeos::ProfileHelper::GetProfileByUserIdHash(info.hash))
             ->SetAuthenticatedAccountInfo(info.gaia_id, info.email);

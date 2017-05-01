@@ -4,11 +4,11 @@
 
 #include "google_apis/gaia/gaia_oauth_client.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "google_apis/gaia/gaia_urls.h"
@@ -98,7 +98,7 @@ class GaiaOAuthClient::Core
   int num_retries_;
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
   GaiaOAuthClient::Delegate* delegate_;
-  scoped_ptr<net::URLFetcher> request_;
+  std::unique_ptr<net::URLFetcher> request_;
   RequestType request_type_;
 };
 
@@ -252,7 +252,7 @@ void GaiaOAuthClient::Core::HandleResponse(
   // Move ownership of the request fetcher into a local scoped_ptr which
   // will be nuked when we're done handling the request, unless we need
   // to retry, in which case ownership will be returned to request_.
-  scoped_ptr<net::URLFetcher> old_request = std::move(request_);
+  std::unique_ptr<net::URLFetcher> old_request = std::move(request_);
   DCHECK_EQ(source, old_request.get());
 
   // HTTP_BAD_REQUEST means the arguments are invalid.  HTTP_UNAUTHORIZED means
@@ -265,13 +265,13 @@ void GaiaOAuthClient::Core::HandleResponse(
     return;
   }
 
-  scoped_ptr<base::DictionaryValue> response_dict;
+  std::unique_ptr<base::DictionaryValue> response_dict;
   if (source->GetResponseCode() == net::HTTP_OK) {
     std::string data;
     source->GetResponseAsString(&data);
-    scoped_ptr<base::Value> message_value = base::JSONReader::Read(data);
+    std::unique_ptr<base::Value> message_value = base::JSONReader::Read(data);
     if (message_value.get() &&
-        message_value->IsType(base::Value::TYPE_DICTIONARY)) {
+        message_value->IsType(base::Value::Type::DICTIONARY)) {
       response_dict.reset(
           static_cast<base::DictionaryValue*>(message_value.release()));
     }
@@ -283,6 +283,7 @@ void GaiaOAuthClient::Core::HandleResponse(
     if ((source->GetMaxRetriesOn5xx() != -1) &&
         (num_retries_ >= source->GetMaxRetriesOn5xx())) {
       // Retry limit reached. Give up.
+      request_type_ = NO_PENDING_REQUEST;
       delegate_->OnNetworkError(source->GetResponseCode());
     } else {
       request_ = std::move(old_request);

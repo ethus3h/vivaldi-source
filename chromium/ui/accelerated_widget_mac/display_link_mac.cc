@@ -6,8 +6,10 @@
 
 #include <stdint.h>
 
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 
 namespace base {
@@ -24,6 +26,20 @@ struct ScopedTypeRefTraits<CVDisplayLinkRef> {
 };
 
 }  // namespace base
+
+namespace {
+
+// Empty callback set during tear down.
+CVReturn VoidDisplayLinkCallback(CVDisplayLinkRef display_link,
+                                 const CVTimeStamp* now,
+                                 const CVTimeStamp* output_time,
+                                 CVOptionFlags flags_in,
+                                 CVOptionFlags* flags_out,
+                                 void* context) {
+  return kCVReturnSuccess;
+}
+
+}  // namespace
 
 namespace ui {
 
@@ -67,11 +83,10 @@ scoped_refptr<DisplayLinkMac> DisplayLinkMac::GetForDisplay(
 DisplayLinkMac::DisplayLinkMac(
     CGDirectDisplayID display_id,
     base::ScopedTypeRef<CVDisplayLinkRef> display_link)
-      : main_thread_task_runner_(
-            base::MessageLoop::current()->task_runner()),
-        display_id_(display_id),
-        display_link_(display_link),
-        timebase_and_interval_valid_(false) {
+    : main_thread_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      display_id_(display_id),
+      display_link_(display_link),
+      timebase_and_interval_valid_(false) {
   DCHECK(display_map_.Get().find(display_id) == display_map_.Get().end());
   if (display_map_.Get().empty()) {
     CGError register_error = CGDisplayRegisterReconfigurationCallback(
@@ -85,6 +100,14 @@ DisplayLinkMac::DisplayLinkMac(
 
 DisplayLinkMac::~DisplayLinkMac() {
   StopDisplayLink();
+
+  // Usually |display_link_| holds the last reference to CVDisplayLinkRef, but
+  // that's not guaranteed, so it might not free all resources after the
+  // destructor completes. Ensure the callback is cleared out regardless to
+  // avoid possible crashes (see http://crbug.com/564780).
+  CVReturn ret = CVDisplayLinkSetOutputCallback(
+      display_link_, VoidDisplayLinkCallback, nullptr);
+  DCHECK_EQ(kCGErrorSuccess, ret);
 
   DisplayMap::iterator found = display_map_.Get().find(display_id_);
   DCHECK(found != display_map_.Get().end());

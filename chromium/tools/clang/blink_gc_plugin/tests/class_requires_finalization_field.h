@@ -11,20 +11,20 @@ namespace blink {
 
 class A : public GarbageCollected<A> {
 public:
-    virtual void trace(Visitor*) { }
+    virtual void Trace(Visitor*) { }
 };
 
 // Has a non-trivial dtor (user-declared).
 class B {
 public:
     ~B() { }
-    void trace(Visitor*) { };
+    void Trace(Visitor*) { };
 };
 
 // Has a trivial dtor.
 class C {
 public:
-    void trace(Visitor*) { };
+    void Trace(Visitor*) { };
 };
 
 } // blink namespace
@@ -41,9 +41,9 @@ struct VectorTraits<blink::C> {
 namespace blink {
 
 // Off-heap vectors always need to be finalized.
-class NeedsFinalizer : public A, public ScriptWrappable {
+class NeedsFinalizer : public A {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 private:
     Vector<Member<A> > m_as;
 };
@@ -52,24 +52,24 @@ private:
 // need to be finalized.
 class AlsoNeedsFinalizer : public A {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 private:
     HeapVector<B, 10> m_bs;
 };
 
 // On-heap vectors with no inlined objects never need to be finalized.
-class DoesNotNeedFinalizer : public A, public ScriptWrappable {
+class DoesNotNeedFinalizer : public A {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 private:
     HeapVector<B> m_bs;
 };
 
 // On-heap vectors with inlined objects that don't need destruction
 // don't need to be finalized.
-class AlsoDoesNotNeedFinalizer : public A, public ScriptWrappable {
+class AlsoDoesNotNeedFinalizer : public A {
 public:
-    void trace(Visitor*);
+    void Trace(Visitor*);
 private:
     HeapVector<Member<A>, 10> m_as;
     HeapVector<C, 10> m_cs;

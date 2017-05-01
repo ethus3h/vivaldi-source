@@ -6,10 +6,11 @@
 #include <stdint.h>
 
 #include "base/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
-#include "device/core/mock_device_client.h"
+#include "device/base/mock_device_client.h"
 #include "device/hid/hid_collection_info.h"
 #include "device/hid/hid_connection.h"
 #include "device/hid/hid_device_info.h"
@@ -33,7 +34,7 @@ using testing::_;
 #if defined(OS_MACOSX)
 const uint64_t kTestDeviceIds[] = {1, 2, 3, 4, 5};
 #else
-const char* kTestDeviceIds[] = {"A", "B", "C", "D", "E"};
+const char* const kTestDeviceIds[] = {"A", "B", "C", "D", "E"};
 #endif
 
 // These report descriptors define two devices with 8-byte input, output and
@@ -132,7 +133,17 @@ class TestDevicePermissionsPrompt
 
   void ShowDialog() override { prompt()->SetObserver(this); }
 
-  void OnDevicesChanged() override {
+  void OnDeviceAdded(size_t index, const base::string16& device_name) override {
+    OnDevicesChanged();
+  }
+
+  void OnDeviceRemoved(size_t index,
+                       const base::string16& device_name) override {
+    OnDevicesChanged();
+  }
+
+ private:
+  void OnDevicesChanged() {
     for (size_t i = 0; i < prompt()->GetDeviceCount(); ++i) {
       prompt()->GrantDevicePermission(i);
       if (!prompt()->multiple()) {
@@ -147,9 +158,9 @@ class TestExtensionsAPIClient : public ShellExtensionsAPIClient {
  public:
   TestExtensionsAPIClient() : ShellExtensionsAPIClient() {}
 
-  scoped_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
+  std::unique_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
       content::WebContents* web_contents) const override {
-    return make_scoped_ptr(new TestDevicePermissionsPrompt(web_contents));
+    return base::MakeUnique<TestDevicePermissionsPrompt>(web_contents);
   }
 };
 
@@ -207,7 +218,7 @@ class HidApiTest : public ShellApiTest {
   }
 
  protected:
-  scoped_ptr<MockDeviceClient> device_client_;
+  std::unique_ptr<MockDeviceClient> device_client_;
 };
 
 IN_PROC_BROWSER_TEST_F(HidApiTest, HidApp) {

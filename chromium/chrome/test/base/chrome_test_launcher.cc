@@ -4,13 +4,16 @@
 
 #include "chrome/test/base/chrome_test_launcher.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/command_line.h"
 #include "base/debug/leak_annotations.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/linked_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/process/process_metrics.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
@@ -19,8 +22,9 @@
 #include "chrome/app/chrome_main_delegate.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/install_static/install_details.h"
+#include "chrome/install_static/install_modes.h"
 #include "chrome/test/base/chrome_test_suite.h"
-#include "chrome/test/base/test_switches.h"
 #include "components/crash/content/app/crashpad.h"
 #include "content/public/app/content_main.h"
 #include "content/public/common/content_switches.h"
@@ -44,84 +48,82 @@
 #include "ash/test/ui_controls_factory_ash.h"
 #endif
 
-#if defined(OS_LINUX) || defined(OS_ANDROID) || defined(OS_WIN)
+#if defined(OS_LINUX) || defined(OS_ANDROID)
 #include "chrome/app/chrome_crash_reporter_client.h"
+#endif
+
+#if defined(OS_WIN)
+#include "chrome/app/chrome_crash_reporter_client_win.h"
 #endif
 
 #if defined(VIVALDI_BUILD)
 #include "extraparts/vivaldi_main_delegate.h"
 #endif
 
-namespace {
+ChromeTestSuiteRunner::ChromeTestSuiteRunner() {}
+ChromeTestSuiteRunner::~ChromeTestSuiteRunner() {}
 
-class ChromeTestLauncherDelegate : public content::TestLauncherDelegate {
- public:
-  explicit ChromeTestLauncherDelegate(ChromeTestSuiteRunner* runner)
-      : runner_(runner) {}
-  ~ChromeTestLauncherDelegate() override {}
+int ChromeTestSuiteRunner::RunTestSuite(int argc, char** argv) {
+  return ChromeTestSuite(argc, argv).Run();
+}
 
-  int RunTestSuite(int argc, char** argv) override {
-    return runner_->RunTestSuite(argc, argv);
+ChromeTestLauncherDelegate::ChromeTestLauncherDelegate(
+    ChromeTestSuiteRunner* runner)
+    : runner_(runner) {}
+ChromeTestLauncherDelegate::~ChromeTestLauncherDelegate() {}
+
+int ChromeTestLauncherDelegate::RunTestSuite(int argc, char** argv) {
+  return runner_->RunTestSuite(argc, argv);
+}
+
+bool ChromeTestLauncherDelegate::AdjustChildProcessCommandLine(
+    base::CommandLine* command_line,
+    const base::FilePath& temp_data_dir) {
+  base::CommandLine new_command_line(command_line->GetProgram());
+  base::CommandLine::SwitchMap switches = command_line->GetSwitches();
+
+  // Strip out user-data-dir if present.  We will add it back in again later.
+  switches.erase(switches::kUserDataDir);
+
+  for (base::CommandLine::SwitchMap::const_iterator iter = switches.begin();
+       iter != switches.end(); ++iter) {
+    new_command_line.AppendSwitchNative((*iter).first, (*iter).second);
   }
 
-  bool AdjustChildProcessCommandLine(
-      base::CommandLine* command_line,
-      const base::FilePath& temp_data_dir) override {
-    base::CommandLine new_command_line(command_line->GetProgram());
-    base::CommandLine::SwitchMap switches = command_line->GetSwitches();
+  new_command_line.AppendSwitchPath(switches::kUserDataDir, temp_data_dir);
 
-    // Strip out user-data-dir if present.  We will add it back in again later.
-    switches.erase(switches::kUserDataDir);
+  // file:// access for ChromeOS.
+  new_command_line.AppendSwitch(switches::kAllowFileAccess);
 
-    for (base::CommandLine::SwitchMap::const_iterator iter = switches.begin();
-         iter != switches.end(); ++iter) {
-      new_command_line.AppendSwitchNative((*iter).first, (*iter).second);
-    }
+  *command_line = new_command_line;
+  return true;
+}
 
-    new_command_line.AppendSwitchPath(switches::kUserDataDir, temp_data_dir);
-
-    // file:// access for ChromeOS.
-    new_command_line.AppendSwitch(switches::kAllowFileAccess);
-
-    *command_line = new_command_line;
-    return true;
-  }
-
- protected:
-  content::ContentMainDelegate* CreateContentMainDelegate() override {
+content::ContentMainDelegate*
+ChromeTestLauncherDelegate::CreateContentMainDelegate() {
 #if defined(VIVALDI_BUILD)
-    return new VivaldiMainDelegate();
+  return new VivaldiMainDelegate();
 #else
-    return new ChromeMainDelegate();
+  return new ChromeMainDelegate();
 #endif
-  }
-
-  void AdjustDefaultParallelJobs(int* default_jobs) override {
-#if defined(OS_WIN)
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kAshBrowserTests)) {
-      *default_jobs = 1;
-      fprintf(stdout,
-              "Disabling test parallelization for --ash-browsertests.\n");
-      fflush(stdout);
-    }
-#endif  // defined(OS_WIN)
-  }
-
- private:
-  ChromeTestSuiteRunner* runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeTestLauncherDelegate);
-};
-
-}  // namespace
+}
 
 int LaunchChromeTests(int default_jobs,
-                      ChromeTestSuiteRunner* runner,
+                      content::TestLauncherDelegate* delegate,
                       int argc,
                       char** argv) {
 #if defined(OS_MACOSX)
   chrome_browser_application_mac::RegisterBrowserCrApp();
+#endif
+
+#if defined(OS_WIN)
+  // Create a primordial InstallDetails instance for the test.
+  std::unique_ptr<install_static::PrimaryInstallDetails> install_details =
+      base::MakeUnique<install_static::PrimaryInstallDetails>();
+  install_details->set_mode(&install_static::kInstallModes[0]);
+  install_details->set_channel(
+      install_static::kInstallModes[0].default_channel_name);
+  install_static::InstallDetails::SetForProcess(std::move(install_details));
 #endif
 
 #if defined(OS_LINUX) || defined(OS_ANDROID) || defined(OS_WIN)
@@ -132,6 +134,5 @@ int LaunchChromeTests(int default_jobs,
   crash_reporter::SetCrashReporterClient(crash_client);
 #endif
 
-  ChromeTestLauncherDelegate launcher_delegate(runner);
-  return content::LaunchTests(&launcher_delegate, default_jobs, argc, argv);
+  return content::LaunchTests(delegate, default_jobs, argc, argv);
 }

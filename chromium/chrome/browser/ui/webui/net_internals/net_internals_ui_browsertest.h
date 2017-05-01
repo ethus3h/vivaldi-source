@@ -5,15 +5,12 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_NET_INTERNALS_NET_INTERNALS_UI_BROWSERTEST_H_
 #define CHROME_BROWSER_UI_WEBUI_NET_INTERNALS_NET_INTERNALS_UI_BROWSERTEST_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/test/base/web_ui_browser_test.h"
 
 class GURL;
-
-namespace base {
-class ListValue;
-}  // namespace base
 
 class NetInternalsTest : public WebUIBrowserTest {
  protected:
@@ -24,7 +21,6 @@ class NetInternalsTest : public WebUIBrowserTest {
   class MessageHandler;
 
   // InProcessBrowserTest overrides.
-  void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
 
   // WebUIBrowserTest implementation.
@@ -36,7 +32,7 @@ class NetInternalsTest : public WebUIBrowserTest {
   // TestServer is already started.
   bool StartTestServer();
 
-  scoped_ptr<MessageHandler> message_handler_;
+  std::unique_ptr<MessageHandler> message_handler_;
 
   // True if the test server has already been successfully started.
   bool test_server_started_;

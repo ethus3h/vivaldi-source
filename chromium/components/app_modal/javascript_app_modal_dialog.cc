@@ -36,8 +36,8 @@ void EnforceMaxPromptSize(const base::string16& in_string,
 #else
 // One-dimensional eliding.  Trust the window system to break the string
 // appropriately, but limit its overall length to something reasonable.
-const int kMessageTextMaxSize = 2000;
-const int kDefaultPromptMaxSize = 2000;
+const size_t kMessageTextMaxSize = 2000;
+const size_t kDefaultPromptMaxSize = 2000;
 void EnforceMaxTextSize(const base::string16& in_string,
                         base::string16* out_string) {
   gfx::ElideString(in_string, kMessageTextMaxSize, out_string);
@@ -92,12 +92,13 @@ bool JavaScriptAppModalDialog::IsJavaScriptModalDialog() {
   return true;
 }
 
-void JavaScriptAppModalDialog::Invalidate() {
+void JavaScriptAppModalDialog::Invalidate(bool suppress_callbacks) {
   if (!IsValid())
     return;
 
-  AppModalDialog::Invalidate();
-  CallDialogClosedCallback(false, base::string16());
+  AppModalDialog::Invalidate(suppress_callbacks);
+  if (!suppress_callbacks)
+    CallDialogClosedCallback(false, base::string16());
   if (native_dialog())
     CloseModalDialog();
 }
@@ -154,7 +155,7 @@ void JavaScriptAppModalDialog::NotifyDelegate(bool success,
 
   // On Views, we can end up coming through this code path twice :(.
   // See crbug.com/63732.
-  AppModalDialog::Invalidate();
+  AppModalDialog::Invalidate(false);
 }
 
 void JavaScriptAppModalDialog::CallDialogClosedCallback(bool success,

@@ -91,9 +91,10 @@ bool ParseScaleFactor(const base::StringPiece& identifier,
 void ParsePathAndScale(const GURL& url,
                        std::string* path,
                        float* scale_factor) {
-  *path = net::UnescapeURLComponent(url.path().substr(1),
-                                    (net::UnescapeRule::URL_SPECIAL_CHARS |
-                                     net::UnescapeRule::SPACES));
+  *path = net::UnescapeURLComponent(
+      url.path().substr(1),
+      net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
+          net::UnescapeRule::SPACES);
   if (scale_factor)
     *scale_factor = 1.0f;
 
@@ -122,8 +123,8 @@ void SetLoadTimeDataDefaults(const std::string& app_locale,
   localized_strings->SetString("textdirection", GetTextDirection());
 }
 
-std::string GetWebUiCssTextDefaults(const std::string& css_template) {
-  std::map<base::StringPiece, std::string> placeholders;
+std::string GetWebUiCssTextDefaults(base::StringPiece css_template) {
+  ui::TemplateReplacements placeholders;
   placeholders["textDirection"] = GetTextDirection();
   placeholders["fontFamily"] = GetFontFamily();
   placeholders["fontSize"] = GetFontSize();
@@ -133,19 +134,15 @@ std::string GetWebUiCssTextDefaults(const std::string& css_template) {
 std::string GetWebUiCssTextDefaults() {
   const ui::ResourceBundle& resource_bundle =
       ui::ResourceBundle::GetSharedInstance();
-  const std::string& css_template =
-      resource_bundle.GetRawDataResource(IDR_WEBUI_CSS_TEXT_DEFAULTS)
-          .as_string();
-  return GetWebUiCssTextDefaults(css_template);
+  return GetWebUiCssTextDefaults(
+      resource_bundle.GetRawDataResource(IDR_WEBUI_CSS_TEXT_DEFAULTS));
 }
 
 std::string GetWebUiCssTextDefaultsMd() {
   const ui::ResourceBundle& resource_bundle =
       ui::ResourceBundle::GetSharedInstance();
-  const std::string& css_template =
-      resource_bundle.GetRawDataResource(IDR_WEBUI_CSS_TEXT_DEFAULTS_MD)
-          .as_string();
-  return GetWebUiCssTextDefaults(css_template);
+  return GetWebUiCssTextDefaults(
+      resource_bundle.GetRawDataResource(IDR_WEBUI_CSS_TEXT_DEFAULTS_MD));
 }
 
 void AppendWebUiCssTextDefaults(std::string* html) {

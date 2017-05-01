@@ -13,139 +13,35 @@
 
 namespace media {
 
-// TODO(msu.koo): http://crbug.com/532272, remove checking the switch in favour
-// of deferring GetModel() call to the actual VideoCaptureDevice object.
-const std::string VideoCaptureDevice::Name::GetNameAndModel() const {
-  const std::string model_id = GetModel();
-  if (model_id.empty())
-    return device_name_;
-  const std::string suffix = " (" + model_id + ")";
-  if (base::EndsWith(device_name_, suffix, base::CompareCase::SENSITIVE) ||
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kUseFakeDeviceForMediaStream))
-    // Ignore |model_id| if |kUseFakeDeviceForMediaStream| flag is present.
-    return device_name_;
-  return device_name_ + suffix;
-}
+VideoCaptureDevice::Client::Buffer::Buffer() : id_(0), frame_feedback_id_(0) {}
 
-VideoCaptureDevice::Name::Name() {
-}
+VideoCaptureDevice::Client::Buffer::Buffer(
+    int buffer_id,
+    int frame_feedback_id,
+    std::unique_ptr<HandleProvider> handle_provider,
+    std::unique_ptr<ScopedAccessPermission> access_permission)
+    : handle_provider_(std::move(handle_provider)),
+      access_permission_(std::move(access_permission)),
+      id_(buffer_id),
+      frame_feedback_id_(frame_feedback_id) {}
 
-VideoCaptureDevice::Name::Name(const std::string& name, const std::string& id)
-    : device_name_(name), unique_id_(id) {
-}
+VideoCaptureDevice::Client::Buffer::Buffer(
+    VideoCaptureDevice::Client::Buffer&& other) = default;
 
-#if defined(OS_LINUX)
-VideoCaptureDevice::Name::Name(const std::string& name,
-                               const std::string& id,
-                               const CaptureApiType api_type)
-    : device_name_(name), unique_id_(id), capture_api_class_(api_type) {
-}
-#elif defined(OS_WIN)
-VideoCaptureDevice::Name::Name(const std::string& name,
-                               const std::string& id,
-                               const CaptureApiType api_type)
-    : device_name_(name),
-      unique_id_(id),
-      capture_api_class_(api_type),
-      capabilities_id_(id) {
-}
-#elif defined(OS_MACOSX)
-VideoCaptureDevice::Name::Name(const std::string& name,
-                               const std::string& id,
-                               const CaptureApiType api_type)
-    : device_name_(name),
-      unique_id_(id),
-      capture_api_class_(api_type),
-      transport_type_(OTHER_TRANSPORT),
-      is_blacklisted_(false) {
-}
+VideoCaptureDevice::Client::Buffer::~Buffer() = default;
 
-VideoCaptureDevice::Name::Name(const std::string& name,
-                               const std::string& id,
-                               const CaptureApiType api_type,
-                               const TransportType transport_type)
-    : device_name_(name),
-      unique_id_(id),
-      capture_api_class_(api_type),
-      transport_type_(transport_type),
-      is_blacklisted_(false) {
-}
-#elif defined(ANDROID)
-VideoCaptureDevice::Name::Name(const std::string& name,
-                               const std::string& id,
-                               const CaptureApiType api_type)
-    : device_name_(name), unique_id_(id), capture_api_class_(api_type) {
-}
-#endif
+VideoCaptureDevice::Client::Buffer& VideoCaptureDevice::Client::Buffer::
+operator=(VideoCaptureDevice::Client::Buffer&& other) = default;
 
-VideoCaptureDevice::Name::~Name() {
-}
+VideoCaptureDevice::~VideoCaptureDevice() {}
 
-#if defined(OS_LINUX)
-const char* VideoCaptureDevice::Name::GetCaptureApiTypeString() const {
-  switch (capture_api_type()) {
-    case V4L2_SINGLE_PLANE:
-      return "V4L2 SPLANE";
-    case V4L2_MULTI_PLANE:
-      return "V4L2 MPLANE";
-    default:
-      NOTREACHED() << "Unknown Video Capture API type!";
-      return "Unknown API";
-  }
-}
-#elif defined(OS_WIN)
-const char* VideoCaptureDevice::Name::GetCaptureApiTypeString() const {
-  switch (capture_api_type()) {
-    case MEDIA_FOUNDATION:
-      return "Media Foundation";
-    case DIRECT_SHOW:
-      return "Direct Show";
-    default:
-      NOTREACHED() << "Unknown Video Capture API type!";
-      return "Unknown API";
-  }
-}
-#elif defined(OS_MACOSX)
-const char* VideoCaptureDevice::Name::GetCaptureApiTypeString() const {
-  switch (capture_api_type()) {
-    case AVFOUNDATION:
-      return "AV Foundation";
-    case QTKIT:
-      return "QTKit";
-    case DECKLINK:
-      return "DeckLink";
-    default:
-      NOTREACHED() << "Unknown Video Capture API type!";
-      return "Unknown API";
-  }
-}
-#elif defined(OS_ANDROID)
-const char* VideoCaptureDevice::Name::GetCaptureApiTypeString() const {
-  switch (capture_api_type()) {
-    case API1:
-      return "Camera API1";
-    case API2_LEGACY:
-      return "Camera API2 Legacy";
-    case API2_FULL:
-      return "Camera API2 Full";
-    case API2_LIMITED:
-      return "Camera API2 Limited";
-    case TANGO:
-      return "Tango API";
-    case API_TYPE_UNKNOWN:
-    default:
-      NOTREACHED() << "Unknown Video Capture API type!";
-      return "Unknown API";
-  }
-}
-#endif
+void VideoCaptureDevice::GetPhotoCapabilities(
+    GetPhotoCapabilitiesCallback callback) {}
 
-VideoCaptureDevice::Client::Buffer::~Buffer() {
-}
+void VideoCaptureDevice::SetPhotoOptions(mojom::PhotoSettingsPtr settings,
+                                         SetPhotoOptionsCallback callback) {}
 
-VideoCaptureDevice::~VideoCaptureDevice() {
-}
+void VideoCaptureDevice::TakePhoto(TakePhotoCallback callback) {}
 
 PowerLineFrequency VideoCaptureDevice::GetPowerLineFrequencyForLocation()
     const {

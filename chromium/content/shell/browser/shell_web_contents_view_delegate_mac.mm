@@ -95,8 +95,7 @@ ShellWebContentsViewDelegate::~ShellWebContentsViewDelegate() {
 void ShellWebContentsViewDelegate::ShowContextMenu(
     RenderFrameHost* render_frame_host,
     const ContextMenuParams& params) {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kRunLayoutTest))
+  if (switches::IsRunLayoutTestSwitchPresent())
     return;
 
   params_ = params;
@@ -254,7 +253,7 @@ void ShellWebContentsViewDelegate::ActionPerformed(int tag) {
       web_contents_->Focus();
       break;
     case ShellContextMenuItemReloadTag: {
-      web_contents_->GetController().Reload(false);
+      web_contents_->GetController().Reload(ReloadType::NORMAL, false);
       web_contents_->Focus();
       break;
     }

@@ -42,14 +42,6 @@ function GalleryDataModel(metadataModel, opt_watcher) {
  */
 GalleryDataModel.MAX_FULL_IMAGE_CACHE_ = 3;
 
-/**
- * Maximum number of screen size image cache.
- * @type {number}
- * @const
- * @private
- */
-GalleryDataModel.MAX_SCREEN_IMAGE_CACHE_ = 5;
-
 GalleryDataModel.prototype = {
   __proto__: cr.ui.ArrayDataModel.prototype
 };
@@ -138,18 +130,6 @@ GalleryDataModel.prototype.evictCache = function() {
           sorted[i].contentImage.width = 0;
           sorted[i].contentImage.height = 0;
           sorted[i].contentImage = null;
-        }
-      }
-    }
-    if (sorted[i].screenImage) {
-      if (++screenCacheCount > GalleryDataModel.MAX_SCREEN_IMAGE_CACHE_) {
-        if (sorted[i].screenImage.parentNode) {
-          console.error('The screen image has a parent node.');
-        } else {
-          // Force to free the buffer of the canvas by assigning zero size.
-          sorted[i].screenImage.width = 0;
-          sorted[i].screenImage.height = 0;
-          sorted[i].screenImage = null;
         }
       }
     }

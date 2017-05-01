@@ -10,18 +10,18 @@
 #include "base/callback.h"
 #include "base/callback_list.h"
 #include "chrome/browser/chromeos/customization/customization_document.h"
+#include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/ui/login_display.h"
 #include "ui/gfx/native_widget_types.h"
 
-namespace views {
-class Widget;
-}  // namespace views
+class AccountId;
 
 namespace chromeos {
 
 class AppLaunchController;
 class AutoEnrollmentController;
 class LoginScreenContext;
+class OobeUI;
 class WebUILoginView;
 class WizardController;
 
@@ -30,6 +30,9 @@ class WizardController;
 // UI implementation (such as LoginDisplay).
 class LoginDisplayHost {
  public:
+  // Returns the default LoginDisplayHost instance if it has been created.
+  static LoginDisplayHost* default_host() { return default_host_; }
+
   virtual ~LoginDisplayHost() {}
 
   // Creates UI implementation specific login display instance (views/WebUI).
@@ -39,6 +42,9 @@ class LoginDisplayHost {
 
   // Returns corresponding native window.
   virtual gfx::NativeWindow GetNativeWindow() const = 0;
+
+  // Returns instance of the OOBE WebUI.
+  virtual OobeUI* GetOobeUI() const = 0;
 
   // Returns the current login view.
   virtual WebUILoginView* GetWebUILoginView() const = 0;
@@ -64,8 +70,8 @@ class LoginDisplayHost {
 
   // Starts out-of-box-experience flow or shows other screen handled by
   // Wizard controller i.e. camera, recovery.
-  // One could specify start screen with |first_screen_name|.
-  virtual void StartWizard(const std::string& first_screen_name) = 0;
+  // One could specify start screen with |first_screen|.
+  virtual void StartWizard(OobeScreen first_screen) = 0;
 
   // Returns current WizardController, if it exists.
   // Result should not be stored.
@@ -79,6 +85,9 @@ class LoginDisplayHost {
   // |completion_callback| called before display host shutdown.
   // |completion_callback| can be null.
   virtual void StartUserAdding(const base::Closure& completion_callback) = 0;
+
+  // Cancel addint user into session.
+  virtual void CancelUserAdding() = 0;
 
   // Starts sign in screen.
   virtual void StartSignInScreen(const LoginScreenContext& context) = 0;
@@ -97,6 +106,13 @@ class LoginDisplayHost {
 
   // Starts the demo app launch.
   virtual void StartDemoAppLaunch() = 0;
+
+  // Starts ARC kiosk splash screen.
+  virtual void StartArcKiosk(const AccountId& account_id) = 0;
+
+ protected:
+  // Default LoginDisplayHost. Child class sets the reference.
+  static LoginDisplayHost* default_host_;
 };
 
 }  // namespace chromeos

@@ -6,10 +6,13 @@
 
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
+#include "components/version_info/version_info.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/resource_request_info.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/generated_api_registration.h"
 #include "extensions/browser/event_router.h"
@@ -18,11 +21,14 @@
 #include "extensions/browser/null_app_sorting.h"
 #include "extensions/browser/updater/null_extension_cache.h"
 #include "extensions/browser/url_request_util.h"
+#include "extensions/common/features/feature_channel.h"
 #include "extensions/shell/browser/api/generated_api_registration.h"
+#include "extensions/shell/browser/delegates/shell_kiosk_delegate.h"
 #include "extensions/shell/browser/shell_extension_host_delegate.h"
 #include "extensions/shell/browser/shell_extension_system_factory.h"
 #include "extensions/shell/browser/shell_extension_web_contents_observer.h"
 #include "extensions/shell/browser/shell_extensions_api_client.h"
+#include "extensions/shell/browser/shell_navigation_ui_data.h"
 #include "extensions/shell/browser/shell_runtime_api_delegate.h"
 
 #if defined(OS_CHROMEOS)
@@ -41,6 +47,9 @@ ShellExtensionsBrowserClient::ShellExtensionsBrowserClient(
       pref_service_(pref_service),
       api_client_(new ShellExtensionsAPIClient),
       extension_cache_(new NullExtensionCache()) {
+  // app_shell does not have a concept of channel yet, so leave UNKNOWN to
+  // enable all channel-dependent extension APIs.
+  SetCurrentChannel(version_info::Channel::UNKNOWN);
 }
 
 ShellExtensionsBrowserClient::~ShellExtensionsBrowserClient() {
@@ -145,9 +154,9 @@ ShellExtensionsBrowserClient::GetProcessManagerDelegate() const {
   return NULL;
 }
 
-scoped_ptr<ExtensionHostDelegate>
+std::unique_ptr<ExtensionHostDelegate>
 ShellExtensionsBrowserClient::CreateExtensionHostDelegate() {
-  return scoped_ptr<ExtensionHostDelegate>(new ShellExtensionHostDelegate);
+  return base::WrapUnique(new ShellExtensionHostDelegate);
 }
 
 bool ShellExtensionsBrowserClient::DidVersionUpdate(BrowserContext* context) {
@@ -164,12 +173,6 @@ bool ShellExtensionsBrowserClient::IsRunningInForcedAppMode() {
 
 bool ShellExtensionsBrowserClient::IsLoggedInAsPublicAccount() {
   return false;
-}
-
-ApiActivityMonitor* ShellExtensionsBrowserClient::GetApiActivityMonitor(
-    BrowserContext* context) {
-  // app_shell doesn't monitor API function calls or events.
-  return NULL;
 }
 
 ExtensionSystemProvider*
@@ -192,10 +195,10 @@ void ShellExtensionsBrowserClient::RegisterMojoServices(
   RegisterServicesForFrame(render_frame_host, extension);
 }
 
-scoped_ptr<RuntimeAPIDelegate>
+std::unique_ptr<RuntimeAPIDelegate>
 ShellExtensionsBrowserClient::CreateRuntimeAPIDelegate(
     content::BrowserContext* context) const {
-  return scoped_ptr<RuntimeAPIDelegate>(new ShellRuntimeAPIDelegate());
+  return base::MakeUnique<ShellRuntimeAPIDelegate>();
 }
 
 const ComponentExtensionResourceManager*
@@ -206,7 +209,7 @@ ShellExtensionsBrowserClient::GetComponentExtensionResourceManager() {
 void ShellExtensionsBrowserClient::BroadcastEventToRenderers(
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    scoped_ptr<base::ListValue> args) {
+    std::unique_ptr<base::ListValue> args) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
@@ -216,7 +219,7 @@ void ShellExtensionsBrowserClient::BroadcastEventToRenderers(
     return;
   }
 
-  scoped_ptr<Event> event(
+  std::unique_ptr<Event> event(
       new Event(histogram_value, event_name, std::move(args)));
   EventRouter::Get(browser_context_)->BroadcastEvent(std::move(event));
 }
@@ -247,6 +250,26 @@ ExtensionWebContentsObserver*
 ShellExtensionsBrowserClient::GetExtensionWebContentsObserver(
     content::WebContents* web_contents) {
   return ShellExtensionWebContentsObserver::FromWebContents(web_contents);
+}
+
+ExtensionNavigationUIData*
+ShellExtensionsBrowserClient::GetExtensionNavigationUIData(
+    net::URLRequest* request) {
+  const content::ResourceRequestInfo* info =
+      content::ResourceRequestInfo::ForRequest(request);
+  if (!info)
+    return nullptr;
+  ShellNavigationUIData* navigation_data =
+      static_cast<ShellNavigationUIData*>(info->GetNavigationUIData());
+  if (!navigation_data)
+    return nullptr;
+  return navigation_data->GetExtensionNavigationUIData();
+}
+
+KioskDelegate* ShellExtensionsBrowserClient::GetKioskDelegate() {
+  if (!kiosk_delegate_)
+    kiosk_delegate_.reset(new ShellKioskDelegate());
+  return kiosk_delegate_.get();
 }
 
 }  // namespace extensions

@@ -10,9 +10,9 @@
 
 #include "base/bind.h"
 #include "base/location.h"
+#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
@@ -22,8 +22,7 @@
 #include "net/dns/dns_protocol.h"
 #include "net/dns/dns_util.h"
 #include "net/dns/record_rdata.h"
-#include "net/log/net_log.h"
-#include "net/udp/datagram_socket.h"
+#include "net/socket/datagram_socket.h"
 
 // TODO(gene): Remove this temporary method of disabling NSEC support once it
 // becomes clear whether this feature should be
@@ -45,12 +44,12 @@ const double kListenerRefreshRatio2 = 0.95;
 }  // namespace
 
 void MDnsSocketFactoryImpl::CreateSockets(
-    std::vector<scoped_ptr<DatagramServerSocket>>* sockets) {
+    std::vector<std::unique_ptr<DatagramServerSocket>>* sockets) {
   InterfaceIndexFamilyList interfaces(GetMDnsInterfacesToBind());
   for (size_t i = 0; i < interfaces.size(); ++i) {
     DCHECK(interfaces[i].second == ADDRESS_FAMILY_IPV4 ||
            interfaces[i].second == ADDRESS_FAMILY_IPV6);
-    scoped_ptr<DatagramServerSocket> socket(
+    std::unique_ptr<DatagramServerSocket> socket(
         CreateAndBindMDnsSocket(interfaces[i].second, interfaces[i].first));
     if (socket)
       sockets->push_back(std::move(socket));
@@ -58,7 +57,7 @@ void MDnsSocketFactoryImpl::CreateSockets(
 }
 
 MDnsConnection::SocketHandler::SocketHandler(
-    scoped_ptr<DatagramServerSocket> socket,
+    std::unique_ptr<DatagramServerSocket> socket,
     MDnsConnection* connection)
     : socket_(std::move(socket)),
       connection_(connection),
@@ -142,11 +141,11 @@ MDnsConnection::~MDnsConnection() {
 }
 
 bool MDnsConnection::Init(MDnsSocketFactory* socket_factory) {
-  std::vector<scoped_ptr<DatagramServerSocket>> sockets;
+  std::vector<std::unique_ptr<DatagramServerSocket>> sockets;
   socket_factory->CreateSockets(&sockets);
 
-  for (scoped_ptr<DatagramServerSocket>& socket : sockets) {
-    socket_handlers_.push_back(make_scoped_ptr(
+  for (std::unique_ptr<DatagramServerSocket>& socket : sockets) {
+    socket_handlers_.push_back(base::WrapUnique(
         new MDnsConnection::SocketHandler(std::move(socket), this)));
   }
 
@@ -168,7 +167,7 @@ bool MDnsConnection::Init(MDnsSocketFactory* socket_factory) {
 
 void MDnsConnection::Send(const scoped_refptr<IOBuffer>& buffer,
                           unsigned size) {
-  for (scoped_ptr<SocketHandler>& handler : socket_handlers_)
+  for (std::unique_ptr<SocketHandler>& handler : socket_handlers_)
     handler->Send(buffer, size);
 }
 
@@ -208,7 +207,6 @@ MDnsClientImpl::Core::Core(base::Clock* clock, base::Timer* timer)
 }
 
 MDnsClientImpl::Core::~Core() {
-  STLDeleteValues(&listeners_);
 }
 
 bool MDnsClientImpl::Core::Init(MDnsSocketFactory* socket_factory) {
@@ -250,7 +248,7 @@ void MDnsClientImpl::Core::HandlePacket(DnsResponse* response,
 
   for (unsigned i = 0; i < answer_count; i++) {
     offset = parser.GetOffset();
-    scoped_ptr<const RecordParsed> record =
+    std::unique_ptr<const RecordParsed> record =
         RecordParsed::CreateFrom(&parser, clock_->Now());
 
     if (!record) {
@@ -311,7 +309,8 @@ void MDnsClientImpl::Core::NotifyNsecRecord(const RecordParsed* record) {
     if ((*i)->type() == dns_protocol::kTypeNSEC)
       continue;
     if (!rdata->GetBit((*i)->type())) {
-      scoped_ptr<const RecordParsed> record_removed = cache_.RemoveRecord((*i));
+      std::unique_ptr<const RecordParsed> record_removed =
+          cache_.RemoveRecord((*i));
       DCHECK(record_removed);
       OnRecordRemoved(record_removed.get());
     }
@@ -322,7 +321,8 @@ void MDnsClientImpl::Core::NotifyNsecRecord(const RecordParsed* record) {
       listeners_.upper_bound(ListenerKey(record->name(), 0));
   for (; i != listeners_.end() && i->first.first == record->name(); i++) {
     if (!rdata->GetBit(i->first.second)) {
-      FOR_EACH_OBSERVER(MDnsListenerImpl, *i->second, AlertNsecRecord());
+      for (auto& observer : *i->second)
+        observer.AlertNsecRecord();
     }
   }
 }
@@ -339,24 +339,19 @@ void MDnsClientImpl::Core::AlertListeners(
   ListenerMap::iterator listener_map_iterator = listeners_.find(key);
   if (listener_map_iterator == listeners_.end()) return;
 
-  FOR_EACH_OBSERVER(MDnsListenerImpl, *listener_map_iterator->second,
-                    HandleRecordUpdate(update_type, record));
+  for (auto& observer : *listener_map_iterator->second)
+    observer.HandleRecordUpdate(update_type, record);
 }
 
 void MDnsClientImpl::Core::AddListener(
     MDnsListenerImpl* listener) {
   ListenerKey key(listener->GetName(), listener->GetType());
-  std::pair<ListenerMap::iterator, bool> observer_insert_result =
-      listeners_.insert(make_pair(
-          key, static_cast<base::ObserverList<MDnsListenerImpl>*>(NULL)));
 
-  // If an equivalent key does not exist, actually create the observer list.
-  if (observer_insert_result.second)
-    observer_insert_result.first->second =
-        new base::ObserverList<MDnsListenerImpl>();
+  std::unique_ptr<base::ObserverList<MDnsListenerImpl>>& observer_list =
+      listeners_[key];
 
-  base::ObserverList<MDnsListenerImpl>* observer_list =
-      observer_insert_result.first->second;
+  if (!observer_list)
+    observer_list = base::MakeUnique<base::ObserverList<MDnsListenerImpl>>();
 
   observer_list->AddObserver(listener);
 }
@@ -383,7 +378,6 @@ void MDnsClientImpl::Core::RemoveListener(MDnsListenerImpl* listener) {
 void MDnsClientImpl::Core::CleanupObserverList(const ListenerKey& key) {
   ListenerMap::iterator found = listeners_.find(key);
   if (found != listeners_.end() && !found->second->might_have_observers()) {
-    delete found->second;
     listeners_.erase(found);
   }
 }
@@ -432,8 +426,8 @@ MDnsClientImpl::MDnsClientImpl()
       cleanup_timer_(new base::Timer(false, false)) {
 }
 
-MDnsClientImpl::MDnsClientImpl(scoped_ptr<base::Clock> clock,
-                               scoped_ptr<base::Timer> timer)
+MDnsClientImpl::MDnsClientImpl(std::unique_ptr<base::Clock> clock,
+                               std::unique_ptr<base::Timer> timer)
     : clock_(std::move(clock)), cleanup_timer_(std::move(timer)) {}
 
 MDnsClientImpl::~MDnsClientImpl() {
@@ -457,20 +451,20 @@ bool MDnsClientImpl::IsListening() const {
   return core_.get() != NULL;
 }
 
-scoped_ptr<MDnsListener> MDnsClientImpl::CreateListener(
+std::unique_ptr<MDnsListener> MDnsClientImpl::CreateListener(
     uint16_t rrtype,
     const std::string& name,
     MDnsListener::Delegate* delegate) {
-  return scoped_ptr<MDnsListener>(
+  return std::unique_ptr<MDnsListener>(
       new MDnsListenerImpl(rrtype, name, clock_.get(), delegate, this));
 }
 
-scoped_ptr<MDnsTransaction> MDnsClientImpl::CreateTransaction(
+std::unique_ptr<MDnsTransaction> MDnsClientImpl::CreateTransaction(
     uint16_t rrtype,
     const std::string& name,
     int flags,
     const MDnsTransaction::ResultCallback& callback) {
-  return scoped_ptr<MDnsTransaction>(
+  return std::unique_ptr<MDnsTransaction>(
       new MDnsTransactionImpl(rrtype, name, flags, callback, this));
 }
 

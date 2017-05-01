@@ -7,9 +7,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
@@ -214,7 +215,7 @@ bool RenderbufferManager::ComputeEstimatedRenderbufferSize(
   if (!SafeMultiplyUint32(width, height, &temp)) {
     return false;
   }
-  if (!SafeMultiplyUint32(temp, samples, &temp)) {
+  if (!SafeMultiplyUint32(temp, (samples == 0 ? 1 : samples), &temp)) {
     return false;
   }
   GLenum impl_format = InternalRenderbufferFormatToImplFormat(internal_format);
@@ -250,25 +251,41 @@ GLenum RenderbufferManager::InternalRenderbufferFormatToImplFormat(
 bool RenderbufferManager::OnMemoryDump(
     const base::trace_event::MemoryDumpArgs& args,
     base::trace_event::ProcessMemoryDump* pmd) {
-  int client_id = memory_tracker_->ClientId();
+  using base::trace_event::MemoryAllocatorDump;
+  using base::trace_event::MemoryDumpLevelOfDetail;
+  const uint64_t share_group_tracing_guid =
+      memory_tracker_->ShareGroupTracingGUID();
+
+  if (args.level_of_detail == MemoryDumpLevelOfDetail::BACKGROUND) {
+    std::string dump_name =
+        base::StringPrintf("gpu/gl/renderbuffers/share_group_%" PRIu64 "/",
+                           share_group_tracing_guid);
+    MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
+    dump->AddScalar(MemoryAllocatorDump::kNameSize,
+                    MemoryAllocatorDump::kUnitsBytes, mem_represented());
+
+    // Early out, no need for more detail in a BACKGROUND dump.
+    return true;
+  }
+
   for (const auto& renderbuffer_entry : renderbuffers_) {
     const auto& client_renderbuffer_id = renderbuffer_entry.first;
     const auto& renderbuffer = renderbuffer_entry.second;
 
-    std::string dump_name =
-        base::StringPrintf("gpu/gl/renderbuffers/client_%d/renderbuffer_%d",
-                           client_id, client_renderbuffer_id);
-    base::trace_event::MemoryAllocatorDump* dump =
-        pmd->CreateAllocatorDump(dump_name);
-    dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
-                    base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+    std::string dump_name = base::StringPrintf(
+        "gpu/gl/renderbuffers/share_group_%" PRIu64 "/renderbuffer_%d",
+        share_group_tracing_guid, client_renderbuffer_id);
+    MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
+    dump->AddScalar(MemoryAllocatorDump::kNameSize,
+                    MemoryAllocatorDump::kUnitsBytes,
                     static_cast<uint64_t>(renderbuffer->EstimatedSize()));
 
-    auto guid = gfx::GetGLRenderbufferGUIDForTracing(
-        memory_tracker_->ShareGroupTracingGUID(), client_renderbuffer_id);
+    auto guid = gl::GetGLRenderbufferGUIDForTracing(share_group_tracing_guid,
+                                                    client_renderbuffer_id);
     pmd->CreateSharedGlobalAllocatorDump(guid);
     pmd->AddOwnershipEdge(dump->guid(), guid);
   }
+
   return true;
 }
 

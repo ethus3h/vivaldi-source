@@ -9,6 +9,7 @@
 #
 # Assumes tombstone file was created with current symbols.
 
+import argparse
 import datetime
 import logging
 import multiprocessing
@@ -16,7 +17,6 @@ import os
 import re
 import subprocess
 import sys
-import optparse
 
 import devil_chromium
 
@@ -24,8 +24,15 @@ from devil.android import device_blacklist
 from devil.android import device_errors
 from devil.android import device_utils
 from devil.utils import run_tests_helper
+from pylib import constants
+
+sys.path.insert(0, os.path.abspath(os.path.join(
+    constants.DIR_SOURCE_ROOT, 'tools', 'swarming_client')))
+from libs.logdog import bootstrap # pylint: disable=import-error
+
 
 _TZ_UTC = {'TZ': 'UTC'}
+
 
 def _ListTombstones(device):
   """List the tombstone files on the device.
@@ -39,16 +46,11 @@ def _ListTombstones(device):
   try:
     if not device.PathExists('/data/tombstones', as_root=True):
       return
-    # TODO(perezju): Introduce a DeviceUtils.Ls() method (crbug.com/552376).
-    lines = device.RunShellCommand(
-        ['ls', '-a', '-l', '/data/tombstones'],
-        as_root=True, check_return=True, env=_TZ_UTC)
-    for line in lines:
-      if 'tombstone' in line:
-        details = line.split()
-        t = datetime.datetime.strptime(details[-3] + ' ' + details[-2],
-                                       '%Y-%m-%d %H:%M')
-        yield details[-1], t
+    entries = device.StatDirectory('/data/tombstones', as_root=True)
+    for entry in entries:
+      if 'tombstone' in entry['filename']:
+        yield (entry['filename'],
+               datetime.datetime.fromtimestamp(entry['st_mtime']))
   except device_errors.CommandFailedError:
     logging.exception('Could not retrieve tombstones.')
   except device_errors.CommandTimeoutError:
@@ -105,6 +107,7 @@ def _DeviceAbiToArch(device_abi):
       return arch
   raise RuntimeError('Unknown device ABI: %s' % device_abi)
 
+
 def _ResolveSymbols(tombstone_data, include_stack, device_abi):
   """Run the stack tool for given tombstone input.
 
@@ -129,8 +132,9 @@ def _ResolveSymbols(tombstone_data, include_stack, device_abi):
   stack_tool = os.path.join(os.path.dirname(__file__), '..', '..',
                             'third_party', 'android_platform', 'development',
                             'scripts', 'stack')
-  proc = subprocess.Popen([stack_tool, '--arch', arch], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE)
+  cmd = [stack_tool, '--arch', arch, '--output-directory',
+         constants.GetOutDirectory()]
+  proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
   output = proc.communicate(input='\n'.join(tombstone_data))[0]
   for line in output.split('\n'):
     if not include_stack and 'Stack Data:' in line:
@@ -160,23 +164,28 @@ def _ResolveTombstones(jobs, tombstones):
   """
   if not tombstones:
     logging.warning('No tombstones to resolve.')
-    return
+    return []
   if len(tombstones) == 1:
     data = [_ResolveTombstone(tombstones[0])]
   else:
     pool = multiprocessing.Pool(processes=jobs)
     data = pool.map(_ResolveTombstone, tombstones)
+  resolved_tombstones = []
   for tombstone in data:
-    for line in tombstone:
-      logging.info(line)
+    resolved_tombstones.extend(tombstone)
+  return resolved_tombstones
 
 
-def _GetTombstonesForDevice(device, options):
+def _GetTombstonesForDevice(device, resolve_all_tombstones,
+                            include_stack_symbols,
+                            wipe_tombstones):
   """Returns a list of tombstones on a given device.
 
   Args:
     device: An instance of DeviceUtils.
-    options: command line arguments from OptParse
+    resolve_all_tombstone: Whether to resolve every tombstone.
+    include_stack_symbols: Whether to include symbols for stack data.
+    wipe_tombstones: Whether to wipe tombstones.
   """
   ret = []
   all_tombstones = list(_ListTombstones(device))
@@ -188,7 +197,7 @@ def _GetTombstonesForDevice(device, options):
   all_tombstones.sort(cmp=lambda a, b: cmp(b[1], a[1]))
 
   # Only resolve the most recent unless --all-tombstones given.
-  tombstones = all_tombstones if options.all_tombstones else [all_tombstones[0]]
+  tombstones = all_tombstones if resolve_all_tombstones else [all_tombstones[0]]
 
   device_now = _GetDeviceDateTime(device)
   try:
@@ -198,21 +207,81 @@ def _GetTombstonesForDevice(device, options):
                'device_now': device_now,
                'time': tombstone_time,
                'file': tombstone_file,
-               'stack': options.stack,
+               'stack': include_stack_symbols,
                'data': _GetTombstoneData(device, tombstone_file)}]
   except device_errors.CommandFailedError:
-    for line in device.RunShellCommand(
-        ['ls', '-a', '-l', '/data/tombstones'],
-        as_root=True, check_return=True, env=_TZ_UTC, timeout=60):
-      logging.info('%s: %s', str(device), line)
+    for entry in device.StatDirectory(
+        '/data/tombstones', as_root=True, timeout=60):
+      logging.info('%s: %s', str(device), entry)
     raise
 
   # Erase all the tombstones if desired.
-  if options.wipe_tombstones:
+  if wipe_tombstones:
     for tombstone_file, _ in all_tombstones:
       _EraseTombstone(device, tombstone_file)
 
   return ret
+
+
+def ClearAllTombstones(device):
+  """Clear all tombstones in the device.
+
+  Args:
+    device: An instance of DeviceUtils.
+  """
+  all_tombstones = list(_ListTombstones(device))
+  if not all_tombstones:
+    logging.warning('No tombstones to clear.')
+
+  for tombstone_file, _ in all_tombstones:
+    _EraseTombstone(device, tombstone_file)
+
+
+def ResolveTombstones(device, resolve_all_tombstones, include_stack_symbols,
+                      wipe_tombstones, jobs=4):
+  """Resolve tombstones in the device.
+
+  Args:
+    device: An instance of DeviceUtils.
+    resolve_all_tombstone: Whether to resolve every tombstone.
+    include_stack_symbols: Whether to include symbols for stack data.
+    wipe_tombstones: Whether to wipe tombstones.
+    jobs: Number of jobs to use when processing multiple crash stacks.
+
+  Returns:
+    A list of resolved tombstones.
+  """
+  return _ResolveTombstones(jobs,
+                            _GetTombstonesForDevice(device,
+                                                    resolve_all_tombstones,
+                                                    include_stack_symbols,
+                                                    wipe_tombstones))
+
+
+def LogdogTombstones(resolved_tombstones, stream_name):
+  """Save resolved tombstones to logdog and return the url.
+
+  Args:
+    stream_name: The name of the logdog stream that records tombstones.
+    resolved_tombstones: Resolved tombstones (output of ResolveTombstones).
+
+  Returns:
+    A url link to the recorded tombstones.
+  """
+  try:
+    tombstones_url = ''
+    stream_client = bootstrap.ButlerBootstrap.probe().stream_client()
+    with stream_client.text(stream_name) as logdog_stream:
+      for tombstones_line in resolved_tombstones:
+        logdog_stream.write(tombstones_line + '\n')
+      tombstones_url = logdog_stream.get_viewer_url(stream_name)
+  except bootstrap.NotBootstrappedError:
+    logging.exception('Error not bootstrapped. Failed to start logdog')
+  except (KeyError, ValueError) as e:
+    logging.exception('Error when creating stream_client/stream: %s.', e)
+  except Exception as e: # pylint: disable=broad-except
+    logging.exception('Unknown Error: %s.', e)
+  return tombstones_url
 
 
 def main():
@@ -221,43 +290,53 @@ def main():
   logging.getLogger().addHandler(custom_handler)
   logging.getLogger().setLevel(logging.INFO)
 
-  parser = optparse.OptionParser()
-  parser.add_option('--device',
-                    help='The serial number of the device. If not specified '
-                         'will use all devices.')
-  parser.add_option('--blacklist-file', help='Device blacklist JSON file.')
-  parser.add_option('-a', '--all-tombstones', action='store_true',
-                    help="""Resolve symbols for all tombstones, rather than just
-                         the most recent""")
-  parser.add_option('-s', '--stack', action='store_true',
-                    help='Also include symbols for stack data')
-  parser.add_option('-w', '--wipe-tombstones', action='store_true',
-                    help='Erase all tombstones from device after processing')
-  parser.add_option('-j', '--jobs', type='int',
-                    default=4,
-                    help='Number of jobs to use when processing multiple '
-                         'crash stacks.')
-  options, _ = parser.parse_args()
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--device',
+                      help='The serial number of the device. If not specified '
+                           'will use all devices.')
+  parser.add_argument('--blacklist-file', help='Device blacklist JSON file.')
+  parser.add_argument('-a', '--all-tombstones', action='store_true',
+                      help='Resolve symbols for all tombstones, rather than '
+                           'just the most recent.')
+  parser.add_argument('-s', '--stack', action='store_true',
+                      help='Also include symbols for stack data')
+  parser.add_argument('-w', '--wipe-tombstones', action='store_true',
+                      help='Erase all tombstones from device after processing')
+  parser.add_argument('-j', '--jobs', type=int,
+                      default=4,
+                      help='Number of jobs to use when processing multiple '
+                           'crash stacks.')
+  parser.add_argument('--output-directory',
+                      help='Path to the root build directory.')
+  parser.add_argument('--adb-path', type=os.path.abspath,
+                      help='Path to the adb binary.')
+  args = parser.parse_args()
 
-  devil_chromium.Initialize()
+  devil_chromium.Initialize(adb_path=args.adb_path)
 
-  blacklist = (device_blacklist.Blacklist(options.blacklist_file)
-               if options.blacklist_file
+  blacklist = (device_blacklist.Blacklist(args.blacklist_file)
+               if args.blacklist_file
                else None)
 
-  if options.device:
-    devices = [device_utils.DeviceUtils(options.device)]
+  if args.output_directory:
+    constants.SetOutputDirectory(args.output_directory)
+  # Do an up-front test that the output directory is known.
+  constants.CheckOutputDirectory()
+
+  if args.device:
+    devices = [device_utils.DeviceUtils(args.device)]
   else:
     devices = device_utils.DeviceUtils.HealthyDevices(blacklist)
 
   # This must be done serially because strptime can hit a race condition if
   # used for the first time in a multithreaded environment.
   # http://bugs.python.org/issue7980
-  tombstones = []
   for device in devices:
-    tombstones += _GetTombstonesForDevice(device, options)
-
-  _ResolveTombstones(options.jobs, tombstones)
+    resolved_tombstones = ResolveTombstones(
+        device, args.all_tombstones,
+        args.stack, args.wipe_tombstones, args.jobs)
+    for line in resolved_tombstones:
+      logging.info(line)
 
 
 if __name__ == '__main__':

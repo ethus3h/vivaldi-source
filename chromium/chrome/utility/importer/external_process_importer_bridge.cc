@@ -13,11 +13,14 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/common/importer/imported_bookmark_entry.h"
+#include "chrome/common/importer/importer_autofill_form_data_entry.h"
 #include "chrome/common/importer/importer_data_types.h"
-#include "chrome/common/importer/profile_import_process_messages.h"
-#include "importer/vivaldi_profile_import_process_messages.h"
 #include "components/autofill/core/common/password_form.h"
-#include "ipc/ipc_sender.h"
+
+using chrome::mojom::ProfileImportObserver;
+
+#include "importer/viv_importer.h"
+#include "importer/vivaldi_profile_import_process_messages.h"
 
 namespace {
 
@@ -29,15 +32,14 @@ const int kNumHistoryRowsToSend = 100;
 const int kNumFaviconsToSend = 100;
 const int kNumNotesToSend = 10;
 const int kNumAutofillFormDataToSend = 100;
+const int kNumSpeedDialToSend = 100;
 
 } // namespace
 
 ExternalProcessImporterBridge::ExternalProcessImporterBridge(
     const base::DictionaryValue& localized_strings,
-    IPC::Sender* sender,
-    base::TaskRunner* task_runner)
-    : sender_(sender),
-      task_runner_(task_runner) {
+    scoped_refptr<chrome::mojom::ThreadSafeProfileImportObserverPtr> observer)
+    : observer_(std::move(observer)) {
   // Bridge needs to make its own copy because OS 10.6 autoreleases the
   // localized_strings value that is passed in (see http://crbug.com/46003 ).
   localized_strings_.reset(localized_strings.DeepCopy());
@@ -46,8 +48,7 @@ ExternalProcessImporterBridge::ExternalProcessImporterBridge(
 void ExternalProcessImporterBridge::AddBookmarks(
     const std::vector<ImportedBookmarkEntry>& bookmarks,
     const base::string16& first_folder_name) {
-  Send(new ProfileImportProcessHostMsg_NotifyBookmarksImportStart(
-      first_folder_name, bookmarks.size()));
+  (*observer_)->OnBookmarksImportStart(first_folder_name, bookmarks.size());
 
   // |bookmarks_left| is required for the checks below as Windows has a
   // Debug bounds-check which prevents pushing an iterator beyond its end()
@@ -60,8 +61,7 @@ void ExternalProcessImporterBridge::AddBookmarks(
         it + std::min(bookmarks_left, kNumBookmarksToSend);
     bookmark_group.assign(it, end_group);
 
-    Send(new ProfileImportProcessHostMsg_NotifyBookmarksImportGroup(
-        bookmark_group));
+    (*observer_)->OnBookmarksImportGroup(bookmark_group);
     bookmarks_left -= end_group - it;
     it = end_group;
   }
@@ -72,8 +72,7 @@ void ExternalProcessImporterBridge::AddNotes(
       const std::vector<ImportedNotesEntry>& notes,
       const base::string16& first_folder_name)
 {
-  Send(new ProfileImportProcessHostMsg_NotifyNotesImportStart(
-      first_folder_name, notes.size()));
+  (*observer_)->OnNotesImportStart(first_folder_name, notes.size());
 
   // |notes_left| is required for the checks below as Windows has a
   // Debug bounds-check which prevents pushing an iterator beyond its end()
@@ -86,29 +85,49 @@ void ExternalProcessImporterBridge::AddNotes(
         it + std::min(notes_left, kNumNotesToSend);
     notes_group.assign(it, end_group);
 
-    Send(new ProfileImportProcessHostMsg_NotifyNotesImportGroup(
-        notes_group));
+    (*observer_)->OnNotesImportGroup(notes_group);
     notes_left -= end_group - it;
     it = end_group;
   }
   DCHECK_EQ(0, notes_left);
 }
 
+void ExternalProcessImporterBridge::AddSpeedDial(
+    const std::vector<ImportedSpeedDialEntry>& speeddials) {
+  (*observer_)->OnSpeedDialImportStart(speeddials.size());
+
+  // |sd_left| is required for the checks below as Windows has a
+  // Debug bounds-check which prevents pushing an iterator beyond its end()
+  // (i.e., |it + 2 < s.end()| crashes in debug mode if |i + 1 == s.end()|).
+  int sd_left = speeddials.end() - speeddials.begin();
+  for (std::vector<ImportedSpeedDialEntry>::const_iterator it =
+           speeddials.begin(); it < speeddials.end();) {
+    std::vector<ImportedSpeedDialEntry> sd_group;
+    std::vector<ImportedSpeedDialEntry>::const_iterator end_group =
+        it + std::min(sd_left, kNumSpeedDialToSend);
+    sd_group.assign(it, end_group);
+
+    (*observer_)->OnSpeedDialImportGroup(sd_group);
+    sd_left -= end_group - it;
+    it = end_group;
+  }
+  DCHECK_EQ(0, sd_left);
+}
+
 void ExternalProcessImporterBridge::AddHomePage(const GURL& home_page) {
-  Send(new ProfileImportProcessHostMsg_NotifyHomePageImportReady(home_page));
+  (*observer_)->OnHomePageImportReady(home_page);
 }
 
 #if defined(OS_WIN)
 void ExternalProcessImporterBridge::AddIE7PasswordInfo(
     const importer::ImporterIE7PasswordInfo& password_info) {
-  Send(new ProfileImportProcessHostMsg_NotifyIE7PasswordInfo(password_info));
+  (*observer_)->OnIE7PasswordReceived(password_info);
 }
 #endif
 
 void ExternalProcessImporterBridge::SetFavicons(
     const favicon_base::FaviconUsageDataList& favicons) {
-  Send(new ProfileImportProcessHostMsg_NotifyFaviconsImportStart(
-    favicons.size()));
+  (*observer_)->OnFaviconsImportStart(favicons.size());
 
   // |favicons_left| is required for the checks below as Windows has a
   // Debug bounds-check which prevents pushing an iterator beyond its end()
@@ -121,8 +140,7 @@ void ExternalProcessImporterBridge::SetFavicons(
         it + std::min(favicons_left, kNumFaviconsToSend);
     favicons_group.assign(it, end_group);
 
-    Send(new ProfileImportProcessHostMsg_NotifyFaviconsImportGroup(
-        favicons_group));
+    (*observer_)->OnFaviconsImportGroup(favicons_group);
     favicons_left -= end_group - it;
     it = end_group;
   }
@@ -132,7 +150,7 @@ void ExternalProcessImporterBridge::SetFavicons(
 void ExternalProcessImporterBridge::SetHistoryItems(
     const std::vector<ImporterURLRow>& rows,
     importer::VisitSource visit_source) {
-  Send(new ProfileImportProcessHostMsg_NotifyHistoryImportStart(rows.size()));
+  (*observer_)->OnHistoryImportStart(rows.size());
 
   // |rows_left| is required for the checks below as Windows has a
   // Debug bounds-check which prevents pushing an iterator beyond its end()
@@ -145,8 +163,7 @@ void ExternalProcessImporterBridge::SetHistoryItems(
         it + std::min(rows_left, kNumHistoryRowsToSend);
     row_group.assign(it, end_group);
 
-    Send(new ProfileImportProcessHostMsg_NotifyHistoryImportGroup(
-        row_group, visit_source));
+    (*observer_)->OnHistoryImportGroup(row_group, visit_source);
     rows_left -= end_group - it;
     it = end_group;
   }
@@ -156,25 +173,22 @@ void ExternalProcessImporterBridge::SetHistoryItems(
 void ExternalProcessImporterBridge::SetKeywords(
     const std::vector<importer::SearchEngineInfo>& search_engines,
     bool unique_on_host_and_path) {
-  Send(new ProfileImportProcessHostMsg_NotifyKeywordsReady(
-      search_engines, unique_on_host_and_path));
+  (*observer_)->OnKeywordsImportReady(search_engines, unique_on_host_and_path);
 }
 
 void ExternalProcessImporterBridge::SetFirefoxSearchEnginesXMLData(
     const std::vector<std::string>& search_engine_data) {
-  Send(new ProfileImportProcessHostMsg_NotifyFirefoxSearchEngData(
-      search_engine_data));
+  (*observer_)->OnFirefoxSearchEngineDataReceived(search_engine_data);
 }
 
 void ExternalProcessImporterBridge::SetPasswordForm(
     const autofill::PasswordForm& form) {
-  Send(new ProfileImportProcessHostMsg_NotifyPasswordFormReady(form));
+  (*observer_)->OnPasswordFormImportReady(form);
 }
 
 void ExternalProcessImporterBridge::SetAutofillFormData(
     const std::vector<ImporterAutofillFormDataEntry>& entries) {
-  Send(new ProfileImportProcessHostMsg_AutofillFormDataImportStart(
-      entries.size()));
+  (*observer_)->OnAutofillFormDataImportStart(entries.size());
 
   // |autofill_form_data_entries_left| is required for the checks below as
   // Windows has a Debug bounds-check which prevents pushing an iterator beyond
@@ -190,8 +204,7 @@ void ExternalProcessImporterBridge::SetAutofillFormData(
         std::min(autofill_form_data_entries_left, kNumAutofillFormDataToSend);
     autofill_form_data_entry_group.assign(it, end_group);
 
-    Send(new ProfileImportProcessHostMsg_AutofillFormDataImportGroup(
-        autofill_form_data_entry_group));
+    (*observer_)->OnAutofillFormDataImportGroup(autofill_form_data_entry_group);
     autofill_form_data_entries_left -= end_group - it;
     it = end_group;
   }
@@ -199,20 +212,25 @@ void ExternalProcessImporterBridge::SetAutofillFormData(
 }
 
 void ExternalProcessImporterBridge::NotifyStarted() {
-  Send(new ProfileImportProcessHostMsg_Import_Started());
+  (*observer_)->OnImportStart();
 }
 
 void ExternalProcessImporterBridge::NotifyItemStarted(
     importer::ImportItem item) {
-  Send(new ProfileImportProcessHostMsg_ImportItem_Started(item));
+  (*observer_)->OnImportItemStart(item);
 }
 
 void ExternalProcessImporterBridge::NotifyItemEnded(importer::ImportItem item) {
-  Send(new ProfileImportProcessHostMsg_ImportItem_Finished(item));
+  (*observer_)->OnImportItemFinished(item);
+}
+
+void ExternalProcessImporterBridge::NotifyItemFailed(importer::ImportItem item,
+                                                     const std::string& error) {
+  (*observer_)->OnImportItemFailed(item, error);
 }
 
 void ExternalProcessImporterBridge::NotifyEnded() {
-  // The internal process detects import end when all items have been received.
+  (*observer_)->OnImportFinished(true, std::string());
 }
 
 base::string16 ExternalProcessImporterBridge::GetLocalizedString(
@@ -223,15 +241,3 @@ base::string16 ExternalProcessImporterBridge::GetLocalizedString(
 }
 
 ExternalProcessImporterBridge::~ExternalProcessImporterBridge() {}
-
-void ExternalProcessImporterBridge::Send(IPC::Message* message) {
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::Bind(&ExternalProcessImporterBridge::SendInternal,
-                 this, message));
-}
-
-void ExternalProcessImporterBridge::SendInternal(IPC::Message* message) {
-  DCHECK(task_runner_->RunsTasksOnCurrentThread());
-  sender_->Send(message);
-}

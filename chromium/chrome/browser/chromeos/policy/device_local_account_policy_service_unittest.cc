@@ -13,13 +13,14 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chromeos/policy/device_local_account.h"
 #include "chrome/browser/chromeos/policy/device_local_account_policy_provider.h"
 #include "chrome/browser/chromeos/policy/fake_affiliated_invalidation_service_provider.h"
@@ -41,11 +42,11 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema_registry.h"
+#include "components/policy/policy_constants.h"
+#include "components/policy/proto/cloud_policy.pb.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_test_util.h"
-#include "policy/policy_constants.h"
-#include "policy/proto/cloud_policy.pb.h"
-#include "policy/proto/device_management_backend.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::AnyNumber;
@@ -102,7 +103,7 @@ class DeviceLocalAccountPolicyServiceTestBase
   MockDeviceManagementService mock_device_management_service_;
   FakeAffiliatedInvalidationServiceProvider
       affiliated_invalidation_service_provider_;
-  scoped_ptr<DeviceLocalAccountPolicyService> service_;
+  std::unique_ptr<DeviceLocalAccountPolicyService> service_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountPolicyServiceTestBase);
@@ -142,15 +143,14 @@ DeviceLocalAccountPolicyServiceTestBase::
 void DeviceLocalAccountPolicyServiceTestBase::SetUp() {
   chromeos::DeviceSettingsTestBase::SetUp();
 
-  expected_policy_map_.Set(key::kDisableSpdy,
-                           POLICY_LEVEL_MANDATORY,
-                           POLICY_SCOPE_USER,
-                           POLICY_SOURCE_CLOUD,
-                           new base::FundamentalValue(true),
-                           NULL);
+  expected_policy_map_.Set(key::kSearchSuggestEnabled, POLICY_LEVEL_MANDATORY,
+                           POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+                           base::MakeUnique<base::FundamentalValue>(true),
+                           nullptr);
 
-  device_local_account_policy_.payload().mutable_disablespdy()->set_value(
-      true);
+  device_local_account_policy_.payload()
+      .mutable_searchsuggestenabled()
+      ->set_value(true);
   device_local_account_policy_.policy_data().set_policy_type(
       dm_protocol::kChromePublicAccountPolicyType);
 }
@@ -507,7 +507,7 @@ class DeviceLocalAccountPolicyExtensionCacheTest
   base::FilePath GetCacheDirectoryForAccountID(const std::string& account_id);
 
   base::ScopedTempDir cache_root_dir_;
-  scoped_ptr<base::ScopedPathOverride> cache_root_dir_override_;
+  std::unique_ptr<base::ScopedPathOverride> cache_root_dir_override_;
 
   base::FilePath cache_dir_1_;
   base::FilePath cache_dir_2_;
@@ -526,7 +526,7 @@ void DeviceLocalAccountPolicyExtensionCacheTest::SetUp() {
   ASSERT_TRUE(cache_root_dir_.CreateUniqueTempDir());
   cache_root_dir_override_.reset(new base::ScopedPathOverride(
       chromeos::DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,
-      cache_root_dir_.path()));
+      cache_root_dir_.GetPath()));
 
   cache_dir_1_ = GetCacheDirectoryForAccountID(kAccount1);
   cache_dir_2_ = GetCacheDirectoryForAccountID(kAccount2);
@@ -539,8 +539,8 @@ void DeviceLocalAccountPolicyExtensionCacheTest::SetUp() {
 
 base::FilePath DeviceLocalAccountPolicyExtensionCacheTest::
     GetCacheDirectoryForAccountID(const std::string& account_id) {
-  return cache_root_dir_.path().Append(base::HexEncode(account_id.c_str(),
-                                                       account_id.size()));
+  return cache_root_dir_.GetPath().Append(
+      base::HexEncode(account_id.c_str(), account_id.size()));
 }
 
 // Verifies that during startup, orphaned cache directories are deleted,
@@ -785,7 +785,7 @@ class DeviceLocalAccountPolicyProviderTest
   void TearDown() override;
 
   SchemaRegistry schema_registry_;
-  scoped_ptr<DeviceLocalAccountPolicyProvider> provider_;
+  std::unique_ptr<DeviceLocalAccountPolicyProvider> provider_;
   MockConfigurationPolicyObserver provider_observer_;
 
  private:
@@ -797,7 +797,7 @@ DeviceLocalAccountPolicyProviderTest::DeviceLocalAccountPolicyProviderTest() {
   provider_ = DeviceLocalAccountPolicyProvider::Create(
       GenerateDeviceLocalAccountUserId(kAccount1,
                                        DeviceLocalAccount::TYPE_PUBLIC_SESSION),
-      service_.get());
+      service_.get(), false /*force_immediate_load*/);
 }
 
 void DeviceLocalAccountPolicyProviderTest::SetUp() {
@@ -806,32 +806,27 @@ void DeviceLocalAccountPolicyProviderTest::SetUp() {
   provider_->AddObserver(&provider_observer_);
 
   // Values implicitly enforced for public accounts.
-  expected_policy_map_.Set(key::kLidCloseAction,
-                           POLICY_LEVEL_MANDATORY,
-                           POLICY_SCOPE_MACHINE,
-                           POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
-                           new base::FundamentalValue(
-                               chromeos::PowerPolicyController::
-                                   ACTION_STOP_SESSION),
-                           NULL);
-  expected_policy_map_.Set(key::kShelfAutoHideBehavior,
-                           POLICY_LEVEL_MANDATORY,
-                           POLICY_SCOPE_MACHINE,
-                           POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
-                           new base::StringValue("Never"),
-                           NULL);
-  expected_policy_map_.Set(key::kShowLogoutButtonInTray,
-                           POLICY_LEVEL_MANDATORY,
-                           POLICY_SCOPE_MACHINE,
-                           POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
-                           new base::FundamentalValue(true),
-                           NULL);
-  expected_policy_map_.Set(key::kFullscreenAllowed,
-                           POLICY_LEVEL_MANDATORY,
-                           POLICY_SCOPE_MACHINE,
-                           POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
-                           new base::FundamentalValue(false),
-                           NULL);
+  expected_policy_map_.Set(
+      key::kLidCloseAction, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+      POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
+      base::MakeUnique<base::FundamentalValue>(
+          chromeos::PowerPolicyController::ACTION_STOP_SESSION),
+      nullptr);
+  expected_policy_map_.Set(
+      key::kShelfAutoHideBehavior, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+      POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
+      base::MakeUnique<base::StringValue>("Never"), nullptr);
+  expected_policy_map_.Set(
+      key::kShowLogoutButtonInTray, POLICY_LEVEL_MANDATORY,
+      POLICY_SCOPE_MACHINE, POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
+      base::MakeUnique<base::FundamentalValue>(true), nullptr);
+  expected_policy_map_.Set(
+      key::kFullscreenAllowed, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+      POLICY_SOURCE_PUBLIC_SESSION_OVERRIDE,
+      base::MakeUnique<base::FundamentalValue>(false), nullptr);
+
+  // Policy defaults (for policies not set by admin).
+  SetEnterpriseUsersDefaults(&expected_policy_map_);
 }
 
 void DeviceLocalAccountPolicyProviderTest::TearDown() {
@@ -878,11 +873,22 @@ TEST_F(DeviceLocalAccountPolicyProviderTest, Policy) {
       POLICY_DOMAIN_CHROME, std::string())).CopyFrom(expected_policy_map_);
   EXPECT_TRUE(expected_policy_bundle.Equals(provider_->policies()));
 
+  // Make sure the Dinosaur game is disabled by default. This ensures the
+  // default policies have been set in Public Sessions.
+  bool allow_dinosaur_game = true;
+  auto policy_value =
+      provider_->policies()
+          .Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+          .GetValue(key::kAllowDinosaurEasterEgg);
+  EXPECT_TRUE(policy_value && policy_value->GetAsBoolean(&allow_dinosaur_game));
+  EXPECT_FALSE(allow_dinosaur_game);
+
   // Policy change should be reported.
   EXPECT_CALL(provider_observer_, OnUpdatePolicy(provider_.get()))
       .Times(AtLeast(1));
-  device_local_account_policy_.payload().mutable_disablespdy()->set_value(
-      false);
+  device_local_account_policy_.payload()
+      .mutable_searchsuggestenabled()
+      ->set_value(false);
   InstallDeviceLocalAccountPolicy(kAccount1);
   DeviceLocalAccountPolicyBroker* broker =
       service_->GetBrokerForUser(account_1_user_id_);
@@ -891,14 +897,11 @@ TEST_F(DeviceLocalAccountPolicyProviderTest, Policy) {
   FlushDeviceSettings();
   Mock::VerifyAndClearExpectations(&provider_observer_);
 
-  expected_policy_bundle.Get(
-      PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
-      .Set(key::kDisableSpdy,
-           POLICY_LEVEL_MANDATORY,
-           POLICY_SCOPE_USER,
-           POLICY_SOURCE_CLOUD,
-           new base::FundamentalValue(false),
-           NULL);
+  expected_policy_bundle
+      .Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+      .Set(key::kSearchSuggestEnabled, POLICY_LEVEL_MANDATORY,
+           POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+           base::MakeUnique<base::FundamentalValue>(false), nullptr);
   EXPECT_TRUE(expected_policy_bundle.Equals(provider_->policies()));
 
   // Any values set for the |ShelfAutoHideBehavior|, |ShowLogoutButtonInTray|
@@ -984,6 +987,54 @@ TEST_F(DeviceLocalAccountPolicyProviderTest, RefreshPolicies) {
   request_job->SendResponse(DM_STATUS_SUCCESS, response);
   FlushDeviceSettings();
   Mock::VerifyAndClearExpectations(&provider_observer_);
+}
+
+class DeviceLocalAccountPolicyProviderLoadImmediateTest
+    : public DeviceLocalAccountPolicyServiceTestBase {
+ protected:
+  DeviceLocalAccountPolicyProviderLoadImmediateTest();
+
+  void SetUp() override;
+  void TearDown() override;
+
+  std::unique_ptr<DeviceLocalAccountPolicyProvider> provider_;
+  MockDeviceLocalAccountPolicyServiceObserver service_observer_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountPolicyProviderLoadImmediateTest);
+};
+
+DeviceLocalAccountPolicyProviderLoadImmediateTest::
+    DeviceLocalAccountPolicyProviderLoadImmediateTest() {
+  CreatePolicyService();
+}
+
+void DeviceLocalAccountPolicyProviderLoadImmediateTest::SetUp() {
+  service_->AddObserver(&service_observer_);
+  DeviceLocalAccountPolicyServiceTestBase::SetUp();
+}
+
+void DeviceLocalAccountPolicyProviderLoadImmediateTest::TearDown() {
+  service_->RemoveObserver(&service_observer_);
+  provider_->Shutdown();
+  provider_.reset();
+  DeviceLocalAccountPolicyServiceTestBase::TearDown();
+}
+
+TEST_F(DeviceLocalAccountPolicyProviderLoadImmediateTest, Initialization) {
+  InstallDeviceLocalAccountPolicy(kAccount1);
+  AddDeviceLocalAccountToPolicy(kAccount1);
+  EXPECT_CALL(service_observer_, OnPolicyUpdated(account_1_user_id_))
+      .Times(AtLeast(2));
+  EXPECT_CALL(service_observer_, OnDeviceLocalAccountsChanged());
+  InstallDevicePolicy();
+
+  provider_ = DeviceLocalAccountPolicyProvider::Create(
+      GenerateDeviceLocalAccountUserId(kAccount1,
+                                       DeviceLocalAccount::TYPE_PUBLIC_SESSION),
+      service_.get(), true /*force_immediate_load*/);
+
+  EXPECT_TRUE(provider_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
 }
 
 }  // namespace policy

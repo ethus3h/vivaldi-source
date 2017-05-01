@@ -6,13 +6,12 @@
 #define CONTENT_BROWSER_LOADER_ASYNC_REVALIDATION_MANAGER_H_
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 
 class GURL;
-struct ResourceHostMsg_Request;
 
 namespace net {
 class URLRequest;
@@ -24,6 +23,7 @@ namespace content {
 class AsyncRevalidationDriver;
 class ResourceContext;
 class ResourceScheduler;
+struct ResourceRequest;
 
 // One instance of this class manages all active AsyncRevalidationDriver objects
 // for all profiles. It is created by and owned by
@@ -37,15 +37,14 @@ class AsyncRevalidationManager {
 
   // Starts an async revalidation by copying |for_request|. |scheduler| must
   // remain valid until this object is destroyed.
-  void BeginAsyncRevalidation(const net::URLRequest& for_request,
+  void BeginAsyncRevalidation(net::URLRequest* for_request,
                               ResourceScheduler* scheduler);
 
   // Cancel all pending async revalidations that use ResourceContext.
   void CancelAsyncRevalidationsForResourceContext(
       ResourceContext* resource_context);
 
-  static bool QualifiesForAsyncRevalidation(
-      const ResourceHostMsg_Request& request);
+  static bool QualifiesForAsyncRevalidation(const ResourceRequest& request);
 
  private:
   // The key of the map of pending async revalidations. This key has a distinct
@@ -89,9 +88,10 @@ class AsyncRevalidationManager {
     };
   };
 
-  using AsyncRevalidationMap = std::map<AsyncRevalidationKey,
-                                        scoped_ptr<AsyncRevalidationDriver>,
-                                        AsyncRevalidationKey::LessThan>;
+  using AsyncRevalidationMap =
+      std::map<AsyncRevalidationKey,
+               std::unique_ptr<AsyncRevalidationDriver>,
+               AsyncRevalidationKey::LessThan>;
 
   void OnAsyncRevalidationComplete(AsyncRevalidationMap::iterator it);
 

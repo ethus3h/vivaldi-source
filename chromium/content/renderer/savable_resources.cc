@@ -9,6 +9,7 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
+#include "content/public/common/url_utils.h"
 #include "content/renderer/web_frame_utils.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/WebKit/public/platform/WebVector.h"
@@ -61,13 +62,9 @@ void GetSavableResourceLinkForElement(
     const WebElement& element,
     const WebDocument& current_doc,
     SavableResourcesResult* result) {
-  // Check whether the node has sub resource URL or not.
-  WebString value = GetSubResourceLinkFromElement(element);
-  if (value.isNull())
-    return;
-
   // Get absolute URL.
-  GURL element_url = current_doc.completeURL(value);
+  WebString link_attribute_value = GetSubResourceLinkFromElement(element);
+  GURL element_url = current_doc.completeURL(link_attribute_value);
 
   // See whether to report this element as a subframe.
   WebFrame* web_frame = WebFrame::fromFrameOwnerElement(element);
@@ -78,6 +75,10 @@ void GetSavableResourceLinkForElement(
     result->subframes->push_back(subframe);
     return;
   }
+
+  // Check whether the node has sub resource URL or not.
+  if (link_attribute_value.isNull())
+    return;
 
   // Ignore invalid URL.
   if (!element_url.is_valid())
@@ -96,8 +97,7 @@ void GetSavableResourceLinkForElement(
 }  // namespace
 
 bool GetSavableResourceLinksForFrame(WebFrame* current_frame,
-                                     SavableResourcesResult* result,
-                                     const char** savable_schemes) {
+                                     SavableResourcesResult* result) {
   // Get current frame's URL.
   GURL current_frame_url = current_frame->document().url();
 
@@ -106,14 +106,7 @@ bool GetSavableResourceLinksForFrame(WebFrame* current_frame,
     return false;
 
   // If url of current frame is not a savable protocol, ignore it.
-  bool is_valid_protocol = false;
-  for (int i = 0; savable_schemes[i] != NULL; ++i) {
-    if (current_frame_url.SchemeIs(savable_schemes[i])) {
-      is_valid_protocol = true;
-      break;
-    }
-  }
-  if (!is_valid_protocol)
+  if (!IsSavableURL(current_frame_url))
     return false;
 
   // Get current using document.

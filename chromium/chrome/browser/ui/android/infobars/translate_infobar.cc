@@ -5,29 +5,34 @@
 #include "chrome/browser/ui/android/infobars/translate_infobar.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/jni_weak_ref.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "components/translate/core/browser/translate_infobar_delegate.h"
 #include "jni/TranslateInfoBar_jni.h"
 
+using base::android::JavaParamRef;
+using base::android::ScopedJavaLocalRef;
+
 // ChromeTranslateClient
 // ----------------------------------------------------------
 
-scoped_ptr<infobars::InfoBar> ChromeTranslateClient::CreateInfoBar(
-    scoped_ptr<translate::TranslateInfoBarDelegate> delegate) const {
-  return make_scoped_ptr(new TranslateInfoBar(std::move(delegate)));
+std::unique_ptr<infobars::InfoBar> ChromeTranslateClient::CreateInfoBar(
+    std::unique_ptr<translate::TranslateInfoBarDelegate> delegate) const {
+  return base::MakeUnique<TranslateInfoBar>(std::move(delegate));
 }
 
 
 // TranslateInfoBar -----------------------------------------------------------
 
 TranslateInfoBar::TranslateInfoBar(
-    scoped_ptr<translate::TranslateInfoBarDelegate> delegate)
+    std::unique_ptr<translate::TranslateInfoBarDelegate> delegate)
     : InfoBarAndroid(std::move(delegate)) {}
 
 TranslateInfoBar::~TranslateInfoBar() {
@@ -58,10 +63,10 @@ ScopedJavaLocalRef<jobject> TranslateInfoBar::CreateRenderInfoBar(JNIEnv* env) {
                                              delegate->target_language_code());
 
   return Java_TranslateInfoBar_show(
-      env, delegate->translate_step(), source_language_code.obj(),
-      target_language_code.obj(), delegate->ShouldAlwaysTranslate(),
+      env, delegate->translate_step(), source_language_code,
+      target_language_code, delegate->ShouldAlwaysTranslate(),
       ShouldDisplayNeverTranslateInfoBarOnCancel(),
-      delegate->triggered_from_menu(), java_languages.obj(), java_codes.obj());
+      delegate->triggered_from_menu(), java_languages, java_codes);
 }
 
 void TranslateInfoBar::ProcessButton(int action) {
@@ -99,7 +104,7 @@ void TranslateInfoBar::SetJavaInfoBar(
     const base::android::JavaRef<jobject>& java_info_bar) {
   InfoBarAndroid::SetJavaInfoBar(java_info_bar);
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_TranslateInfoBar_setNativePtr(env, java_info_bar.obj(),
+  Java_TranslateInfoBar_setNativePtr(env, java_info_bar,
                                      reinterpret_cast<intptr_t>(this));
 }
 

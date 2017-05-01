@@ -16,7 +16,7 @@
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/quota/mock_quota_manager.h"
 #include "content/browser/quota/mock_quota_manager_proxy.h"
 #include "content/public/test/async_file_test_helper.h"
@@ -194,7 +194,7 @@ class CopyOrMoveOperationTestHelper {
   void SetUp(bool require_copy_or_move_validator,
              bool init_copy_or_move_validator) {
     ASSERT_TRUE(base_.CreateUniqueTempDir());
-    base::FilePath base_dir = base_.path();
+    base::FilePath base_dir = base_.GetPath();
     quota_manager_ =
         new MockQuotaManager(false /* is_incognito */, base_dir,
                              base::ThreadTaskRunnerHandle::Get().get(),
@@ -216,7 +216,7 @@ class CopyOrMoveOperationTestHelper {
     if (dest_type_ == storage::kFileSystemTypeTest) {
       TestFileSystemBackend* test_backend =
           static_cast<TestFileSystemBackend*>(backend);
-      scoped_ptr<storage::CopyOrMoveFileValidatorFactory> factory(
+      std::unique_ptr<storage::CopyOrMoveFileValidatorFactory> factory(
           new TestValidatorFactory);
       test_backend->set_require_copy_or_move_validator(
           require_copy_or_move_validator);
@@ -329,7 +329,7 @@ class CopyOrMoveOperationTestHelper {
         base::FilePath relative;
         root.virtual_path().AppendRelativePath(url.virtual_path(), &relative);
         relative = relative.NormalizePathSeparators();
-        ASSERT_TRUE(ContainsKey(test_case_map, relative));
+        ASSERT_TRUE(base::ContainsKey(test_case_map, relative));
         if (entries[i].is_directory) {
           EXPECT_TRUE(test_case_map[relative]->is_directory);
           directories.push(url);
@@ -619,8 +619,10 @@ TEST(LocalFileSystemCopyOrMoveOperationTest,
   ASSERT_TRUE(helper.DirectoryExists(src));
   ASSERT_TRUE(helper.DirectoryExists(dest));
 
+  // In the move operation, [file 0, file 2, file 3] are processed as LIFO.
+  // After file 3 is processed, file 2 is rejected by the validator and the
+  // operation fails. That is, only file 3 should be in dest.
   FileSystemTestCaseRecord kMoveDirResultCases[] = {
-    {false, FILE_PATH_LITERAL("file 0"), 38},
     {false, FILE_PATH_LITERAL("file 3"), 0},
   };
 
@@ -721,8 +723,8 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, ProgressCallback) {
 TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelper) {
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  base::FilePath source_path = temp_dir.path().AppendASCII("source");
-  base::FilePath dest_path = temp_dir.path().AppendASCII("dest");
+  base::FilePath source_path = temp_dir.GetPath().AppendASCII("source");
+  base::FilePath dest_path = temp_dir.GetPath().AppendASCII("dest");
   const char kTestData[] = "abcdefghijklmnopqrstuvwxyz0123456789";
   base::WriteFile(source_path, kTestData,
                   arraysize(kTestData) - 1);  // Exclude trailing '\0'.
@@ -736,11 +738,11 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelper) {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       file_thread.task_runner();
 
-  scoped_ptr<storage::FileStreamReader> reader(
+  std::unique_ptr<storage::FileStreamReader> reader(
       storage::FileStreamReader::CreateForLocalFile(
           task_runner.get(), source_path, 0, base::Time()));
 
-  scoped_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
+  std::unique_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
       task_runner.get(), dest_path, 0, FileStreamWriter::CREATE_NEW_FILE));
 
   std::vector<int64_t> progress;
@@ -776,8 +778,8 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelperWithFlush) {
   // written with or without the flag.
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  base::FilePath source_path = temp_dir.path().AppendASCII("source");
-  base::FilePath dest_path = temp_dir.path().AppendASCII("dest");
+  base::FilePath source_path = temp_dir.GetPath().AppendASCII("source");
+  base::FilePath dest_path = temp_dir.GetPath().AppendASCII("dest");
   const char kTestData[] = "abcdefghijklmnopqrstuvwxyz0123456789";
   base::WriteFile(source_path, kTestData,
                   arraysize(kTestData) - 1);  // Exclude trailing '\0'.
@@ -792,11 +794,11 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelperWithFlush) {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       file_thread.task_runner();
 
-  scoped_ptr<storage::FileStreamReader> reader(
+  std::unique_ptr<storage::FileStreamReader> reader(
       storage::FileStreamReader::CreateForLocalFile(
           task_runner.get(), source_path, 0, base::Time()));
 
-  scoped_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
+  std::unique_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
       task_runner.get(), dest_path, 0, FileStreamWriter::CREATE_NEW_FILE));
 
   std::vector<int64_t> progress;
@@ -828,8 +830,8 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelperWithFlush) {
 TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelper_Cancel) {
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  base::FilePath source_path = temp_dir.path().AppendASCII("source");
-  base::FilePath dest_path = temp_dir.path().AppendASCII("dest");
+  base::FilePath source_path = temp_dir.GetPath().AppendASCII("source");
+  base::FilePath dest_path = temp_dir.GetPath().AppendASCII("dest");
   const char kTestData[] = "abcdefghijklmnopqrstuvwxyz0123456789";
   base::WriteFile(source_path, kTestData,
                   arraysize(kTestData) - 1);  // Exclude trailing '\0'.
@@ -843,11 +845,11 @@ TEST(LocalFileSystemCopyOrMoveOperationTest, StreamCopyHelper_Cancel) {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       file_thread.task_runner();
 
-  scoped_ptr<storage::FileStreamReader> reader(
+  std::unique_ptr<storage::FileStreamReader> reader(
       storage::FileStreamReader::CreateForLocalFile(
           task_runner.get(), source_path, 0, base::Time()));
 
-  scoped_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
+  std::unique_ptr<FileStreamWriter> writer(FileStreamWriter::CreateForLocalFile(
       task_runner.get(), dest_path, 0, FileStreamWriter::CREATE_NEW_FILE));
 
   std::vector<int64_t> progress;

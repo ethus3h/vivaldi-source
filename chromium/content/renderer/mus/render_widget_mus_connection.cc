@@ -8,19 +8,11 @@
 
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "components/mus/public/cpp/context_provider.h"
-#include "components/mus/public/cpp/output_surface.h"
-#include "components/mus/public/interfaces/command_buffer.mojom.h"
-#include "components/mus/public/interfaces/compositor_frame.mojom.h"
-#include "components/mus/public/interfaces/gpu.mojom.h"
-#include "components/mus/public/interfaces/window_tree.mojom.h"
-#include "content/public/common/mojo_shell_connection.h"
 #include "content/renderer/mus/compositor_mus_connection.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
-#include "mojo/converters/geometry/geometry_type_converters.h"
-#include "mojo/converters/surfaces/surfaces_utils.h"
-#include "mojo/shell/public/cpp/application_impl.h"
+#include "services/ui/public/cpp/window_compositor_frame_sink.h"
+#include "services/ui/public/interfaces/window_tree.mojom.h"
 
 namespace content {
 
@@ -32,36 +24,36 @@ base::LazyInstance<ConnectionMap>::Leaky g_connections =
 }
 
 void RenderWidgetMusConnection::Bind(
-    mojo::InterfaceRequest<mus::mojom::WindowTreeClient> request) {
+    mojo::InterfaceRequest<ui::mojom::WindowTreeClient> request) {
   DCHECK(thread_checker_.CalledOnValidThread());
   RenderThreadImpl* render_thread = RenderThreadImpl::current();
   compositor_mus_connection_ = new CompositorMusConnection(
       routing_id_, render_thread->GetCompositorMainThreadTaskRunner(),
       render_thread->compositor_task_runner(), std::move(request),
       render_thread->input_handler_manager());
-  if (window_surface_binding_) {
-    compositor_mus_connection_->AttachSurfaceOnMainThread(
-        std::move(window_surface_binding_));
+  if (window_compositor_frame_sink_binding_) {
+    compositor_mus_connection_->AttachCompositorFrameSinkOnMainThread(
+        std::move(window_compositor_frame_sink_binding_));
   }
 }
 
-scoped_ptr<cc::OutputSurface> RenderWidgetMusConnection::CreateOutputSurface() {
+std::unique_ptr<cc::CompositorFrameSink>
+RenderWidgetMusConnection::CreateCompositorFrameSink(
+    const cc::FrameSinkId& frame_sink_id,
+    scoped_refptr<cc::ContextProvider> context_provider,
+    gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(!window_surface_binding_);
-  mus::mojom::GpuPtr gpu_service;
-  MojoShellConnection::Get()->GetApplication()->ConnectToService("mojo:mus",
-                                                                 &gpu_service);
-  mus::mojom::CommandBufferPtr cb;
-  gpu_service->CreateOffscreenGLES2Context(GetProxy(&cb));
-  scoped_refptr<cc::ContextProvider> context_provider(
-      new mus::ContextProvider(cb.PassInterface().PassHandle()));
-  scoped_ptr<cc::OutputSurface> surface(new mus::OutputSurface(
-      context_provider, mus::WindowSurface::Create(&window_surface_binding_)));
+  DCHECK(!window_compositor_frame_sink_binding_);
+
+  std::unique_ptr<cc::CompositorFrameSink> compositor_frame_sink(
+      ui::WindowCompositorFrameSink::Create(
+          frame_sink_id, std::move(context_provider), gpu_memory_buffer_manager,
+          &window_compositor_frame_sink_binding_));
   if (compositor_mus_connection_) {
-    compositor_mus_connection_->AttachSurfaceOnMainThread(
-        std::move(window_surface_binding_));
+    compositor_mus_connection_->AttachCompositorFrameSinkOnMainThread(
+        std::move(window_compositor_frame_sink_binding_));
   }
-  return surface;
+  return compositor_frame_sink;
 }
 
 // static
@@ -99,8 +91,8 @@ bool RenderWidgetMusConnection::HasTouchEventHandlersAt(
   return true;
 }
 
-void RenderWidgetMusConnection::ObserveWheelEventAndResult(
-    const blink::WebMouseWheelEvent& wheel_event,
+void RenderWidgetMusConnection::ObserveGestureEventAndResult(
+    const blink::WebGestureEvent& gesture_event,
     const gfx::Vector2dF& wheel_unused_delta,
     bool event_processed) {
   NOTIMPLEMENTED();
@@ -111,16 +103,25 @@ void RenderWidgetMusConnection::OnDidHandleKeyEvent() {
 }
 
 void RenderWidgetMusConnection::OnDidOverscroll(
-    const DidOverscrollParams& params) {
+    const ui::DidOverscrollParams& params) {
   NOTIMPLEMENTED();
 }
 
 void RenderWidgetMusConnection::OnInputEventAck(
-    scoped_ptr<InputEventAck> input_event_ack) {
+    std::unique_ptr<InputEventAck> input_event_ack) {
   DCHECK(!pending_ack_.is_null());
-  // TODO(fsamuel): Use the state in |input_event_ack|.
-  pending_ack_.Run();
+  pending_ack_.Run(input_event_ack->state ==
+                           InputEventAckState::INPUT_EVENT_ACK_STATE_CONSUMED
+                       ? ui::mojom::EventResult::HANDLED
+                       : ui::mojom::EventResult::UNHANDLED);
   pending_ack_.Reset();
+}
+
+void RenderWidgetMusConnection::NotifyInputEventHandled(
+    blink::WebInputEvent::Type handled_type,
+    blink::WebInputEventResult result,
+    InputEventAckState ack_result) {
+  NOTIMPLEMENTED();
 }
 
 void RenderWidgetMusConnection::SetInputHandler(
@@ -129,9 +130,11 @@ void RenderWidgetMusConnection::SetInputHandler(
   input_handler_ = input_handler;
 }
 
-void RenderWidgetMusConnection::UpdateTextInputState(
-    ShowIme show_ime,
-    ChangeSource change_source) {
+void RenderWidgetMusConnection::ShowVirtualKeyboard() {
+  NOTIMPLEMENTED();
+}
+
+void RenderWidgetMusConnection::UpdateTextInputState() {
   NOTIMPLEMENTED();
 }
 
@@ -155,13 +158,13 @@ void RenderWidgetMusConnection::OnConnectionLost() {
 }
 
 void RenderWidgetMusConnection::OnWindowInputEvent(
-    scoped_ptr<blink::WebInputEvent> input_event,
-    const base::Closure& ack) {
+    blink::WebScopedInputEvent input_event,
+    const base::Callback<void(ui::mojom::EventResult)>& ack) {
   DCHECK(thread_checker_.CalledOnValidThread());
   // If we don't yet have a RenderWidgetInputHandler then we don't yet have
   // an initialized RenderWidget.
   if (!input_handler_) {
-    ack.Run();
+    ack.Run(ui::mojom::EventResult::UNHANDLED);
     return;
   }
   // TODO(fsamuel): It would be nice to add this DCHECK but the reality is an
@@ -171,7 +174,8 @@ void RenderWidgetMusConnection::OnWindowInputEvent(
   pending_ack_ = ack;
   // TODO(fsamuel, sadrul): Track real latency info.
   ui::LatencyInfo latency_info;
-  input_handler_->HandleInputEvent(*input_event, latency_info);
+  input_handler_->HandleInputEvent(*input_event, latency_info,
+                                   DISPATCH_TYPE_BLOCKING);
 }
 
 }  // namespace content

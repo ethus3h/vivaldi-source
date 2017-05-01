@@ -5,83 +5,92 @@
 #ifndef PresentationAvailability_h
 #define PresentationAvailability_h
 
-#include "core/dom/ActiveDOMObject.h"
+#include "bindings/core/v8/ActiveScriptWrappable.h"
+#include "core/dom/SuspendableObject.h"
 #include "core/events/EventTarget.h"
-#include "core/page/PageLifecycleObserver.h"
+#include "core/page/PageVisibilityObserver.h"
 #include "modules/ModulesExport.h"
+#include "modules/presentation/PresentationPromiseProperty.h"
 #include "platform/weborigin/KURL.h"
 #include "public/platform/WebURL.h"
+#include "public/platform/WebVector.h"
 #include "public/platform/modules/presentation/WebPresentationAvailabilityObserver.h"
+#include "wtf/Vector.h"
 
 namespace blink {
 
 class ExecutionContext;
-class ScriptPromiseResolver;
 
 // Expose whether there is a presentation display available for |url|. The
 // object will be initialized with a default value passed via ::take() and will
 // then subscribe to receive callbacks if the status for |url| were to
 // change. The object will only listen to changes when required.
 class MODULES_EXPORT PresentationAvailability final
-    : public RefCountedGarbageCollectedEventTargetWithInlineData<PresentationAvailability>
-    , public ActiveDOMObject
-    , public PageLifecycleObserver
-    , public WebPresentationAvailabilityObserver {
-    REFCOUNTED_GARBAGE_COLLECTED_EVENT_TARGET(PresentationAvailability);
-    WILL_BE_USING_GARBAGE_COLLECTED_MIXIN(PresentationAvailability);
-    DEFINE_WRAPPERTYPEINFO();
-public:
-    static PresentationAvailability* take(ScriptPromiseResolver*, const KURL&, bool);
-    ~PresentationAvailability() override;
+    : public EventTargetWithInlineData,
+      public ActiveScriptWrappable<PresentationAvailability>,
+      public SuspendableObject,
+      public PageVisibilityObserver,
+      public WebPresentationAvailabilityObserver {
+  USING_GARBAGE_COLLECTED_MIXIN(PresentationAvailability);
+  DEFINE_WRAPPERTYPEINFO();
 
-    // EventTarget implementation.
-    const AtomicString& interfaceName() const override;
-    ExecutionContext* executionContext() const override;
+ public:
+  static PresentationAvailability* take(PresentationAvailabilityProperty*,
+                                        const WTF::Vector<KURL>&,
+                                        bool);
+  ~PresentationAvailability() override;
 
-    // WebPresentationAvailabilityObserver implementation.
-    void availabilityChanged(bool) override;
-    const WebURL url() const override;
+  // EventTarget implementation.
+  const AtomicString& interfaceName() const override;
+  ExecutionContext* getExecutionContext() const override;
 
-    // ActiveDOMObject implementation.
-    bool hasPendingActivity() const override;
-    void suspend() override;
-    void resume() override;
-    void stop() override;
+  // WebPresentationAvailabilityObserver implementation.
+  void availabilityChanged(bool) override;
+  const WebVector<WebURL>& urls() const override;
 
-    // PageLifecycleObserver implementation.
-    void pageVisibilityChanged() override;
+  // ScriptWrappable implementation.
+  bool hasPendingActivity() const final;
 
-    bool value() const;
+  // SuspendableObject implementation.
+  void suspend() override;
+  void resume() override;
+  void contextDestroyed(ExecutionContext*) override;
 
-    DEFINE_ATTRIBUTE_EVENT_LISTENER(change);
+  // PageVisibilityObserver implementation.
+  void pageVisibilityChanged() override;
 
-    DECLARE_VIRTUAL_TRACE();
+  bool value() const;
 
-protected:
-    // EventTarget implementation.
-    bool addEventListenerInternal(const AtomicString& eventType, PassRefPtrWillBeRawPtr<EventListener>, const EventListenerOptions&) override;
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(change);
 
-private:
-    // Current state of the ActiveDOMObject. It is Active when created. It
-    // becomes Suspended when suspend() is called and moves back to Active if
-    // resume() is called. It becomes Inactive when stop() is called or at
-    // destruction time.
-    enum class State : char {
-        Active,
-        Suspended,
-        Inactive,
-    };
+  DECLARE_VIRTUAL_TRACE();
 
-    PresentationAvailability(ExecutionContext*, const KURL&, bool);
+ protected:
+  // EventTarget implementation.
+  void addedEventListener(const AtomicString& eventType,
+                          RegisteredEventListener&) override;
 
-    void setState(State);
-    void updateListening();
+ private:
+  // Current state of the SuspendableObject. It is Active when created. It
+  // becomes Suspended when suspend() is called and moves back to Active if
+  // resume() is called. It becomes Inactive when stop() is called or at
+  // destruction time.
+  enum class State : char {
+    Active,
+    Suspended,
+    Inactive,
+  };
 
-    const KURL m_url;
-    bool m_value;
-    State m_state;
+  PresentationAvailability(ExecutionContext*, const WTF::Vector<KURL>&, bool);
+
+  void setState(State);
+  void updateListening();
+
+  WebVector<WebURL> m_urls;
+  bool m_value;
+  State m_state;
 };
 
-} // namespace blink
+}  // namespace blink
 
-#endif // PresentationAvailability_h
+#endif  // PresentationAvailability_h

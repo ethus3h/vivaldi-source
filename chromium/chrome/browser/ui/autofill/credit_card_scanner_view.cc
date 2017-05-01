@@ -4,22 +4,21 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/credit_card_scanner_view.h"
-#include "chrome/common/features.h"
 
 namespace autofill {
 
 // Not implemented on other platforms yet.
-#if !BUILDFLAG(ANDROID_JAVA_UI)
+#if !defined(OS_ANDROID)
 // static
 bool CreditCardScannerView::CanShow() {
   return false;
 }
 
 // static
-scoped_ptr<CreditCardScannerView> CreditCardScannerView::Create(
+std::unique_ptr<CreditCardScannerView> CreditCardScannerView::Create(
     const base::WeakPtr<CreditCardScannerViewDelegate>& delegate,
     content::WebContents* web_contents) {
-  return scoped_ptr<CreditCardScannerView>();
+  return std::unique_ptr<CreditCardScannerView>();
 }
 #endif  // !defined(OS_ANDROID)
 

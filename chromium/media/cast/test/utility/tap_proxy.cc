@@ -17,24 +17,28 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 #include <deque>
 #include <map>
+#include <memory>
 #include <utility>
 
 #include "base/at_exit.h"
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/files/file_descriptor_watcher_posix.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
+#include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/default_tick_clock.h"
 #include "media/cast/test/utility/udp_proxy.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
-#include "net/udp/udp_socket.h"
+#include "net/socket/udp_socket.h"
 
 namespace media {
 namespace cast {
@@ -46,7 +50,7 @@ class SendToFDPipe : public PacketPipe {
  public:
   explicit SendToFDPipe(int fd) : fd_(fd) {
   }
-  void Send(scoped_ptr<Packet> packet) final {
+  void Send(std::unique_ptr<Packet> packet) final {
     while (1) {
       int written = write(
           fd_,
@@ -68,15 +72,15 @@ class SendToFDPipe : public PacketPipe {
   int fd_;
 };
 
-class QueueManager : public base::MessageLoopForIO::Watcher {
+class QueueManager {
  public:
-  QueueManager(int input_fd, int output_fd, scoped_ptr<PacketPipe> pipe)
+  QueueManager(int input_fd, int output_fd, std::unique_ptr<PacketPipe> pipe)
       : input_fd_(input_fd), packet_pipe_(std::move(pipe)) {
-    CHECK(base::MessageLoopForIO::current()->WatchFileDescriptor(
-        input_fd_, true, base::MessageLoopForIO::WATCH_READ,
-        &read_socket_watcher_, this));
+    read_socket_watch_controller_ = base::FileDescriptorWatcher::WatchReadable(
+        input_fd_, base::Bind(&QueueManager::OnFileCanReadWithoutBlocking,
+                              base::Unretained(this)));
 
-    scoped_ptr<PacketPipe> tmp(new SendToFDPipe(output_fd));
+    std::unique_ptr<PacketPipe> tmp(new SendToFDPipe(output_fd));
     if (packet_pipe_) {
       packet_pipe_->AppendToPipe(std::move(tmp));
     } else {
@@ -86,11 +90,9 @@ class QueueManager : public base::MessageLoopForIO::Watcher {
                                  &tick_clock_);
   }
 
-  ~QueueManager() final {}
-
-  // MessageLoopForIO::Watcher methods
-  void OnFileCanReadWithoutBlocking(int fd) final {
-    scoped_ptr<Packet> packet(new Packet(kMaxPacketSize));
+ private:
+  void OnFileCanReadWithoutBlocking() {
+    std::unique_ptr<Packet> packet(new Packet(kMaxPacketSize));
     int nread = read(input_fd_,
                      reinterpret_cast<char*>(&packet->front()),
                      kMaxPacketSize);
@@ -103,12 +105,11 @@ class QueueManager : public base::MessageLoopForIO::Watcher {
     packet->resize(nread);
     packet_pipe_->Send(std::move(packet));
   }
-  void OnFileCanWriteWithoutBlocking(int fd) final { NOTREACHED(); }
 
- private:
   int input_fd_;
-  scoped_ptr<PacketPipe> packet_pipe_;
-  base::MessageLoopForIO::FileDescriptorWatcher read_socket_watcher_;
+  std::unique_ptr<PacketPipe> packet_pipe_;
+  std::unique_ptr<base::FileDescriptorWatcher::Controller>
+      read_socket_watch_controller_;
   base::DefaultTickClock tick_clock_;
 };
 
@@ -170,7 +171,7 @@ ByteCounter out_pipe_output_counter;
 class ByteCounterPipe : public media::cast::test::PacketPipe {
  public:
   ByteCounterPipe(ByteCounter* counter) : counter_(counter) {}
-  void Send(scoped_ptr<media::cast::Packet> packet) final {
+  void Send(std::unique_ptr<media::cast::Packet> packet) final {
     counter_->Increment(packet->size());
     pipe_->Send(std::move(packet));
   }
@@ -178,13 +179,13 @@ class ByteCounterPipe : public media::cast::test::PacketPipe {
   ByteCounter* counter_;
 };
 
-void SetupByteCounters(scoped_ptr<media::cast::test::PacketPipe>* pipe,
+void SetupByteCounters(std::unique_ptr<media::cast::test::PacketPipe>* pipe,
                        ByteCounter* pipe_input_counter,
                        ByteCounter* pipe_output_counter) {
   media::cast::test::PacketPipe* new_pipe =
       new ByteCounterPipe(pipe_input_counter);
   new_pipe->AppendToPipe(std::move(*pipe));
-  new_pipe->AppendToPipe(scoped_ptr<media::cast::test::PacketPipe>(
+  new_pipe->AppendToPipe(std::unique_ptr<media::cast::test::PacketPipe>(
       new ByteCounterPipe(pipe_output_counter)));
   pipe->reset(new_pipe);
 }
@@ -276,7 +277,7 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  scoped_ptr<media::cast::test::PacketPipe> in_pipe, out_pipe;
+  std::unique_ptr<media::cast::test::PacketPipe> in_pipe, out_pipe;
   std::string network_type = argv[3];
   if (network_type == "perfect") {
     // No action needed.
@@ -305,10 +306,11 @@ int main(int argc, char **argv) {
   int fd2 = tun_alloc(argv[2], IFF_TAP);
 
   base::MessageLoopForIO message_loop;
+  base::FileDescriptorWatcher file_descriptor_watcher(&message_loop);
   last_printout = base::TimeTicks::Now();
   media::cast::test::QueueManager qm1(fd1, fd2, std::move(in_pipe));
   media::cast::test::QueueManager qm2(fd2, fd1, std::move(out_pipe));
   CheckByteCounters();
   printf("Press Ctrl-C when done.\n");
-  message_loop.Run();
+  base::RunLoop().Run();
 }

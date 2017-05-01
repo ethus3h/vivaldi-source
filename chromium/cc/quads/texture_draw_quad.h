@@ -7,16 +7,21 @@
 
 #include <stddef.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "cc/base/cc_export.h"
 #include "cc/quads/draw_quad.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace cc {
 
 class CC_EXPORT TextureDrawQuad : public DrawQuad {
  public:
+  static const size_t kResourceIdIndex = 0;
+
   TextureDrawQuad();
+  TextureDrawQuad(const TextureDrawQuad& other);
 
   void SetNew(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
@@ -29,7 +34,8 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
               SkColor background_color,
               const float vertex_opacity[4],
               bool y_flipped,
-              bool nearest_neighbor);
+              bool nearest_neighbor,
+              bool secure_output_only);
 
   void SetAll(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
@@ -44,7 +50,8 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
               SkColor background_color,
               const float vertex_opacity[4],
               bool y_flipped,
-              bool nearest_neighbor);
+              bool nearest_neighbor,
+              bool secure_output_only);
 
   bool premultiplied_alpha;
   gfx::PointF uv_top_left;
@@ -53,6 +60,7 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
   float vertex_opacity[4];
   bool y_flipped;
   bool nearest_neighbor;
+  bool secure_output_only = false;
 
   struct OverlayResources {
     OverlayResources();
@@ -72,8 +80,6 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
   static const TextureDrawQuad* MaterialCast(const DrawQuad*);
 
  private:
-  static const size_t kResourceIdIndex = 0;
-
   void ExtendValue(base::trace_event::TracedValue* value) const override;
 };
 

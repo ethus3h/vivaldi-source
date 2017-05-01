@@ -10,50 +10,61 @@
 #include "core/loader/FrameLoaderClient.h"
 #include "core/workers/WorkerGlobalScope.h"
 #include "public/platform/modules/serviceworker/WebServiceWorkerProvider.h"
+#include <memory>
 
 namespace blink {
 
-PassOwnPtrWillBeRawPtr<ServiceWorkerContainerClient> ServiceWorkerContainerClient::create(PassOwnPtr<WebServiceWorkerProvider> provider)
-{
-    return adoptPtrWillBeNoop(new ServiceWorkerContainerClient(provider));
+ServiceWorkerContainerClient::ServiceWorkerContainerClient(
+    Document& document,
+    std::unique_ptr<WebServiceWorkerProvider> provider)
+    : Supplement<Document>(document), m_provider(std::move(provider)) {}
+
+ServiceWorkerContainerClient::ServiceWorkerContainerClient(
+    WorkerClients& clients,
+    std::unique_ptr<WebServiceWorkerProvider> provider)
+    : Supplement<WorkerClients>(clients), m_provider(std::move(provider)) {}
+
+ServiceWorkerContainerClient::~ServiceWorkerContainerClient() {}
+
+const char* ServiceWorkerContainerClient::supplementName() {
+  return "ServiceWorkerContainerClient";
 }
 
-ServiceWorkerContainerClient::ServiceWorkerContainerClient(PassOwnPtr<WebServiceWorkerProvider> provider)
-    : m_provider(provider)
-{
-}
-
-ServiceWorkerContainerClient::~ServiceWorkerContainerClient()
-{
-}
-
-const char* ServiceWorkerContainerClient::supplementName()
-{
-    return "ServiceWorkerContainerClient";
-}
-
-ServiceWorkerContainerClient* ServiceWorkerContainerClient::from(ExecutionContext* context)
-{
-    if (context->isWorkerGlobalScope()) {
-        WorkerClients* clients = toWorkerGlobalScope(context)->clients();
-        ASSERT(clients);
-        return static_cast<ServiceWorkerContainerClient*>(WillBeHeapSupplement<WorkerClients>::from(clients, supplementName()));
-    }
-    Document* document = toDocument(context);
-    if (!document->frame())
-        return nullptr;
-
-    ServiceWorkerContainerClient* client = static_cast<ServiceWorkerContainerClient*>(WillBeHeapSupplement<Document>::from(document, supplementName()));
-    if (!client) {
-        client = new ServiceWorkerContainerClient(document->frame()->loader().client()->createServiceWorkerProvider());
-        WillBeHeapSupplement<Document>::provideTo(*document, supplementName(), adoptPtrWillBeNoop(client));
-    }
+ServiceWorkerContainerClient* ServiceWorkerContainerClient::from(
+    ExecutionContext* context) {
+  if (!context)
+    return nullptr;
+  if (context->isWorkerGlobalScope()) {
+    WorkerClients* workerClients = toWorkerGlobalScope(context)->clients();
+    DCHECK(workerClients);
+    ServiceWorkerContainerClient* client =
+        static_cast<ServiceWorkerContainerClient*>(
+            Supplement<WorkerClients>::from(workerClients, supplementName()));
+    DCHECK(client);
     return client;
+  }
+  Document* document = toDocument(context);
+  if (!document->frame())
+    return nullptr;
+
+  ServiceWorkerContainerClient* client =
+      static_cast<ServiceWorkerContainerClient*>(
+          Supplement<Document>::from(document, supplementName()));
+  if (!client) {
+    client = new ServiceWorkerContainerClient(
+        *document,
+        document->frame()->loader().client()->createServiceWorkerProvider());
+    Supplement<Document>::provideTo(*document, supplementName(), client);
+  }
+  return client;
 }
 
-void provideServiceWorkerContainerClientToWorker(WorkerClients* clients, PassOwnPtr<WebServiceWorkerProvider> provider)
-{
-    clients->provideSupplement(ServiceWorkerContainerClient::supplementName(), ServiceWorkerContainerClient::create(provider));
+void provideServiceWorkerContainerClientToWorker(
+    WorkerClients* clients,
+    std::unique_ptr<WebServiceWorkerProvider> provider) {
+  clients->provideSupplement(
+      ServiceWorkerContainerClient::supplementName(),
+      new ServiceWorkerContainerClient(*clients, std::move(provider)));
 }
 
-} // namespace blink
+}  // namespace blink

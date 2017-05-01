@@ -17,7 +17,7 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/stl_util.h"
+#include "base/memory/ptr_util.h"
 #include "util/file/file_writer.h"
 #include "util/numeric/safe_assignment.h"
 
@@ -33,8 +33,8 @@ MinidumpSimpleStringDictionaryEntryWriter::
 }
 
 const MinidumpSimpleStringDictionaryEntry*
-MinidumpSimpleStringDictionaryEntryWriter::MinidumpSimpleStringDictionaryEntry()
-    const {
+MinidumpSimpleStringDictionaryEntryWriter::
+    GetMinidumpSimpleStringDictionaryEntry() const {
   DCHECK_EQ(state(), kStateWritable);
 
   return &entry_;
@@ -99,7 +99,8 @@ MinidumpSimpleStringDictionaryWriter::MinidumpSimpleStringDictionaryWriter()
 }
 
 MinidumpSimpleStringDictionaryWriter::~MinidumpSimpleStringDictionaryWriter() {
-  STLDeleteContainerPairSecondPointers(entries_.begin(), entries_.end());
+  for (auto& item : entries_)
+    delete item.second;
 }
 
 void MinidumpSimpleStringDictionaryWriter::InitializeFromMap(
@@ -109,14 +110,14 @@ void MinidumpSimpleStringDictionaryWriter::InitializeFromMap(
 
   for (const auto& iterator : map) {
     auto entry =
-        make_scoped_ptr(new MinidumpSimpleStringDictionaryEntryWriter());
+        base::WrapUnique(new MinidumpSimpleStringDictionaryEntryWriter());
     entry->SetKeyValue(iterator.first, iterator.second);
     AddEntry(std::move(entry));
   }
 }
 
 void MinidumpSimpleStringDictionaryWriter::AddEntry(
-    scoped_ptr<MinidumpSimpleStringDictionaryEntryWriter> entry) {
+    std::unique_ptr<MinidumpSimpleStringDictionaryEntryWriter> entry) {
   DCHECK_EQ(state(), kStateMutable);
 
   const std::string& key = entry->Key();
@@ -178,7 +179,7 @@ bool MinidumpSimpleStringDictionaryWriter::WriteObject(
   std::vector<WritableIoVec> iovecs(1, iov);
 
   for (const auto& key_entry : entries_) {
-    iov.iov_base = key_entry.second->MinidumpSimpleStringDictionaryEntry();
+    iov.iov_base = key_entry.second->GetMinidumpSimpleStringDictionaryEntry();
     iov.iov_len = sizeof(MinidumpSimpleStringDictionaryEntry);
     iovecs.push_back(iov);
   }

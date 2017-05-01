@@ -7,28 +7,30 @@
 #include <stddef.h>
 
 #include <list>
+#include <memory>
 #include <utility>
+#include <vector>
 
+#include "base/memory/ptr_util.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/histogram_tester.h"
 #include "base/test/test_timeouts.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_metrics.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/test_autofill_driver.h"
 #include "components/autofill/core/common/form_data.h"
-#include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_request_status.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/zlib/google/compression_utils.h"
 
 using base::ASCIIToUTF16;
 
@@ -49,11 +51,12 @@ void FakeOnURLFetchComplete(net::TestURLFetcher* fetcher,
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 }
 
-// Compresses |data| and returns the result.
-std::string Compress(const std::string& data) {
-  std::string compressed_data;
-  EXPECT_TRUE(compression::GzipCompress(data, &compressed_data));
-  return compressed_data;
+std::vector<FormStructure*> ToRawPointerVector(
+    const std::vector<std::unique_ptr<FormStructure>>& list) {
+  std::vector<FormStructure*> result;
+  for (const auto& item : list)
+    result.push_back(item.get());
+  return result;
 }
 
 }  // namespace
@@ -173,9 +176,8 @@ TEST_F(AutofillDownloadManagerTest, QueryAndUploadTest) {
   field.form_control_type = "submit";
   form.fields.push_back(field);
 
-  FormStructure* form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures;
-  form_structures.push_back(form_structure);
+  std::vector<std::unique_ptr<FormStructure>> form_structures;
+  form_structures.push_back(base::MakeUnique<FormStructure>(form));
 
   form.fields.clear();
 
@@ -199,8 +201,7 @@ TEST_F(AutofillDownloadManagerTest, QueryAndUploadTest) {
   field.form_control_type = "submit";
   form.fields.push_back(field);
 
-  form_structure = new FormStructure(form);
-  form_structures.push_back(form_structure);
+  form_structures.push_back(base::MakeUnique<FormStructure>(form));
 
   form.fields.clear();
 
@@ -219,12 +220,12 @@ TEST_F(AutofillDownloadManagerTest, QueryAndUploadTest) {
   field.form_control_type = "submit";
   form.fields.push_back(field);
 
-  form_structure = new FormStructure(form);
-  form_structures.push_back(form_structure);
+  form_structures.push_back(base::MakeUnique<FormStructure>(form));
 
   // Request with id 0.
   base::HistogramTester histogram;
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures.get()));
+  EXPECT_TRUE(
+      download_manager_.StartQueryRequest(ToRawPointerVector(form_structures)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 1);
 
@@ -284,7 +285,7 @@ TEST_F(AutofillDownloadManagerTest, QueryAndUploadTest) {
   EXPECT_EQ(AutofillDownloadManagerTest::REQUEST_UPLOAD_FAILED,
             responses_.front().type_of_response);
   EXPECT_EQ(net::HTTP_NOT_FOUND, responses_.front().error);
-  EXPECT_EQ(form_structures[1]->FormSignature(),
+  EXPECT_EQ(form_structures[1]->FormSignatureAsStr(),
             responses_.front().signature);
   // Expected response on non-query request is an empty string.
   EXPECT_EQ(std::string(), responses_.front().response);
@@ -303,11 +304,11 @@ TEST_F(AutofillDownloadManagerTest, QueryAndUploadTest) {
   field.name = ASCIIToUTF16("address2");
   field.form_control_type = "text";
   form.fields.push_back(field);
-  form_structure = new FormStructure(form);
-  form_structures.push_back(form_structure);
+  form_structures.push_back(base::MakeUnique<FormStructure>(form));
 
   // Request with id 4, not successful.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures.get()));
+  EXPECT_TRUE(
+      download_manager_.StartQueryRequest(ToRawPointerVector(form_structures)));
   fetcher = factory.GetFetcherByID(4);
   ASSERT_TRUE(fetcher);
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
@@ -350,13 +351,13 @@ TEST_F(AutofillDownloadManagerTest, BackoffLogic_Query) {
   field.form_control_type = "submit";
   form.fields.push_back(field);
 
-  FormStructure* form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures;
-  form_structures.push_back(form_structure);
+  std::vector<std::unique_ptr<FormStructure>> form_structures;
+  form_structures.push_back(base::MakeUnique<FormStructure>(form));
 
   // Request with id 0.
   base::HistogramTester histogram;
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures.get()));
+  EXPECT_TRUE(
+      download_manager_.StartQueryRequest(ToRawPointerVector(form_structures)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 1);
 
@@ -371,7 +372,7 @@ TEST_F(AutofillDownloadManagerTest, BackoffLogic_Query) {
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
       base::TimeDelta::FromMilliseconds(1100));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   // Get the retried request.
   fetcher = factory.GetFetcherByID(1);
@@ -410,7 +411,7 @@ TEST_F(AutofillDownloadManagerTest, BackoffLogic_Upload) {
   field.form_control_type = "submit";
   form.fields.push_back(field);
 
-  scoped_ptr<FormStructure> form_structure(new FormStructure(form));
+  auto form_structure = base::MakeUnique<FormStructure>(form);
 
   // Request with id 0.
   EXPECT_TRUE(download_manager_.StartUploadRequest(
@@ -427,13 +428,13 @@ TEST_F(AutofillDownloadManagerTest, BackoffLogic_Upload) {
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
       base::TimeDelta::FromMilliseconds(1100));
-  base::MessageLoop::current()->Run();
+  base::RunLoop().Run();
 
   // Check that it was a failure.
   EXPECT_EQ(AutofillDownloadManagerTest::REQUEST_UPLOAD_FAILED,
             responses_.front().type_of_response);
   EXPECT_EQ(net::HTTP_NOT_FOUND, responses_.front().error);
-  EXPECT_EQ(form_structure->FormSignature(), responses_.front().signature);
+  EXPECT_EQ(form_structure->FormSignatureAsStr(), responses_.front().signature);
   // Expected response on non-query request is an empty string.
   EXPECT_EQ(std::string(), responses_.front().response);
   responses_.pop_front();
@@ -459,7 +460,7 @@ TEST_F(AutofillDownloadManagerTest, QueryTooManyFieldsTest) {
 
   // Create a query that contains too many fields for the server.
   std::vector<FormData> forms(21);
-  ScopedVector<FormStructure> form_structures;
+  std::vector<std::unique_ptr<FormStructure>> form_structures;
   for (auto& form : forms) {
     for (size_t i = 0; i < 5; ++i) {
       FormFieldData field;
@@ -468,12 +469,12 @@ TEST_F(AutofillDownloadManagerTest, QueryTooManyFieldsTest) {
       field.form_control_type = "text";
       form.fields.push_back(field);
     }
-    FormStructure* form_structure = new FormStructure(form);
-    form_structures.push_back(form_structure);
+    form_structures.push_back(base::MakeUnique<FormStructure>(form));
   }
 
   // Check whether the query is aborted.
-  EXPECT_FALSE(download_manager_.StartQueryRequest(form_structures.get()));
+  EXPECT_FALSE(
+      download_manager_.StartQueryRequest(ToRawPointerVector(form_structures)));
 }
 
 TEST_F(AutofillDownloadManagerTest, QueryNotTooManyFieldsTest) {
@@ -483,7 +484,7 @@ TEST_F(AutofillDownloadManagerTest, QueryNotTooManyFieldsTest) {
   // Create a query that contains a lot of fields, but not too many for the
   // server.
   std::vector<FormData> forms(25);
-  ScopedVector<FormStructure> form_structures;
+  std::vector<std::unique_ptr<FormStructure>> form_structures;
   for (auto& form : forms) {
     for (size_t i = 0; i < 4; ++i) {
       FormFieldData field;
@@ -492,12 +493,12 @@ TEST_F(AutofillDownloadManagerTest, QueryNotTooManyFieldsTest) {
       field.form_control_type = "text";
       form.fields.push_back(field);
     }
-    FormStructure* form_structure = new FormStructure(form);
-    form_structures.push_back(form_structure);
+    form_structures.push_back(base::MakeUnique<FormStructure>(form));
   }
 
   // Check that the query is not aborted.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures.get()));
+  EXPECT_TRUE(
+      download_manager_.StartQueryRequest(ToRawPointerVector(form_structures)));
 }
 
 TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
@@ -521,26 +522,23 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   field.name = ASCIIToUTF16("lastname");
   form.fields.push_back(field);
 
-  FormStructure* form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures0;
-  form_structures0.push_back(form_structure);
+  std::vector<std::unique_ptr<FormStructure>> form_structures0;
+  form_structures0.push_back(base::MakeUnique<FormStructure>(form));
 
   // Add a slightly different form, which should result in a different request.
   field.label = ASCIIToUTF16("email");
   field.name = ASCIIToUTF16("email");
   form.fields.push_back(field);
-  form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures1;
-  form_structures1.push_back(form_structure);
+  std::vector<std::unique_ptr<FormStructure>> form_structures1;
+  form_structures1.push_back(base::MakeUnique<FormStructure>(form));
 
   // Add another slightly different form, which should also result in a
   // different request.
   field.label = ASCIIToUTF16("email2");
   field.name = ASCIIToUTF16("email2");
   form.fields.push_back(field);
-  form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures2;
-  form_structures2.push_back(form_structure);
+  std::vector<std::unique_ptr<FormStructure>> form_structures2;
+  form_structures2.push_back(base::MakeUnique<FormStructure>(form));
 
   // Limit cache to two forms.
   LimitCache(2);
@@ -568,7 +566,8 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
 
   base::HistogramTester histogram;
   // Request with id 0.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures0.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures0)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 1);
 
@@ -584,7 +583,8 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   responses_.clear();
 
   // No actual request - should be a cache hit.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures0.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures0)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 2);
   // Data is available immediately from cache - no over-the-wire trip.
@@ -593,7 +593,8 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   responses_.clear();
 
   // Request with id 1.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures1.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures1)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 3);
   // No responses yet
@@ -608,7 +609,8 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   responses_.clear();
 
   // Request with id 2.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures2.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures2)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 4);
 
@@ -621,11 +623,13 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   responses_.clear();
 
   // No actual requests - should be a cache hit.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures1.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures1)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 5);
 
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures2.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures2)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 6);
 
@@ -636,7 +640,8 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
 
   // The first structure should've expired.
   // Request with id 3.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures0.get()));
+  EXPECT_TRUE(download_manager_.StartQueryRequest(
+      ToRawPointerVector(form_structures0)));
   histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
                                AutofillMetrics::QUERY_SENT, 7);
   // No responses yet
@@ -647,122 +652,6 @@ TEST_F(AutofillDownloadManagerTest, CacheQueryTest) {
   FakeOnURLFetchComplete(fetcher, 200, std::string(responses[0]));
   ASSERT_EQ(1U, responses_.size());
   EXPECT_EQ(responses[0], responses_.front().response);
-}
-
-TEST_F(AutofillDownloadManagerTest, QueryRequestIsGzipped) {
-  // Expected query (uncompressed for visual verification).
-  const char* kExpectedQueryXml =
-      "<?xml version=\"1.0\"?>\n"
-      "<autofillquery clientversion=\"6.1.1715.1442/en (GGLL)\">"
-      "<form signature=\"14546501144368603154\">"
-      "<field signature=\"239111655\"/>"
-      "<field signature=\"3763331450\"/>"
-      "<field signature=\"3494530716\"/>"
-      "</form></autofillquery>\n";
-
-  // Create and register factory.
-  net::TestURLFetcherFactory factory;
-
-  FormData form;
-
-  FormFieldData field;
-  field.form_control_type = "text";
-
-  field.label = ASCIIToUTF16("username");
-  field.name = ASCIIToUTF16("username");
-  form.fields.push_back(field);
-
-  field.label = ASCIIToUTF16("First Name");
-  field.name = ASCIIToUTF16("firstname");
-  form.fields.push_back(field);
-
-  field.label = ASCIIToUTF16("Last Name");
-  field.name = ASCIIToUTF16("lastname");
-  form.fields.push_back(field);
-
-  FormStructure* form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures;
-  form_structures.push_back(form_structure);
-
-  base::HistogramTester histogram;
-  // Request with id 0.
-  EXPECT_TRUE(download_manager_.StartQueryRequest(form_structures.get()));
-  histogram.ExpectUniqueSample("Autofill.ServerQueryResponse",
-                               AutofillMetrics::QUERY_SENT, 1);
-
-  // Request payload is gzipped.
-  net::TestURLFetcher* fetcher = factory.GetFetcherByID(0);
-  ASSERT_TRUE(fetcher);
-  EXPECT_EQ(Compress(kExpectedQueryXml), fetcher->upload_data());
-
-  // Proper content-encoding header is defined.
-  net::HttpRequestHeaders headers;
-  fetcher->GetExtraRequestHeaders(&headers);
-  std::string header;
-  EXPECT_TRUE(headers.GetHeader("content-encoding", &header));
-  EXPECT_EQ("gzip", header);
-
-  // Expect that the compression is logged.
-  // NOTE: To get the expected value, run tests with --vmodule=autofill*=1 and
-  // watch for the VLOG which indicates compression.
-  histogram.ExpectUniqueSample("Autofill.PayloadCompressionRatio.Query", 72, 1);
-}
-
-TEST_F(AutofillDownloadManagerTest, UploadRequestIsGzipped) {
-  // Expected upload (uncompressed for visual verification).
-  const char* kExpectedUploadXml =
-      "<?xml version=\"1.0\"?>\n"
-      "<autofillupload submission=\"true\""
-      " clientversion=\"6.1.1715.1442/en (GGLL)\""
-      " formsignature=\"14546501144368603154\" autofillused=\"true\""
-      " datapresent=\"\"/>\n";
-
-  // Create and register factory.
-  net::TestURLFetcherFactory factory;
-
-  FormData form;
-
-  FormFieldData field;
-  field.form_control_type = "text";
-
-  field.label = ASCIIToUTF16("username");
-  field.name = ASCIIToUTF16("username");
-  form.fields.push_back(field);
-
-  field.label = ASCIIToUTF16("First Name");
-  field.name = ASCIIToUTF16("firstname");
-  form.fields.push_back(field);
-
-  field.label = ASCIIToUTF16("Last Name");
-  field.name = ASCIIToUTF16("lastname");
-  form.fields.push_back(field);
-
-  FormStructure* form_structure = new FormStructure(form);
-  ScopedVector<FormStructure> form_structures;
-  form_structures.push_back(form_structure);
-
-  base::HistogramTester histogram;
-  // Request with id 0.
-  EXPECT_TRUE(download_manager_.StartUploadRequest(
-      *(form_structures[0]), true, ServerFieldTypeSet(), std::string(), true));
-
-  // Request payload is gzipped.
-  net::TestURLFetcher* fetcher = factory.GetFetcherByID(0);
-  ASSERT_TRUE(fetcher);
-  EXPECT_EQ(Compress(kExpectedUploadXml), fetcher->upload_data());
-
-  // Proper content-encoding header is defined.
-  net::HttpRequestHeaders headers;
-  fetcher->GetExtraRequestHeaders(&headers);
-  std::string header;
-  EXPECT_TRUE(headers.GetHeader("content-encoding", &header));
-  EXPECT_EQ("gzip", header);
-
-  // Expect that the compression is logged.
-  // NOTE: To get the expected value, run tests with --vmodule=autofill*=1 and
-  // watch for the VLOG which indicates compression.
-  histogram.ExpectUniqueSample("Autofill.PayloadCompressionRatio.Upload", 90,
-                               1);
 }
 
 }  // namespace autofill

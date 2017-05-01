@@ -9,53 +9,27 @@
 #import <UIKit/UIKit.h>
 #include <vector>
 
-#include "base/ios/block_types.h"
+#import "base/ios/block_types.h"
 #include "ios/web/public/favicon_url.h"
+#import "ios/web/public/navigation_manager.h"
 #include "ios/web/public/ssl_status.h"
 #import "ios/web/public/web_state/ui/crw_native_content.h"
-#include "ios/web/public/web_state/web_state.h"
+#import "ios/web/public/web_state/web_state.h"
 #include "ui/base/page_transition_types.h"
 
 class GURL;
 @class CRWSessionEntry;
 @class CRWWebController;
 
-namespace net {
-class HttpResponseHeaders;
-class SSLInfo;
-class X509Certificate;
-}
-
 namespace web {
 class BlockedPopupInfo;
 struct Referrer;
-struct WebLoadParams;
 }
 
-// Callback for -presentSSLError:forSSLStatus:onUrl:recoverable:callback:
-typedef void (^SSLErrorCallback)(BOOL);
-
-// Interface to perform cross window scripting on CRWWebController.
-@protocol CRWWebControllerScripting
-
-// Loads the HTML into the page.
-- (void)loadHTML:(NSString*)html;
-
-// Loads HTML in the page and presents it as if it was originating from the
-// URL itself. Should be used only in specific cases, where the injected html
-// is guaranteed to be some derived representation of the original content.
-- (void)loadHTMLForCurrentURL:(NSString*)html;
-
-// Stops loading the page.
-- (void)stopLoading;
-
-// TODO(eugenebut): rename -[CRWWebController close] method to avoid confusion.
-// Asks the delegate to be closed.
-- (void)orderClose;
-
-@end
-
 // Methods implemented by the delegate of the CRWWebController.
+// DEPRECATED, do not conform to this protocol and do not add any methods to it.
+// Use web::WebStateDelegate instead.
+// TODO(crbug.com/674991): Remove this protocol.
 @protocol CRWWebDelegate<NSObject>
 
 // Called when the page wants to open a new window by DOM (e.g. with
@@ -76,39 +50,17 @@ typedef void (^SSLErrorCallback)(BOOL);
 // Called when the page calls window.close() on itself. Begin the shut-down
 // sequence for this controller.
 - (void)webPageOrderedClose;
-// Navigate forwards or backwards by delta pages.
-- (void)goDelta:(int)delta;
-// Opens a URL with the given parameters.
-- (void)openURLWithParams:(const web::WebState::OpenURLParams&)params;
-// Called when a link to an external app needs to be opened. Returns YES iff
-// |url| is launched in an external app.
-- (BOOL)openExternalURL:(const GURL&)url;
+// Called when an external app needs to be opened, it also passes |linkClicked|
+// to track if this call was a result of user action or not. Returns YES iff
+// |URL| is launched in an external app.
+- (BOOL)openExternalURL:(const GURL&)URL linkClicked:(BOOL)linkClicked;
 
-// This method is called when a network request has an issue with the SSL
-// connection to present it to the user. The user will decide if the request
-// should continue or not and the callback should be invoked to let the backend
-// know.
-// The callback is safe to call until CRWWebController is closed.
-- (void)presentSSLError:(const net::SSLInfo&)info
-           forSSLStatus:(const web::SSLStatus&)status
-            recoverable:(BOOL)recoverable
-               callback:(SSLErrorCallback)shouldContinue;
-// Asked the delegate to present an error to the user because the
-// CRWWebController cannot verify the URL of the current page.
-- (void)presentSpoofingError;
 // This method is invoked whenever the system believes the URL is about to
 // change, or immediately after any unexpected change of the URL, prior to
 // updating the navigation manager's pending entry.
 // Phase will be LOAD_REQUESTED.
 - (void)webWillAddPendingURL:(const GURL&)url
                   transition:(ui::PageTransition)transition;
-// This method is invoked after an update to the navigation manager's pending
-// URL, triggered whenever the system believes the URL is about to
-// change, or immediately after any unexpected change of the URL.
-// This can be followed by a call to webDidStartLoading (phase PAGE_LOADING) or
-// another call to webWillAddPendingURL and webDidAddPendingURL (phase still
-// LOAD_REQUESTED).
-- (void)webDidAddPendingURL;
 // Called when webWillStartLoadingURL was called, but something went wrong, and
 // webDidStartLoadingURL will now never be called.
 - (void)webCancelStartLoadingRequest;
@@ -119,12 +71,6 @@ typedef void (^SSLErrorCallback)(BOOL);
 // isn't a web concept, so this shoud be expressed differently.
 - (void)webDidStartLoadingURL:(const GURL&)url
           shouldUpdateHistory:(BOOL)updateHistory;
-// Called when the page finishes loading, with the URL, page title and load
-// success status. Phase will be PAGE_LOADED.
-// On the next navigation event, this will be followed by a call to
-// webWillStartLoadingURL.
-- (void)webDidFinishWithURL:(const GURL&)url
-                loadSuccess:(BOOL)loadSuccess;
 // Called when the page load was cancelled by page activity (before a success /
 // failure state is known). Phase will be PAGE_LOADED.
 - (void)webLoadCancelled:(const GURL&)url;
@@ -145,11 +91,6 @@ typedef void (^SSLErrorCallback)(BOOL);
     onFormResubmissionForRequest:(NSURLRequest*)request
                    continueBlock:(ProceduralBlock)continueBlock
                      cancelBlock:(ProceduralBlock)cancelBlock;
-// Returns the unique id of the download request and starts downloading the
-// image at |url| without sending the cookies. Invokes |callback| on completion.
-- (int)downloadImageAtUrl:(const GURL&)url
-    maxBitmapSize:(uint32_t)maxBitmapSize
-         callback:(const web::WebState::ImageDownloadCallback&)callback;
 
 // ---------------------------------------------------------------------
 // TODO(rohitrao): Eliminate as many of the following delegate methods as
@@ -163,14 +104,13 @@ typedef void (^SSLErrorCallback)(BOOL);
 // |webWillInitiateLoadWithParams|, the |params| argument is non-const so that
 // the delegate can make changes if necessary.
 // TODO(rohitrao): This is not a great API.  Clean it up.
-- (void)webWillInitiateLoadWithParams:(web::WebLoadParams&)params;
-- (void)webDidUpdateSessionForLoadWithParams:(const web::WebLoadParams&)params
+- (void)webWillInitiateLoadWithParams:
+    (web::NavigationManager::WebLoadParams&)params;
+- (void)webDidUpdateSessionForLoadWithParams:
+            (const web::NavigationManager::WebLoadParams&)params
                         wasInitialNavigation:(BOOL)initialNavigation;
 // Called from finishHistoryNavigationFromEntry.
 - (void)webWillFinishHistoryNavigationFromEntry:(CRWSessionEntry*)fromEntry;
-// Called when a page navigates backwards or forwards.
-- (void)webWillGoDelta:(int)delta;
-- (void)webDidPrepareForGoBack;
 // ---------------------------------------------------------------------
 
 @optional
@@ -188,15 +128,17 @@ typedef void (^SSLErrorCallback)(BOOL);
 - (BOOL)webController:(CRWWebController*)webController
     shouldOpenExternalURL:(const GURL&)URL;
 
-// Called when |url| is deemed suitable to be opened in a matching native app.
-// Needs to return whether |url| was opened in a matching native app.
+// Called when |URL| is deemed suitable to be opened in a matching native app.
+// Needs to return whether |URL| was opened in a matching native app.
+// Also triggering user action |linkClicked| is passed to use it when needed.
 // The return value indicates if the native app was launched, not if a native
 // app was found.
 // TODO(shreyasv): Instead of having the CRWWebDelegate handle an external URL,
 // provide a hook/API to steal a URL navigation. That way the logic to determine
 // a URL as triggering a native app launch can also be moved.
-- (BOOL)urlTriggersNativeAppLaunch:(const GURL&)url
-                         sourceURL:(const GURL&)sourceURL;
+- (BOOL)urlTriggersNativeAppLaunch:(const GURL&)URL
+                         sourceURL:(const GURL&)sourceURL
+                       linkClicked:(BOOL)linkClicked;
 
 // Called to ask the delegate for a controller to display the given url,
 // which contained content that the UIWebView couldn't display. Returns
@@ -222,21 +164,10 @@ typedef void (^SSLErrorCallback)(BOOL);
 - (void)webController:(CRWWebController*)webController
         didBlockPopup:(const web::BlockedPopupInfo&)blockedPopupInfo;
 
-// TODO(jimblackler): Create a DialogController and move dialog-related delegate
-// methods to CRWWebControllerObserver.
-
-// Called when CRWWebController will present a dialog (only if
-// kNotifyBeforeOpeningDialogs policy is set via
-// -[CRWWebController setPageDialogsOpenPolicy:] method).
-- (void)webControllerWillShowDialog:(CRWWebController*)webController;
-
-// Called when CRWWebController did suppress a dialog (only if kSuppressDialogs
-// policy is set via -[CRWWebController setPageDialogsOpenPolicy:] method).
+// Called when CRWWebController did suppress a dialog (JavaScript, HTTP
+// authentication or window.open).
+// NOTE: Called only if CRWWebController.shouldSuppressDialogs is set to YES.
 - (void)webControllerDidSuppressDialog:(CRWWebController*)webController;
-
-// Called to get CRWWebController of a child window by name.
-- (id<CRWWebControllerScripting>)webController:(CRWWebController*)webController
-              scriptingInterfaceForWindowNamed:(NSString*)windowName;
 
 // Called to retrieve the height of any header that is overlaying on top of the
 // web view. This can be used to implement, for e.g. a toolbar that changes
@@ -248,13 +179,6 @@ typedef void (^SSLErrorCallback)(BOOL);
 // NagivationItem.
 - (void)webControllerDidUpdateSSLStatusForCurrentNavigationItem:
     (CRWWebController*)webController;
-
-// Called when CRWWebController did update page load progress.
-- (void)webController:(CRWWebController*)webController
-    didUpdateProgress:(CGFloat)progress;
-
-// Called when web view process has been terminated.
-- (void)webControllerWebProcessDidCrash:(CRWWebController*)webController;
 
 // Called when a PassKit file is downloaded. |data| should be the data from a
 // PassKit file, but this is not guaranteed, and the delegate is responsible for

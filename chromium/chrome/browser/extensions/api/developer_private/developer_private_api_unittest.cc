@@ -2,28 +2,37 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
+
+#include <memory>
 #include <utility>
 
 #include "base/files/file_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/extensions/scripting_permissions_modifier.h"
 #include "chrome/browser/extensions/test_extension_dir.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/common/extensions/api/developer_private.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "components/crx_file/id_util.h"
-#include "content/public/test/test_web_contents_factory.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/mock_configuration_policy_provider.h"
+#include "components/policy/core/common/policy_map.h"
+#include "components/policy/core/common/policy_service_impl.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/policy/policy_constants.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "content/public/test/web_contents_tester.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_error_test_util.h"
 #include "extensions/browser/extension_prefs.h"
@@ -38,17 +47,32 @@
 #include "extensions/common/test_util.h"
 #include "extensions/common/value_builder.h"
 
+using testing::Return;
+using testing::_;
+
 namespace extensions {
 
 namespace {
 
-scoped_ptr<KeyedService> BuildAPI(content::BrowserContext* context) {
-  return make_scoped_ptr(new DeveloperPrivateAPI(context));
+std::unique_ptr<KeyedService> BuildAPI(content::BrowserContext* context) {
+  return base::MakeUnique<DeveloperPrivateAPI>(context);
 }
 
-scoped_ptr<KeyedService> BuildEventRouter(content::BrowserContext* profile) {
-  return make_scoped_ptr(
-      new EventRouter(profile, ExtensionPrefs::Get(profile)));
+std::unique_ptr<KeyedService> BuildEventRouter(
+    content::BrowserContext* profile) {
+  return base::MakeUnique<EventRouter>(profile, ExtensionPrefs::Get(profile));
+}
+
+bool HasAllUrlsPermission(const Extension* extension,
+                          content::BrowserContext* context) {
+  return ScriptingPermissionsModifier(context, extension).IsAllowedOnAllUrls();
+}
+
+bool HasPrefsPermission(bool (*has_pref)(const std::string&,
+                                         content::BrowserContext*),
+                        content::BrowserContext* context,
+                        const std::string& id) {
+  return has_pref(id, context);
 }
 
 }  // namespace
@@ -72,15 +96,26 @@ class DeveloperPrivateApiUnitTest : public ExtensionServiceTestBase {
   const Extension* LoadSimpleExtension();
 
   // Tests modifying the extension's configuration.
-  void TestExtensionPrefSetting(
-      bool (*has_pref)(const std::string&, content::BrowserContext*),
-      const std::string& key,
-      const std::string& extension_id);
+  void TestExtensionPrefSetting(const base::Callback<bool()>& has_pref,
+                                const std::string& key,
+                                const std::string& extension_id);
 
   testing::AssertionResult TestPackExtensionFunction(
       const base::ListValue& args,
       api::developer_private::PackStatus expected_status,
       int expected_flags);
+
+  // Execute the updateProfileConfiguration API call with a specified
+  // dev_mode. This is done from the webui when the user checks the
+  // "Developer Mode" checkbox.
+  void UpdateProfileConfigurationDevMode(bool dev_mode);
+
+  // Execute the getProfileConfiguration API and parse its result into a
+  // ProfileInfo structure for further verification in the calling test.
+  // Will reset the profile_info unique_ptr.
+  // Uses ASSERT_* inside - callers should use ASSERT_NO_FATAL_FAILURE.
+  void GetProfileConfiguration(
+      std::unique_ptr<api::developer_private::ProfileInfo>* profile_info);
 
   Browser* browser() { return browser_.get(); }
 
@@ -90,10 +125,11 @@ class DeveloperPrivateApiUnitTest : public ExtensionServiceTestBase {
   void TearDown() override;
 
   // The browser (and accompanying window).
-  scoped_ptr<TestBrowserWindow> browser_window_;
-  scoped_ptr<Browser> browser_;
+  std::unique_ptr<TestBrowserWindow> browser_window_;
+  std::unique_ptr<Browser> browser_;
 
-  ScopedVector<TestExtensionDir> test_extension_dirs_;
+  std::vector<std::unique_ptr<TestExtensionDir>> test_extension_dirs_;
+  policy::MockConfigurationPolicyProvider mock_policy_provider_;
 
   DISALLOW_COPY_AND_ASSIGN(DeveloperPrivateApiUnitTest);
 };
@@ -102,9 +138,7 @@ bool DeveloperPrivateApiUnitTest::RunFunction(
     const scoped_refptr<UIThreadExtensionFunction>& function,
     const base::ListValue& args) {
   return extension_function_test_utils::RunFunction(
-      function.get(),
-      make_scoped_ptr(args.DeepCopy()),
-      browser(),
+      function.get(), args.CreateDeepCopy(), browser(),
       extension_function_test_utils::NONE);
 }
 
@@ -117,8 +151,8 @@ const Extension* DeveloperPrivateApiUnitTest::LoadUnpackedExtension() {
       " \"permissions\": [\"*://*/*\"]"
       "}";
 
-  test_extension_dirs_.push_back(new TestExtensionDir);
-  TestExtensionDir* dir = test_extension_dirs_.back();
+  test_extension_dirs_.push_back(base::MakeUnique<TestExtensionDir>());
+  TestExtensionDir* dir = test_extension_dirs_.back().get();
   dir->WriteManifest(kManifest);
 
   // TODO(devlin): We should extract out methods to load an unpacked extension
@@ -127,9 +161,9 @@ const Extension* DeveloperPrivateApiUnitTest::LoadUnpackedExtension() {
   TestExtensionRegistryObserver registry_observer(registry());
   scoped_refptr<UnpackedInstaller> installer(
       UnpackedInstaller::Create(service()));
-  installer->Load(dir->unpacked_path());
+  installer->Load(dir->UnpackedPath());
   base::FilePath extension_path =
-      base::MakeAbsoluteFilePath(dir->unpacked_path());
+      base::MakeAbsoluteFilePath(dir->UnpackedPath());
   const Extension* extension = nullptr;
   do {
     extension = registry_observer.WaitForExtensionLoaded();
@@ -152,7 +186,7 @@ const Extension* DeveloperPrivateApiUnitTest::LoadSimpleExtension() {
           .Set("description", "an extension");
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(std::move(manifest))
+          .SetManifest(manifest.Build())
           .SetLocation(Manifest::INTERNAL)
           .SetID(id)
           .Build();
@@ -161,33 +195,43 @@ const Extension* DeveloperPrivateApiUnitTest::LoadSimpleExtension() {
 }
 
 void DeveloperPrivateApiUnitTest::TestExtensionPrefSetting(
-    bool (*has_pref)(const std::string&, content::BrowserContext*),
+    const base::Callback<bool()>& has_pref,
     const std::string& key,
     const std::string& extension_id) {
   scoped_refptr<UIThreadExtensionFunction> function(
       new api::DeveloperPrivateUpdateExtensionConfigurationFunction());
 
-  base::ListValue args;
-  base::DictionaryValue* parameters = new base::DictionaryValue();
-  parameters->SetString("extensionId", extension_id);
-  parameters->SetBoolean(key, true);
-  args.Append(parameters);
+  EXPECT_FALSE(has_pref.Run()) << key;
 
-  EXPECT_FALSE(has_pref(extension_id, profile())) << key;
+  {
+    auto parameters = base::MakeUnique<base::DictionaryValue>();
+    parameters->SetString("extensionId", extension_id);
+    parameters->SetBoolean(key, true);
 
-  EXPECT_FALSE(RunFunction(function, args)) << key;
-  EXPECT_EQ(std::string("This action requires a user gesture."),
-            function->GetError());
+    base::ListValue args;
+    args.Append(std::move(parameters));
+    EXPECT_FALSE(RunFunction(function, args)) << key;
+    EXPECT_EQ("This action requires a user gesture.", function->GetError());
 
-  ExtensionFunction::ScopedUserGestureForTests scoped_user_gesture;
-  function = new api::DeveloperPrivateUpdateExtensionConfigurationFunction();
-  EXPECT_TRUE(RunFunction(function, args)) << key;
-  EXPECT_TRUE(has_pref(extension_id, profile())) << key;
+    ExtensionFunction::ScopedUserGestureForTests scoped_user_gesture;
+    function = new api::DeveloperPrivateUpdateExtensionConfigurationFunction();
+    EXPECT_TRUE(RunFunction(function, args)) << key;
+    EXPECT_TRUE(has_pref.Run()) << key;
+  }
 
-  parameters->SetBoolean(key, false);
-  function = new api::DeveloperPrivateUpdateExtensionConfigurationFunction();
-  EXPECT_TRUE(RunFunction(function, args)) << key;
-  EXPECT_FALSE(has_pref(extension_id, profile())) << key;
+  {
+    auto parameters = base::MakeUnique<base::DictionaryValue>();
+    parameters->SetString("extensionId", extension_id);
+    parameters->SetBoolean(key, false);
+
+    base::ListValue args;
+    args.Append(std::move(parameters));
+
+    ExtensionFunction::ScopedUserGestureForTests scoped_user_gesture;
+    function = new api::DeveloperPrivateUpdateExtensionConfigurationFunction();
+    EXPECT_TRUE(RunFunction(function, args)) << key;
+    EXPECT_FALSE(has_pref.Run()) << key;
+  }
 }
 
 testing::AssertionResult DeveloperPrivateApiUnitTest::TestPackExtensionFunction(
@@ -203,7 +247,7 @@ testing::AssertionResult DeveloperPrivateApiUnitTest::TestPackExtensionFunction(
   // part of the general extension api system.
   const base::Value* response_value = nullptr;
   CHECK(function->GetResultList()->Get(0u, &response_value));
-  scoped_ptr<api::developer_private::PackDirectoryResponse> response =
+  std::unique_ptr<api::developer_private::PackDirectoryResponse> response =
       api::developer_private::PackDirectoryResponse::FromValue(*response_value);
   CHECK(response);
 
@@ -221,12 +265,46 @@ testing::AssertionResult DeveloperPrivateApiUnitTest::TestPackExtensionFunction(
   return testing::AssertionSuccess();
 }
 
+void DeveloperPrivateApiUnitTest::UpdateProfileConfigurationDevMode(
+    bool dev_mode) {
+  scoped_refptr<UIThreadExtensionFunction> function(
+      new api::DeveloperPrivateUpdateProfileConfigurationFunction());
+  std::unique_ptr<base::ListValue> args =
+      ListBuilder()
+          .Append(DictionaryBuilder()
+                      .SetBoolean("inDeveloperMode", dev_mode)
+                      .Build())
+          .Build();
+  EXPECT_TRUE(RunFunction(function, *args)) << function->GetError();
+}
+
+void DeveloperPrivateApiUnitTest::GetProfileConfiguration(
+    std::unique_ptr<api::developer_private::ProfileInfo>* profile_info) {
+  scoped_refptr<UIThreadExtensionFunction> function(
+      new api::DeveloperPrivateGetProfileConfigurationFunction());
+  base::ListValue args;
+  EXPECT_TRUE(RunFunction(function, args)) << function->GetError();
+
+  ASSERT_TRUE(function->GetResultList());
+  ASSERT_EQ(1u, function->GetResultList()->GetSize());
+  const base::Value* response_value = nullptr;
+  function->GetResultList()->Get(0u, &response_value);
+  *profile_info =
+      api::developer_private::ProfileInfo::FromValue(*response_value);
+}
+
 void DeveloperPrivateApiUnitTest::SetUp() {
   ExtensionServiceTestBase::SetUp();
-  InitializeEmptyExtensionService();
+
+  // By not specifying a pref_file filepath, we get a
+  // sync_preferences::TestingPrefServiceSyncable
+  // - see BuildTestingProfile in extension_service_test_base.cc.
+  ExtensionServiceInitParams init_params = CreateDefaultInitParams();
+  init_params.pref_file.clear();
+  InitializeExtensionService(init_params);
 
   browser_window_.reset(new TestBrowserWindow());
-  Browser::CreateParams params(profile(), chrome::HOST_DESKTOP_TYPE_NATIVE);
+  Browser::CreateParams params(profile());
   params.type = Browser::TYPE_TABBED;
   params.window = browser_window_.get();
   browser_.reset(new Browser(params));
@@ -253,12 +331,18 @@ TEST_F(DeveloperPrivateApiUnitTest,
       FeatureSwitch::scripts_require_action(), true);
   // Sadly, we need a "real" directory here, because toggling prefs causes
   // a reload (which needs a path).
-  std::string id = LoadUnpackedExtension()->id();
+  const Extension* extension = LoadUnpackedExtension();
+  const std::string& id = extension->id();
 
-  TestExtensionPrefSetting(&util::IsIncognitoEnabled, "incognitoAccess", id);
-  TestExtensionPrefSetting(&util::AllowFileAccess, "fileAccess", id);
   TestExtensionPrefSetting(
-      &util::AllowedScriptingOnAllUrls, "runOnAllUrls", id);
+      base::Bind(&HasPrefsPermission, &util::IsIncognitoEnabled, profile(), id),
+      "incognitoAccess", id);
+  TestExtensionPrefSetting(
+      base::Bind(&HasPrefsPermission, &util::AllowFileAccess, profile(), id),
+      "fileAccess", id);
+  TestExtensionPrefSetting(
+      base::Bind(&HasAllUrlsPermission, extension, profile()), "runOnAllUrls",
+      id);
 }
 
 // Test developerPrivate.reload.
@@ -281,17 +365,26 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateReload) {
 }
 
 // Test developerPrivate.packDirectory.
-// http://crbug.com/527228 flaky
-TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivatePackFunction) {
-  ResetThreadBundle(content::TestBrowserThreadBundle::DEFAULT);
-
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivatePackFunction) {
+  // Use a temp dir isolating the extension dir and its generated files.
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   base::FilePath root_path = data_dir().AppendASCII("good_unpacked");
-  base::FilePath crx_path = data_dir().AppendASCII("good_unpacked.crx");
-  base::FilePath pem_path = data_dir().AppendASCII("good_unpacked.pem");
+  ASSERT_TRUE(base::CopyDirectory(root_path, temp_dir.GetPath(), true));
+
+  base::FilePath temp_root_path =
+      temp_dir.GetPath().Append(root_path.BaseName());
+  base::FilePath crx_path = temp_dir.GetPath().AppendASCII("good_unpacked.crx");
+  base::FilePath pem_path = temp_dir.GetPath().AppendASCII("good_unpacked.pem");
+
+  EXPECT_FALSE(base::PathExists(crx_path))
+      << "crx should not exist before the test is run!";
+  EXPECT_FALSE(base::PathExists(pem_path))
+      << "pem should not exist before the test is run!";
 
   // First, test a directory that should pack properly.
   base::ListValue pack_args;
-  pack_args.AppendString(root_path.AsUTF8Unsafe());
+  pack_args.AppendString(temp_root_path.AsUTF8Unsafe());
   EXPECT_TRUE(TestPackExtensionFunction(
       pack_args, api::developer_private::PACK_STATUS_SUCCESS, 0));
 
@@ -320,18 +413,12 @@ TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivatePackFunction) {
   EXPECT_TRUE(pack_args.Remove(1u, nullptr));  // Remove the flags argument.
   EXPECT_TRUE(TestPackExtensionFunction(
       pack_args, api::developer_private::PACK_STATUS_ERROR, 0));
-
-  base::DeleteFile(crx_path, false);
-  base::DeleteFile(pem_path, false);
 }
 
 // Test developerPrivate.choosePath.
-// http://crbug.com/527228 flaky
-TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivateChoosePath) {
-  ResetThreadBundle(content::TestBrowserThreadBundle::DEFAULT);
-  content::TestWebContentsFactory web_contents_factory;
-  content::WebContents* web_contents =
-      web_contents_factory.CreateWebContents(profile());
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateChoosePath) {
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
 
   base::FilePath expected_dir_path = data_dir().AppendASCII("good_unpacked");
   api::EntryPicker::SkipPickerAndAlwaysSelectPathForTest(&expected_dir_path);
@@ -372,12 +459,9 @@ TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivateChoosePath) {
 }
 
 // Test developerPrivate.loadUnpacked.
-// http://crbug.com/527228 flaky
-TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivateLoadUnpacked) {
-  ResetThreadBundle(content::TestBrowserThreadBundle::DEFAULT);
-  content::TestWebContentsFactory web_contents_factory;
-  content::WebContents* web_contents =
-      web_contents_factory.CreateWebContents(profile());
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateLoadUnpacked) {
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
 
   base::FilePath path = data_dir().AppendASCII("good_unpacked");
   api::EntryPicker::SkipPickerAndAlwaysSelectPathForTest(&path);
@@ -405,9 +489,9 @@ TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivateLoadUnpacked) {
   function = new api::DeveloperPrivateLoadUnpackedFunction();
   function->SetRenderFrameHost(web_contents->GetMainFrame());
   base::ListValue unpacked_args;
-  scoped_ptr<base::DictionaryValue> options(new base::DictionaryValue());
+  std::unique_ptr<base::DictionaryValue> options(new base::DictionaryValue());
   options->SetBoolean("failQuietly", true);
-  unpacked_args.Append(options.release());
+  unpacked_args.Append(std::move(options));
   current_ids = registry()->enabled_extensions().GetIDs();
   EXPECT_FALSE(RunFunction(function, unpacked_args));
   EXPECT_EQ(manifest_errors::kManifestUnreadable, function->GetError());
@@ -418,10 +502,7 @@ TEST_F(DeveloperPrivateApiUnitTest, DISABLED_DeveloperPrivateLoadUnpacked) {
 }
 
 // Test developerPrivate.requestFileSource.
-// http://crbug.com/527228 flaky
-TEST_F(DeveloperPrivateApiUnitTest,
-       DISABLED_DeveloperPrivateRequestFileSource) {
-  ResetThreadBundle(content::TestBrowserThreadBundle::DEFAULT);
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateRequestFileSource) {
   // Testing of this function seems light, but that's because it basically just
   // forwards to reading a file to a string, and highlighting it - both of which
   // are already tested separately.
@@ -436,12 +517,12 @@ TEST_F(DeveloperPrivateApiUnitTest,
   scoped_refptr<UIThreadExtensionFunction> function(
       new api::DeveloperPrivateRequestFileSourceFunction());
   base::ListValue file_source_args;
-  file_source_args.Append(properties.ToValue().release());
+  file_source_args.Append(properties.ToValue());
   EXPECT_TRUE(RunFunction(function, file_source_args)) << function->GetError();
 
   const base::Value* response_value = nullptr;
   ASSERT_TRUE(function->GetResultList()->Get(0u, &response_value));
-  scoped_ptr<api::developer_private::RequestFileSourceResponse> response =
+  std::unique_ptr<api::developer_private::RequestFileSourceResponse> response =
       api::developer_private::RequestFileSourceResponse::FromValue(
           *response_value);
   EXPECT_FALSE(response->before_highlight.empty());
@@ -452,10 +533,7 @@ TEST_F(DeveloperPrivateApiUnitTest,
 }
 
 // Test developerPrivate.getExtensionsInfo.
-// http://crbug.com/527228 flaky
-TEST_F(DeveloperPrivateApiUnitTest,
-       DISABLED_DeveloperPrivateGetExtensionsInfo) {
-  ResetThreadBundle(content::TestBrowserThreadBundle::DEFAULT);
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateGetExtensionsInfo) {
   LoadSimpleExtension();
 
   // The test here isn't so much about the generated value (that's tested in
@@ -472,7 +550,7 @@ TEST_F(DeveloperPrivateApiUnitTest,
   ASSERT_EQ(1u, list->GetSize());
   const base::Value* value = nullptr;
   ASSERT_TRUE(list->Get(0u, &value));
-  scoped_ptr<api::developer_private::ExtensionInfo> info =
+  std::unique_ptr<api::developer_private::ExtensionInfo> info =
       api::developer_private::ExtensionInfo::FromValue(*value);
   ASSERT_TRUE(info);
 
@@ -488,7 +566,7 @@ TEST_F(DeveloperPrivateApiUnitTest,
   ASSERT_TRUE(results->GetList(0u, &list));
   ASSERT_EQ(1u, list->GetSize());
   ASSERT_TRUE(list->Get(0u, &value));
-  scoped_ptr<api::developer_private::ItemInfo> item_info =
+  std::unique_ptr<api::developer_private::ItemInfo> item_info =
       api::developer_private::ItemInfo::FromValue(*value);
   ASSERT_TRUE(item_info);
 }
@@ -514,11 +592,12 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDeleteExtensionErrors) {
   // Start by removing all errors for the extension of a given type (manifest).
   std::string type_string = api::developer_private::ToString(
       api::developer_private::ERROR_TYPE_MANIFEST);
-  scoped_ptr<base::ListValue> args =
+  std::unique_ptr<base::ListValue> args =
       ListBuilder()
-          .Append(std::move(DictionaryBuilder()
-                                .Set("extensionId", extension->id())
-                                .Set("type", type_string)))
+          .Append(DictionaryBuilder()
+                      .Set("extensionId", extension->id())
+                      .Set("type", type_string)
+                      .Build())
           .Build();
   scoped_refptr<UIThreadExtensionFunction> function =
       new api::DeveloperPrivateDeleteExtensionErrorsFunction();
@@ -532,10 +611,10 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDeleteExtensionErrors) {
   int error_id = error_list[0]->id();
   args =
       ListBuilder()
-          .Append(std::move(
-              DictionaryBuilder()
-                  .Set("extensionId", extension->id())
-                  .Set("errorIds", std::move(ListBuilder().Append(error_id)))))
+          .Append(DictionaryBuilder()
+                      .Set("extensionId", extension->id())
+                      .Set("errorIds", ListBuilder().Append(error_id).Build())
+                      .Build())
           .Build();
   function = new api::DeveloperPrivateDeleteExtensionErrorsFunction();
   EXPECT_TRUE(RunFunction(function, *args)) << function->GetError();
@@ -543,14 +622,49 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDeleteExtensionErrors) {
   EXPECT_EQ(1u, error_console->GetErrorsForExtension(extension->id()).size());
 
   // Finally remove all errors for the extension.
-  args = ListBuilder()
-             .Append(std::move(
-                 DictionaryBuilder().Set("extensionId", extension->id())))
-             .Build();
+  args =
+      ListBuilder()
+          .Append(
+              DictionaryBuilder().Set("extensionId", extension->id()).Build())
+          .Build();
   function = new api::DeveloperPrivateDeleteExtensionErrorsFunction();
   EXPECT_TRUE(RunFunction(function, *args)) << function->GetError();
   // No more errors!
   EXPECT_TRUE(error_console->GetErrorsForExtension(extension->id()).empty());
+}
+
+// Test developerPrivate.updateProfileConfiguration: Try to turn on devMode
+// when DeveloperToolsDisabled policy is active.
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDevModeDisabledPolicy) {
+  testing_pref_service()->SetManagedPref(prefs::kExtensionsUIDeveloperMode,
+                                         new base::FundamentalValue(false));
+
+  UpdateProfileConfigurationDevMode(true);
+
+  EXPECT_FALSE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode));
+
+  std::unique_ptr<api::developer_private::ProfileInfo> profile_info;
+  ASSERT_NO_FATAL_FAILURE(GetProfileConfiguration(&profile_info));
+  EXPECT_FALSE(profile_info->in_developer_mode);
+  EXPECT_TRUE(profile_info->is_developer_mode_controlled_by_policy);
+}
+
+// Test developerPrivate.updateProfileConfiguration: Try to turn on devMode
+// (without DeveloperToolsDisabled policy).
+TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDevMode) {
+  EXPECT_FALSE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode));
+
+  UpdateProfileConfigurationDevMode(true);
+
+  EXPECT_TRUE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode));
+
+  std::unique_ptr<api::developer_private::ProfileInfo> profile_info;
+  ASSERT_NO_FATAL_FAILURE(GetProfileConfiguration(&profile_info));
+  EXPECT_TRUE(profile_info->in_developer_mode);
+  EXPECT_FALSE(profile_info->is_developer_mode_controlled_by_policy);
 }
 
 }  // namespace extensions

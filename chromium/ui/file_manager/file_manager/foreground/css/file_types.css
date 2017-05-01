@@ -109,6 +109,12 @@ tree .tree-item[selected] > .tree-row > .shared[file-type-icon='folder'] {
       url(../images/filetype/2x/filetype_map.png) 2x);
 }
 
+[file-type-icon='gsite'] {
+  background-image: -webkit-image-set(
+      url(../images/filetype/filetype_gsite.png) 1x,
+      url(../images/filetype/2x/filetype_gsite.png) 2x);
+}
+
 [file-type-icon='image'] {
   background-image: -webkit-image-set(
       url(../images/filetype/filetype_image.png) 1x,
@@ -298,6 +304,45 @@ tree .tree-item[selected] > .tree-row > .shared[file-type-icon='folder'] {
   background-image: -webkit-image-set(
       url(../images/volumes/cd_active.png) 1x,
       url(../images/volumes/2x/cd_active.png) 2x);
+}
+
+[volume-type-icon='media_view'][volume-subtype='images_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/images.png) 1x,
+      url(../images/volumes/2x/images.png) 2x);
+}
+
+.tree-row[selected]
+    [volume-type-icon='media_view'][volume-subtype='images_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/images_active.png) 1x,
+      url(../images/volumes/2x/images_active.png) 2x);
+}
+
+[volume-type-icon='media_view'][volume-subtype='videos_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/videos.png) 1x,
+      url(../images/volumes/2x/videos.png) 2x);
+}
+
+.tree-row[selected]
+    [volume-type-icon='media_view'][volume-subtype='videos_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/videos_active.png) 1x,
+      url(../images/volumes/2x/videos_active.png) 2x);
+}
+
+[volume-type-icon='media_view'][volume-subtype='audio_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/audio.png) 1x,
+      url(../images/volumes/2x/audio.png) 2x);
+}
+
+.tree-row[selected]
+    [volume-type-icon='media_view'][volume-subtype='audio_root'] {
+  background-image: -webkit-image-set(
+      url(../images/volumes/audio_active.png) 1x,
+      url(../images/volumes/2x/audio_active.png) 2x);
 }
 
 [volume-type-icon='mtp'] {

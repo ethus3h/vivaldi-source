@@ -20,12 +20,12 @@
 #include <sys/types.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "snapshot/exception_snapshot.h"
 #include "snapshot/memory_map_region_snapshot.h"
 #include "snapshot/memory_snapshot.h"
@@ -33,6 +33,7 @@
 #include "snapshot/process_snapshot.h"
 #include "snapshot/system_snapshot.h"
 #include "snapshot/thread_snapshot.h"
+#include "snapshot/unloaded_module_snapshot.h"
 #include "util/misc/uuid.h"
 #include "util/stdlib/pointer_container.h"
 
@@ -72,7 +73,7 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   //!
   //! \param[in] system The system snapshot that System() will return. The
   //!     TestProcessSnapshot object takes ownership of \a system.
-  void SetSystem(scoped_ptr<SystemSnapshot> system) {
+  void SetSystem(std::unique_ptr<SystemSnapshot> system) {
     system_ = std::move(system);
   }
 
@@ -80,7 +81,7 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   //!
   //! \param[in] thread The thread snapshot that will be included in Threads().
   //!     The TestProcessSnapshot object takes ownership of \a thread.
-  void AddThread(scoped_ptr<ThreadSnapshot> thread) {
+  void AddThread(std::unique_ptr<ThreadSnapshot> thread) {
     threads_.push_back(thread.release());
   }
 
@@ -88,15 +89,24 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   //!
   //! \param[in] module The module snapshot that will be included in Modules().
   //!     The TestProcessSnapshot object takes ownership of \a module.
-  void AddModule(scoped_ptr<ModuleSnapshot> module) {
+  void AddModule(std::unique_ptr<ModuleSnapshot> module) {
     modules_.push_back(module.release());
+  }
+
+  //! \brief Adds an unloaded module snapshot to be returned by
+  //!     UnloadedModules().
+  //!
+  //! \param[in] unloaded_module The unloaded module snapshot that will be
+  //!     included in UnloadedModules().
+  void AddModule(const UnloadedModuleSnapshot& unloaded_module) {
+    unloaded_modules_.push_back(unloaded_module);
   }
 
   //! \brief Sets the exception snapshot to be returned by Exception().
   //!
   //! \param[in] exception The exception snapshot that Exception() will return.
   //!     The TestProcessSnapshot object takes ownership of \a exception.
-  void SetException(scoped_ptr<ExceptionSnapshot> exception) {
+  void SetException(std::unique_ptr<ExceptionSnapshot> exception) {
     exception_ = std::move(exception);
   }
 
@@ -105,13 +115,13 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   //! \param[in] region The memory map region snapshot that will be included in
   //!     MemoryMap(). The TestProcessSnapshot object takes ownership of \a
   //!     region.
-  void AddMemoryMapRegion(scoped_ptr<MemoryMapRegionSnapshot> region) {
+  void AddMemoryMapRegion(std::unique_ptr<MemoryMapRegionSnapshot> region) {
     memory_map_.push_back(region.release());
   }
 
   //! \brief Adds a handle snapshot to be returned by Handles().
   //!
-  //! \param[in] region The handle snapshot that will be included in Handles().
+  //! \param[in] handle The handle snapshot that will be included in Handles().
   void AddHandle(const HandleSnapshot& handle) {
     handles_.push_back(handle);
   }
@@ -121,7 +131,7 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   //! \param[in] extra_memory The memory snapshot that will be included in
   //!     ExtraMemory(). The TestProcessSnapshot object takes ownership of \a
   //!     extra_memory.
-  void AddExtraMemory(scoped_ptr<MemorySnapshot> extra_memory) {
+  void AddExtraMemory(std::unique_ptr<MemorySnapshot> extra_memory) {
     extra_memory_.push_back(extra_memory.release());
   }
 
@@ -139,6 +149,7 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   const SystemSnapshot* System() const override;
   std::vector<const ThreadSnapshot*> Threads() const override;
   std::vector<const ModuleSnapshot*> Modules() const override;
+  std::vector<UnloadedModuleSnapshot> UnloadedModules() const override;
   const ExceptionSnapshot* Exception() const override;
   std::vector<const MemoryMapRegionSnapshot*> MemoryMap() const override;
   std::vector<HandleSnapshot> Handles() const override;
@@ -154,10 +165,11 @@ class TestProcessSnapshot final : public ProcessSnapshot {
   UUID report_id_;
   UUID client_id_;
   std::map<std::string, std::string> annotations_simple_map_;
-  scoped_ptr<SystemSnapshot> system_;
+  std::unique_ptr<SystemSnapshot> system_;
   PointerVector<ThreadSnapshot> threads_;
   PointerVector<ModuleSnapshot> modules_;
-  scoped_ptr<ExceptionSnapshot> exception_;
+  std::vector<UnloadedModuleSnapshot> unloaded_modules_;
+  std::unique_ptr<ExceptionSnapshot> exception_;
   PointerVector<MemoryMapRegionSnapshot> memory_map_;
   std::vector<HandleSnapshot> handles_;
   PointerVector<MemorySnapshot> extra_memory_;

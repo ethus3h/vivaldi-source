@@ -11,6 +11,7 @@
 // An instance of this class is generated when a safe browsing warning page
 // is shown (SafeBrowsingBlockingPage).
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,6 @@
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
 #include "content/public/browser/browser_thread.h"
@@ -50,10 +50,10 @@ class ThreatDetails : public base::RefCountedThreadSafe<
                           content::BrowserThread::DeleteOnUIThread>,
                       public content::WebContentsObserver {
  public:
-  typedef SafeBrowsingUIManager::UnsafeResource UnsafeResource;
+  typedef security_interstitials::UnsafeResource UnsafeResource;
 
   // Constructs a new ThreatDetails instance, using the factory.
-  static ThreatDetails* NewThreatDetails(SafeBrowsingUIManager* ui_manager,
+  static ThreatDetails* NewThreatDetails(BaseUIManager* ui_manager,
                                          content::WebContents* web_contents,
                                          const UnsafeResource& resource);
 
@@ -83,7 +83,7 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   friend class ThreatDetailsFactoryImpl;
   friend class TestThreatDetailsFactory;
 
-  ThreatDetails(SafeBrowsingUIManager* ui_manager,
+  ThreatDetails(BaseUIManager* ui_manager,
                 content::WebContents* web_contents,
                 const UnsafeResource& resource);
 
@@ -96,7 +96,7 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   Profile* profile_;
 
   // The report protocol buffer.
-  scoped_ptr<ClientSafeBrowsingReportRequest> report_;
+  std::unique_ptr<ClientSafeBrowsingReportRequest> report_;
 
   // Used to get a pointer to the HTTP cache.
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
@@ -132,7 +132,7 @@ class ThreatDetails : public base::RefCountedThreadSafe<
 
   void AddRedirectUrlList(const std::vector<GURL>& urls);
 
-  scoped_refptr<SafeBrowsingUIManager> ui_manager_;
+  scoped_refptr<BaseUIManager> ui_manager_;
 
   const UnsafeResource resource_;
 
@@ -164,6 +164,7 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, ThreatDOMDetails);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HTTPCache);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HTTPCacheNoEntries);
+  FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HttpsResourceSanitization);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HistoryServiceUrls);
 
   DISALLOW_COPY_AND_ASSIGN(ThreatDetails);
@@ -175,7 +176,7 @@ class ThreatDetailsFactory {
   virtual ~ThreatDetailsFactory() {}
 
   virtual ThreatDetails* CreateThreatDetails(
-      SafeBrowsingUIManager* ui_manager,
+      BaseUIManager* ui_manager,
       content::WebContents* web_contents,
       const SafeBrowsingUIManager::UnsafeResource& unsafe_resource) = 0;
 };

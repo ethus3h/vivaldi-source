@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/drive/file_system/get_file_for_saving_operation.h"
+#include "components/drive/chromeos/file_system/get_file_for_saving_operation.h"
 
 #include <stdint.h>
 
 #include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/task_runner_util.h"
 #include "components/drive/drive.pb.h"
 #include "components/drive/file_change.h"
@@ -64,7 +66,7 @@ class GetFileForSavingOperationTest : public OperationTestBase {
   void SetUp() override {
     OperationTestBase::SetUp();
 
-    file_task_runner_ = content::BrowserThread::GetMessageLoopProxyForThread(
+    file_task_runner_ = content::BrowserThread::GetTaskRunnerForThread(
         content::BrowserThread::FILE);
 
     operation_.reset(new GetFileForSavingOperation(
@@ -74,7 +76,7 @@ class GetFileForSavingOperationTest : public OperationTestBase {
   }
 
   TestDelegate delegate_;
-  scoped_ptr<GetFileForSavingOperation> operation_;
+  std::unique_ptr<GetFileForSavingOperation> operation_;
   scoped_refptr<base::SingleThreadTaskRunner> file_task_runner_;
 };
 
@@ -85,7 +87,7 @@ TEST_F(GetFileForSavingOperationTest, GetFileForSaving_Exist) {
 
   // Run the operation.
   FileError error = FILE_ERROR_FAILED;
-  scoped_ptr<ResourceEntry> entry;
+  std::unique_ptr<ResourceEntry> entry;
   base::FilePath local_path;
   operation_->GetFileForSaving(
       drive_path,
@@ -120,7 +122,7 @@ TEST_F(GetFileForSavingOperationTest, GetFileForSaving_NotExist) {
 
   // Run the operation.
   FileError error = FILE_ERROR_FAILED;
-  scoped_ptr<ResourceEntry> entry;
+  std::unique_ptr<ResourceEntry> entry;
   base::FilePath local_path;
   operation_->GetFileForSaving(
       drive_path,
@@ -144,7 +146,7 @@ TEST_F(GetFileForSavingOperationTest, GetFileForSaving_Directory) {
 
   // Run the operation.
   FileError error = FILE_ERROR_FAILED;
-  scoped_ptr<ResourceEntry> entry;
+  std::unique_ptr<ResourceEntry> entry;
   base::FilePath local_path;
   operation_->GetFileForSaving(
       drive_path,

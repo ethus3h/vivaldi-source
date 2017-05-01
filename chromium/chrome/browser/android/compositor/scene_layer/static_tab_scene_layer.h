@@ -7,11 +7,12 @@
 
 #include <jni.h>
 
+#include <memory>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/android/compositor/scene_layer/scene_layer.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -22,7 +23,6 @@ namespace cc {
 class Layer;
 }
 
-namespace chrome {
 namespace android {
 
 class ContentLayer;
@@ -40,10 +40,6 @@ class StaticTabSceneLayer : public SceneLayer {
   void UpdateTabLayer(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& jobj,
-      jfloat content_viewport_x,
-      jfloat content_viewport_y,
-      jfloat content_viewport_width,
-      jfloat content_viewport_height,
       const base::android::JavaParamRef<jobject>& jtab_content_manager,
       jint id,
       jint toolbar_resource_id,
@@ -51,22 +47,12 @@ class StaticTabSceneLayer : public SceneLayer {
       jint default_background_color,
       jfloat x,
       jfloat y,
-      jfloat width,
-      jfloat height,
-      jfloat content_offset_y,
       jfloat static_to_view_blend,
       jfloat saturation,
       jfloat brightness);
 
-  // Set the given |jscene_layer| as content of this SceneLayer, along with its
-  // own content.
-  void SetContentSceneLayer(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& jscene_layer);
-
  private:
-  scoped_refptr<chrome::android::ContentLayer> content_layer_;
+  scoped_refptr<android::ContentLayer> content_layer_;
   scoped_refptr<cc::Layer> content_scene_layer_;
 
   int last_set_tab_id_;
@@ -79,6 +65,5 @@ class StaticTabSceneLayer : public SceneLayer {
 bool RegisterStaticTabSceneLayer(JNIEnv* env);
 
 }  // namespace android
-}  // namespace chrome
 
 #endif  // CHROME_BROWSER_ANDROID_COMPOSITOR_SCENE_LAYER_STATIC_TAB_SCENE_LAYER_H_

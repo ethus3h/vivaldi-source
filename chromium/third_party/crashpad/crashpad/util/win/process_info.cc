@@ -18,11 +18,14 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <new>
+#include <type_traits>
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/free_deleter.h"
+#include "base/process/memory.h"
 #include "base/strings/stringprintf.h"
-#include "base/template_util.h"
 #include "build/build_config.h"
 #include "util/numeric/safe_assignment.h"
 #include "util/win/get_function.h"
@@ -35,6 +38,16 @@
 namespace crashpad {
 
 namespace {
+
+using UniqueMallocPtr = std::unique_ptr<uint8_t[], base::FreeDeleter>;
+
+UniqueMallocPtr UncheckedAllocate(size_t size) {
+  void* raw_ptr = nullptr;
+  if (!base::UncheckedMalloc(size, &raw_ptr))
+    return UniqueMallocPtr();
+
+  return UniqueMallocPtr(new (raw_ptr) uint8_t[size]);
+}
 
 NTSTATUS NtQueryInformationProcess(HANDLE process_handle,
                                    PROCESSINFOCLASS process_information_class,
@@ -131,13 +144,13 @@ MEMORY_BASIC_INFORMATION64 MemoryBasicInformationToMemoryBasicInformation64(
 
 // NtQueryObject with a retry for size mismatch as well as a minimum size to
 // retrieve (and expect).
-scoped_ptr<uint8_t[]> QueryObject(
+std::unique_ptr<uint8_t[]> QueryObject(
     HANDLE handle,
     OBJECT_INFORMATION_CLASS object_information_class,
     ULONG minimum_size) {
   ULONG size = minimum_size;
   ULONG return_length;
-  scoped_ptr<uint8_t[]> buffer(new uint8_t[size]);
+  std::unique_ptr<uint8_t[]> buffer(new uint8_t[size]);
   NTSTATUS status = crashpad::NtQueryObject(
       handle, object_information_class, buffer.get(), size, &return_length);
   if (status == STATUS_INFO_LENGTH_MISMATCH) {
@@ -347,14 +360,20 @@ bool ReadMemoryInfo(HANDLE process, bool is_64_bit, ProcessInfo* process_info) {
 std::vector<ProcessInfo::Handle> ProcessInfo::BuildHandleVector(
     HANDLE process) const {
   ULONG buffer_size = 2 * 1024 * 1024;
-  scoped_ptr<uint8_t[]> buffer(new uint8_t[buffer_size]);
-
   // Typically if the buffer were too small, STATUS_INFO_LENGTH_MISMATCH would
   // return the correct size in the final argument, but it does not for
   // SystemExtendedHandleInformation, so we loop and attempt larger sizes.
   NTSTATUS status;
   ULONG returned_length;
+  UniqueMallocPtr buffer;
   for (int tries = 0; tries < 5; ++tries) {
+    buffer.reset();
+    buffer = UncheckedAllocate(buffer_size);
+    if (!buffer) {
+      LOG(ERROR) << "UncheckedAllocate";
+      return std::vector<Handle>();
+    }
+
     status = crashpad::NtQuerySystemInformation(
         static_cast<SYSTEM_INFORMATION_CLASS>(SystemExtendedHandleInformation),
         buffer.get(),
@@ -364,8 +383,6 @@ std::vector<ProcessInfo::Handle> ProcessInfo::BuildHandleVector(
       break;
 
     buffer_size *= 2;
-    buffer.reset();
-    buffer.reset(new uint8_t[buffer_size]);
   }
 
   if (!NT_SUCCESS(status)) {
@@ -409,7 +426,7 @@ std::vector<ProcessInfo::Handle> ProcessInfo::BuildHandleVector(
       // information, but include the information that we do have already.
       ScopedKernelHANDLE scoped_dup_handle(dup_handle);
 
-      scoped_ptr<uint8_t[]> object_basic_information_buffer =
+      std::unique_ptr<uint8_t[]> object_basic_information_buffer =
           QueryObject(dup_handle,
                       ObjectBasicInformation,
                       sizeof(PUBLIC_OBJECT_BASIC_INFORMATION));
@@ -435,7 +452,7 @@ std::vector<ProcessInfo::Handle> ProcessInfo::BuildHandleVector(
         result_handle.handle_count = object_basic_information->HandleCount - 1;
       }
 
-      scoped_ptr<uint8_t[]> object_type_information_buffer =
+      std::unique_ptr<uint8_t[]> object_type_information_buffer =
           QueryObject(dup_handle,
                       ObjectTypeInformation,
                       sizeof(PUBLIC_OBJECT_TYPE_INFORMATION));
@@ -633,14 +650,27 @@ std::vector<CheckedRange<WinVMAddress, WinVMSize>> GetReadableRangesOfMemoryMap(
     const ProcessInfo::MemoryBasicInformation64Vector& memory_info) {
   using Range = CheckedRange<WinVMAddress, WinVMSize>;
 
+  // Constructing Ranges and using OverlapsRange() is very, very slow in Debug
+  // builds, so do a manual check in this loop. The ranges are still validated
+  // by a CheckedRange before being returned.
+  WinVMAddress range_base = range.base();
+  WinVMAddress range_end = range.end();
+
   // Find all the ranges that overlap the target range, maintaining their order.
   ProcessInfo::MemoryBasicInformation64Vector overlapping;
-  for (const auto& mi : memory_info) {
-    static_assert(base::is_same<decltype(mi.BaseAddress), WinVMAddress>::value,
+  const size_t size = memory_info.size();
+
+  // This loop is written in an ugly fashion to make Debug performance
+  // reasonable.
+  const MEMORY_BASIC_INFORMATION64* begin = &memory_info[0];
+  for (size_t i = 0; i < size; ++i) {
+    const MEMORY_BASIC_INFORMATION64& mi = *(begin + i);
+    static_assert(std::is_same<decltype(mi.BaseAddress), WinVMAddress>::value,
                   "expected range address to be WinVMAddress");
-    static_assert(base::is_same<decltype(mi.RegionSize), WinVMSize>::value,
+    static_assert(std::is_same<decltype(mi.RegionSize), WinVMSize>::value,
                   "expected range size to be WinVMSize");
-    if (range.OverlapsRange(Range(mi.BaseAddress, mi.RegionSize)))
+    WinVMAddress mi_end = mi.BaseAddress + mi.RegionSize;
+    if (range_base < mi_end && mi.BaseAddress < range_end)
       overlapping.push_back(mi);
   }
   if (overlapping.empty())

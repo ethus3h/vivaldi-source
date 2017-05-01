@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/common/extensions/permissions/chrome_permission_message_provider.h"
@@ -196,7 +198,7 @@ class PermissionMessageCombinationsUnittest : public testing::Test {
 
  private:
   extensions::TestExtensionEnvironment env_;
-  scoped_ptr<ChromePermissionMessageProvider> message_provider_;
+  std::unique_ptr<ChromePermissionMessageProvider> message_provider_;
   scoped_refptr<const Extension> app_;
   // Whitelist a known extension id so we can test all permissions. This ID
   // will be used for each test app.
@@ -1162,6 +1164,30 @@ TEST_F(PermissionMessageCombinationsUnittest, PluginPermission) {
       "  ]"
       "}");
   ASSERT_TRUE(CheckManifestProducesPermissions());
+}
+
+TEST_F(PermissionMessageCombinationsUnittest, ClipboardPermissionMessages) {
+  const char kManifest[] =
+      "{"
+      "  'app': {"
+      "    'background': {"
+      "      'scripts': ['background.js']"
+      "    }"
+      "  },"
+      "  'permissions': [%s]"
+      "}";
+
+  CreateAndInstall(base::StringPrintf(kManifest, "'clipboardRead'"));
+  ASSERT_TRUE(CheckManifestProducesPermissions("Read data you copy and paste"));
+
+  CreateAndInstall(
+      base::StringPrintf(kManifest, "'clipboardRead', 'clipboardWrite'"));
+  ASSERT_TRUE(CheckManifestProducesPermissions(
+      "Read and modify data you copy and paste"));
+
+  CreateAndInstall(base::StringPrintf(kManifest, "'clipboardWrite'"));
+  ASSERT_TRUE(
+      CheckManifestProducesPermissions("Modify data you copy and paste"));
 }
 
 // TODO(sashab): Add a test that checks that messages are generated correctly

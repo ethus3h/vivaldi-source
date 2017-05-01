@@ -7,7 +7,7 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/metrics/sparse_histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/synchronization/lock.h"
 #include "media/base/container_names.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -162,7 +162,7 @@ bool FFmpegGlue::OpenContext() {
 
   // Attempt to recognize the container by looking at the first few bytes of the
   // stream. The stream position is left unchanged.
-  scoped_ptr<std::vector<uint8_t>> buffer(new std::vector<uint8_t>(8192));
+  std::unique_ptr<std::vector<uint8_t>> buffer(new std::vector<uint8_t>(8192));
 
   int64_t pos = AVIOSeekOperation(avio_context_.get()->opaque, 0, SEEK_CUR);
   AVIOSeekOperation(avio_context_.get()->opaque, 0, SEEK_SET);
@@ -196,26 +196,6 @@ FFmpegGlue::~FFmpegGlue() {
     avformat_free_context(format_context_);
     av_free(avio_context_->buffer);
     return;
-  }
-
-  // If avformat_open_input() has been called with this context, we need to
-  // close out any codecs/streams before closing the context.
-  if (format_context_->streams) {
-    for (int i = format_context_->nb_streams - 1; i >= 0; --i) {
-      AVStream* stream = format_context_->streams[i];
-
-      // The conditions for calling avcodec_close():
-      // 1. AVStream is alive.
-      // 2. AVCodecContext in AVStream is alive.
-      // 3. AVCodec in AVCodecContext is alive.
-      //
-      // Closing a codec context without prior avcodec_open2() will result in
-      // a crash in FFmpeg.
-      if (stream && stream->codec && stream->codec->codec) {
-        stream->discard = AVDISCARD_ALL;
-        avcodec_close(stream->codec);
-      }
-    }
   }
 
   avformat_close_input(&format_context_);

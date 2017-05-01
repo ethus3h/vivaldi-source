@@ -8,13 +8,13 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "content/browser/appcache/appcache_working_set.h"
 #include "content/common/content_export.h"
 #include "net/base/completion_callback.h"
@@ -114,7 +114,6 @@ class CONTENT_EXPORT AppCacheStorage {
   // immediately without returning to the message loop. If the load fails,
   // the delegate will be called back with a NULL pointer.
   virtual void LoadResponseInfo(const GURL& manifest_url,
-                                int64_t group_id,
                                 int64_t response_id,
                                 Delegate* delegate);
 
@@ -173,17 +172,15 @@ class CONTENT_EXPORT AppCacheStorage {
 
   // Creates a reader to read a response from storage.
   virtual AppCacheResponseReader* CreateResponseReader(const GURL& manifest_url,
-                                                       int64_t group_id,
                                                        int64_t response_id) = 0;
 
   // Creates a writer to write a new response to storage. This call
   // establishes a new response id.
-  virtual AppCacheResponseWriter* CreateResponseWriter(const GURL& manifest_url,
-                                                       int64_t group_id) = 0;
+  virtual AppCacheResponseWriter* CreateResponseWriter(
+      const GURL& manifest_url) = 0;
 
   // Creates a metadata writer to write metadata of response to storage.
   virtual AppCacheResponseMetadataWriter* CreateResponseMetadataWriter(
-      int64_t group_id,
       int64_t response_id) = 0;
 
   // Schedules the lazy deletion of responses and saves the ids
@@ -254,14 +251,12 @@ class CONTENT_EXPORT AppCacheStorage {
   class ResponseInfoLoadTask {
    public:
     ResponseInfoLoadTask(const GURL& manifest_url,
-                         int64_t group_id,
                          int64_t response_id,
                          AppCacheStorage* storage);
     ~ResponseInfoLoadTask();
 
     int64_t response_id() const { return response_id_; }
     const GURL& manifest_url() const { return manifest_url_; }
-    int64_t group_id() const { return group_id_; }
 
     void AddDelegate(DelegateReference* delegate_reference) {
       delegates_.push_back(delegate_reference);
@@ -274,14 +269,11 @@ class CONTENT_EXPORT AppCacheStorage {
 
     AppCacheStorage* storage_;
     GURL manifest_url_;
-    int64_t group_id_;
     int64_t response_id_;
-    scoped_ptr<AppCacheResponseReader> reader_;
+    std::unique_ptr<AppCacheResponseReader> reader_;
     DelegateReferenceVector delegates_;
     scoped_refptr<HttpResponseInfoIOBuffer> info_buffer_;
   };
-
-  typedef std::map<int64_t, ResponseInfoLoadTask*> PendingResponseInfoLoads;
 
   DelegateReference* GetDelegateReference(Delegate* delegate) {
     DelegateReferenceMap::iterator iter =
@@ -300,13 +292,11 @@ class CONTENT_EXPORT AppCacheStorage {
 
   ResponseInfoLoadTask* GetOrCreateResponseInfoLoadTask(
       const GURL& manifest_url,
-      int64_t group_id,
       int64_t response_id) {
-    PendingResponseInfoLoads::iterator iter =
-        pending_info_loads_.find(response_id);
+    auto iter = pending_info_loads_.find(response_id);
     if (iter != pending_info_loads_.end())
-      return iter->second;
-    return new ResponseInfoLoadTask(manifest_url, group_id, response_id, this);
+      return iter->second.get();
+    return new ResponseInfoLoadTask(manifest_url, response_id, this);
   }
 
   // Should only be called when creating a new response writer.
@@ -326,7 +316,9 @@ class CONTENT_EXPORT AppCacheStorage {
   AppCacheWorkingSet working_set_;
   AppCacheServiceImpl* service_;
   DelegateReferenceMap delegate_references_;
-  PendingResponseInfoLoads pending_info_loads_;
+
+  // Note that the ResponseInfoLoadTask items add themselves to this map.
+  std::map<int64_t, std::unique_ptr<ResponseInfoLoadTask>> pending_info_loads_;
 
   // The set of last ids must be retrieved from storage prior to being used.
   static const int64_t kUnitializedId;

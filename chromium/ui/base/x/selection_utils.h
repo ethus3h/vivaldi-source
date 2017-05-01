@@ -22,7 +22,6 @@ namespace ui {
 class SelectionData;
 class X11AtomCache;
 
-extern const char kMimeTypeMozillaURL[];
 extern const char kString[];
 extern const char kText[];
 extern const char kUtf8String[];
@@ -66,6 +65,7 @@ class UI_BASE_EXPORT SelectionFormatMap {
   typedef InternalMap::const_iterator const_iterator;
 
   SelectionFormatMap();
+  SelectionFormatMap(const SelectionFormatMap& other);
   ~SelectionFormatMap();
   // Copy and assignment deliberately open.
 

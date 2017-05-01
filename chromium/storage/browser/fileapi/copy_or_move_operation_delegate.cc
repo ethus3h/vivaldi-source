@@ -5,11 +5,15 @@
 #include "storage/browser/fileapi/copy_or_move_operation_delegate.h"
 
 #include <stdint.h>
+
+#include <memory>
+#include <tuple>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "storage/browser/blob/shareable_file_reference.h"
@@ -346,7 +350,7 @@ class SnapshotCopyOrMoveImpl
 
   CopyOrMoveOperationDelegate::CopyOrMoveOption option_;
   CopyOrMoveFileValidatorFactory* validator_factory_;
-  scoped_ptr<CopyOrMoveFileValidator> validator_;
+  std::unique_ptr<CopyOrMoveFileValidator> validator_;
   FileSystemOperation::CopyFileProgressCallback file_progress_callback_;
   bool cancel_requested_;
   base::WeakPtrFactory<SnapshotCopyOrMoveImpl> weak_factory_;
@@ -373,8 +377,8 @@ class StreamCopyOrMoveImpl
       const FileSystemURL& src_url,
       const FileSystemURL& dest_url,
       CopyOrMoveOperationDelegate::CopyOrMoveOption option,
-      scoped_ptr<storage::FileStreamReader> reader,
-      scoped_ptr<FileStreamWriter> writer,
+      std::unique_ptr<storage::FileStreamReader> reader,
+      std::unique_ptr<FileStreamWriter> writer,
       const FileSystemOperation::CopyFileProgressCallback&
           file_progress_callback)
       : operation_runner_(operation_runner),
@@ -411,21 +415,21 @@ class StreamCopyOrMoveImpl
   void NotifyOnStartUpdate(const FileSystemURL& url) {
     if (file_system_context_->GetUpdateObservers(url.type())) {
       file_system_context_->GetUpdateObservers(url.type())
-          ->Notify(&FileUpdateObserver::OnStartUpdate, base::MakeTuple(url));
+          ->Notify(&FileUpdateObserver::OnStartUpdate, std::make_tuple(url));
     }
   }
 
   void NotifyOnModifyFile(const FileSystemURL& url) {
     if (file_system_context_->GetChangeObservers(url.type())) {
       file_system_context_->GetChangeObservers(url.type())
-          ->Notify(&FileChangeObserver::OnModifyFile, base::MakeTuple(url));
+          ->Notify(&FileChangeObserver::OnModifyFile, std::make_tuple(url));
     }
   }
 
   void NotifyOnEndUpdate(const FileSystemURL& url) {
     if (file_system_context_->GetUpdateObservers(url.type())) {
       file_system_context_->GetUpdateObservers(url.type())
-          ->Notify(&FileUpdateObserver::OnEndUpdate, base::MakeTuple(url));
+          ->Notify(&FileUpdateObserver::OnEndUpdate, std::make_tuple(url));
     }
   }
 
@@ -577,10 +581,10 @@ class StreamCopyOrMoveImpl
   FileSystemURL src_url_;
   FileSystemURL dest_url_;
   CopyOrMoveOperationDelegate::CopyOrMoveOption option_;
-  scoped_ptr<storage::FileStreamReader> reader_;
-  scoped_ptr<FileStreamWriter> writer_;
+  std::unique_ptr<storage::FileStreamReader> reader_;
+  std::unique_ptr<FileStreamWriter> writer_;
   FileSystemOperation::CopyFileProgressCallback file_progress_callback_;
-  scoped_ptr<CopyOrMoveOperationDelegate::StreamCopyHelper> copy_helper_;
+  std::unique_ptr<CopyOrMoveOperationDelegate::StreamCopyHelper> copy_helper_;
   bool cancel_requested_;
   base::WeakPtrFactory<StreamCopyOrMoveImpl> weak_factory_;
   DISALLOW_COPY_AND_ASSIGN(StreamCopyOrMoveImpl);
@@ -589,8 +593,8 @@ class StreamCopyOrMoveImpl
 }  // namespace
 
 CopyOrMoveOperationDelegate::StreamCopyHelper::StreamCopyHelper(
-    scoped_ptr<storage::FileStreamReader> reader,
-    scoped_ptr<FileStreamWriter> writer,
+    std::unique_ptr<storage::FileStreamReader> reader,
+    std::unique_ptr<FileStreamWriter> writer,
     storage::FlushPolicy flush_policy,
     int buffer_size,
     const FileSystemOperation::CopyFileProgressCallback& file_progress_callback,
@@ -751,7 +755,6 @@ CopyOrMoveOperationDelegate::CopyOrMoveOperationDelegate(
 }
 
 CopyOrMoveOperationDelegate::~CopyOrMoveOperationDelegate() {
-  STLDeleteElements(&running_copy_set_);
 }
 
 void CopyOrMoveOperationDelegate::Run() {
@@ -792,13 +795,13 @@ void CopyOrMoveOperationDelegate::ProcessFile(
   }
 
   FileSystemURL dest_url = CreateDestURL(src_url);
-  CopyOrMoveImpl* impl = NULL;
+  std::unique_ptr<CopyOrMoveImpl> impl;
   if (same_file_system_ &&
       (file_system_context()
            ->GetFileSystemBackend(src_url.type())
            ->HasInplaceCopyImplementation(src_url.type()) ||
        operation_type_ == OPERATION_MOVE)) {
-    impl = new CopyOrMoveOnSameFileSystemImpl(
+    impl = base::MakeUnique<CopyOrMoveOnSameFileSystemImpl>(
         operation_runner(), operation_type_, src_url, dest_url, option_,
         base::Bind(&CopyOrMoveOperationDelegate::OnCopyFileProgress,
                    weak_factory_.GetWeakPtr(), src_url));
@@ -818,13 +821,13 @@ void CopyOrMoveOperationDelegate::ProcessFile(
     }
 
     if (!validator_factory) {
-      scoped_ptr<storage::FileStreamReader> reader =
+      std::unique_ptr<storage::FileStreamReader> reader =
           file_system_context()->CreateFileStreamReader(
               src_url, 0 /* offset */, storage::kMaximumLength, base::Time());
-      scoped_ptr<FileStreamWriter> writer =
+      std::unique_ptr<FileStreamWriter> writer =
           file_system_context()->CreateFileStreamWriter(dest_url, 0);
       if (reader && writer) {
-        impl = new StreamCopyOrMoveImpl(
+        impl = base::MakeUnique<StreamCopyOrMoveImpl>(
             operation_runner(), file_system_context(), operation_type_, src_url,
             dest_url, option_, std::move(reader), std::move(writer),
             base::Bind(&CopyOrMoveOperationDelegate::OnCopyFileProgress,
@@ -833,7 +836,7 @@ void CopyOrMoveOperationDelegate::ProcessFile(
     }
 
     if (!impl) {
-      impl = new SnapshotCopyOrMoveImpl(
+      impl = base::MakeUnique<SnapshotCopyOrMoveImpl>(
           operation_runner(), operation_type_, src_url, dest_url, option_,
           validator_factory,
           base::Bind(&CopyOrMoveOperationDelegate::OnCopyFileProgress,
@@ -842,10 +845,12 @@ void CopyOrMoveOperationDelegate::ProcessFile(
   }
 
   // Register the running task.
-  running_copy_set_.insert(impl);
-  impl->Run(base::Bind(
-      &CopyOrMoveOperationDelegate::DidCopyOrMoveFile,
-      weak_factory_.GetWeakPtr(), src_url, dest_url, callback, impl));
+
+  CopyOrMoveImpl* impl_ptr = impl.get();
+  running_copy_set_[impl_ptr] = std::move(impl);
+  impl_ptr->Run(base::Bind(&CopyOrMoveOperationDelegate::DidCopyOrMoveFile,
+                           weak_factory_.GetWeakPtr(), src_url, dest_url,
+                           callback, impl_ptr));
 }
 
 void CopyOrMoveOperationDelegate::ProcessDirectory(
@@ -890,9 +895,8 @@ void CopyOrMoveOperationDelegate::PostProcessDirectory(
 
 void CopyOrMoveOperationDelegate::OnCancel() {
   // Request to cancel all running Copy/Move file.
-  for (std::set<CopyOrMoveImpl*>::iterator iter = running_copy_set_.begin();
-       iter != running_copy_set_.end(); ++iter)
-    (*iter)->Cancel();
+  for (auto& job : running_copy_set_)
+    job.first->Cancel();
 }
 
 void CopyOrMoveOperationDelegate::DidCopyOrMoveFile(
@@ -902,7 +906,6 @@ void CopyOrMoveOperationDelegate::DidCopyOrMoveFile(
     CopyOrMoveImpl* impl,
     base::File::Error error) {
   running_copy_set_.erase(impl);
-  delete impl;
 
   if (!progress_callback_.is_null() && error != base::File::FILE_OK &&
       error != base::File::FILE_ERROR_NOT_A_FILE)

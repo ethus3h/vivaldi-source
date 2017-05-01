@@ -8,6 +8,7 @@
 
 #include "base/format_macros.h"
 #include "base/json/string_escape.h"
+#include "base/memory/ptr_util.h"
 #include "base/process/process_handle.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -15,6 +16,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "base/trace_event/trace_event_argument.h"
 #include "base/trace_event/trace_log.h"
 
 namespace base {
@@ -41,6 +43,7 @@ void CopyTraceEventParameter(char** buffer,
 
 TraceEvent::TraceEvent()
     : duration_(TimeDelta::FromInternalValue(-1)),
+      scope_(trace_event_internal::kGlobalScope),
       id_(0u),
       category_group_enabled_(NULL),
       name_(NULL),
@@ -55,26 +58,27 @@ TraceEvent::TraceEvent()
 TraceEvent::~TraceEvent() {
 }
 
-void TraceEvent::CopyFrom(const TraceEvent& other) {
-  timestamp_ = other.timestamp_;
-  thread_timestamp_ = other.thread_timestamp_;
-  duration_ = other.duration_;
-  id_ = other.id_;
-  category_group_enabled_ = other.category_group_enabled_;
-  name_ = other.name_;
-  if (other.flags_ & TRACE_EVENT_FLAG_HAS_PROCESS_ID)
-    process_id_ = other.process_id_;
+void TraceEvent::MoveFrom(std::unique_ptr<TraceEvent> other) {
+  timestamp_ = other->timestamp_;
+  thread_timestamp_ = other->thread_timestamp_;
+  duration_ = other->duration_;
+  scope_ = other->scope_;
+  id_ = other->id_;
+  category_group_enabled_ = other->category_group_enabled_;
+  name_ = other->name_;
+  if (other->flags_ & TRACE_EVENT_FLAG_HAS_PROCESS_ID)
+    process_id_ = other->process_id_;
   else
-    thread_id_ = other.thread_id_;
-  phase_ = other.phase_;
-  flags_ = other.flags_;
-  parameter_copy_storage_ = other.parameter_copy_storage_;
+    thread_id_ = other->thread_id_;
+  phase_ = other->phase_;
+  flags_ = other->flags_;
+  parameter_copy_storage_ = std::move(other->parameter_copy_storage_);
 
   for (int i = 0; i < kTraceMaxNumArgs; ++i) {
-    arg_names_[i] = other.arg_names_[i];
-    arg_types_[i] = other.arg_types_[i];
-    arg_values_[i] = other.arg_values_[i];
-    convertable_values_[i] = other.convertable_values_[i];
+    arg_names_[i] = other->arg_names_[i];
+    arg_types_[i] = other->arg_types_[i];
+    arg_values_[i] = other->arg_values_[i];
+    convertable_values_[i] = std::move(other->convertable_values_[i]);
   }
 }
 
@@ -85,17 +89,19 @@ void TraceEvent::Initialize(
     char phase,
     const unsigned char* category_group_enabled,
     const char* name,
+    const char* scope,
     unsigned long long id,
     unsigned long long bind_id,
     int num_args,
     const char** arg_names,
     const unsigned char* arg_types,
     const unsigned long long* arg_values,
-    const scoped_refptr<ConvertableToTraceFormat>* convertable_values,
+    std::unique_ptr<ConvertableToTraceFormat>* convertable_values,
     unsigned int flags) {
   timestamp_ = timestamp;
   thread_timestamp_ = thread_timestamp;
   duration_ = TimeDelta::FromInternalValue(-1);
+  scope_ = scope;
   id_ = id;
   category_group_enabled_ = category_group_enabled;
   name_ = name;
@@ -111,22 +117,24 @@ void TraceEvent::Initialize(
     arg_names_[i] = arg_names[i];
     arg_types_[i] = arg_types[i];
 
-    if (arg_types[i] == TRACE_VALUE_TYPE_CONVERTABLE)
-      convertable_values_[i] = convertable_values[i];
-    else
+    if (arg_types[i] == TRACE_VALUE_TYPE_CONVERTABLE) {
+      convertable_values_[i] = std::move(convertable_values[i]);
+    } else {
       arg_values_[i].as_uint = arg_values[i];
+      convertable_values_[i].reset();
+    }
   }
   for (; i < kTraceMaxNumArgs; ++i) {
     arg_names_[i] = NULL;
     arg_values_[i].as_uint = 0u;
-    convertable_values_[i] = NULL;
+    convertable_values_[i].reset();
     arg_types_[i] = TRACE_VALUE_TYPE_UINT;
   }
 
   bool copy = !!(flags & TRACE_EVENT_FLAG_COPY);
   size_t alloc_size = 0;
   if (copy) {
-    alloc_size += GetAllocLength(name);
+    alloc_size += GetAllocLength(name) + GetAllocLength(scope);
     for (i = 0; i < num_args; ++i) {
       alloc_size += GetAllocLength(arg_names_[i]);
       if (arg_types_[i] == TRACE_VALUE_TYPE_STRING)
@@ -147,12 +155,13 @@ void TraceEvent::Initialize(
   }
 
   if (alloc_size) {
-    parameter_copy_storage_ = new RefCountedString;
-    parameter_copy_storage_->data().resize(alloc_size);
-    char* ptr = string_as_array(&parameter_copy_storage_->data());
+    parameter_copy_storage_.reset(new std::string);
+    parameter_copy_storage_->resize(alloc_size);
+    char* ptr = string_as_array(parameter_copy_storage_.get());
     const char* end = ptr + alloc_size;
     if (copy) {
       CopyTraceEventParameter(&ptr, &name_, end);
+      CopyTraceEventParameter(&ptr, &scope_, end);
       for (i = 0; i < num_args; ++i) {
         CopyTraceEventParameter(&ptr, &arg_names_[i], end);
       }
@@ -171,9 +180,9 @@ void TraceEvent::Reset() {
   // Only reset fields that won't be initialized in Initialize(), or that may
   // hold references to other objects.
   duration_ = TimeDelta::FromInternalValue(-1);
-  parameter_copy_storage_ = NULL;
+  parameter_copy_storage_.reset();
   for (int i = 0; i < kTraceMaxNumArgs; ++i)
-    convertable_values_[i] = NULL;
+    convertable_values_[i].reset();
 }
 
 void TraceEvent::UpdateDuration(const TimeTicks& now,
@@ -191,11 +200,8 @@ void TraceEvent::EstimateTraceMemoryOverhead(
     TraceEventMemoryOverhead* overhead) {
   overhead->Add("TraceEvent", sizeof(*this));
 
-  // TODO(primiano): parameter_copy_storage_ is refcounted and, in theory,
-  // could be shared by several events and we might overcount. In practice
-  // this is unlikely but it's worth checking.
   if (parameter_copy_storage_)
-    overhead->AddRefCountedString(*parameter_copy_storage_.get());
+    overhead->AddString(*parameter_copy_storage_);
 
   for (size_t i = 0; i < kTraceMaxNumArgs; ++i) {
     if (arg_types_[i] == TRACE_VALUE_TYPE_CONVERTABLE)
@@ -257,7 +263,7 @@ void TraceEvent::AppendValueAsJSON(unsigned char type,
       // So as not to lose bits from a 64-bit pointer, output as a hex string.
       StringAppendF(
           out, "\"0x%" PRIx64 "\"",
-          static_cast<uint64_t>(reinterpret_cast<intptr_t>(value.as_pointer)));
+          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value.as_pointer)));
       break;
     case TRACE_VALUE_TYPE_STRING:
     case TRACE_VALUE_TYPE_COPY_STRING:
@@ -289,10 +295,10 @@ void TraceEvent::AppendAsJSON(
   // Category group checked at category creation time.
   DCHECK(!strchr(name_, '"'));
   StringAppendF(out, "{\"pid\":%i,\"tid\":%i,\"ts\":%" PRId64
-                     ","
-                     "\"ph\":\"%c\",\"cat\":\"%s\",\"name\":\"%s\",\"args\":",
-                process_id, thread_id, time_int64, phase_, category_group_name,
-                name_);
+                     ",\"ph\":\"%c\",\"cat\":\"%s\",\"name\":",
+                process_id, thread_id, time_int64, phase_, category_group_name);
+  EscapeJSONString(name_, true, out);
+  *out += ",\"args\":";
 
   // Output argument names and values, stop at first NULL argument name.
   // TODO(oysteine): The dual predicates here is a bit ugly; if the filtering
@@ -354,8 +360,34 @@ void TraceEvent::AppendAsJSON(
 
   // If id_ is set, print it out as a hex string so we don't loose any
   // bits (it might be a 64-bit pointer).
-  if (flags_ & TRACE_EVENT_FLAG_HAS_ID)
-    StringAppendF(out, ",\"id\":\"0x%" PRIx64 "\"", static_cast<uint64_t>(id_));
+  unsigned int id_flags_ = flags_ & (TRACE_EVENT_FLAG_HAS_ID |
+                                     TRACE_EVENT_FLAG_HAS_LOCAL_ID |
+                                     TRACE_EVENT_FLAG_HAS_GLOBAL_ID);
+  if (id_flags_) {
+    if (scope_ != trace_event_internal::kGlobalScope)
+      StringAppendF(out, ",\"scope\":\"%s\"", scope_);
+
+    switch (id_flags_) {
+      case TRACE_EVENT_FLAG_HAS_ID:
+        StringAppendF(out, ",\"id\":\"0x%" PRIx64 "\"",
+                      static_cast<uint64_t>(id_));
+        break;
+
+      case TRACE_EVENT_FLAG_HAS_LOCAL_ID:
+        StringAppendF(out, ",\"id2\":{\"local\":\"0x%" PRIx64 "\"}",
+                      static_cast<uint64_t>(id_));
+        break;
+
+      case TRACE_EVENT_FLAG_HAS_GLOBAL_ID:
+        StringAppendF(out, ",\"id2\":{\"global\":\"0x%" PRIx64 "\"}",
+                      static_cast<uint64_t>(id_));
+        break;
+
+      default:
+        NOTREACHED() << "More than one of the ID flags are set";
+        break;
+    }
+  }
 
   if (flags_ & TRACE_EVENT_FLAG_BIND_TO_ENCLOSING)
     StringAppendF(out, ",\"bp\":\"e\"");
@@ -417,3 +449,42 @@ void TraceEvent::AppendPrettyPrinted(std::ostringstream* out) const {
 
 }  // namespace trace_event
 }  // namespace base
+
+namespace trace_event_internal {
+
+std::unique_ptr<base::trace_event::ConvertableToTraceFormat>
+TraceID::AsConvertableToTraceFormat() const {
+  auto value = base::MakeUnique<base::trace_event::TracedValue>();
+
+  if (scope_ != kGlobalScope)
+    value->SetString("scope", scope_);
+
+  const char* id_field_name = "id";
+  if (id_flags_ == TRACE_EVENT_FLAG_HAS_GLOBAL_ID) {
+    id_field_name = "global";
+    value->BeginDictionary("id2");
+  } else if (id_flags_ == TRACE_EVENT_FLAG_HAS_LOCAL_ID) {
+    id_field_name = "local";
+    value->BeginDictionary("id2");
+  } else if (id_flags_ != TRACE_EVENT_FLAG_HAS_ID) {
+    NOTREACHED() << "Unrecognized ID flag";
+  }
+
+  if (has_prefix_) {
+    value->SetString(id_field_name,
+                     base::StringPrintf("0x%" PRIx64 "/0x%" PRIx64,
+                                        static_cast<uint64_t>(prefix_),
+                                        static_cast<uint64_t>(raw_id_)));
+  } else {
+    value->SetString(
+        id_field_name,
+        base::StringPrintf("0x%" PRIx64, static_cast<uint64_t>(raw_id_)));
+  }
+
+  if (id_flags_ != TRACE_EVENT_FLAG_HAS_ID)
+    value->EndDictionary();
+
+  return std::move(value);
+}
+
+}  // namespace trace_event_internal

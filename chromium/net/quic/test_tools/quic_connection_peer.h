@@ -7,25 +7,22 @@
 
 #include "base/macros.h"
 #include "net/base/ip_endpoint.h"
-#include "net/quic/quic_connection_stats.h"
-#include "net/quic/quic_protocol.h"
+#include "net/quic/core/quic_connection.h"
+#include "net/quic/core/quic_connection_stats.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/platform/api/quic_socket_address.h"
 
 namespace net {
 
-struct QuicAckFrame;
 struct QuicPacketHeader;
 class QuicAlarm;
-class QuicConnection;
 class QuicConnectionHelperInterface;
 class QuicConnectionVisitorInterface;
 class QuicEncryptedPacket;
-class QuicFecGroup;
 class QuicFramer;
 class QuicPacketCreator;
 class QuicPacketGenerator;
 class QuicPacketWriter;
-class QuicReceivedPacketManager;
-class QuicSentEntropyManager;
 class QuicSentPacketManager;
 class SendAlgorithmInterface;
 
@@ -39,7 +36,10 @@ class QuicConnectionPeer {
   static void SetSendAlgorithm(QuicConnection* connection,
                                SendAlgorithmInterface* send_algorithm);
 
-  static void PopulateAckFrame(QuicConnection* connection, QuicAckFrame* ack);
+  static void SetLossAlgorithm(QuicConnection* connection,
+                               LossDetectionInterface* loss_algorithm);
+
+  static const QuicFrame GetUpdatedAckFrame(QuicConnection* connection);
 
   static void PopulateStopWaitingFrame(QuicConnection* connection,
                                        QuicStopWaitingFrame* stop_waiting);
@@ -55,28 +55,14 @@ class QuicConnectionPeer {
 
   static QuicTime::Delta GetNetworkTimeout(QuicConnection* connection);
 
-  static QuicSentEntropyManager* GetSentEntropyManager(
-      QuicConnection* connection);
-
-  static QuicPacketEntropyHash GetSentEntropyHash(
-      QuicConnection* connection,
-      QuicPacketNumber packet_number);
-
-  static QuicPacketEntropyHash PacketEntropy(QuicConnection* connection,
-                                             QuicPacketNumber packet_number);
-
-  static QuicPacketEntropyHash ReceivedEntropyHash(
-      QuicConnection* connection,
-      QuicPacketNumber packet_number);
-
   static void SetPerspective(QuicConnection* connection,
                              Perspective perspective);
 
   static void SetSelfAddress(QuicConnection* connection,
-                             const IPEndPoint& self_address);
+                             const QuicSocketAddress& self_address);
 
   static void SetPeerAddress(QuicConnection* connection,
-                             const IPEndPoint& peer_address);
+                             const QuicSocketAddress& peer_address);
 
   static bool IsSilentCloseEnabled(QuicConnection* connection);
 
@@ -84,16 +70,17 @@ class QuicConnectionPeer {
 
   static void SwapCrypters(QuicConnection* connection, QuicFramer* framer);
 
+  static void SetCurrentPacket(QuicConnection* connection,
+                               base::StringPiece current_packet);
+
   static QuicConnectionHelperInterface* GetHelper(QuicConnection* connection);
+
+  static QuicAlarmFactory* GetAlarmFactory(QuicConnection* connection);
 
   static QuicFramer* GetFramer(QuicConnection* connection);
 
-  // Set last_header_->fec_group = fec_group and return connection->GetFecGroup
-  static QuicFecGroup* GetFecGroup(QuicConnection* connection, int fec_group);
-
   static QuicAlarm* GetAckAlarm(QuicConnection* connection);
   static QuicAlarm* GetPingAlarm(QuicConnection* connection);
-  static QuicAlarm* GetFecAlarm(QuicConnection* connection);
   static QuicAlarm* GetResumeWritesAlarm(QuicConnection* connection);
   static QuicAlarm* GetRetransmissionAlarm(QuicConnection* connection);
   static QuicAlarm* GetSendAlarm(QuicConnection* connection);
@@ -105,7 +92,7 @@ class QuicConnectionPeer {
   static void SetWriter(QuicConnection* connection,
                         QuicPacketWriter* writer,
                         bool owns_writer);
-  static void CloseConnection(QuicConnection* connection);
+  static void TearDownLocalConnectionState(QuicConnection* connection);
   static QuicEncryptedPacket* GetConnectionClosePacket(
       QuicConnection* connection);
 
@@ -122,7 +109,13 @@ class QuicConnectionPeer {
                                          QuicPacketCount packets);
   static void SetNextMtuProbeAt(QuicConnection* connection,
                                 QuicPacketNumber number);
-  static void EnableAckDecimation(QuicConnection* connection);
+  static void SetAckMode(QuicConnection* connection,
+                         QuicConnection::AckMode ack_mode);
+  static void SetAckDecimationDelay(QuicConnection* connection,
+                                    float ack_decimation_delay);
+  static bool HasRetransmittableFrames(QuicConnection* connection,
+                                       QuicPathId path_id,
+                                       QuicPacketNumber packet_number);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuicConnectionPeer);

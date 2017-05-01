@@ -2,7 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-build_with_chromium = true
+# This is needed for backwards-compatibility w/ the WebRTC repo for
+# the build_with_chromium flag.
+import("//build_overrides/build.gni")
 
 # Exclude pulse audio on Chromium since its prerequisites don't require
 # pulse audio.
@@ -11,10 +13,5 @@ rtc_include_pulse_audio = false
 # Exclude internal ADM since Chromium uses its own IO handling.
 rtc_include_internal_audio_device = false
 
-declare_args() {
-  # TODO(dpranke): This is a hack needed to get iOS to build w/ a
-  # patched version of WebRTC so that we can access the xmllite
-  # library. Remove this once we've figured out how to get WebRTC building
-  # properly.
-  ios_use_webrtc = false
-}
+# Don't include WebRTC tests.
+rtc_include_tests = false

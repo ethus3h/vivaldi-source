@@ -8,84 +8,116 @@
 #include "bindings/core/v8/ScriptPromise.h"
 #include "bindings/core/v8/ScriptPromiseResolver.h"
 #include "core/dom/DOMException.h"
-#include "core/dom/ExceptionCode.h"
+#include "core/events/Event.h"
+#include "modules/bluetooth/Bluetooth.h"
+#include "modules/bluetooth/BluetoothAttributeInstanceMap.h"
 #include "modules/bluetooth/BluetoothError.h"
-#include "modules/bluetooth/BluetoothGATTRemoteServer.h"
-#include "modules/bluetooth/BluetoothSupplement.h"
-#include "public/platform/modules/bluetooth/WebBluetooth.h"
+#include "modules/bluetooth/BluetoothRemoteGATTServer.h"
+#include <memory>
+#include <utility>
 
 namespace blink {
 
-BluetoothDevice::BluetoothDevice(PassOwnPtr<WebBluetoothDevice> webDevice)
-    : m_webDevice(webDevice)
-    , m_adData(BluetoothAdvertisingData::create(m_webDevice->txPower,
-        m_webDevice->rssi))
-{
+BluetoothDevice::BluetoothDevice(ExecutionContext* context,
+                                 mojom::blink::WebBluetoothDevicePtr device,
+                                 Bluetooth* bluetooth)
+    : ContextLifecycleObserver(context),
+      m_attributeInstanceMap(new BluetoothAttributeInstanceMap(this)),
+      m_device(std::move(device)),
+      m_gatt(BluetoothRemoteGATTServer::create(this)),
+      m_bluetooth(bluetooth) {}
+
+// static
+BluetoothDevice* BluetoothDevice::take(
+    ScriptPromiseResolver* resolver,
+    mojom::blink::WebBluetoothDevicePtr device,
+    Bluetooth* bluetooth) {
+  return new BluetoothDevice(resolver->getExecutionContext(), std::move(device),
+                             bluetooth);
 }
 
-BluetoothDevice* BluetoothDevice::take(ScriptPromiseResolver*, PassOwnPtr<WebBluetoothDevice> webDevice)
-{
-    ASSERT(webDevice);
-    return new BluetoothDevice(webDevice);
+BluetoothRemoteGATTService* BluetoothDevice::getOrCreateRemoteGATTService(
+    mojom::blink::WebBluetoothRemoteGATTServicePtr service,
+    bool isPrimary,
+    const String& deviceInstanceId) {
+  return m_attributeInstanceMap->getOrCreateRemoteGATTService(
+      std::move(service), isPrimary, deviceInstanceId);
 }
 
-DEFINE_TRACE(BluetoothDevice)
-{
-    visitor->trace(m_adData);
+bool BluetoothDevice::isValidService(const String& serviceInstanceId) {
+  return m_attributeInstanceMap->containsService(serviceInstanceId);
 }
 
-unsigned BluetoothDevice::deviceClass(bool& isNull)
-{
-    isNull = false;
-    return m_webDevice->deviceClass;
+BluetoothRemoteGATTCharacteristic*
+BluetoothDevice::getOrCreateRemoteGATTCharacteristic(
+    ExecutionContext* context,
+    mojom::blink::WebBluetoothRemoteGATTCharacteristicPtr characteristic,
+    BluetoothRemoteGATTService* service) {
+  return m_attributeInstanceMap->getOrCreateRemoteGATTCharacteristic(
+      context, std::move(characteristic), service);
 }
 
-String BluetoothDevice::vendorIDSource()
-{
-    switch (m_webDevice->vendorIDSource) {
-    case WebBluetoothDevice::VendorIDSource::Unknown: return String();
-    case WebBluetoothDevice::VendorIDSource::Bluetooth: return "bluetooth";
-    case WebBluetoothDevice::VendorIDSource::USB: return "usb";
-    }
-    ASSERT_NOT_REACHED();
-    return String();
+bool BluetoothDevice::isValidCharacteristic(
+    const String& characteristicInstanceId) {
+  return m_attributeInstanceMap->containsCharacteristic(
+      characteristicInstanceId);
 }
 
-unsigned BluetoothDevice::vendorID(bool& isNull)
-{
-    isNull = false;
-    return m_webDevice->vendorID;
+BluetoothRemoteGATTDescriptor*
+BluetoothDevice::getOrCreateBluetoothRemoteGATTDescriptor(
+    mojom::blink::WebBluetoothRemoteGATTDescriptorPtr descriptor,
+    BluetoothRemoteGATTCharacteristic* characteristic) {
+  return m_attributeInstanceMap->getOrCreateBluetoothRemoteGATTDescriptor(
+      std::move(descriptor), characteristic);
 }
 
-unsigned BluetoothDevice::productID(bool& isNull)
-{
-    isNull = false;
-    return m_webDevice->productID;
+void BluetoothDevice::dispose() {
+  disconnectGATTIfConnected();
 }
 
-unsigned BluetoothDevice::productVersion(bool& isNull)
-{
-    isNull = false;
-    return m_webDevice->productVersion;
+void BluetoothDevice::contextDestroyed(ExecutionContext*) {
+  disconnectGATTIfConnected();
 }
 
-Vector<String> BluetoothDevice::uuids()
-{
-    Vector<String> uuids(m_webDevice->uuids.size());
-    for (size_t i = 0; i < m_webDevice->uuids.size(); ++i)
-        uuids[i] = m_webDevice->uuids[i];
-    return uuids;
+void BluetoothDevice::disconnectGATTIfConnected() {
+  if (m_gatt->connected()) {
+    m_gatt->setConnected(false);
+    m_gatt->ClearActiveAlgorithms();
+    m_bluetooth->removeDevice(id());
+    mojom::blink::WebBluetoothService* service = m_bluetooth->service();
+    service->RemoteServerDisconnect(id());
+  }
 }
 
-ScriptPromise BluetoothDevice::connectGATT(ScriptState* scriptState)
-{
-    WebBluetooth* webbluetooth = BluetoothSupplement::fromScriptState(scriptState);
-    if (!webbluetooth)
-        return ScriptPromise::rejectWithDOMException(scriptState, DOMException::create(NotSupportedError));
-    ScriptPromiseResolver* resolver = ScriptPromiseResolver::create(scriptState);
-    ScriptPromise promise = resolver->promise();
-    webbluetooth->connectGATT(id(), new CallbackPromiseAdapter<BluetoothGATTRemoteServer, BluetoothError>(resolver));
-    return promise;
+void BluetoothDevice::cleanupDisconnectedDeviceAndFireEvent() {
+  DCHECK(m_gatt->connected());
+  m_gatt->setConnected(false);
+  m_gatt->ClearActiveAlgorithms();
+  m_attributeInstanceMap->Clear();
+  dispatchEvent(Event::createBubble(EventTypeNames::gattserverdisconnected));
 }
 
-} // namespace blink
+const WTF::AtomicString& BluetoothDevice::interfaceName() const {
+  return EventTargetNames::BluetoothDevice;
+}
+
+ExecutionContext* BluetoothDevice::getExecutionContext() const {
+  return ContextLifecycleObserver::getExecutionContext();
+}
+
+void BluetoothDevice::dispatchGattServerDisconnected() {
+  if (!m_gatt->connected()) {
+    return;
+  }
+  cleanupDisconnectedDeviceAndFireEvent();
+}
+
+DEFINE_TRACE(BluetoothDevice) {
+  visitor->trace(m_attributeInstanceMap);
+  visitor->trace(m_gatt);
+  visitor->trace(m_bluetooth);
+  EventTargetWithInlineData::trace(visitor);
+  ContextLifecycleObserver::trace(visitor);
+}
+
+}  // namespace blink

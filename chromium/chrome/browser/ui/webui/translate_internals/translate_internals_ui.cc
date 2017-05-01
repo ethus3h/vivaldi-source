@@ -4,22 +4,23 @@
 
 #include "chrome/browser/ui/webui/translate_internals/translate_internals_ui.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/translate_internals/translate_internals_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
-#include "components/translate/content/common/cld_data_source.h"
+#include "chrome/grit/translate_internals_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "grit/translate_internals_resources.h"
+#include "third_party/cld/cld_version.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -50,6 +51,7 @@ content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
   source->SetJsonPath("strings.js");
   source->AddResourcePath("translate_internals.js",
                           IDR_TRANSLATE_INTERNALS_TRANSLATE_INTERNALS_JS);
+  source->UseGzip(std::unordered_set<std::string>());
 
   base::DictionaryValue langs;
   GetLanguages(&langs);
@@ -61,20 +63,16 @@ content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
   }
 
   std::string cld_version = "";
-  std::string cld_data_source = "";
-  // The version strings are hardcoded here to avoid linking with the CLD
+  // The version string is hardcoded here to avoid linking with the CLD
   // library, see http://crbug.com/297777.
-#if CLD_VERSION==1
-  cld_version = "1.6";
-  cld_data_source = "static"; // CLD1.x does not support dynamic data loading
-#elif CLD_VERSION==2
+#if BUILDFLAG(CLD_VERSION) == 2
   cld_version = "2";
-  cld_data_source = translate::CldDataSource::Get()->GetName();
+#elif BUILDFLAG(CLD_VERSION) == 3
+  cld_version = "3";
 #else
-  NOTREACHED();
+# error "CLD_VERSION must be 2 or 3"
 #endif
   source->AddString("cld-version", cld_version);
-  source->AddString("cld-data-source", cld_data_source);
 
   return source;
 }
@@ -83,7 +81,7 @@ content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
 
 TranslateInternalsUI::TranslateInternalsUI(content::WebUI* web_ui)
     : WebUIController(web_ui) {
-  web_ui->AddMessageHandler(new TranslateInternalsHandler);
+  web_ui->AddMessageHandler(base::MakeUnique<TranslateInternalsHandler>());
 
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource::Add(profile, CreateTranslateInternalsHTMLSource());

@@ -8,45 +8,12 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop/message_loop.h"
-#include "content/child/image_decoder.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/renderer/fetchers/multi_resolution_image_resource_fetcher.h"
-#include "mojo/common/url_type_converters.h"
-#include "mojo/converters/geometry/geometry_type_converters.h"
-#include "net/base/data_url.h"
 #include "skia/ext/image_operations.h"
-#include "skia/public/type_converters.h"
-#include "third_party/WebKit/public/platform/WebURLRequest.h"
-#include "third_party/WebKit/public/platform/WebVector.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebView.h"
-#include "ui/gfx/favicon_size.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/skbitmap_operations.h"
-#include "url/url_constants.h"
-
-using blink::WebFrame;
-using blink::WebVector;
-using blink::WebURL;
-using blink::WebURLRequest;
 
 namespace {
-
-// Decodes a data: URL image or returns an empty image in case of failure.
-SkBitmap ImageFromDataUrl(const GURL& url) {
-  std::string mime_type, char_set, data;
-  if (net::DataURL::Parse(url, &mime_type, &char_set, &data) && !data.empty()) {
-    // Decode the image using Blink's image decoder.
-    content::ImageDecoder decoder(
-        gfx::Size(gfx::kFaviconSize, gfx::kFaviconSize));
-    const unsigned char* src_data =
-        reinterpret_cast<const unsigned char*>(data.data());
-
-    return decoder.Decode(src_data, data.size());
-  }
-  return SkBitmap();
-}
 
 //  Proportionally resizes the |image| to fit in a box of size
 // |max_image_size|.
@@ -77,7 +44,7 @@ void FilterAndResizeImagesForMaximalSize(
   images->clear();
   original_image_sizes->clear();
 
-  if (!unfiltered.size())
+  if (unfiltered.empty())
     return;
 
   if (max_image_size == 0)
@@ -106,7 +73,11 @@ void FilterAndResizeImagesForMaximalSize(
     return;
   // Proportionally resize the minimal image to fit in a box of size
   // |max_image_size|.
-  images->push_back(ResizeImage(*min_image, max_image_size));
+  SkBitmap resized = ResizeImage(*min_image, max_image_size);
+  // Drop null or empty SkBitmap.
+  if (resized.drawsNothing())
+    return;
+  images->push_back(resized);
   original_image_sizes->push_back(
       gfx::Size(min_image->width(), min_image->height()));
 }
@@ -115,112 +86,58 @@ void FilterAndResizeImagesForMaximalSize(
 
 namespace content {
 
-ImageDownloaderImpl::ImageDownloaderImpl(
-    RenderFrame* render_frame,
-    mojo::InterfaceRequest<image_downloader::ImageDownloader> request)
-    : RenderFrameObserver(render_frame), binding_(this, std::move(request)) {
+ImageDownloaderImpl::ImageDownloaderImpl(RenderFrame* render_frame,
+                                         mojom::ImageDownloaderRequest request)
+    : ImageDownloaderBase(render_frame), binding_(this, std::move(request)) {
   DCHECK(render_frame);
+  binding_.set_connection_error_handler(
+      base::Bind(&ImageDownloaderImpl::OnDestruct, base::Unretained(this)));
 }
 
-ImageDownloaderImpl::~ImageDownloaderImpl() {
-}
+ImageDownloaderImpl::~ImageDownloaderImpl() {}
 
 // static
 void ImageDownloaderImpl::CreateMojoService(
     RenderFrame* render_frame,
-    mojo::InterfaceRequest<image_downloader::ImageDownloader> request) {
-  DVLOG(1) << "ImageDownloaderImpl::CreateService";
+    mojom::ImageDownloaderRequest request) {
+  DVLOG(1) << "ImageDownloaderImpl::CreateMojoService";
   DCHECK(render_frame);
 
+  // Owns itself. Will be deleted when message pipe is destroyed or RenderFrame
+  // is destructed.
   new ImageDownloaderImpl(render_frame, std::move(request));
 }
 
 // ImageDownloader methods:
-void ImageDownloaderImpl::DownloadImage(
-    image_downloader::DownloadRequestPtr req,
-    const DownloadImageCallback& callback) {
-  const GURL image_url = req->url.To<GURL>();
-  bool is_favicon = req->is_favicon;
-  uint32_t max_image_size = req->max_bitmap_size;
-  bool bypass_cache = req->bypass_cache;
-
+void ImageDownloaderImpl::DownloadImage(const GURL& image_url,
+                                        bool is_favicon,
+                                        uint32_t max_bitmap_size,
+                                        bool bypass_cache,
+                                        const DownloadImageCallback& callback) {
   std::vector<SkBitmap> result_images;
   std::vector<gfx::Size> result_original_image_sizes;
 
-  if (image_url.SchemeIs(url::kDataScheme)) {
-    SkBitmap data_image = ImageFromDataUrl(image_url);
-    if (!data_image.empty()) {
-      result_images.push_back(ResizeImage(data_image, max_image_size));
-      result_original_image_sizes.push_back(
-          gfx::Size(data_image.width(), data_image.height()));
-    }
-  } else {
-    if (FetchImage(image_url, is_favicon, max_image_size, bypass_cache,
-                   callback)) {
-      // Will complete asynchronously via ImageDownloaderImpl::DidFetchImage
-      return;
-    }
-  }
-
-  ReplyDownloadResult(0, result_images, result_original_image_sizes, callback);
+  ImageDownloaderBase::DownloadImage(
+      image_url, is_favicon, bypass_cache,
+      base::Bind(&ImageDownloaderImpl::DidDownloadImage, base::Unretained(this),
+                 max_bitmap_size, callback));
 }
 
-bool ImageDownloaderImpl::FetchImage(const GURL& image_url,
-                                     bool is_favicon,
-                                     uint32_t max_image_size,
-                                     bool bypass_cache,
-                                     const DownloadImageCallback& callback) {
-  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
-  DCHECK(frame);
-
-  // Create an image resource fetcher and assign it with a call back object.
-  image_fetchers_.push_back(new MultiResolutionImageResourceFetcher(
-      image_url, frame, 0, is_favicon ? WebURLRequest::RequestContextFavicon
-                                      : WebURLRequest::RequestContextImage,
-      bypass_cache ? WebURLRequest::ReloadBypassingCache
-                   : WebURLRequest::UseProtocolCachePolicy,
-      base::Bind(&ImageDownloaderImpl::DidFetchImage, base::Unretained(this),
-                 max_image_size, callback)));
-  return true;
-}
-
-void ImageDownloaderImpl::DidFetchImage(
+void ImageDownloaderImpl::DidDownloadImage(
     uint32_t max_image_size,
     const DownloadImageCallback& callback,
-    MultiResolutionImageResourceFetcher* fetcher,
+    int32_t http_status_code,
     const std::vector<SkBitmap>& images) {
   std::vector<SkBitmap> result_images;
   std::vector<gfx::Size> result_original_image_sizes;
   FilterAndResizeImagesForMaximalSize(images, max_image_size, &result_images,
                                       &result_original_image_sizes);
 
-  ReplyDownloadResult(fetcher->http_status_code(), result_images,
-                      result_original_image_sizes, callback);
-
-  // Remove the image fetcher from our pending list. We're in the callback from
-  // MultiResolutionImageResourceFetcher, best to delay deletion.
-  ImageResourceFetcherList::iterator iter =
-      std::find(image_fetchers_.begin(), image_fetchers_.end(), fetcher);
-  if (iter != image_fetchers_.end()) {
-    image_fetchers_.weak_erase(iter);
-    base::MessageLoop::current()->DeleteSoon(FROM_HERE, fetcher);
-  }
+  callback.Run(http_status_code, result_images, result_original_image_sizes);
 }
 
-void ImageDownloaderImpl::ReplyDownloadResult(
-    int32_t http_status_code,
-    const std::vector<SkBitmap>& result_images,
-    const std::vector<gfx::Size>& result_original_image_sizes,
-    const DownloadImageCallback& callback) {
-  image_downloader::DownloadResultPtr result =
-      image_downloader::DownloadResult::New();
-
-  result->http_status_code = http_status_code;
-  result->images = mojo::Array<skia::BitmapPtr>::From(result_images);
-  result->original_image_sizes =
-      mojo::Array<mojo::SizePtr>::From(result_original_image_sizes);
-
-  callback.Run(std::move(result));
+void ImageDownloaderImpl::OnDestruct() {
+  delete this;
 }
 
 }  // namespace content

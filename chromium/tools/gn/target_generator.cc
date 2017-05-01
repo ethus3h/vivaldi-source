@@ -9,8 +9,10 @@
 #include "tools/gn/action_target_generator.h"
 #include "tools/gn/binary_target_generator.h"
 #include "tools/gn/build_settings.h"
+#include "tools/gn/bundle_data_target_generator.h"
 #include "tools/gn/config.h"
 #include "tools/gn/copy_target_generator.h"
+#include "tools/gn/create_bundle_target_generator.h"
 #include "tools/gn/err.h"
 #include "tools/gn/filesystem_utils.h"
 #include "tools/gn/functions.h"
@@ -50,8 +52,19 @@ void TargetGenerator::Run() {
   if (!FillTestonly())
     return;
 
+  if (!FillAssertNoDeps())
+    return;
+
   if (!Visibility::FillItemVisibility(target_, scope_, err_))
     return;
+
+  if (!FillWriteRuntimeDeps())
+    return;
+
+  // <Vivaldi>
+  if (!FillDisabledTarget())
+    return;
+  // </Vivaldi>
 
   // Do type-specific generation.
   DoRun();
@@ -80,11 +93,19 @@ void TargetGenerator::GenerateTarget(Scope* scope,
   if (g_scheduler->verbose_logging())
     g_scheduler->Log("Defining target", label.GetUserVisibleName(true));
 
-  scoped_ptr<Target> target(new Target(scope->settings(), label));
+  std::unique_ptr<Target> target(new Target(scope->settings(), label));
   target->set_defined_from(function_call);
 
   // Create and call out to the proper generator.
-  if (output_type == functions::kCopy) {
+  if (output_type == functions::kBundleData) {
+    BundleDataTargetGenerator generator(
+        target.get(), scope, function_call, err);
+    generator.Run();
+  } else if (output_type == functions::kCreateBundle) {
+    CreateBundleTargetGenerator generator(target.get(), scope, function_call,
+                                          err);
+    generator.Run();
+  } else if (output_type == functions::kCopy) {
     CopyTargetGenerator generator(target.get(), scope, function_call, err);
     generator.Run();
   } else if (output_type == functions::kAction) {
@@ -266,6 +287,15 @@ bool TargetGenerator::FillTestonly() {
   return true;
 }
 
+bool TargetGenerator::FillAssertNoDeps() {
+  const Value* value = scope_->GetValue(variables::kAssertNoDeps, true);
+  if (value) {
+    return ExtractListOfLabelPatterns(*value, scope_->GetSourceDir(),
+                                      &target_->assert_no_deps(), err_);
+  }
+  return true;
+}
+
 bool TargetGenerator::FillOutputs(bool allow_substitutions) {
   const Value* value = scope_->GetValue(variables::kOutputs, true);
   if (!value)
@@ -280,15 +310,16 @@ bool TargetGenerator::FillOutputs(bool allow_substitutions) {
     if (!outputs.required_types().empty()) {
       *err_ = Err(*value, "Source expansions not allowed here.",
           "The outputs of this target used source {{expansions}} but this "
-          "targe type\ndoesn't support them. Just express the outputs "
+          "target type\ndoesn't support them. Just express the outputs "
           "literally.");
       return false;
     }
   }
 
   // Check the substitutions used are valid for this purpose.
-  if (!EnsureValidSourcesSubstitutions(outputs.required_types(),
-                                       value->origin(), err_))
+  if (!EnsureValidSubstitutions(outputs.required_types(),
+                                &IsValidSourceSubstitution,
+                                value->origin(), err_))
     return false;
 
   // Validate that outputs are in the output dir.
@@ -361,3 +392,41 @@ bool TargetGenerator::FillGenericDeps(const char* var_name,
   }
   return !err_->has_error();
 }
+
+bool TargetGenerator::FillWriteRuntimeDeps() {
+  const Value* value = scope_->GetValue(variables::kWriteRuntimeDeps, true);
+  if (!value)
+    return true;
+
+  // Compute the file name and make sure it's in the output dir.
+  SourceFile source_file = scope_->GetSourceDir().ResolveRelativeFile(
+      *value, err_, GetBuildSettings()->root_path_utf8());
+  if (err_->has_error())
+    return false;
+  if (!EnsureStringIsInOutputDir(GetBuildSettings()->build_dir(),
+          source_file.value(), value->origin(), err_))
+    return false;
+  OutputFile output_file(GetBuildSettings(), source_file);
+  target_->set_write_runtime_deps_output(output_file);
+
+  return true;
+}
+
+// <Vivaldi>
+bool TargetGenerator::FillDisabledTarget() {
+  const Value* value = scope_->GetValue(variables::kDisabled, true);
+  if (!value) {
+    const Value* invoker = scope_->GetValue(variables::kInvoker, true);
+    if (!invoker || invoker->type() != Value::SCOPE)
+      return true;
+    const Scope* invoker_scope = invoker->scope_value();
+    value = invoker_scope->GetValue(variables::kDisabled);
+    if(!value)
+      return true;
+  }
+  if (!value->VerifyTypeIs(Value::BOOLEAN, err_))
+    return false;
+  target_->set_is_disabled(value->boolean_value());
+  return true;
+}
+// </Vivaldi>

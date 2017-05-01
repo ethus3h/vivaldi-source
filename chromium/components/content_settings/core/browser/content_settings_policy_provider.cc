@@ -9,15 +9,16 @@
 #include <string>
 
 #include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/json/json_reader.h"
 #include "base/macros.h"
-#include "base/prefs/pref_service.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 
 namespace {
 
@@ -54,11 +55,7 @@ const PrefsForManagedContentSettingsMapEntry
         {prefs::kManagedPopupsAllowedForUrls, CONTENT_SETTINGS_TYPE_POPUPS,
          CONTENT_SETTING_ALLOW},
         {prefs::kManagedPopupsBlockedForUrls, CONTENT_SETTINGS_TYPE_POPUPS,
-         CONTENT_SETTING_BLOCK},
-        {prefs::kManagedKeygenAllowedForUrls,
-         CONTENT_SETTINGS_TYPE_KEYGEN, CONTENT_SETTING_ALLOW},
-        {prefs::kManagedKeygenBlockedForUrls,
-         CONTENT_SETTINGS_TYPE_KEYGEN, CONTENT_SETTING_BLOCK}};
+         CONTENT_SETTING_BLOCK}};
 
 }  // namespace
 
@@ -88,7 +85,8 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
          prefs::kManagedDefaultNotificationsSetting},
         {CONTENT_SETTINGS_TYPE_PLUGINS, prefs::kManagedDefaultPluginsSetting},
         {CONTENT_SETTINGS_TYPE_POPUPS, prefs::kManagedDefaultPopupsSetting},
-        {CONTENT_SETTINGS_TYPE_KEYGEN, prefs::kManagedDefaultKeygenSetting},
+        {CONTENT_SETTINGS_TYPE_BLUETOOTH_GUARD,
+         prefs::kManagedDefaultWebBluetoothGuardSetting},
 };
 
 // static
@@ -108,8 +106,6 @@ void PolicyProvider::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kManagedPluginsBlockedForUrls);
   registry->RegisterListPref(prefs::kManagedPopupsAllowedForUrls);
   registry->RegisterListPref(prefs::kManagedPopupsBlockedForUrls);
-  registry->RegisterListPref(prefs::kManagedKeygenAllowedForUrls);
-  registry->RegisterListPref(prefs::kManagedKeygenBlockedForUrls);
   // Preferences for default content setting policies. If a policy is not set of
   // the corresponding preferences below is set to CONTENT_SETTING_DEFAULT.
   registry->RegisterIntegerPref(prefs::kManagedDefaultCookiesSetting,
@@ -128,7 +124,7 @@ void PolicyProvider::RegisterProfilePrefs(
                                 CONTENT_SETTING_DEFAULT);
   registry->RegisterIntegerPref(prefs::kManagedDefaultPopupsSetting,
                                 CONTENT_SETTING_DEFAULT);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultKeygenSetting,
+  registry->RegisterIntegerPref(prefs::kManagedDefaultWebBluetoothGuardSetting,
                                 CONTENT_SETTING_DEFAULT);
 }
 
@@ -157,8 +153,6 @@ PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
   pref_change_registrar_.Add(prefs::kManagedPluginsBlockedForUrls, callback);
   pref_change_registrar_.Add(prefs::kManagedPopupsAllowedForUrls, callback);
   pref_change_registrar_.Add(prefs::kManagedPopupsBlockedForUrls, callback);
-  pref_change_registrar_.Add(prefs::kManagedKeygenAllowedForUrls, callback);
-  pref_change_registrar_.Add(prefs::kManagedKeygenBlockedForUrls, callback);
   // The following preferences are only used to indicate if a default content
   // setting is managed and to hold the managed default setting value. If the
   // value for any of the following preferences is set then the corresponding
@@ -177,14 +171,15 @@ PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
       prefs::kManagedDefaultMediaStreamSetting, callback);
   pref_change_registrar_.Add(prefs::kManagedDefaultPluginsSetting, callback);
   pref_change_registrar_.Add(prefs::kManagedDefaultPopupsSetting, callback);
-  pref_change_registrar_.Add(prefs::kManagedDefaultKeygenSetting, callback);
+  pref_change_registrar_.Add(prefs::kManagedDefaultWebBluetoothGuardSetting,
+                             callback);
 }
 
 PolicyProvider::~PolicyProvider() {
   DCHECK(!prefs_);
 }
 
-scoped_ptr<RuleIterator> PolicyProvider::GetRuleIterator(
+std::unique_ptr<RuleIterator> PolicyProvider::GetRuleIterator(
     ContentSettingsType content_type,
     const ResourceIdentifier& resource_identifier,
     bool incognito) const {
@@ -207,22 +202,26 @@ void PolicyProvider::GetContentSettingsFromPreferences(
 
     const base::ListValue* pattern_str_list = nullptr;
     if (!pref->GetValue()->GetAsList(&pattern_str_list)) {
-      NOTREACHED();
+      NOTREACHED() << "Could not read patterns from " << pref_name;
       return;
     }
 
     for (size_t j = 0; j < pattern_str_list->GetSize(); ++j) {
       std::string original_pattern_str;
       if (!pattern_str_list->GetString(j, &original_pattern_str)) {
-        NOTREACHED();
+        NOTREACHED() << "Could not read content settings pattern #" << j
+                     << " from " << pref_name;
         continue;
       }
+
+      VLOG(2) << "Reading content settings pattern " << original_pattern_str
+              << " from " << pref_name;
 
       PatternPair pattern_pair = ParsePatternString(original_pattern_str);
       // Ignore invalid patterns.
       if (!pattern_pair.first.IsValid()) {
-        VLOG(1) << "Ignoring invalid content settings pattern: " <<
-                   original_pattern_str;
+        VLOG(1) << "Ignoring invalid content settings pattern "
+                << original_pattern_str;
         continue;
       }
 
@@ -233,6 +232,9 @@ void PolicyProvider::GetContentSettingsFromPreferences(
       ContentSettingsPattern secondary_pattern =
           !pattern_pair.second.IsValid() ? ContentSettingsPattern::Wildcard()
                                          : pattern_pair.second;
+      VLOG_IF(2, !pattern_pair.second.IsValid())
+          << "Replacing invalid secondary pattern '"
+          << pattern_pair.second.ToString() << "' with wildcard";
       value_map->SetValue(pattern_pair.first, secondary_pattern, content_type,
                           ResourceIdentifier(),
                           new base::FundamentalValue(
@@ -284,15 +286,15 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences(
       continue;
     }
 
-    scoped_ptr<base::Value> value = base::JSONReader::Read(
+    std::unique_ptr<base::Value> value = base::JSONReader::Read(
         pattern_filter_json, base::JSON_ALLOW_TRAILING_COMMAS);
-    if (!value || !value->IsType(base::Value::TYPE_DICTIONARY)) {
+    if (!value || !value->IsType(base::Value::Type::DICTIONARY)) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
                  " Invalid JSON object: " << pattern_filter_json;
       continue;
     }
 
-    scoped_ptr<base::DictionaryValue> pattern_filter_pair(
+    std::unique_ptr<base::DictionaryValue> pattern_filter_pair(
         static_cast<base::DictionaryValue*>(value.release()));
     std::string pattern_str;
     bool pattern_read = pattern_filter_pair->GetStringWithoutPathExpansion(
@@ -341,8 +343,14 @@ void PolicyProvider::UpdateManagedDefaultSetting(
   DCHECK(!prefs_->HasPrefPath(entry.pref_name) ||
          prefs_->IsManagedPreference(entry.pref_name));
   base::AutoLock auto_lock(lock_);
-
   int setting = prefs_->GetInteger(entry.pref_name);
+  // TODO(wfh): Remove once HDB is enabled by default.
+  if (entry.pref_name == prefs::kManagedDefaultPluginsSetting) {
+    static constexpr base::Feature kIgnoreDefaultPluginsSetting = {
+        "IgnoreDefaultPluginsSetting", base::FEATURE_DISABLED_BY_DEFAULT};
+    if (base::FeatureList::IsEnabled(kIgnoreDefaultPluginsSetting))
+      setting = CONTENT_SETTING_DEFAULT;
+  }
   if (setting == CONTENT_SETTING_DEFAULT) {
     value_map_.DeleteValue(ContentSettingsPattern::Wildcard(),
                            ContentSettingsPattern::Wildcard(),
@@ -408,9 +416,7 @@ void PolicyProvider::OnPreferenceChanged(const std::string& name) {
       name == prefs::kManagedPluginsAllowedForUrls ||
       name == prefs::kManagedPluginsBlockedForUrls ||
       name == prefs::kManagedPopupsAllowedForUrls ||
-      name == prefs::kManagedPopupsBlockedForUrls ||
-      name == prefs::kManagedKeygenAllowedForUrls ||
-      name == prefs::kManagedKeygenBlockedForUrls) {
+      name == prefs::kManagedPopupsBlockedForUrls) {
     ReadManagedContentSettings(true);
     ReadManagedDefaultSettings();
   }

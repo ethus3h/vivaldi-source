@@ -8,22 +8,24 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/test/histogram_tester.h"
 #include "chrome/browser/chromeos/input_method/input_method_configuration.h"
-#include "chrome/browser/chromeos/input_method/mock_input_method_manager.h"
+#include "chrome/browser/chromeos/input_method/mock_input_method_manager_impl.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/input_method/input_method_engine_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ime/chromeos/extension_ime_util.h"
 #include "ui/base/ime/chromeos/mock_component_extension_ime_manager_delegate.h"
-#include "ui/base/ime/chromeos/mock_ime_input_context_handler.h"
 #include "ui/base/ime/ime_bridge.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
-#include "ui/base/ime/ime_engine_observer.h"
+#include "ui/base/ime/mock_ime_input_context_handler.h"
 #include "ui/base/ime/text_input_flags.h"
 #include "ui/gfx/geometry/rect.h"
+
+using input_method::InputMethodEngineBase;
 
 namespace chromeos {
 
@@ -62,15 +64,15 @@ void InitInputMethod() {
   ime_list.push_back(ext1);
   delegate->set_ime_list(ime_list);
   comp_ime_manager->Initialize(
-      scoped_ptr<ComponentExtensionIMEManagerDelegate>(delegate));
+      std::unique_ptr<ComponentExtensionIMEManagerDelegate>(delegate));
 
-  MockInputMethodManager* manager = new MockInputMethodManager;
+  MockInputMethodManagerImpl* manager = new MockInputMethodManagerImpl;
   manager->SetComponentExtensionIMEManager(
-      scoped_ptr<ComponentExtensionIMEManager>(comp_ime_manager));
+      std::unique_ptr<ComponentExtensionIMEManager>(comp_ime_manager));
   InitializeForTesting(manager);
 }
 
-class TestObserver : public ui::IMEEngineObserver {
+class TestObserver : public InputMethodEngineBase::Observer {
  public:
   TestObserver() : calls_bitmap_(NONE) {}
   ~TestObserver() override {}
@@ -89,13 +91,14 @@ class TestObserver : public ui::IMEEngineObserver {
   bool IsInterestedInKeyEvent() const override { return true; }
   void OnKeyEvent(
       const std::string& engine_id,
-      const ui::IMEEngineHandlerInterface::KeyboardEvent& event,
+      const InputMethodEngineBase::KeyboardEvent& event,
       ui::IMEEngineHandlerInterface::KeyEventDoneCallback& key_data) override {}
   void OnInputContextUpdate(
       const ui::IMEEngineHandlerInterface::InputContext& context) override {}
-  void OnCandidateClicked(const std::string& engine_id,
-                          int candidate_id,
-                          MouseButtonEvent button) override {}
+  void OnCandidateClicked(
+      const std::string& engine_id,
+      int candidate_id,
+      InputMethodEngineBase::MouseButtonEvent button) override {}
   void OnMenuItemActivated(const std::string& engine_id,
                            const std::string& menu_id) override {}
   void OnSurroundingTextChanged(const std::string& engine_id,
@@ -103,6 +106,7 @@ class TestObserver : public ui::IMEEngineObserver {
                                 int cursor_pos,
                                 int anchor_pos,
                                 int offset) override {}
+  void OnRequestEngineSwitch() override {}
   void OnCompositionBoundsChanged(
       const std::vector<gfx::Rect>& bounds) override {
     calls_bitmap_ |= ONCOMPOSITIONBOUNDSCHANGED;
@@ -128,7 +132,7 @@ class InputMethodEngineTest : public testing::Test {
     layouts_.push_back("us");
     InitInputMethod();
     ui::IMEBridge::Initialize();
-    mock_ime_input_context_handler_.reset(new MockIMEInputContextHandler());
+    mock_ime_input_context_handler_.reset(new ui::MockIMEInputContextHandler());
     ui::IMEBridge::Get()->SetInputContextHandler(
         mock_ime_input_context_handler_.get());
   }
@@ -142,7 +146,7 @@ class InputMethodEngineTest : public testing::Test {
   void CreateEngine(bool whitelisted) {
     engine_.reset(new InputMethodEngine());
     observer_ = new TestObserver();
-    scoped_ptr<ui::IMEEngineObserver> observer_ptr(observer_);
+    std::unique_ptr<InputMethodEngineBase::Observer> observer_ptr(observer_);
     engine_->Initialize(std::move(observer_ptr),
                         whitelisted ? kTestExtensionId : kTestExtensionId2,
                         ProfileManager::GetActiveUserProfile());
@@ -155,7 +159,7 @@ class InputMethodEngineTest : public testing::Test {
     ui::IMEBridge::Get()->SetCurrentInputContext(input_context);
   }
 
-  scoped_ptr<InputMethodEngine> engine_;
+  std::unique_ptr<InputMethodEngine> engine_;
 
   TestObserver* observer_;
   std::vector<std::string> languages_;
@@ -163,7 +167,8 @@ class InputMethodEngineTest : public testing::Test {
   GURL options_page_;
   GURL input_view_;
 
-  scoped_ptr<MockIMEInputContextHandler> mock_ime_input_context_handler_;
+  std::unique_ptr<ui::MockIMEInputContextHandler>
+      mock_ime_input_context_handler_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(InputMethodEngineTest);
@@ -245,7 +250,7 @@ TEST_F(InputMethodEngineTest, TestHistograms) {
   CreateEngine(true);
   FocusIn(ui::TEXT_INPUT_TYPE_TEXT);
   engine_->Enable(kTestImeComponentId);
-  std::vector<ui::IMEEngineHandlerInterface::SegmentInfo> segments;
+  std::vector<InputMethodEngineBase::SegmentInfo> segments;
   int context = engine_->GetCotextIdForTesting();
   std::string error;
   base::HistogramTester histograms;

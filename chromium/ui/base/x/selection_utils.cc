@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <set>
 
 #include "base/i18n/icu_string_conversions.h"
@@ -19,7 +20,6 @@
 
 namespace ui {
 
-const char kMimeTypeMozillaURL[] = "text/x-moz-url";
 const char kString[] = "STRING";
 const char kText[] = "TEXT";
 const char kTextPlain[] = "text/plain";
@@ -49,7 +49,7 @@ std::vector< ::Atom> GetTextAtomsFrom(const X11AtomCache* atom_cache) {
 std::vector< ::Atom> GetURLAtomsFrom(const X11AtomCache* atom_cache) {
   std::vector< ::Atom> atoms;
   atoms.push_back(atom_cache->GetAtom(Clipboard::kMimeTypeURIList));
-  atoms.push_back(atom_cache->GetAtom(kMimeTypeMozillaURL));
+  atoms.push_back(atom_cache->GetAtom(Clipboard::kMimeTypeMozillaURL));
   return atoms;
 }
 
@@ -119,6 +119,9 @@ base::string16 RefCountedMemoryToString16(
 ///////////////////////////////////////////////////////////////////////////////
 
 SelectionFormatMap::SelectionFormatMap() {}
+
+SelectionFormatMap::SelectionFormatMap(const SelectionFormatMap& other) =
+    default;
 
 SelectionFormatMap::~SelectionFormatMap() {}
 

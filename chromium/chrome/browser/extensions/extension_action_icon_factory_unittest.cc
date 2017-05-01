@@ -12,19 +12,20 @@
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/grit/theme_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
 #include "extensions/common/extension.h"
-#include "grit/theme_resources.h"
 #include "skia/ext/image_operations.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/resource/material_design/material_design_controller.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/test/material_design_controller_test_api.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -98,7 +99,7 @@ class ExtensionActionIconFactoryTest
 
   void WaitForIconUpdate() {
     quit_in_icon_updated_ = true;
-    base::MessageLoop::current()->Run();
+    base::RunLoop().Run();
     quit_in_icon_updated_ = false;
   }
 
@@ -115,8 +116,9 @@ class ExtensionActionIconFactoryTest
     std::string error;
     JSONFileValueDeserializer deserializer(
         test_file.AppendASCII("manifest.json"));
-    scoped_ptr<base::DictionaryValue> valid_value = base::DictionaryValue::From(
-        deserializer.Deserialize(&error_code, &error));
+    std::unique_ptr<base::DictionaryValue> valid_value =
+        base::DictionaryValue::From(
+            deserializer.Deserialize(&error_code, &error));
     EXPECT_EQ(0, error_code) << error;
     if (error_code != 0)
       return NULL;
@@ -143,17 +145,14 @@ class ExtensionActionIconFactoryTest
     extension_service_ = static_cast<extensions::TestExtensionSystem*>(
         extensions::ExtensionSystem::Get(profile_.get()))->
         CreateExtensionService(&command_line, base::FilePath(), false);
-    // Any call by a previous test to MaterialDesignController::GetMode() will
-    // initialize and cache the mode. This ensures that these tests will run
-    // from a non-initialized state.
-    ui::test::MaterialDesignControllerTestAPI::UninitializeMode();
-    ui::test::MaterialDesignControllerTestAPI::SetMode(GetParam());
+    material_design_state_.reset(
+        new ui::test::MaterialDesignControllerTestAPI(GetParam()));
   }
 
   void TearDown() override {
-    ui::test::MaterialDesignControllerTestAPI::UninitializeMode();
+    material_design_state_.reset();
     profile_.reset();  // Get all DeleteSoon calls sent to ui_loop_.
-    ui_loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   // ExtensionActionIconFactory::Observer overrides:
@@ -179,8 +178,10 @@ class ExtensionActionIconFactoryTest
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread io_thread_;
-  scoped_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfile> profile_;
   ExtensionService* extension_service_;
+  std::unique_ptr<ui::test::MaterialDesignControllerTestAPI>
+      material_design_state_;
 
 #if defined OS_CHROMEOS
   chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
@@ -194,8 +195,7 @@ class ExtensionActionIconFactoryTest
 INSTANTIATE_TEST_CASE_P(
     ExtensionActionIconFactoryTest_MaterialDesign,
     ExtensionActionIconFactoryTest,
-    testing::Values(ui::MaterialDesignController::NON_MATERIAL,
-                    ui::MaterialDesignController::MATERIAL_NORMAL,
+    testing::Values(ui::MaterialDesignController::MATERIAL_NORMAL,
                     ui::MaterialDesignController::MATERIAL_HYBRID));
 
 // If there is no default icon, and the icon has not been set using |SetIcon|,
@@ -206,12 +206,10 @@ TEST_P(ExtensionActionIconFactoryTest, NoIcons) {
   scoped_refptr<Extension> extension(CreateExtension(
       "browser_action/no_icon", Manifest::INVALID_LOCATION));
   ASSERT_TRUE(extension.get() != NULL);
-  ExtensionAction* browser_action = GetBrowserAction(*extension.get());
+  ExtensionAction* browser_action = GetBrowserAction(*extension);
   ASSERT_TRUE(browser_action);
   ASSERT_FALSE(browser_action->default_icon());
   ASSERT_TRUE(browser_action->GetExplicitlySetIcon(0 /*tab id*/).IsEmpty());
-
-  gfx::ImageSkia favicon = GetFavicon();
 
   ExtensionActionIconFactory icon_factory(
       profile(), extension.get(), browser_action, this);
@@ -219,7 +217,8 @@ TEST_P(ExtensionActionIconFactoryTest, NoIcons) {
   gfx::Image icon = icon_factory.GetIcon(0);
 
   EXPECT_TRUE(ImageRepsAreEqual(
-      favicon.GetRepresentation(1.0f),
+      browser_action->GetDefaultIconImage().ToImageSkia()->GetRepresentation(
+          1.0f),
       icon.ToImageSkia()->GetRepresentation(1.0f)));
 }
 
@@ -232,7 +231,7 @@ TEST_P(ExtensionActionIconFactoryTest, AfterSetIcon) {
   scoped_refptr<Extension> extension(CreateExtension(
       "browser_action/no_icon", Manifest::INVALID_LOCATION));
   ASSERT_TRUE(extension.get() != NULL);
-  ExtensionAction* browser_action = GetBrowserAction(*extension.get());
+  ExtensionAction* browser_action = GetBrowserAction(*extension);
   ASSERT_TRUE(browser_action);
   ASSERT_FALSE(browser_action->default_icon());
   ASSERT_TRUE(browser_action->GetExplicitlySetIcon(0 /*tab id*/).IsEmpty());
@@ -253,11 +252,12 @@ TEST_P(ExtensionActionIconFactoryTest, AfterSetIcon) {
       set_icon.ToImageSkia()->GetRepresentation(1.0f),
       icon.ToImageSkia()->GetRepresentation(1.0f)));
 
-  // It should still return favicon for another tabs.
+  // It should still return the default icon for another tab.
   icon = icon_factory.GetIcon(1);
 
   EXPECT_TRUE(ImageRepsAreEqual(
-      GetFavicon().GetRepresentation(1.0f),
+      browser_action->GetDefaultIconImage().ToImageSkia()->GetRepresentation(
+          1.0f),
       icon.ToImageSkia()->GetRepresentation(1.0f)));
 }
 
@@ -270,24 +270,25 @@ TEST_P(ExtensionActionIconFactoryTest, DefaultIcon) {
   scoped_refptr<Extension> extension(CreateExtension(
       "browser_action/no_icon", Manifest::INVALID_LOCATION));
   ASSERT_TRUE(extension.get() != NULL);
-  ExtensionAction* browser_action = GetBrowserAction(*extension.get());
+  ExtensionAction* browser_action = GetBrowserAction(*extension);
   ASSERT_TRUE(browser_action);
   ASSERT_FALSE(browser_action->default_icon());
   ASSERT_TRUE(browser_action->GetExplicitlySetIcon(0 /*tab id*/).IsEmpty());
 
+  scoped_refptr<const Extension> extension_with_icon =
+      CreateExtension("browser_action_with_icon", Manifest::INVALID_LOCATION);
+  ASSERT_TRUE(extension_with_icon);
+
   int icon_size = ExtensionAction::ActionIconSize();
   gfx::Image default_icon =
-      EnsureImageSize(LoadIcon("browser_action/no_icon/icon.png"), icon_size);
+      EnsureImageSize(LoadIcon("browser_action_with_icon/icon.png"), icon_size);
   ASSERT_FALSE(default_icon.IsEmpty());
 
-  scoped_ptr<ExtensionIconSet> default_icon_set(new ExtensionIconSet());
-  default_icon_set->Add(icon_size, "icon.png");
-
-  browser_action->SetDefaultIconForTest(std::move(default_icon_set));
+  browser_action = GetBrowserAction(*extension_with_icon);
   ASSERT_TRUE(browser_action->default_icon());
 
   ExtensionActionIconFactory icon_factory(
-      profile(), extension.get(), browser_action, this);
+      profile(), extension_with_icon.get(), browser_action, this);
 
   gfx::Image icon = icon_factory.GetIcon(0);
 

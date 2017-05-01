@@ -5,6 +5,7 @@
 #include "google_apis/drive/base_requests.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/files/file_util.h"
@@ -12,11 +13,12 @@
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task_runner_util.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "google_apis/drive/drive_api_parser.h"
 #include "google_apis/drive/request_sender.h"
@@ -82,7 +84,7 @@ const char kMultipartFooterFormat[] = "--%s--";
 void ParseJsonOnBlockingPool(
     base::TaskRunner* blocking_task_runner,
     const std::string& json,
-    const base::Callback<void(scoped_ptr<base::Value> value)>& callback) {
+    const base::Callback<void(std::unique_ptr<base::Value> value)>& callback) {
   base::PostTaskAndReplyWithResult(
       blocking_task_runner,
       FROM_HERE,
@@ -151,7 +153,7 @@ google_apis::DriveApiErrorCode MapJsonError(
   const char kErrorReasonQuotaExceeded[] = "quotaExceeded";
   const char kErrorReasonResponseTooLarge[] = "responseTooLarge";
 
-  scoped_ptr<const base::Value> value(google_apis::ParseJson(error_body));
+  std::unique_ptr<const base::Value> value(google_apis::ParseJson(error_body));
   const base::DictionaryValue* dictionary = NULL;
   const base::DictionaryValue* error = NULL;
   if (value &&
@@ -187,10 +189,10 @@ google_apis::DriveApiErrorCode MapJsonError(
 
 namespace google_apis {
 
-scoped_ptr<base::Value> ParseJson(const std::string& json) {
+std::unique_ptr<base::Value> ParseJson(const std::string& json) {
   int error_code = -1;
   std::string error_message;
-  scoped_ptr<base::Value> value = base::JSONReader::ReadAndReturnError(
+  std::unique_ptr<base::Value> value = base::JSONReader::ReadAndReturnError(
       json, base::JSON_PARSE_RFC, &error_code, &error_message);
 
   if (!value.get()) {
@@ -292,8 +294,7 @@ int ResponseWriter::Write(net::IOBuffer* buffer,
                           const net::CompletionCallback& callback) {
   if (!get_content_callback_.is_null()) {
     get_content_callback_.Run(
-        HTTP_SUCCESS,
-        make_scoped_ptr(new std::string(buffer->data(), num_bytes)));
+        HTTP_SUCCESS, base::MakeUnique<std::string>(buffer->data(), num_bytes));
   }
 
   if (file_writer_) {
@@ -311,9 +312,10 @@ int ResponseWriter::Write(net::IOBuffer* buffer,
   return num_bytes;
 }
 
-int ResponseWriter::Finish(const net::CompletionCallback& callback) {
+int ResponseWriter::Finish(int net_error,
+                           const net::CompletionCallback& callback) {
   if (file_writer_)
-    return file_writer_->Finish(callback);
+    return file_writer_->Finish(net_error, callback);
 
   return net::OK;
 }
@@ -417,7 +419,7 @@ void UrlFetchRequestBase::StartAfterPrepare(
                                         output_file_path,
                                         get_content_callback);
   url_fetcher_->SaveResponseWithWriter(
-      scoped_ptr<net::URLFetcherResponseWriter>(response_writer_));
+      std::unique_ptr<net::URLFetcherResponseWriter>(response_writer_));
 
   // Add request headers.
   // Note that SetExtraRequestHeaders clears the current headers and sets it
@@ -703,10 +705,9 @@ void UploadRangeRequestBase::ProcessURLFetchResults(
     // should be always 0.
     DCHECK_EQ(start_position_received, 0);
 
-    OnRangeRequestComplete(UploadRangeResponse(code,
-                                               start_position_received,
+    OnRangeRequestComplete(UploadRangeResponse(code, start_position_received,
                                                end_position_received),
-                           scoped_ptr<base::Value>());
+                           std::unique_ptr<base::Value>());
 
     OnProcessURLFetchResultsComplete();
   } else if (code == HTTP_CREATED || code == HTTP_SUCCESS) {
@@ -719,14 +720,14 @@ void UploadRangeRequestBase::ProcessURLFetchResults(
                                        code));
   } else {
     // Failed to upload. Run callbacks to notify the error.
-    OnRangeRequestComplete(
-        UploadRangeResponse(code, -1, -1), scoped_ptr<base::Value>());
+    OnRangeRequestComplete(UploadRangeResponse(code, -1, -1),
+                           std::unique_ptr<base::Value>());
     OnProcessURLFetchResultsComplete();
   }
 }
 
 void UploadRangeRequestBase::OnDataParsed(DriveApiErrorCode code,
-                                          scoped_ptr<base::Value> value) {
+                                          std::unique_ptr<base::Value> value) {
   DCHECK(CalledOnValidThread());
   DCHECK(code == HTTP_CREATED || code == HTTP_SUCCESS);
 
@@ -736,8 +737,8 @@ void UploadRangeRequestBase::OnDataParsed(DriveApiErrorCode code,
 
 void UploadRangeRequestBase::RunCallbackOnPrematureFailure(
     DriveApiErrorCode code) {
-  OnRangeRequestComplete(
-      UploadRangeResponse(code, 0, 0), scoped_ptr<base::Value>());
+  OnRangeRequestComplete(UploadRangeResponse(code, 0, 0),
+                         std::unique_ptr<base::Value>());
 }
 
 //========================== ResumeUploadRequestBase =========================
@@ -923,7 +924,7 @@ void MultipartUploadRequestBase::NotifyResult(
 }
 
 void MultipartUploadRequestBase::NotifyError(DriveApiErrorCode code) {
-  callback_.Run(code, scoped_ptr<FileResource>());
+  callback_.Run(code, std::unique_ptr<FileResource>());
 }
 
 void MultipartUploadRequestBase::NotifyUploadProgress(
@@ -937,7 +938,7 @@ void MultipartUploadRequestBase::NotifyUploadProgress(
 void MultipartUploadRequestBase::OnDataParsed(
     DriveApiErrorCode code,
     const base::Closure& notify_complete_callback,
-    scoped_ptr<base::Value> value) {
+    std::unique_ptr<base::Value> value) {
   DCHECK(thread_checker_.CalledOnValidThread());
   if (value)
     callback_.Run(code, google_apis::FileResource::CreateFrom(*value));
@@ -984,7 +985,8 @@ void DownloadFileRequestBase::GetOutputFilePath(
 void DownloadFileRequestBase::OnURLFetchDownloadProgress(
     const URLFetcher* source,
     int64_t current,
-    int64_t total) {
+    int64_t total,
+    int64_t current_network_bytes) {
   if (!progress_callback_.is_null())
     progress_callback_.Run(current, total);
 }

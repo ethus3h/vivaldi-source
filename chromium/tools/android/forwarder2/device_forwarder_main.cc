@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread.h"
@@ -67,12 +68,12 @@ class ServerDelegate : public Daemon::ServerDelegate {
     controller_thread_->Start();
   }
 
-  void OnClientConnected(scoped_ptr<Socket> client_socket) override {
+  void OnClientConnected(std::unique_ptr<Socket> client_socket) override {
     if (initialized_) {
       client_socket->WriteString("OK");
       return;
     }
-    controller_thread_->message_loop()->PostTask(
+    controller_thread_->task_runner()->PostTask(
         FROM_HERE,
         base::Bind(&ServerDelegate::StartController, base::Unretained(this),
                    GetExitNotifierFD(), base::Passed(&client_socket)));
@@ -80,9 +81,10 @@ class ServerDelegate : public Daemon::ServerDelegate {
   }
 
  private:
-  void StartController(int exit_notifier_fd, scoped_ptr<Socket> client_socket) {
+  void StartController(int exit_notifier_fd,
+                       std::unique_ptr<Socket> client_socket) {
     DCHECK(!controller_.get());
-    scoped_ptr<DeviceController> controller(
+    std::unique_ptr<DeviceController> controller(
         DeviceController::Create(kUnixDomainSocketPath, exit_notifier_fd));
     if (!controller.get()) {
       client_socket->WriteString(
@@ -97,8 +99,8 @@ class ServerDelegate : public Daemon::ServerDelegate {
     client_socket->Close();
   }
 
-  scoped_ptr<DeviceController> controller_;
-  scoped_ptr<base::Thread> controller_thread_;
+  std::unique_ptr<DeviceController> controller_;
+  std::unique_ptr<base::Thread> controller_thread_;
   bool initialized_;
 };
 

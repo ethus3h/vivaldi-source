@@ -12,14 +12,13 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/history/core/browser/history_types.h"
 
-class GURL;
-
 namespace history_report {
 
 // Represents a single delta file entry with additional data.
 class DeltaFileEntryWithData {
  public:
   explicit DeltaFileEntryWithData(DeltaFileEntry entry);
+  DeltaFileEntryWithData(const DeltaFileEntryWithData& other);
   ~DeltaFileEntryWithData();
 
   // Returns sequence number of this delta file entry.

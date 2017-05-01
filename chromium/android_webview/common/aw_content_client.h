@@ -23,6 +23,7 @@ std::string GetExtraOSUserAgentInfo();
 class AwContentClient : public content::ContentClient {
  public:
   // ContentClient implementation.
+  void AddAdditionalSchemes(Schemes* schemes) override;
   std::string GetProduct() const override;
   std::string GetUserAgent() const override;
   base::string16 GetLocalizedString(int message_id) const override;
@@ -30,8 +31,10 @@ class AwContentClient : public content::ContentClient {
       int resource_id,
       ui::ScaleFactor scale_factor) const override;
   bool CanSendWhileSwappedOut(const IPC::Message* message) override;
-
   void SetGpuInfo(const gpu::GPUInfo& gpu_info) override;
+  bool UsingSynchronousCompositing() override;
+  media::MediaClientAndroid* GetMediaClientAndroid() override;
+
   const std::string& gpu_fingerprint() const { return gpu_fingerprint_; }
 
  private:

@@ -1,7 +1,4 @@
-// Copyright (c) 2013 Vivaldi Technologies AS. All rights reserved
-// Copyright 2013 The Chromium Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+// Copyright (c) 2013-2016 Vivaldi Technologies AS. All rights reserved
 
 #ifndef VIVALDI_IMPORTER_IMPORTED_NOTES_ENTRY_H_
 #define VIVALDI_IMPORTER_IMPORTED_NOTES_ENTRY_H_
@@ -13,17 +10,19 @@
 #include "url/gurl.h"
 
 struct ImportedNotesEntry {
-	ImportedNotesEntry();
-	~ImportedNotesEntry();
+ public:
+  ImportedNotesEntry();
+  ImportedNotesEntry(const ImportedNotesEntry &);
+  ~ImportedNotesEntry();
+  bool operator==(const ImportedNotesEntry& other) const;
 
-	bool operator==(const ImportedNotesEntry& other) const;
+  bool is_folder = false;
+  GURL url;
+  std::vector<base::string16> path;
+  base::string16 title;
+  base::string16 content;
+  base::Time creation_time;
 
-	bool is_folder;
-	GURL url;
-	std::vector<base::string16> path;
-	base::string16 title;
-	base::string16 content;
-	base::Time creation_time;
 };
 
 #endif  // VIVALDI_IMPORTER_IMPORTED_NOTES_ENTRY_H_

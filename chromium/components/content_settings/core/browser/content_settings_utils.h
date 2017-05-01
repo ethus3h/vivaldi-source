@@ -5,11 +5,11 @@
 #ifndef COMPONENTS_CONTENT_SETTINGS_CORE_BROWSER_CONTENT_SETTINGS_UTILS_H_
 #define COMPONENTS_CONTENT_SETTINGS_CORE_BROWSER_CONTENT_SETTINGS_UTILS_H_
 
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
@@ -18,13 +18,9 @@ namespace base {
 class Value;
 }
 
-class GURL;
 class HostContentSettingsMap;
 
 namespace content_settings {
-
-class ProviderInterface;
-class RuleIterator;
 
 typedef std::pair<ContentSettingsPattern, ContentSettingsPattern> PatternPair;
 
@@ -79,12 +75,15 @@ std::string CreatePatternString(
 
 // Returns a |base::Value*| representation of |setting| if |setting| is
 // a valid content setting. Otherwise, returns a nullptr.
-scoped_ptr<base::Value> ContentSettingToValue(ContentSetting setting);
+std::unique_ptr<base::Value> ContentSettingToValue(ContentSetting setting);
 
 // Populates |rules| with content setting rules for content types that are
 // handled by the renderer.
 void GetRendererContentSettingRules(const HostContentSettingsMap* map,
                                     RendererContentSettingRules* rules);
+
+// Returns true if setting |a| is more permissive than setting |b|.
+bool IsMorePermissive(ContentSetting a, ContentSetting b);
 
 }  // namespace content_settings
 

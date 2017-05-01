@@ -4,6 +4,9 @@
 
 #include "content/renderer/gpu/queue_message_swap_promise.h"
 
+#include "base/command_line.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/renderer/render_thread.h"
 #include "content/renderer/gpu/frame_swap_message_queue.h"
 #include "ipc/ipc_sync_message_filter.h"
 
@@ -40,7 +43,7 @@ void QueueMessageSwapPromise::DidActivate() {
   // The OutputSurface will take care of the Drain+Send.
 }
 
-void QueueMessageSwapPromise::DidSwap(cc::CompositorFrameMetadata* metadata) {
+void QueueMessageSwapPromise::WillSwap(cc::CompositorFrameMetadata* metadata) {
 #if DCHECK_IS_ON()
   DCHECK(!completed_);
 #endif
@@ -49,16 +52,20 @@ void QueueMessageSwapPromise::DidSwap(cc::CompositorFrameMetadata* metadata) {
   PromiseCompleted();
 }
 
-void QueueMessageSwapPromise::DidNotSwap(DidNotSwapReason reason) {
+void QueueMessageSwapPromise::DidSwap() {}
+
+cc::SwapPromise::DidNotSwapAction QueueMessageSwapPromise::DidNotSwap(
+    DidNotSwapReason reason) {
 #if DCHECK_IS_ON()
   DCHECK(!completed_);
 #endif
-  std::vector<scoped_ptr<IPC::Message>> messages;
+  std::vector<std::unique_ptr<IPC::Message>> messages;
   message_queue_->DidNotSwap(source_frame_number_, reason, &messages);
   for (auto& msg : messages) {
     message_sender_->Send(msg.release());
   }
   PromiseCompleted();
+  return DidNotSwapAction::BREAK_PROMISE;
 }
 
 void QueueMessageSwapPromise::PromiseCompleted() {

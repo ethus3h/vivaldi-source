@@ -18,14 +18,15 @@ const char kReturnVariationInfo[] = "returnVariationInfo";
 
 // Strings.
 const char kApplicationLabel[] = "application_label";
-const char kBlinkVersion[] = "blink_version";
-const char kBuildID[] = "build_id";
-const char kBuildIDName[] = "build_id_name";
+const char kARC[] = "arc_label";
 const char kCL[] = "cl";
 const char kCommandLine[] = "command_line";
 const char kCommandLineName[] = "command_line_name";
 const char kCompany[] = "company";
 const char kCopyright[] = "copyright";
+#if defined(OS_CHROMEOS)
+const char kCustomizationId[] = "customization_id";
+#endif
 const char kExecutablePath[] = "executable_path";
 const char kExecutablePathName[] = "executable_path_name";
 const char kFlashPlugin[] = "flash_plugin";

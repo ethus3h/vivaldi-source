@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 #include "base/at_exit.h"
@@ -21,9 +22,10 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,6 +35,7 @@
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "net/log/net_log.h"
+#include "net/log/net_log_entry.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_context.h"
@@ -81,7 +84,8 @@ class QuitDelegate : public net::URLFetcherDelegate {
 
   void OnURLFetchDownloadProgress(const net::URLFetcher* source,
                                   int64_t current,
-                                  int64_t total) override {
+                                  int64_t total,
+                                  int64_t current_network_bytes) override {
     NOTREACHED();
   }
 
@@ -107,7 +111,7 @@ class PrintingLogObserver : public net::NetLog::ThreadSafeObserver {
   }
 
   // NetLog::ThreadSafeObserver implementation:
-  void OnAddEntry(const net::NetLog::Entry& entry) override {
+  void OnAddEntry(const net::NetLogEntry& entry) override {
     // The log level of the entry is unknown, so just assume it maps
     // to VLOG(1).
     if (!VLOG_IS_ON(1))
@@ -119,7 +123,7 @@ class PrintingLogObserver : public net::NetLog::ThreadSafeObserver {
         net::NetLog::EventTypeToString(entry.type());
     const char* const event_phase =
         net::NetLog::EventPhaseToString(entry.phase());
-    scoped_ptr<base::Value> params(entry.ParametersToValue());
+    std::unique_ptr<base::Value> params(entry.ParametersToValue());
     std::string params_str;
     if (params.get()) {
       base::JSONWriter::Write(*params, &params_str);
@@ -135,8 +139,8 @@ class PrintingLogObserver : public net::NetLog::ThreadSafeObserver {
 };
 
 // Builds a URLRequestContext assuming there's only a single loop.
-scoped_ptr<net::URLRequestContext>
-BuildURLRequestContext(net::NetLog* net_log) {
+std::unique_ptr<net::URLRequestContext> BuildURLRequestContext(
+    net::NetLog* net_log) {
   net::URLRequestContextBuilder builder;
 #if defined(OS_LINUX)
   // On Linux, use a fixed ProxyConfigService, since the default one
@@ -144,9 +148,9 @@ BuildURLRequestContext(net::NetLog* net_log) {
   //
   // TODO(akalin): Remove this once http://crbug.com/146421 is fixed.
   builder.set_proxy_config_service(
-      make_scoped_ptr(new net::ProxyConfigServiceFixed(net::ProxyConfig())));
+      base::MakeUnique<net::ProxyConfigServiceFixed>(net::ProxyConfig()));
 #endif
-  scoped_ptr<net::URLRequestContext> context(builder.Build());
+  std::unique_ptr<net::URLRequestContext> context(builder.Build());
   context->set_net_log(net_log);
   return context;
 }
@@ -230,9 +234,9 @@ int main(int argc, char* argv[]) {
                                 net::NetLogCaptureMode::IncludeSocketBytes());
 
   QuitDelegate delegate;
-  scoped_ptr<net::URLFetcher> fetcher =
+  std::unique_ptr<net::URLFetcher> fetcher =
       net::URLFetcher::Create(url, net::URLFetcher::HEAD, &delegate);
-  scoped_ptr<net::URLRequestContext> url_request_context(
+  std::unique_ptr<net::URLRequestContext> url_request_context(
       BuildURLRequestContext(&net_log));
   fetcher->SetRequestContext(
       // Since there's only a single thread, there's no need to worry
@@ -251,7 +255,7 @@ int main(int argc, char* argv[]) {
       start_ticks.ToInternalValue());
 
   // |delegate| quits |main_loop| when the request is done.
-  main_loop.Run();
+  base::RunLoop().Run();
 
   const base::Time end_time = base::Time::Now();
   const base::TimeTicks end_ticks = base::TimeTicks::Now();
@@ -283,7 +287,7 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  void* iter = NULL;
+  size_t iter = 0;
   std::string date_header;
   while (headers->EnumerateHeader(&iter, "Date", &date_header)) {
     std::printf("Got date header: %s\n", date_header.c_str());

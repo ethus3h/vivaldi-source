@@ -152,7 +152,7 @@ void CertLoader::LoadCertificates() {
 }
 
 void CertLoader::UpdateCertificates(
-    scoped_ptr<net::CertificateList> cert_list) {
+    std::unique_ptr<net::CertificateList> cert_list) {
   CHECK(thread_checker_.CalledOnValidThread());
   DCHECK(certificates_update_running_);
   VLOG(1) << "UpdateCertificates: " << cert_list->size();
@@ -170,24 +170,12 @@ void CertLoader::UpdateCertificates(
 }
 
 void CertLoader::NotifyCertificatesLoaded(bool initial_load) {
-  FOR_EACH_OBSERVER(Observer, observers_,
-                    OnCertificatesLoaded(*cert_list_, initial_load));
+  for (auto& observer : observers_)
+    observer.OnCertificatesLoaded(*cert_list_, initial_load);
 }
 
-void CertLoader::OnCACertChanged(const net::X509Certificate* cert) {
-  // This is triggered when a CA certificate is modified.
-  VLOG(1) << "OnCACertChanged";
-  LoadCertificates();
-}
-
-void CertLoader::OnCertAdded(const net::X509Certificate* cert) {
-  // This is triggered when a client certificate is added.
-  VLOG(1) << "OnCertAdded";
-  LoadCertificates();
-}
-
-void CertLoader::OnCertRemoved(const net::X509Certificate* cert) {
-  VLOG(1) << "OnCertRemoved";
+void CertLoader::OnCertDBChanged(const net::X509Certificate* cert) {
+  VLOG(1) << "OnCertDBChanged";
   LoadCertificates();
 }
 

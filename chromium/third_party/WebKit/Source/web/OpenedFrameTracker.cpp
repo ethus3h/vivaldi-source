@@ -9,52 +9,30 @@
 
 namespace blink {
 
-OpenedFrameTracker::OpenedFrameTracker()
-{
+OpenedFrameTracker::OpenedFrameTracker() {}
+
+OpenedFrameTracker::~OpenedFrameTracker() {
+  DCHECK(isEmpty());
 }
 
-OpenedFrameTracker::~OpenedFrameTracker()
-{
-#if !ENABLE(OILPAN)
-    // Oilpan takes care of clearing weak m_opener fields during GC.
-    transferTo(nullptr);
-#endif
+bool OpenedFrameTracker::isEmpty() const {
+  return m_openedFrames.isEmpty();
 }
 
-bool OpenedFrameTracker::isEmpty() const
-{
-    return m_openedFrames.isEmpty();
+void OpenedFrameTracker::add(WebFrame* frame) {
+  m_openedFrames.add(frame);
 }
 
-void OpenedFrameTracker::add(WebFrame* frame)
-{
-    m_openedFrames.add(frame);
+void OpenedFrameTracker::remove(WebFrame* frame) {
+  m_openedFrames.remove(frame);
 }
 
-void OpenedFrameTracker::remove(WebFrame* frame)
-{
-    m_openedFrames.remove(frame);
+void OpenedFrameTracker::transferTo(WebFrame* opener) {
+  // Copy the set of opened frames, since changing the owner will mutate this
+  // set.
+  HashSet<WebFrame*> frames(m_openedFrames);
+  for (WebFrame* frame : frames)
+    frame->setOpener(opener);
 }
 
-void OpenedFrameTracker::transferTo(WebFrame* opener)
-{
-    // Copy the set of opened frames, since changing the owner will mutate this set.
-    HashSet<WebFrame*> frames(m_openedFrames);
-    for (WebFrame* frame : frames)
-        frame->setOpener(opener);
-}
-
-template <typename VisitorDispatcher>
-ALWAYS_INLINE void OpenedFrameTracker::traceFramesImpl(VisitorDispatcher visitor)
-{
-#if ENABLE(OILPAN)
-    HashSet<WebFrame*>::iterator end = m_openedFrames.end();
-    for (HashSet<WebFrame*>::iterator it = m_openedFrames.begin(); it != end; ++it)
-        WebFrame::traceFrame(visitor, *it);
-#endif
-}
-
-void OpenedFrameTracker::traceFrames(Visitor* visitor) { traceFramesImpl(visitor); }
-void OpenedFrameTracker::traceFrames(InlinedGlobalMarkingVisitor visitor) { traceFramesImpl(visitor); }
-
-} // namespace blink
+}  // namespace blink

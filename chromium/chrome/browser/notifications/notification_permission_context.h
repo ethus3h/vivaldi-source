@@ -8,27 +8,27 @@
 #include "base/gtest_prod_util.h"
 #include "chrome/browser/permissions/permission_context_base.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "notifications/notification_permission_context_extensions.h"
 
 class GURL;
 class Profile;
 
 class NotificationPermissionContext : public PermissionContextBase {
  public:
-  explicit NotificationPermissionContext(Profile* profile);
+  NotificationPermissionContext(Profile* profile,
+                                content::PermissionType permission_type);
   ~NotificationPermissionContext() override;
 
   // PermissionContextBase implementation.
+  ContentSetting GetPermissionStatusInternal(
+      const GURL& requesting_origin,
+      const GURL& embedding_origin) const override;
   void ResetPermission(const GURL& requesting_origin,
                        const GURL& embedder_origin) override;
   void CancelPermissionRequest(content::WebContents* web_contents,
                                const PermissionRequestID& id) override;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(NotificationPermissionContextTest,
-                           IgnoresEmbedderOrigin);
-  FRIEND_TEST_ALL_PREFIXES(NotificationPermissionContextTest,
-                           NoSecureOriginRequirement);
+  friend class NotificationPermissionContextTest;
 
   // PermissionContextBase implementation.
   void DecidePermission(content::WebContents* web_contents,
@@ -41,9 +41,6 @@ class NotificationPermissionContext : public PermissionContextBase {
                             const GURL& embedder_origin,
                             ContentSetting content_setting) override;
   bool IsRestrictedToSecureOrigins() const override;
-
-  // This must only be accessed from the UI thread.
-  NotificationPermissionContextExtensions extensions_context_;
 
   base::WeakPtrFactory<NotificationPermissionContext> weak_factory_ui_thread_;
 };

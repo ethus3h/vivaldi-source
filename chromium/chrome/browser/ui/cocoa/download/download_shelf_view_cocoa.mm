@@ -6,16 +6,18 @@
 
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/ui/cocoa/hover_close_button.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #import "ui/base/cocoa/nsview_additions.h"
+#include "ui/base/material_design/material_design_controller.h"
 
 @implementation DownloadShelfView
 
 // For programmatic instantiations in unit tests.
 - (id)initWithFrame:(NSRect)frameRect {
   if ((self = [super initWithFrame:frameRect])) {
-    [self setShowsDivider:NO];
+    self.dividerEdge = NSMaxYEdge;
   }
   return self;
 }
@@ -23,18 +25,9 @@
 // For nib instantiations in production.
 - (id)initWithCoder:(NSCoder*)decoder {
   if ((self = [super initWithCoder:decoder])) {
-    [self setShowsDivider:NO];
+    self.dividerEdge = NSMaxYEdge;
   }
   return self;
-}
-
-- (NSColor*)strokeColor {
-  BOOL isActive = [[self window] isMainWindow];
-  const ui::ThemeProvider* themeProvider = [[self window] themeProvider];
-  return themeProvider ? themeProvider->GetNSColor(
-      isActive ? ThemeProperties::COLOR_TOOLBAR_STROKE :
-                 ThemeProperties::COLOR_TOOLBAR_STROKE_INACTIVE) :
-      [NSColor blackColor];
 }
 
 - (NSPoint)patternPhase {
@@ -48,17 +41,10 @@
 - (void)drawRect:(NSRect)dirtyRect {
   [self drawBackground:dirtyRect];
 
-  // Draw top stroke
+  // Draw the top highlight
   NSRect borderRect, contentRect;
   NSDivideRect([self bounds], &borderRect, &contentRect, [self cr_lineWidth],
                NSMaxYEdge);
-  if (NSIntersectsRect(borderRect, dirtyRect)) {
-    [[self strokeColor] set];
-    NSRectFillUsingOperation(NSIntersectionRect(borderRect, dirtyRect),
-                             NSCompositeSourceOver);
-  }
-
-  // Draw the top highlight
   borderRect.origin.y -= [self cr_lineWidth];
   if (NSIntersectsRect(borderRect, dirtyRect)) {
     const ui::ThemeProvider* themeProvider = [[self window] themeProvider];
@@ -74,6 +60,14 @@
       }
     }
   }
+}
+
+- (void)viewWillDraw {
+  if (const ui::ThemeProvider* themeProvider = [[self window] themeProvider]) {
+    [closeButton_
+        setIconColor:themeProvider->GetColor(ThemeProperties::COLOR_TAB_TEXT)];
+  }
+  [super viewWillDraw];
 }
 
 // Mouse down events on the download shelf should not allow dragging the parent

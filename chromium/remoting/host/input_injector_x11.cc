@@ -19,12 +19,15 @@
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversion_utils.h"
 #include "build/build_config.h"
 #include "remoting/base/logging.h"
 #include "remoting/host/clipboard.h"
 #include "remoting/host/linux/unicode_to_keysym.h"
+#include "remoting/host/linux/x11_character_injector.h"
+#include "remoting/host/linux/x11_keyboard_impl.h"
 #include "remoting/host/linux/x11_util.h"
 #include "remoting/proto/internal.pb.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
@@ -45,65 +48,15 @@ using protocol::TextEvent;
 using protocol::MouseEvent;
 using protocol::TouchEvent;
 
-bool FindKeycodeForKeySym(Display* display,
-                          KeySym key_sym,
-                          uint32_t* keycode,
-                          uint32_t* modifiers) {
-  *keycode = XKeysymToKeycode(display, key_sym);
-
-  const uint32_t kModifiersToTry[] = {
-    0,
-    ShiftMask,
-    Mod2Mask,
-    Mod3Mask,
-    Mod4Mask,
-    ShiftMask | Mod2Mask,
-    ShiftMask | Mod3Mask,
-    ShiftMask | Mod4Mask,
-  };
-
-  // TODO(sergeyu): Is there a better way to find modifiers state?
-  for (size_t i = 0; i < arraysize(kModifiersToTry); ++i) {
-    unsigned long key_sym_with_mods;
-    if (XkbLookupKeySym(display, *keycode, kModifiersToTry[i], nullptr,
-                        &key_sym_with_mods) &&
-        key_sym_with_mods == key_sym) {
-      *modifiers = kModifiersToTry[i];
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// Finds a keycode and set of modifiers that generate character with the
-// specified |code_point|.
-bool FindKeycodeForUnicode(Display* display,
-                          uint32_t code_point,
-                          uint32_t* keycode,
-                          uint32_t* modifiers) {
-  std::vector<uint32_t> keysyms;
-  GetKeySymsForUnicode(code_point, &keysyms);
-
-  for (std::vector<uint32_t>::iterator it = keysyms.begin();
-       it != keysyms.end(); ++it) {
-    if (FindKeycodeForKeySym(display, *it, keycode, modifiers)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 bool IsModifierKey(ui::DomCode dom_code) {
   return dom_code == ui::DomCode::CONTROL_LEFT ||
          dom_code == ui::DomCode::SHIFT_LEFT ||
          dom_code == ui::DomCode::ALT_LEFT ||
-         dom_code == ui::DomCode::OS_LEFT ||
+         dom_code == ui::DomCode::META_LEFT ||
          dom_code == ui::DomCode::CONTROL_RIGHT ||
          dom_code == ui::DomCode::SHIFT_RIGHT ||
          dom_code == ui::DomCode::ALT_RIGHT ||
-         dom_code == ui::DomCode::OS_RIGHT;
+         dom_code == ui::DomCode::META_RIGHT;
 }
 
 // Pixel-to-wheel-ticks conversion ratio used by GTK.
@@ -129,7 +82,8 @@ class InputInjectorX11 : public InputInjector {
   void InjectTouchEvent(const TouchEvent& event) override;
 
   // InputInjector interface.
-  void Start(scoped_ptr<protocol::ClipboardStub> client_clipboard) override;
+  void Start(
+      std::unique_ptr<protocol::ClipboardStub> client_clipboard) override;
 
  private:
   // The actual implementation resides in InputInjectorX11::Core class.
@@ -148,7 +102,7 @@ class InputInjectorX11 : public InputInjector {
     void InjectMouseEvent(const MouseEvent& event);
 
     // Mirrors the InputInjector interface.
-    void Start(scoped_ptr<protocol::ClipboardStub> client_clipboard);
+    void Start(std::unique_ptr<protocol::ClipboardStub> client_clipboard);
 
     void Stop();
 
@@ -196,7 +150,9 @@ class InputInjectorX11 : public InputInjector {
     PointTransformer point_transformer_;
 #endif
 
-    scoped_ptr<Clipboard> clipboard_;
+    std::unique_ptr<Clipboard> clipboard_;
+
+    std::unique_ptr<X11CharacterInjector> character_injector_;
 
     bool saved_auto_repeat_enabled_;
 
@@ -242,7 +198,7 @@ void InputInjectorX11::InjectTouchEvent(const TouchEvent& event) {
 }
 
 void InputInjectorX11::Start(
-    scoped_ptr<protocol::ClipboardStub> client_clipboard) {
+    std::unique_ptr<protocol::ClipboardStub> client_clipboard) {
   core_->Start(std::move(client_clipboard));
 }
 
@@ -363,21 +319,8 @@ void InputInjectorX11::Core::InjectTextEvent(const TextEvent& event) {
             text.c_str(), text.size(), &index, &code_point)) {
       continue;
     }
-
-    uint32_t keycode;
-    uint32_t modifiers;
-    if (!FindKeycodeForUnicode(display_, code_point, &keycode, &modifiers))
-      continue;
-
-    XkbLockModifiers(display_, XkbUseCoreKbd,  modifiers, modifiers);
-
-    XTestFakeKeyEvent(display_, keycode, True, CurrentTime);
-    XTestFakeKeyEvent(display_, keycode, False, CurrentTime);
-
-    XkbLockModifiers(display_, XkbUseCoreKbd, modifiers, 0);
+    character_injector_->Inject(code_point);
   }
-
-  XFlush(display_);
 }
 
 InputInjectorX11::Core::~Core() {
@@ -522,7 +465,8 @@ void InputInjectorX11::Core::InitMouseButtonMap() {
   // Note that if a user has a global mapping that completely disables a button
   // (by assigning 0 to it), we won't be able to inject it.
   int num_buttons = XGetPointerMapping(display_, nullptr, 0);
-  scoped_ptr<unsigned char[]> pointer_mapping(new unsigned char[num_buttons]);
+  std::unique_ptr<unsigned char[]> pointer_mapping(
+      new unsigned char[num_buttons]);
   num_buttons = XGetPointerMapping(display_, pointer_mapping.get(),
                                    num_buttons);
   for (int i = 0; i < kNumPointerButtons; i++) {
@@ -579,7 +523,8 @@ void InputInjectorX11::Core::InitMouseButtonMap() {
 
   int num_device_buttons =
       XGetDeviceButtonMapping(display_, device, nullptr, 0);
-  scoped_ptr<unsigned char[]> button_mapping(new unsigned char[num_buttons]);
+  std::unique_ptr<unsigned char[]> button_mapping(
+      new unsigned char[num_buttons]);
   for (int i = 0; i < num_device_buttons; i++) {
     button_mapping[i] = i + 1;
   }
@@ -620,7 +565,7 @@ int InputInjectorX11::Core::VerticalScrollWheelToX11ButtonNumber(int dy) {
 }
 
 void InputInjectorX11::Core::Start(
-    scoped_ptr<protocol::ClipboardStub> client_clipboard) {
+    std::unique_ptr<protocol::ClipboardStub> client_clipboard) {
   if (!task_runner_->BelongsToCurrentThread()) {
     task_runner_->PostTask(
         FROM_HERE,
@@ -631,6 +576,9 @@ void InputInjectorX11::Core::Start(
   InitMouseButtonMap();
 
   clipboard_->Start(std::move(client_clipboard));
+
+  character_injector_.reset(
+      new X11CharacterInjector(base::MakeUnique<X11KeyboardImpl>(display_)));
 }
 
 void InputInjectorX11::Core::Stop() {
@@ -640,15 +588,16 @@ void InputInjectorX11::Core::Stop() {
   }
 
   clipboard_.reset();
+  character_injector_.reset();
 }
 
 }  // namespace
 
 // static
-scoped_ptr<InputInjector> InputInjector::Create(
+std::unique_ptr<InputInjector> InputInjector::Create(
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-  scoped_ptr<InputInjectorX11> injector(
+  std::unique_ptr<InputInjectorX11> injector(
       new InputInjectorX11(main_task_runner));
   if (!injector->Init())
     return nullptr;

@@ -38,7 +38,7 @@ void PreviewModeClient::ScrollToPage(int page) {
 }
 
 void PreviewModeClient::NavigateTo(const std::string& url,
-                                   bool open_in_new_tab) {
+                                   WindowOpenDisposition disposition) {
   NOTREACHED();
 }
 
@@ -138,12 +138,15 @@ void PreviewModeClient::DocumentLoadFailed() {
 }
 
 pp::Instance* PreviewModeClient::GetPluginInstance() {
-  NOTREACHED();
-  return NULL;
+  return nullptr;
 }
 
 void PreviewModeClient::DocumentHasUnsupportedFeature(
     const std::string& feature) {
+  NOTREACHED();
+}
+
+void PreviewModeClient::FontSubstituted() {
   NOTREACHED();
 }
 

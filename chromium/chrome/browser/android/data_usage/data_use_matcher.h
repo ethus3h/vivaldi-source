@@ -5,20 +5,18 @@
 #ifndef CHROME_BROWSER_ANDROID_DATA_USAGE_DATA_USE_MATCHER_H_
 #define CHROME_BROWSER_ANDROID_DATA_USAGE_DATA_USE_MATCHER_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
-#include "chrome/browser/android/data_usage/data_use_tab_model.h"
-
 namespace base {
-class SingleThreadTaskRunner;
 class TickClock;
 }
 
@@ -32,17 +30,22 @@ namespace chrome {
 
 namespace android {
 
-class ExternalDataUseObserver;
-
 // DataUseMatcher stores the matching URL patterns and package names along with
 // the labels. It also provides functionality to get the matching label for a
-// given URL or package. DataUseMatcher is not thread safe.
+// given URL or package. DataUseMatcher is not thread safe. It is created on IO
+// thread, but immediately moved to the UI thread, and afterwards accessible
+// only on the UI thread.
 class DataUseMatcher {
  public:
+  // |on_tracking_label_removed_callback| is the callback to be run when a
+  // tracking label is removed from the list of matching rules.
+  // |on_matching_rules_fetched_callback| is the callback to be run after
+  // matching rules are fetched, indicating if at least one valid matching rule
+  // is available.
   DataUseMatcher(
-      const base::WeakPtr<DataUseTabModel>& data_use_tab_model,
-      const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner,
-      const base::WeakPtr<ExternalDataUseObserver>& external_data_use_observer,
+      const base::Callback<void(const std::string&)>&
+          on_tracking_label_removed_callback,
+      const base::Callback<void(bool)>& on_matching_rules_fetched_callback,
       const base::TimeDelta& default_matching_rule_expiration_duration);
 
   ~DataUseMatcher();
@@ -66,12 +69,12 @@ class DataUseMatcher {
   bool MatchesAppPackageName(const std::string& app_package_name,
                              std::string* label) const WARN_UNUSED_RESULT;
 
-  // Fetches the matching rules asynchronously from
-  // |external_data_use_observer_|.
-  void FetchMatchingRules();
+  // Returns true if there is any matching rule. HasRules may return true even
+  // if all rules are expired.
+  bool HasRules() const;
 
-  // Returns true if there is any valid matching rule.
-  bool HasValidRules() const;
+  // Returns true if there is any valid matching rule with label |label|.
+  bool HasValidRuleWithLabel(const std::string& label) const;
 
  private:
   friend class DataUseMatcherTest;
@@ -86,7 +89,7 @@ class DataUseMatcher {
   class MatchingRule {
    public:
     MatchingRule(const std::string& app_package_name,
-                 scoped_ptr<re2::RE2> pattern,
+                 std::unique_ptr<re2::RE2> pattern,
                  const std::string& label,
                  const base::TimeTicks& expiration);
     ~MatchingRule();
@@ -101,7 +104,7 @@ class DataUseMatcher {
     const std::string app_package_name_;
 
     // RE2 pattern to match against URLs.
-    scoped_ptr<re2::RE2> pattern_;
+    std::unique_ptr<re2::RE2> pattern_;
 
     // Opaque label that uniquely identifies this matching rule.
     const std::string label_;
@@ -125,24 +128,21 @@ class DataUseMatcher {
 
   base::ThreadChecker thread_checker_;
 
-  std::vector<scoped_ptr<MatchingRule>> matching_rules_;
-
-  // |data_use_tab_model_| is notified if a label is removed from the set of
-  // matching labels.
-  base::WeakPtr<DataUseTabModel> data_use_tab_model_;
+  std::vector<std::unique_ptr<MatchingRule>> matching_rules_;
 
   // Default expiration duration of a matching rule, if expiration is not
   // specified in the rule.
   const base::TimeDelta default_matching_rule_expiration_duration_;
 
   // TickClock used for obtaining the current time.
-  scoped_ptr<base::TickClock> tick_clock_;
-  // |io_task_runner_| is used to call ExternalDataUseObserver methods on
-  // IO thread.
-  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
+  std::unique_ptr<base::TickClock> tick_clock_;
 
-  // |external_data_use_observer_| is notified when matching rules are fetched.
-  base::WeakPtr<ExternalDataUseObserver> external_data_use_observer_;
+  // Callback to be run when a label is removed from the set of matching labels.
+  const base::Callback<void(const std::string&)>
+      on_tracking_label_removed_callback_;
+
+  // Callback to be run when matching rules are fetched.
+  const base::Callback<void(bool)> on_matching_rules_fetched_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(DataUseMatcher);
 };

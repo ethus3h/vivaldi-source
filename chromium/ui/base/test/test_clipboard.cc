@@ -5,6 +5,7 @@
 #include "ui/base/test/test_clipboard.h"
 
 #include <stddef.h>
+#include "base/memory/ptr_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 
@@ -21,9 +22,11 @@ Clipboard* TestClipboard::CreateForCurrentThread() {
   base::AutoLock lock(Clipboard::clipboard_map_lock_.Get());
   Clipboard* clipboard = new TestClipboard;
   Clipboard::clipboard_map_.Get()[base::PlatformThread::CurrentId()] =
-      clipboard;
+      base::WrapUnique(clipboard);
   return clipboard;
 }
+
+void TestClipboard::OnPreShutdown() {}
 
 uint64_t TestClipboard::GetSequenceNumber(ClipboardType type) const {
   return GetStore(type).sequence_number;
@@ -181,6 +184,8 @@ void TestClipboard::WriteData(const FormatType& format,
 
 TestClipboard::DataStore::DataStore() : sequence_number(0) {
 }
+
+TestClipboard::DataStore::DataStore(const DataStore& other) = default;
 
 TestClipboard::DataStore::~DataStore() {
 }

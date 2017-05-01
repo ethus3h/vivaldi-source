@@ -7,12 +7,14 @@
 #include <set>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/test/test_simple_task_runner.h"
 #include "content/browser/indexed_db/indexed_db_active_blob_registry.h"
 #include "content/browser/indexed_db/indexed_db_backing_store.h"
 #include "content/browser/indexed_db/indexed_db_fake_backing_store.h"
 #include "content/browser/indexed_db/mock_indexed_db_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -22,35 +24,35 @@ class RegistryTestMockFactory : public MockIndexedDBFactory {
  public:
   RegistryTestMockFactory() : duplicate_calls_(false) {}
 
-  void ReportOutstandingBlobs(const GURL& origin_url,
+  void ReportOutstandingBlobs(const url::Origin& origin,
                               bool blobs_outstanding) override {
     if (blobs_outstanding) {
-      if (origins_.count(origin_url)) {
+      if (origins_.count(origin)) {
         duplicate_calls_ = true;
       } else {
-        origins_.insert(origin_url);
+        origins_.insert(origin);
       }
     } else {
-      if (!origins_.count(origin_url)) {
+      if (!origins_.count(origin)) {
         duplicate_calls_ = true;
       } else {
-        origins_.erase(origin_url);
+        origins_.erase(origin);
       }
     }
   }
 
   bool CheckNoOriginsInUse() const {
-    return !duplicate_calls_ && !origins_.size();
+    return !duplicate_calls_ && origins_.empty();
   }
 
-  bool CheckSingleOriginInUse(const GURL& origin) const {
+  bool CheckSingleOriginInUse(const url::Origin& origin) const {
     return !duplicate_calls_ && origins_.size() == 1 && origins_.count(origin);
   }
 
  private:
   ~RegistryTestMockFactory() override {}
 
-  std::set<GURL> origins_;
+  std::set<url::Origin> origins_;
   bool duplicate_calls_;
 
   DISALLOW_COPY_AND_ASSIGN(RegistryTestMockFactory);
@@ -106,7 +108,8 @@ class IndexedDBActiveBlobRegistryTest : public testing::Test {
         factory_(new RegistryTestMockFactory),
         backing_store_(
             new MockIDBBackingStore(factory_.get(), task_runner_.get())),
-        registry_(new IndexedDBActiveBlobRegistry(backing_store_.get())) {}
+        registry_(base::MakeUnique<IndexedDBActiveBlobRegistry>(
+            backing_store_.get())) {}
 
   void RunUntilIdle() { task_runner_->RunUntilIdle(); }
   RegistryTestMockFactory* factory() const { return factory_.get(); }
@@ -117,7 +120,7 @@ class IndexedDBActiveBlobRegistryTest : public testing::Test {
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   scoped_refptr<RegistryTestMockFactory> factory_;
   scoped_refptr<MockIDBBackingStore> backing_store_;
-  scoped_ptr<IndexedDBActiveBlobRegistry> registry_;
+  std::unique_ptr<IndexedDBActiveBlobRegistry> registry_;
 
   DISALLOW_COPY_AND_ASSIGN(IndexedDBActiveBlobRegistryTest);
 };
@@ -144,7 +147,7 @@ TEST_F(IndexedDBActiveBlobRegistryTest, SimpleUse) {
   add_ref.Run();
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   release.Run(base::FilePath());
@@ -166,13 +169,13 @@ TEST_F(IndexedDBActiveBlobRegistryTest, DeleteWhileInUse) {
   add_ref.Run();
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   EXPECT_TRUE(registry()->MarkDeletedCheckIfUsed(kDatabaseId0, kBlobKey0));
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   release.Run(base::FilePath());
@@ -207,7 +210,7 @@ TEST_F(IndexedDBActiveBlobRegistryTest, MultipleBlobs) {
   add_ref_01.Run();
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   release_00.Run(base::FilePath());
@@ -215,20 +218,20 @@ TEST_F(IndexedDBActiveBlobRegistryTest, MultipleBlobs) {
   add_ref_11.Run();
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   EXPECT_TRUE(registry()->MarkDeletedCheckIfUsed(kDatabaseId0, kBlobKey1));
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   release_01.Run(base::FilePath());
   release_11.Run(base::FilePath());
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckSingleUnusedBlob(kDatabaseId0, kBlobKey1));
 
   release_10.Run(base::FilePath());
@@ -254,7 +257,7 @@ TEST_F(IndexedDBActiveBlobRegistryTest, ForceShutdown) {
   add_ref_0.Run();
   RunUntilIdle();
 
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   registry()->ForceShutdown();
@@ -263,7 +266,7 @@ TEST_F(IndexedDBActiveBlobRegistryTest, ForceShutdown) {
   RunUntilIdle();
 
   // Nothing changes.
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 
   release_0.Run(base::FilePath());
@@ -271,7 +274,7 @@ TEST_F(IndexedDBActiveBlobRegistryTest, ForceShutdown) {
   RunUntilIdle();
 
   // Nothing changes.
-  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin_url()));
+  EXPECT_TRUE(factory()->CheckSingleOriginInUse(backing_store()->origin()));
   EXPECT_TRUE(backing_store()->CheckUnusedBlobsEmpty());
 }
 

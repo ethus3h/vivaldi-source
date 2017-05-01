@@ -91,7 +91,7 @@ bool SyncedTabDelegateAndroid::ProfileIsSupervised() const {
   return tab_contents_delegate_->ProfileIsSupervised();
 }
 
-const std::vector<const sessions::SerializedNavigationEntry*>*
+const std::vector<std::unique_ptr<const sessions::SerializedNavigationEntry>>*
 SyncedTabDelegateAndroid::GetBlockedNavigations() const {
   return tab_contents_delegate_->GetBlockedNavigations();
 }
@@ -107,10 +107,6 @@ void SyncedTabDelegateAndroid::SetSyncId(int sync_id) {
 bool SyncedTabDelegateAndroid::ShouldSync(
     sync_sessions::SyncSessionsClient* sessions_client) {
   return tab_contents_delegate_->ShouldSync(sessions_client);
-}
-
-std::string SyncedTabDelegateAndroid::GetExtData() const {
-  return web_contents_->GetExtData();
 }
 
 }  // namespace browser_sync

@@ -7,12 +7,14 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/shared_memory.h"
 #include "cc/resources/shared_bitmap_manager.h"
-#include "content/child/thread_safe_sender.h"
+#include "content/common/render_message_filter.mojom.h"
+#include "mojo/public/cpp/bindings/thread_safe_interface_ptr.h"
 
 namespace content {
 
@@ -30,23 +32,27 @@ class SharedMemoryBitmap : public cc::SharedBitmap {
 
 class ChildSharedBitmapManager : public cc::SharedBitmapManager {
  public:
-  ChildSharedBitmapManager(scoped_refptr<ThreadSafeSender> sender);
+  explicit ChildSharedBitmapManager(
+      const scoped_refptr<mojom::ThreadSafeRenderMessageFilterAssociatedPtr>&
+          render_message_filter_ptr);
   ~ChildSharedBitmapManager() override;
 
   // cc::SharedBitmapManager implementation.
-  scoped_ptr<cc::SharedBitmap> AllocateSharedBitmap(
+  std::unique_ptr<cc::SharedBitmap> AllocateSharedBitmap(
       const gfx::Size& size) override;
-  scoped_ptr<cc::SharedBitmap> GetSharedBitmapFromId(
+  std::unique_ptr<cc::SharedBitmap> GetSharedBitmapFromId(
       const gfx::Size&,
       const cc::SharedBitmapId&) override;
 
-  scoped_ptr<cc::SharedBitmap> GetBitmapForSharedMemory(
+  std::unique_ptr<cc::SharedBitmap> GetBitmapForSharedMemory(
       base::SharedMemory* mem);
-  scoped_ptr<SharedMemoryBitmap> AllocateSharedMemoryBitmap(
-      const gfx::Size& size);
 
  private:
-  scoped_refptr<ThreadSafeSender> sender_;
+  void NotifyAllocatedSharedBitmap(base::SharedMemory* memory,
+                                   const cc::SharedBitmapId& id);
+
+  scoped_refptr<mojom::ThreadSafeRenderMessageFilterAssociatedPtr>
+      render_message_filter_ptr_;
 
   DISALLOW_COPY_AND_ASSIGN(ChildSharedBitmapManager);
 };

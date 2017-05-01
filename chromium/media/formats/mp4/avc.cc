@@ -5,6 +5,7 @@
 #include "media/formats/mp4/avc.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
@@ -64,6 +65,9 @@ bool AVC::ConvertFrameToAnnexB(int length_size,
                                std::vector<uint8_t>* buffer,
                                std::vector<SubsampleEntry>* subsamples) {
   RCHECK(length_size == 1 || length_size == 2 || length_size == 4);
+  DVLOG(5) << __func__ << " length_size=" << length_size
+           << " buffer->size()=" << buffer->size()
+           << " subsamples=" << (subsamples ? subsamples->size() : 0);
 
   if (length_size == 4)
     return ConvertAVCToAnnexBInPlaceForLengthSize4(buffer);
@@ -106,7 +110,7 @@ bool AVC::InsertParamSetsAnnexB(const AVCDecoderConfigurationRecord& avc_config,
                                 std::vector<SubsampleEntry>* subsamples) {
   DCHECK(AVC::IsValidAnnexB(*buffer, *subsamples));
 
-  scoped_ptr<H264Parser> parser(new H264Parser());
+  std::unique_ptr<H264Parser> parser(new H264Parser());
   const uint8_t* start = &(*buffer)[0];
   parser->SetEncryptedStream(start, buffer->size(), *subsamples);
 
@@ -180,7 +184,7 @@ bool AVC::IsValidAnnexB(const std::vector<uint8_t>& buffer,
 bool AVC::IsValidAnnexB(const uint8_t* buffer,
                         size_t size,
                         const std::vector<SubsampleEntry>& subsamples) {
-  DVLOG(3) << __FUNCTION__;
+  DVLOG(3) << __func__;
   DCHECK(buffer);
 
   if (size == 0)
@@ -311,9 +315,9 @@ bool AVC::IsValidAnnexB(const uint8_t* buffer,
 }
 
 AVCBitstreamConverter::AVCBitstreamConverter(
-    scoped_ptr<AVCDecoderConfigurationRecord> avc_config)
+    std::unique_ptr<AVCDecoderConfigurationRecord> avc_config)
     : avc_config_(std::move(avc_config)) {
-    DCHECK(avc_config_);
+  DCHECK(avc_config_);
 }
 
 AVCBitstreamConverter::~AVCBitstreamConverter() {

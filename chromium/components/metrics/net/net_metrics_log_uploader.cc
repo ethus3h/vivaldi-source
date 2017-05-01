@@ -7,22 +7,8 @@
 #include "base/metrics/histogram_macros.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
 #include "net/base/load_flags.h"
-#include "net/base/network_change_notifier.h"
 #include "net/url_request/url_fetcher.h"
 #include "url/gurl.h"
-
-namespace {
-
-// Records the network connection type if upload was successful.
-void RecordConnectionType(int response_code) {
-  if (response_code == 200) {
-    UMA_HISTOGRAM_ENUMERATION("UMA.LogUpload.ConnetionType",
-                              net::NetworkChangeNotifier::GetConnectionType(),
-                              net::NetworkChangeNotifier::CONNECTION_LAST);
-  }
-}
-
-}  // namespace
 
 namespace metrics {
 
@@ -53,9 +39,9 @@ void NetMetricsLogUploader::UploadLog(const std::string& compressed_log_data,
   DCHECK(!log_hash.empty());
   current_fetch_->AddExtraRequestHeader("X-Chrome-UMA-Log-SHA1: " + log_hash);
 
-  // We already drop cookies server-side, but we might as well strip them out
-  // client-side as well.
+  // Drop cookies and auth data.
   current_fetch_->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES |
+                               net::LOAD_DO_NOT_SEND_AUTH_DATA |
                                net::LOAD_DO_NOT_SEND_COOKIES);
   current_fetch_->Start();
 }
@@ -70,7 +56,6 @@ void NetMetricsLogUploader::OnURLFetchComplete(const net::URLFetcher* source) {
   if (response_code == net::URLFetcher::RESPONSE_CODE_INVALID)
     response_code = -1;
   current_fetch_.reset();
-  RecordConnectionType(response_code);
   on_upload_complete_.Run(response_code);
 }
 

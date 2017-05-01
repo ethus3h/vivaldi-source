@@ -8,18 +8,25 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <algorithm>
 #include <utility>
 
+#include "base/containers/small_map.h"
 #include "ui/display/util/edid_parser.h"
 
-#if !defined(DRM_MODE_CONNECTOR_DSI)
-#define DRM_MODE_CONNECTOR_DSI 16
+#if !defined(DRM_FORMAT_YV12)
+// TODO(dcastagna): after libdrm has this definition, remove it.
+#define DRM_FORMAT_YV12 fourcc_code('Y', 'V', '1', '2')
 #endif
 
 namespace ui {
 
 namespace {
+
+static const size_t kDefaultCursorWidth = 64;
+static const size_t kDefaultCursorHeight = 64;
 
 bool IsCrtcInUse(uint32_t crtc,
                  const ScopedVector<HardwareDisplayControllerInfo>& displays) {
@@ -31,16 +38,21 @@ bool IsCrtcInUse(uint32_t crtc,
   return false;
 }
 
+// Return a CRTC compatible with |connector| and not already used in |displays|.
+// If there are multiple compatible CRTCs, the one that supports the majority of
+// planes will be returned.
 uint32_t GetCrtc(int fd,
                  drmModeConnector* connector,
                  drmModeRes* resources,
                  const ScopedVector<HardwareDisplayControllerInfo>& displays) {
-  // If the connector already has an encoder try to re-use.
-  if (connector->encoder_id) {
-    ScopedDrmEncoderPtr encoder(drmModeGetEncoder(fd, connector->encoder_id));
-    if (encoder && encoder->crtc_id && !IsCrtcInUse(encoder->crtc_id, displays))
-      return encoder->crtc_id;
-  }
+  ScopedDrmPlaneResPtr plane_resources(drmModeGetPlaneResources(fd));
+  std::vector<ScopedDrmPlanePtr> planes;
+  for (uint32_t i = 0; i < plane_resources->count_planes; i++)
+    planes.emplace_back(drmModeGetPlane(fd, plane_resources->planes[i]));
+
+  DCHECK_GE(32, resources->count_crtcs);
+  uint32_t best_crtc = 0;
+  int best_crtc_planes = -1;
 
   // Try to find an encoder for the connector.
   for (int i = 0; i < connector->count_encoders; ++i) {
@@ -50,15 +62,29 @@ uint32_t GetCrtc(int fd,
 
     for (int j = 0; j < resources->count_crtcs; ++j) {
       // Check if the encoder is compatible with this CRTC
-      if (!(encoder->possible_crtcs & (1 << j)) ||
+      int crtc_bit = 1 << j;
+      if (!(encoder->possible_crtcs & crtc_bit) ||
           IsCrtcInUse(resources->crtcs[j], displays))
         continue;
 
-      return resources->crtcs[j];
+      int supported_planes = std::count_if(
+          planes.begin(), planes.end(), [crtc_bit](const ScopedDrmPlanePtr& p) {
+            return p->possible_crtcs & crtc_bit;
+          });
+
+      uint32_t assigned_crtc = 0;
+      if (connector->encoder_id == encoder->encoder_id)
+        assigned_crtc = encoder->crtc_id;
+      if (supported_planes > best_crtc_planes ||
+          (supported_planes == best_crtc_planes &&
+           assigned_crtc == resources->crtcs[j])) {
+        best_crtc_planes = supported_planes;
+        best_crtc = resources->crtcs[j];
+      }
     }
   }
 
-  return 0;
+  return best_crtc;
 }
 
 // Computes the refresh rate for the specific mode. If we have enough
@@ -77,25 +103,25 @@ float GetRefreshRate(const drmModeModeInfo& mode) {
   return (clock * 1000.0f) / (htotal * vtotal);
 }
 
-DisplayConnectionType GetDisplayType(drmModeConnector* connector) {
+display::DisplayConnectionType GetDisplayType(drmModeConnector* connector) {
   switch (connector->connector_type) {
     case DRM_MODE_CONNECTOR_VGA:
-      return DISPLAY_CONNECTION_TYPE_VGA;
+      return display::DISPLAY_CONNECTION_TYPE_VGA;
     case DRM_MODE_CONNECTOR_DVII:
     case DRM_MODE_CONNECTOR_DVID:
     case DRM_MODE_CONNECTOR_DVIA:
-      return DISPLAY_CONNECTION_TYPE_DVI;
+      return display::DISPLAY_CONNECTION_TYPE_DVI;
     case DRM_MODE_CONNECTOR_LVDS:
     case DRM_MODE_CONNECTOR_eDP:
     case DRM_MODE_CONNECTOR_DSI:
-      return DISPLAY_CONNECTION_TYPE_INTERNAL;
+      return display::DISPLAY_CONNECTION_TYPE_INTERNAL;
     case DRM_MODE_CONNECTOR_DisplayPort:
-      return DISPLAY_CONNECTION_TYPE_DISPLAYPORT;
+      return display::DISPLAY_CONNECTION_TYPE_DISPLAYPORT;
     case DRM_MODE_CONNECTOR_HDMIA:
     case DRM_MODE_CONNECTOR_HDMIB:
-      return DISPLAY_CONNECTION_TYPE_HDMI;
+      return display::DISPLAY_CONNECTION_TYPE_HDMI;
     default:
-      return DISPLAY_CONNECTION_TYPE_UNKNOWN;
+      return display::DISPLAY_CONNECTION_TYPE_UNKNOWN;
   }
 }
 
@@ -157,7 +183,34 @@ int ConnectorIndex(int device_index, int display_index) {
   return ((device_index << 4) + display_index) & 0xFF;
 }
 
+bool HasColorCorrectionMatrix(int fd, drmModeCrtc* crtc) {
+  ScopedDrmObjectPropertyPtr crtc_props(
+      drmModeObjectGetProperties(fd, crtc->crtc_id, DRM_MODE_OBJECT_CRTC));
+
+  for (uint32_t i = 0; i < crtc_props->count_props; ++i) {
+    ScopedDrmPropertyPtr property(drmModeGetProperty(fd, crtc_props->props[i]));
+    if (property && !strcmp(property->name, "CTM")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
+
+gfx::Size GetMaximumCursorSize(int fd) {
+  uint64_t width = 0, height = 0;
+  if (drmGetCap(fd, DRM_CAP_CURSOR_WIDTH, &width)) {
+    VPLOG(1) << "Unable to get cursor width capability";
+    return gfx::Size(kDefaultCursorWidth, kDefaultCursorHeight);
+  }
+  if (drmGetCap(fd, DRM_CAP_CURSOR_HEIGHT, &height)) {
+    VPLOG(1) << "Unable to get cursor height capability";
+    return gfx::Size(kDefaultCursorWidth, kDefaultCursorHeight);
+  }
+
+  return gfx::Size(width, height);
+}
 
 HardwareDisplayControllerInfo::HardwareDisplayControllerInfo(
     ScopedDrmConnectorPtr connector,
@@ -174,21 +227,54 @@ ScopedVector<HardwareDisplayControllerInfo> GetAvailableDisplayControllerInfos(
   DCHECK(resources) << "Failed to get DRM resources";
   ScopedVector<HardwareDisplayControllerInfo> displays;
 
+  std::vector<ScopedDrmConnectorPtr> available_connectors;
+  std::vector<ScopedDrmConnectorPtr::element_type*> connectors;
   for (int i = 0; i < resources->count_connectors; ++i) {
     ScopedDrmConnectorPtr connector(
         drmModeGetConnector(fd, resources->connectors[i]));
+    connectors.push_back(connector.get());
 
-    if (!connector || connector->connection != DRM_MODE_CONNECTED ||
-        connector->count_modes == 0)
-      continue;
+    if (connector && connector->connection == DRM_MODE_CONNECTED &&
+        connector->count_modes != 0)
+      available_connectors.push_back(std::move(connector));
+  }
 
-    uint32_t crtc_id = GetCrtc(fd, connector.get(), resources.get(), displays);
+  base::SmallMap<std::map<ScopedDrmConnectorPtr::element_type*, int>>
+      connector_crtcs;
+  for (auto& c : available_connectors) {
+    uint32_t possible_crtcs = 0;
+    for (int i = 0; i < c->count_encoders; ++i) {
+      ScopedDrmEncoderPtr encoder(drmModeGetEncoder(fd, c->encoders[i]));
+      if (!encoder)
+        continue;
+      possible_crtcs |= encoder->possible_crtcs;
+    }
+    connector_crtcs[c.get()] = possible_crtcs;
+  }
+  // Make sure to start assigning a crtc to the connector that supports the
+  // fewest crtcs first.
+  std::stable_sort(available_connectors.begin(), available_connectors.end(),
+                   [&connector_crtcs](const ScopedDrmConnectorPtr& c1,
+                                      const ScopedDrmConnectorPtr& c2) {
+                     // When c1 supports a proper subset of the crtcs of c2, we
+                     // should process c1 first (return true).
+                     int c1_crtcs = connector_crtcs[c1.get()];
+                     int c2_crtcs = connector_crtcs[c2.get()];
+                     return (c1_crtcs & c2_crtcs) == c1_crtcs &&
+                            c1_crtcs != c2_crtcs;
+                   });
+
+  for (auto& c : available_connectors) {
+    uint32_t crtc_id = GetCrtc(fd, c.get(), resources.get(), displays);
     if (!crtc_id)
       continue;
 
     ScopedDrmCrtcPtr crtc(drmModeGetCrtc(fd, crtc_id));
-    displays.push_back(new HardwareDisplayControllerInfo(std::move(connector),
-                                                         std::move(crtc), i));
+    size_t index = std::find(connectors.begin(), connectors.end(), c.get()) -
+                   connectors.begin();
+    DCHECK_LT(index, connectors.size());
+    displays.push_back(new HardwareDisplayControllerInfo(
+        std::move(c), std::move(crtc), index));
   }
 
   return displays;
@@ -229,21 +315,24 @@ DisplaySnapshot_Params CreateDisplaySnapshotParams(
   params.type = GetDisplayType(info->connector());
   params.is_aspect_preserving_scaling =
       IsAspectPreserving(fd, info->connector());
+  params.has_color_correction_matrix =
+      HasColorCorrectionMatrix(fd, info->crtc());
+  params.maximum_cursor_size = GetMaximumCursorSize(fd);
 
   ScopedDrmPropertyBlobPtr edid_blob(
       GetDrmPropertyBlob(fd, info->connector(), "EDID"));
 
   if (edid_blob) {
-    std::vector<uint8_t> edid(
+    params.edid.assign(
         static_cast<uint8_t*>(edid_blob->data),
         static_cast<uint8_t*>(edid_blob->data) + edid_blob->length);
 
-    GetDisplayIdFromEDID(edid, connector_index, &params.display_id,
-                         &params.product_id);
+    display::GetDisplayIdFromEDID(params.edid, connector_index,
+                                  &params.display_id, &params.product_id);
 
-    ParseOutputDeviceData(edid, nullptr, nullptr, &params.display_name, nullptr,
-                          nullptr);
-    ParseOutputOverscanFlag(edid, &params.has_overscan);
+    display::ParseOutputDeviceData(params.edid, nullptr, nullptr,
+                                   &params.display_name, nullptr, nullptr);
+    display::ParseOutputOverscanFlag(params.edid, &params.has_overscan);
   } else {
     VLOG(1) << "Failed to get EDID blob for connector "
             << info->connector()->connector_id;
@@ -276,6 +365,10 @@ DisplaySnapshot_Params CreateDisplaySnapshotParams(
 
 int GetFourCCFormatFromBufferFormat(gfx::BufferFormat format) {
   switch (format) {
+    case gfx::BufferFormat::R_8:
+      return DRM_FORMAT_R8;
+    case gfx::BufferFormat::RG_88:
+      return DRM_FORMAT_GR88;
     case gfx::BufferFormat::RGBA_8888:
       return DRM_FORMAT_ABGR8888;
     case gfx::BufferFormat::RGBX_8888:
@@ -284,8 +377,14 @@ int GetFourCCFormatFromBufferFormat(gfx::BufferFormat format) {
       return DRM_FORMAT_ARGB8888;
     case gfx::BufferFormat::BGRX_8888:
       return DRM_FORMAT_XRGB8888;
+    case gfx::BufferFormat::BGR_565:
+      return DRM_FORMAT_RGB565;
     case gfx::BufferFormat::UYVY_422:
       return DRM_FORMAT_UYVY;
+    case gfx::BufferFormat::YVU_420:
+      return DRM_FORMAT_YV12;
+    case gfx::BufferFormat::YUV_420_BIPLANAR:
+      return DRM_FORMAT_NV12;
     default:
       NOTREACHED();
       return 0;
@@ -294,6 +393,10 @@ int GetFourCCFormatFromBufferFormat(gfx::BufferFormat format) {
 
 gfx::BufferFormat GetBufferFormatFromFourCCFormat(int format) {
   switch (format) {
+    case DRM_FORMAT_R8:
+      return gfx::BufferFormat::R_8;
+    case DRM_FORMAT_GR88:
+      return gfx::BufferFormat::RG_88;
     case DRM_FORMAT_ABGR8888:
       return gfx::BufferFormat::RGBA_8888;
     case DRM_FORMAT_XBGR8888:
@@ -302,8 +405,14 @@ gfx::BufferFormat GetBufferFormatFromFourCCFormat(int format) {
       return gfx::BufferFormat::BGRA_8888;
     case DRM_FORMAT_XRGB8888:
       return gfx::BufferFormat::BGRX_8888;
+    case DRM_FORMAT_RGB565:
+      return gfx::BufferFormat::BGR_565;
     case DRM_FORMAT_UYVY:
       return gfx::BufferFormat::UYVY_422;
+    case DRM_FORMAT_NV12:
+      return gfx::BufferFormat::YUV_420_BIPLANAR;
+    case DRM_FORMAT_YV12:
+      return gfx::BufferFormat::YVU_420;
     default:
       NOTREACHED();
       return gfx::BufferFormat::BGRA_8888;
@@ -319,6 +428,8 @@ int GetFourCCFormatForFramebuffer(gfx::BufferFormat format) {
     case gfx::BufferFormat::BGRA_8888:
     case gfx::BufferFormat::BGRX_8888:
       return DRM_FORMAT_XRGB8888;
+    case gfx::BufferFormat::BGR_565:
+      return DRM_FORMAT_RGB565;
     case gfx::BufferFormat::UYVY_422:
       return DRM_FORMAT_UYVY;
     default:

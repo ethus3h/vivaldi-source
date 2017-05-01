@@ -7,20 +7,28 @@
 
 #include <set>
 
-#include "chrome/browser/ui/host_desktop.h"
-
-namespace aura {
-class Window;
-}
+#include "ui/gfx/native_widget_types.h"
 
 namespace gfx {
 class Point;
 }
 
-// Returns the Window at the specified point, ignoring the windows in |ignore|.
-gfx::NativeWindow GetLocalProcessWindowAtPoint(
-    chrome::HostDesktopType host_desktop_type,
-    const gfx::Point& screen_point,
-    const std::set<gfx::NativeWindow>& ignore);
+// Class used by the tabstrip to find chrome windows that we can attach tabs to.
+class WindowFinder {
+ public:
+  WindowFinder();
+  virtual ~WindowFinder();
+
+  // Finds the topmost visible chrome window at |screen_point|. This should
+  // return nullptr if |screen_point| is in another program's window which
+  // occludes the topmost chrome window. Ignores the windows in |ignore|, which
+  // contain windows such as the tab being dragged right now.
+  virtual gfx::NativeWindow GetLocalProcessWindowAtPoint(
+      const gfx::Point& screen_point,
+      const std::set<gfx::NativeWindow>& ignore);
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(WindowFinder);
+};
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_WINDOW_FINDER_H_

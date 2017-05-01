@@ -10,11 +10,20 @@
 
 #include "chrome/browser/ui/validation_message_bubble.h"
 
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
 
 #include "chrome/browser/ui/tabs/tab_utils.h"
 
-extern extensions::WebViewGuest* s_current_webviewguest;
+#include "content/public/browser/render_widget_host.h"
+
+#include "components/content_settings/core/common/content_settings_types.h"
+
+#ifdef USE_AURA
+#include "ui/aura/client/cursor_client.h"
+#include "ui/aura/client/cursor_client_observer.h"
+#include "ui/aura/window.h"
+#include "base/timer/timer.h"
+#endif // USE_AURA
 
 
 namespace extensions {

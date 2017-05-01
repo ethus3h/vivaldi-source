@@ -67,7 +67,7 @@ class StorageMonitorMacTest : public testing::Test {
  protected:
   content::TestBrowserThreadBundle thread_bundle_;
 
-  scoped_ptr<MockRemovableStorageObserver> mock_storage_observer_;
+  std::unique_ptr<MockRemovableStorageObserver> mock_storage_observer_;
 
   // Information about the disk.
   std::string unique_id_;
@@ -75,7 +75,7 @@ class StorageMonitorMacTest : public testing::Test {
   std::string device_id_;
   StorageInfo disk_info_;
 
-  scoped_ptr<StorageMonitorMac> monitor_;
+  std::unique_ptr<StorageMonitorMac> monitor_;
 };
 
 TEST_F(StorageMonitorMacTest, AddRemove) {
@@ -123,10 +123,10 @@ TEST_F(StorageMonitorMacTest, UpdateVolumeName) {
 TEST_F(StorageMonitorMacTest, DCIM) {
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  ASSERT_TRUE(base::CreateDirectory(
-      temp_dir.path().Append(kDCIMDirectoryName)));
+  ASSERT_TRUE(
+      base::CreateDirectory(temp_dir.GetPath().Append(kDCIMDirectoryName)));
 
-  base::FilePath mount_point = temp_dir.path();
+  base::FilePath mount_point = temp_dir.GetPath();
   std::string device_id = StorageInfo::MakeDeviceId(
       StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, unique_id_);
   StorageInfo info = CreateStorageInfo(device_id, "", mount_point, kTestSize);

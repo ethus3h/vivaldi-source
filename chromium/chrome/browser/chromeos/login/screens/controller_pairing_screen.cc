@@ -5,6 +5,7 @@
 #include "chrome/browser/chromeos/login/screens/controller_pairing_screen.h"
 
 #include "base/command_line.h"
+#include "base/stl_util.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "google_apis/gaia/gaia_auth_util.h"
@@ -19,7 +20,8 @@ ControllerPairingScreen::ControllerPairingScreen(
     Delegate* delegate,
     ControllerPairingScreenActor* actor,
     ControllerPairingController* shark_controller)
-    : BaseScreen(base_screen_delegate),
+    : BaseScreen(base_screen_delegate,
+                 OobeScreen::SCREEN_OOBE_CONTROLLER_PAIRING),
       delegate_(delegate),
       actor_(actor),
       shark_controller_(shark_controller),
@@ -52,9 +54,6 @@ bool ControllerPairingScreen::ExpectStageIs(Stage stage) const {
   return stage == current_stage_;
 }
 
-void ControllerPairingScreen::PrepareToShow() {
-}
-
 void ControllerPairingScreen::Show() {
   if (actor_)
     actor_->Show();
@@ -64,10 +63,6 @@ void ControllerPairingScreen::Show() {
 void ControllerPairingScreen::Hide() {
   if (actor_)
     actor_->Hide();
-}
-
-std::string ControllerPairingScreen::GetName() const {
-  return WizardController::kControllerPairingScreenName;
 }
 
 void ControllerPairingScreen::PairingStageChanged(Stage new_stage) {
@@ -152,10 +147,8 @@ void ControllerPairingScreen::DiscoveredDevicesListChanged() {
       kContextKeyPage,
       devices.empty() ? kPageDevicesDiscovery : kPageDeviceSelect);
   std::string selected_device = context_.GetString(kContextKeySelectedDevice);
-  if (std::find(devices.begin(), devices.end(), selected_device) ==
-      devices.end()) {
+  if (!base::ContainsValue(devices, selected_device))
     selected_device.clear();
-  }
   if (devices.empty()) {
     device_preselected_ = false;
   } else if (!device_preselected_) {

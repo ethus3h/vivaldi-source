@@ -70,10 +70,10 @@ class UpgradeDetector {
 
   bool is_factory_reset_required() const { return is_factory_reset_required_; }
 
-  // Retrieves the right icon ID based on the degree of severity (see
+  // Retrieves the right icon based on the degree of severity (see
   // UpgradeNotificationAnnoyanceLevel, each level has an an accompanying icon
   // to go with it) to display within the app menu.
-  int GetIconResourceID();
+  gfx::Image GetIcon();
 
   UpgradeNotificationAnnoyanceLevel upgrade_notification_stage() const {
     return upgrade_notification_stage_;
@@ -135,6 +135,7 @@ class UpgradeDetector {
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AppMenuModelTest, Basics);
+  FRIEND_TEST_ALL_PREFIXES(SystemTrayClientTest, UpdateTrayIcon);
 
   // Initiates an Idle check. See IdleCallback below.
   void CheckIdle();

@@ -4,11 +4,16 @@
 
 #include "components/memory_pressure/direct_memory_pressure_calculator_win.h"
 
+#include "base/logging.h"
+#include "base/process/process_metrics.h"
+
 namespace memory_pressure {
+
+#if defined(MEMORY_PRESSURE_IS_POLLING)
 
 namespace {
 
-static const int kKBperMB = 1024;
+const int kKBperMB = 1024;
 
 }  // namespace
 
@@ -105,5 +110,7 @@ void DirectMemoryPressureCalculator::InferThresholds() {
     critical_threshold_mb_ = kSmallMemoryDefaultCriticalThresholdMb;
   }
 }
+
+#endif  // defined(MEMORY_PRESSURE_IS_POLLING)
 
 }  // namespace memory_pressure

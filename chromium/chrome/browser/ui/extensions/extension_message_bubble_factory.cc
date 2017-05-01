@@ -18,7 +18,9 @@
 #include "chrome/browser/extensions/suspicious_extension_bubble_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/version_info/version_info.h"
 #include "extensions/common/feature_switch.h"
 
@@ -38,7 +40,7 @@ ExtensionMessageBubbleFactory::OverrideForTesting g_override_for_testing =
 const char kEnableDevModeWarningExperimentName[] =
     "ExtensionDeveloperModeWarning";
 
-#if !defined(OS_WIN)
+#if !defined(OS_WIN) && !defined(OS_MACOSX)
 const char kEnableProxyWarningExperimentName[] = "ExtensionProxyWarning";
 #endif
 
@@ -61,7 +63,7 @@ bool EnableSuspiciousExtensionsBubble() {
 }
 
 bool EnableSettingsApiBubble() {
-#if defined(OS_WIN)
+#if defined(OS_WIN) || defined(OS_MACOSX)
   return true;
 #else
   return g_override_for_testing ==
@@ -70,7 +72,7 @@ bool EnableSettingsApiBubble() {
 }
 
 bool EnableProxyOverrideBubble() {
-#if defined(OS_WIN)
+#if defined(OS_WIN) || defined(OS_MACOSX)
   return true;
 #else
   return g_override_for_testing ==
@@ -82,6 +84,14 @@ bool EnableProxyOverrideBubble() {
 bool EnableDevModeBubble() {
   if (extensions::FeatureSwitch::force_dev_mode_highlighting()->IsEnabled())
     return true;
+
+  // If an automated test is controlling the browser, we don't show the dev mode
+  // bubble because it interferes with focus. This isn't a security concern
+  // because we'll instead show an (even scarier) infobar. See also
+  // AutomationInfoBarDelegate.
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableAutomation))
+    return false;
 
 #if defined(OS_WIN)
   if (chrome::GetChannel() >= version_info::Channel::BETA)
@@ -102,14 +112,14 @@ ExtensionMessageBubbleFactory::ExtensionMessageBubbleFactory(Browser* browser)
 ExtensionMessageBubbleFactory::~ExtensionMessageBubbleFactory() {
 }
 
-scoped_ptr<extensions::ExtensionMessageBubbleController>
+std::unique_ptr<extensions::ExtensionMessageBubbleController>
 ExtensionMessageBubbleFactory::GetController() {
   Profile* original_profile = browser_->profile()->GetOriginalProfile();
   std::set<Profile*>& profiles_evaluated = g_profiles_evaluated.Get();
   bool is_initial_check = profiles_evaluated.count(original_profile) == 0;
   profiles_evaluated.insert(original_profile);
 
-  scoped_ptr<extensions::ExtensionMessageBubbleController> controller;
+  std::unique_ptr<extensions::ExtensionMessageBubbleController> controller;
 
   if (g_override_for_testing == OVERRIDE_DISABLED)
     return controller;
@@ -133,8 +143,10 @@ ExtensionMessageBubbleFactory::GetController() {
   }
 
   if (EnableSettingsApiBubble()) {
-    // No use showing this if it's not the startup of the profile.
-    if (is_initial_check) {
+    // No use showing this if it's not the startup of the profile, and if the
+    // browser was restarted, then we always do a session restore (rather than
+    // showing normal startup pages).
+    if (is_initial_check && !StartupBrowserCreator::WasRestarted()) {
       controller.reset(new extensions::ExtensionMessageBubbleController(
               new extensions::SettingsApiBubbleDelegate(
                   browser_->profile(), extensions::BUBBLE_TYPE_STARTUP_PAGES),

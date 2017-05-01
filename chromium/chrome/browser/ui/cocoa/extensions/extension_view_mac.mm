@@ -7,6 +7,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/mac/foundation_util.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #import "chrome/browser/ui/cocoa/chrome_event_processing_window.h"
 #include "content/public/browser/render_view_host.h"
@@ -32,11 +33,6 @@ ExtensionViewMac::ExtensionViewMac(extensions::ExtensionHost* extension_host,
 }
 
 ExtensionViewMac::~ExtensionViewMac() {
-}
-
-void ExtensionViewMac::WindowFrameChanged() {
-  if (render_view_host()->GetWidget()->GetView())
-    render_view_host()->GetWidget()->GetView()->WindowFrameChanged();
 }
 
 void ExtensionViewMac::CreateWidgetHostViewIn(gfx::NativeView superview) {
@@ -73,7 +69,7 @@ void ExtensionViewMac::HandleKeyboardEvent(
     content::WebContents* source,
     const content::NativeWebKeyboardEvent& event) {
   if (event.skip_in_browser ||
-      event.type == content::NativeWebKeyboardEvent::Char ||
+      event.type() == content::NativeWebKeyboardEvent::Char ||
       extension_host_->extension_host_type() !=
           extensions::VIEW_TYPE_EXTENSION_POPUP)
     return;
@@ -105,10 +101,10 @@ void ExtensionViewMac::ShowIfCompletelyLoaded() {
 namespace extensions {
 
 // static
-scoped_ptr<ExtensionView> ExtensionViewHost::CreateExtensionView(
+std::unique_ptr<ExtensionView> ExtensionViewHost::CreateExtensionView(
     ExtensionViewHost* host,
     Browser* browser) {
-  return make_scoped_ptr(new ExtensionViewMac(host, browser));
+  return base::MakeUnique<ExtensionViewMac>(host, browser);
 }
 
 }  // namespace extensions

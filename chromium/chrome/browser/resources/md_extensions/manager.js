@@ -2,6 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+/**
+ * The different pages that can be shown at a time.
+ * Note: This must remain in sync with the order in manager.html!
+ * @enum {string}
+ */
+var Page = {
+  ITEM_LIST: '0',
+  DETAIL_VIEW: '1',
+  KEYBOARD_SHORTCUTS: '2',
+  ERROR_PAGE: '3',
+};
+
 cr.define('extensions', function() {
   'use strict';
 
@@ -32,12 +44,14 @@ cr.define('extensions', function() {
   var Manager = Polymer({
     is: 'extensions-manager',
 
+    behaviors: [I18nBehavior],
+
     properties: {
       /** @type {extensions.Sidebar} */
       sidebar: Object,
 
-      /** @type {extensions.Service} */
-      service: Object,
+      /** @type {extensions.ItemDelegate} */
+      itemDelegate: Object,
 
       inDevMode: {
         type: Boolean,
@@ -48,6 +62,23 @@ cr.define('extensions', function() {
         type: String,
         value: '',
       },
+
+      /**
+       * The item currently displayed in the error subpage. We use a separate
+       * item for different pages (rather than a single subpageItem_ property)
+       * so that hidden subpages don't update when an item updates. That is, we
+       * don't want the details view subpage to update when the item shown in
+       * the errors page updates, and vice versa.
+       * @private {!chrome.developerPrivate.ExtensionInfo|undefined}
+       */
+      errorPageItem_: Object,
+
+      /**
+       * The item currently displayed in the details view subpage. See also
+       * errorPageItem_.
+       * @private {!chrome.developerPrivate.ExtensionInfo|undefined}
+       */
+      detailViewItem_: Object,
 
       /** @type {!Array<!chrome.developerPrivate.ExtensionInfo>} */
       extensions: {
@@ -60,27 +91,58 @@ cr.define('extensions', function() {
         type: Array,
         value: function() { return []; },
       },
-
-      /** @type {!Array<!chrome.developerPrivate.ExtensionInfo>} */
-      websites: {
-        type: Array,
-        value: function() { return []; },
-      },
     },
 
-    behaviors: [
-      I18nBehavior,
-    ],
+    listeners: {
+      'items-list.extension-item-show-details': 'onShouldShowItemDetails_',
+      'items-list.extension-item-show-errors': 'onShouldShowItemErrors_',
+    },
+
+    created: function() {
+      this.readyPromiseResolver = new PromiseResolver();
+    },
 
     ready: function() {
       /** @type {extensions.Sidebar} */
       this.sidebar =
           /** @type {extensions.Sidebar} */(this.$$('extensions-sidebar'));
-      this.service = extensions.Service.getInstance();
-      this.service.managerReady(this);
-      this.scrollHelper_ = new ScrollHelper(this);
-      this.sidebar.setScrollDelegate(this.scrollHelper_);
-      this.$.toolbar.setSearchDelegate(new SearchHelper(this));
+      this.listHelper_ = new ListHelper(this);
+      this.sidebar.setListDelegate(this.listHelper_);
+      this.readyPromiseResolver.resolve();
+    },
+
+    get keyboardShortcuts() {
+      return this.$['keyboard-shortcuts'];
+    },
+
+    get packDialog() {
+      return this.$['pack-dialog'];
+    },
+
+    get optionsDialog() {
+      return this.$['options-dialog'];
+    },
+
+    get errorPage() {
+      return this.$['error-page'];
+    },
+
+    /**
+     * Shows the details view for a given item.
+     * @param {!chrome.developerPrivate.ExtensionInfo} data
+     */
+    showItemDetails: function(data) {
+      this.$['items-list'].willShowItemSubpage(data.id);
+      this.detailViewItem_ = data;
+      this.changePage(Page.DETAIL_VIEW);
+    },
+
+    /**
+     * @param {!CustomEvent} event
+     * @private
+     */
+    onFilterChanged_: function(event) {
+      this.filter = /** @type {string} */ (event.detail);
     },
 
     /**
@@ -94,8 +156,6 @@ cr.define('extensions', function() {
       switch (type) {
         case ExtensionType.HOSTED_APP:
         case ExtensionType.LEGACY_PACKAGED_APP:
-          listId = 'websites';
-          break;
         case ExtensionType.PLATFORM_APP:
           listId = 'apps';
           break;
@@ -125,11 +185,11 @@ cr.define('extensions', function() {
     },
 
     /**
-     * @param {!Array<!chrome.developerPrivate.ExtensionInfo>} list
      * @return {boolean} Whether the list should be visible.
+     * @private
      */
-    computeListHidden_: function(list) {
-      return list.length == 0;
+    computeListHidden_: function() {
+      return this.$['items-list'].items.length == 0;
     },
 
     /**
@@ -160,6 +220,19 @@ cr.define('extensions', function() {
       // We should never try and update a non-existent item.
       assert(index >= 0);
       this.set([listId, index], item);
+
+      // Update the subpage if it is open and displaying the item. If it's not
+      // open, we don't update the data even if it's displaying that item. We'll
+      // set the item correctly before opening the page. It's a little weird
+      // that the DOM will have stale data, but there's no point in causing the
+      // extra work.
+      if (this.detailViewItem_ && this.detailViewItem_.id == item.id &&
+          this.$.pages.selected == Page.DETAIL_VIEW) {
+        this.detailViewItem_ = item;
+      } else if (this.errorPageItem_ && this.errorPageItem_.id == item.id &&
+                 this.$.pages.selected == Page.ERROR_PAGE) {
+        this.errorPageItem_ = item;
+      }
     },
 
     /**
@@ -173,51 +246,127 @@ cr.define('extensions', function() {
       assert(index >= 0);
       this.splice(listId, index, 1);
     },
+
+    /**
+     * @param {Page} page
+     * @return {!(extensions.KeyboardShortcuts |
+     *            extensions.DetailView |
+     *            extensions.ItemList)}
+     * @private
+     */
+    getPage_: function(page) {
+      switch (page) {
+        case Page.ITEM_LIST:
+          return this.$['items-list'];
+        case Page.DETAIL_VIEW:
+          return this.$['details-view'];
+        case Page.KEYBOARD_SHORTCUTS:
+          return this.$['keyboard-shortcuts'];
+        case Page.ERROR_PAGE:
+          return this.$['error-page'];
+      }
+      assertNotReached();
+    },
+
+    /**
+     * Changes the active page selection.
+     * @param {Page} toPage
+     */
+    changePage: function(toPage) {
+      var fromPage = this.$.pages.selected;
+      if (fromPage == toPage)
+        return;
+      var entry;
+      var exit;
+      if (fromPage == Page.ITEM_LIST && (toPage == Page.DETAIL_VIEW ||
+                                         toPage == Page.ERROR_PAGE)) {
+        entry = extensions.Animation.HERO;
+        exit = extensions.Animation.HERO;
+      } else if (toPage == Page.ITEM_LIST) {
+        entry = extensions.Animation.FADE_IN;
+        exit = extensions.Animation.SCALE_DOWN;
+      } else {
+        assert(toPage == Page.DETAIL_VIEW ||
+               toPage == Page.KEYBOARD_SHORTCUTS);
+        entry = extensions.Animation.FADE_IN;
+        exit = extensions.Animation.FADE_OUT;
+      }
+      this.getPage_(fromPage).animationHelper.setExitAnimation(exit);
+      this.getPage_(toPage).animationHelper.setEntryAnimation(entry);
+      this.$.pages.selected = toPage;
+    },
+
+    /**
+     * Handles the event for the user clicking on a details button.
+     * @param {!CustomEvent} e
+     * @private
+     */
+    onShouldShowItemDetails_: function(e) {
+      this.showItemDetails(e.detail.data);
+    },
+
+    /**
+     * Handles the event for the user clicking on the errors button.
+     * @param {!CustomEvent} e
+     * @private
+     */
+    onShouldShowItemErrors_: function(e) {
+      var data = e.detail.data;
+      this.$['items-list'].willShowItemSubpage(data.id);
+      this.errorPageItem_ = data;
+      this.changePage(Page.ERROR_PAGE);
+    },
+
+    /** @private */
+    onDetailsViewClose_: function() {
+      // Note: we don't reset detailViewItem_ here because doing so just causes
+      // extra work for the data-bound details view.
+      this.changePage(Page.ITEM_LIST);
+    },
+
+    /** @private */
+    onErrorPageClose_: function() {
+      // Note: we don't reset errorPageItem_ here because doing so just causes
+      // extra work for the data-bound error page.
+      this.changePage(Page.ITEM_LIST);
+    }
   });
 
   /**
    * @param {extensions.Manager} manager
    * @constructor
-   * @implements {extensions.SidebarScrollDelegate}
+   * @implements {extensions.SidebarListDelegate}
    */
-  function ScrollHelper(manager) {
-    this.items_ = manager.$.items;
-  }
-
-  ScrollHelper.prototype = {
-    /** @override */
-    scrollToExtensions: function() {
-      this.items_.scrollTop =
-          this.items_.querySelector('#extensions-list').offsetTop;
-    },
-
-    /** @override */
-    scrollToApps: function() {
-      this.items_.scrollTop =
-          this.items_.querySelector('#apps-list').offsetTop;
-    },
-
-    /** @override */
-    scrollToWebsites: function() {
-      this.items_.scrollTop =
-          this.items_.querySelector('#websites-list').offsetTop;
-    },
-  };
-
-  /**
-   * @param {extensions.Manager} manager
-   * @constructor
-   * @implements {SearchFieldDelegate}
-   */
-  function SearchHelper(manager) {
+  function ListHelper(manager) {
     this.manager_ = manager;
   }
 
-  SearchHelper.prototype = {
+  ListHelper.prototype = {
     /** @override */
-    onSearchTermSearch: function(searchTerm) {
-      this.manager_.filter = searchTerm;
+    showType: function(type) {
+      var items;
+      switch (type) {
+        case extensions.ShowingType.EXTENSIONS:
+          items = this.manager_.extensions;
+          break;
+        case extensions.ShowingType.APPS:
+          items = this.manager_.apps;
+          break;
+      }
+
+      this.manager_.$/* hack */ ['items-list'].set('items', assert(items));
+      this.manager_.changePage(Page.ITEM_LIST);
     },
+
+    /** @override */
+    showKeyboardShortcuts: function() {
+      this.manager_.changePage(Page.KEYBOARD_SHORTCUTS);
+    },
+
+    /** @override */
+    showPackDialog: function() {
+      this.manager_.packDialog.show();
+    }
   };
 
   return {Manager: Manager};

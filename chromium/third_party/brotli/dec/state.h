@@ -1,16 +1,7 @@
 /* Copyright 2015 Google Inc. All Rights Reserved.
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-   http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+   Distributed under MIT license.
+   See file LICENSE for detail or copy at https://opensource.org/licenses/MIT
 */
 
 /* Brotli state for partial streaming decoding. */
@@ -18,10 +9,11 @@
 #ifndef BROTLI_DEC_STATE_H_
 #define BROTLI_DEC_STATE_H_
 
-#include <stdio.h>
+#include "../common/constants.h"
+#include <brotli/types.h>
 #include "./bit_reader.h"
 #include "./huffman.h"
-#include "./types.h"
+#include "./port.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -102,8 +94,12 @@ typedef enum {
   BROTLI_STATE_READ_BLOCK_LENGTH_SUFFIX
 } BrotliRunningReadBlockLengthState;
 
-struct BrotliStateStruct {
+struct BrotliDecoderStateStruct {
   BrotliRunningState state;
+
+  /* This counter is reused for several disjoint loops. */
+  int loop_counter;
+
   BrotliBitReader br;
 
   brotli_alloc_func alloc_func;
@@ -117,16 +113,15 @@ struct BrotliStateStruct {
   } buffer;
   uint32_t buffer_length;
 
-  /* This counter is reused for several disjoint loops. */
-  int loop_counter;
   int pos;
   int max_backward_distance;
-  int max_backward_distance_minus_custom_dict_size;
   int max_distance;
   int ringbuffer_size;
   int ringbuffer_mask;
   int dist_rb_idx;
   int dist_rb[4];
+  int error_code;
+  uint32_t sub_loop_counter;
   uint8_t* ringbuffer;
   uint8_t* ringbuffer_end;
   HuffmanCode* htree_command;
@@ -134,8 +129,6 @@ struct BrotliStateStruct {
   const uint8_t* context_lookup2;
   uint8_t* context_map_slice;
   uint8_t* dist_context_map_slice;
-
-  uint32_t sub_loop_counter;
 
   /* This ring buffer holds a few past copy distances that will be used by */
   /* some special distance codes. */
@@ -158,19 +151,17 @@ struct BrotliStateStruct {
   int distance_postfix_mask;
   uint32_t num_dist_htrees;
   uint8_t* dist_context_map;
-  HuffmanCode *literal_htree;
-  uint8_t literal_htree_index;
+  HuffmanCode* literal_htree;
   uint8_t dist_htree_index;
   uint32_t repeat_code_len;
   uint32_t prev_code_len;
-
 
   int copy_length;
   int distance_code;
 
   /* For partial write operations */
-  size_t rb_roundtrips;  /* How many times we went around the ringbuffer */
-  size_t partial_pos_out;  /* How much output to the user in total (<= rb) */
+  size_t rb_roundtrips;  /* How many times we went around the ring-buffer */
+  size_t partial_pos_out;  /* How much output to the user in total */
 
   /* For ReadHuffmanCode */
   uint32_t symbol;
@@ -182,10 +173,10 @@ struct BrotliStateStruct {
   uint16_t* symbol_lists;
   /* Storage from symbol_lists. */
   uint16_t symbols_lists_array[BROTLI_HUFFMAN_MAX_CODE_LENGTH + 1 +
-      BROTLI_HUFFMAN_MAX_CODE_LENGTHS_SIZE];
+                               BROTLI_NUM_COMMAND_SYMBOLS];
   /* Tails of symbol chains. */
   int next_symbol[32];
-  uint8_t code_length_code_lengths[18];
+  uint8_t code_length_code_lengths[BROTLI_CODE_LENGTH_CODES];
   /* Population counts for the code lengths */
   uint16_t code_length_histo[16];
 
@@ -197,11 +188,11 @@ struct BrotliStateStruct {
   uint32_t context_index;
   uint32_t max_run_length_prefix;
   uint32_t code;
-  HuffmanCode context_map_table[BROTLI_HUFFMAN_MAX_TABLE_SIZE];
+  HuffmanCode context_map_table[BROTLI_HUFFMAN_MAX_SIZE_272];
 
   /* For InverseMoveToFrontTransform */
   uint32_t mtf_upper_bound;
-  uint8_t mtf[256];
+  uint32_t mtf[64 + 1];
 
   /* For custom dictionaries */
   const uint8_t* custom_dict;
@@ -217,49 +208,41 @@ struct BrotliStateStruct {
   BrotliRunningDecodeUint8State substate_decode_uint8;
   BrotliRunningReadBlockLengthState substate_read_block_length;
 
-  uint8_t is_last_metablock;
-  uint8_t is_uncompressed;
-  uint8_t is_metadata;
-  uint8_t size_nibbles;
+  unsigned int is_last_metablock : 1;
+  unsigned int is_uncompressed : 1;
+  unsigned int is_metadata : 1;
+  unsigned int should_wrap_ringbuffer : 1;
+  unsigned int size_nibbles : 8;
   uint32_t window_bits;
+
+  int new_ringbuffer_size;
 
   uint32_t num_literal_htrees;
   uint8_t* context_map;
   uint8_t* context_modes;
 
-  uint8_t* legacy_input_buffer;
-  uint8_t* legacy_output_buffer;
-  size_t legacy_input_len;
-  size_t legacy_output_len;
-  size_t legacy_input_pos;
-  size_t legacy_output_pos;
+  uint32_t trivial_literal_contexts[8];  /* 256 bits */
 };
 
-typedef struct BrotliStateStruct BrotliState;
+typedef struct BrotliDecoderStateStruct BrotliDecoderStateInternal;
+#define BrotliDecoderState BrotliDecoderStateInternal
 
-void BrotliStateInit(BrotliState* s);
-void BrotliStateInitWithCustomAllocators(BrotliState* s,
-                                         brotli_alloc_func alloc_func,
-                                         brotli_free_func free_func,
-                                         void* opaque);
-void BrotliStateCleanup(BrotliState* s);
-void BrotliStateMetablockBegin(BrotliState* s);
-void BrotliStateCleanupAfterMetablock(BrotliState* s);
-void BrotliHuffmanTreeGroupInit(BrotliState* s, HuffmanTreeGroup* group,
-                                uint32_t alphabet_size, uint32_t ntrees);
-void BrotliHuffmanTreeGroupRelease(BrotliState* s, HuffmanTreeGroup* group);
-
-/* Returns 1, if s is in a state where we have not read any input bytes yet,
-   and 0 otherwise */
-int BrotliStateIsStreamStart(const BrotliState* s);
-
-/* Returns 1, if s is in a state where we reached the end of the input and
-   produced all of the output, and 0 otherwise. */
-int BrotliStateIsStreamEnd(const BrotliState* s);
-
+BROTLI_INTERNAL void BrotliDecoderStateInit(BrotliDecoderState* s);
+BROTLI_INTERNAL void BrotliDecoderStateInitWithCustomAllocators(
+    BrotliDecoderState* s, brotli_alloc_func alloc_func,
+    brotli_free_func free_func, void* opaque);
+BROTLI_INTERNAL void BrotliDecoderStateCleanup(BrotliDecoderState* s);
+BROTLI_INTERNAL void BrotliDecoderStateMetablockBegin(BrotliDecoderState* s);
+BROTLI_INTERNAL void BrotliDecoderStateCleanupAfterMetablock(
+    BrotliDecoderState* s);
+BROTLI_INTERNAL BROTLI_BOOL BrotliDecoderHuffmanTreeGroupInit(
+    BrotliDecoderState* s, HuffmanTreeGroup* group, uint32_t alphabet_size,
+    uint32_t ntrees);
+BROTLI_INTERNAL void BrotliDecoderHuffmanTreeGroupRelease(
+    BrotliDecoderState* s, HuffmanTreeGroup* group);
 
 #if defined(__cplusplus) || defined(c_plusplus)
-} /* extern "C" */
+}  /* extern "C" */
 #endif
 
 #endif  /* BROTLI_DEC_STATE_H_ */

@@ -12,20 +12,23 @@
 #include <vector>
 #include "app/vivaldi_constants.h"
 #include "base/files/file_util.h"
+#include "base/i18n/time_formatting.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_iterator.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/core/session_service_commands.h"
 #include "content/public/browser/navigation_entry.h"
 #include "extensions/browser/extension_function_dispatcher.h"
+#include "extensions/schema/vivaldi_sessions.h"
 #include "ui/vivaldi_session_service.h"
 
 using extensions::vivaldi::sessions_private::SessionItem;
+using extensions::vivaldi::sessions_private::SessionOpenOptions;
 
 namespace {
 enum SessionErrorCodes {
@@ -78,13 +81,7 @@ base::FilePath GenerateFilename(Profile* profile,
 }
 
 Browser* GetActiveBrowser() {
-  for (chrome::BrowserIterator it; !it.done(); it.Next()) {
-    Browser* browser = *it;
-    if (browser->window()->IsActive()) {
-      return browser;
-    }
-  }
-  return nullptr;
+  return BrowserList::GetInstance()->GetLastActive();
 }
 
 }  // namespace
@@ -96,21 +93,22 @@ SessionsPrivateSaveOpenTabsFunction::SessionsPrivateSaveOpenTabsFunction() {}
 SessionsPrivateSaveOpenTabsFunction::~SessionsPrivateSaveOpenTabsFunction() {}
 
 bool SessionsPrivateSaveOpenTabsFunction::RunAsync() {
-  scoped_ptr<vivaldi::sessions_private::SaveOpenTabs::Params> params(
+  std::unique_ptr<vivaldi::sessions_private::SaveOpenTabs::Params> params(
       vivaldi::sessions_private::SaveOpenTabs::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
 
   int error_code = SessionErrorCodes::kNoError;
-  scoped_ptr<::vivaldi::VivaldiSessionService> service(
+  std::unique_ptr<::vivaldi::VivaldiSessionService> service(
       new ::vivaldi::VivaldiSessionService(GetProfile()));
+
+  int save_window_id = params->options.save_only_window_id;
 
   if (params->name.empty()) {
     error_code = SessionErrorCodes::kErrorMissingName;
   } else {
     base::FilePath path = GenerateFilename(GetProfile(), params->name, true);
 
-    for (chrome::BrowserIterator it; !it.done(); it.Next()) {
-      Browser* browser = *it;
+    for (auto* browser: *BrowserList::GetInstance()) {
       // Make sure the browser has tabs and a window. Browser's destructor
       // removes itself from the BrowserList. When a browser is closed the
       // destructor is not necessarily run immediately. This means it's possible
@@ -119,7 +117,10 @@ bool SessionsPrivateSaveOpenTabsFunction::RunAsync() {
       // deleted, so we ignore it.
       if (service->ShouldTrackWindow(browser, GetProfile()) &&
           browser->tab_strip_model()->count() && browser->window()) {
-        service->BuildCommandsForBrowser(browser);
+        if (save_window_id == 0 ||
+            (save_window_id && browser->session_id().id() == save_window_id)) {
+          service->BuildCommandsForBrowser(browser);
+        }
       }
     }
     bool success = service->Save(path);
@@ -141,7 +142,7 @@ SessionsPrivateGetAllFunction::~SessionsPrivateGetAllFunction() {}
 bool SessionsPrivateGetAllFunction::RunAsync() {
   base::ThreadRestrictions::ScopedAllowIO allow_io;
 
-  std::vector<linked_ptr<SessionItem> > sessions;
+  std::vector<SessionItem> sessions;
   base::FilePath path(GetProfile()->GetPath());
   path = path.Append(kSessionPath);
 
@@ -161,8 +162,11 @@ bool SessionsPrivateGetAllFunction::RunAsync() {
     }
     new_item->name.assign(filename);
 
-    linked_ptr<SessionItem> item(new_item);
-    sessions.push_back(item);
+    base::FileEnumerator::FileInfo info = iter.GetInfo();
+    base::Time modified = info.GetLastModifiedTime();
+    new_item->create_date_js = modified.ToJsTime();
+
+    sessions.push_back(std::move(*new_item));
   }
   results_ =
       vivaldi::sessions_private::GetAll::Results::Create(sessions);
@@ -177,9 +181,14 @@ SessionsPrivateOpenFunction::~SessionsPrivateOpenFunction() {}
 
 bool SessionsPrivateOpenFunction::RunAsync() {
   base::ThreadRestrictions::ScopedAllowIO allow_io;
-  scoped_ptr<vivaldi::sessions_private::Open::Params> params(
+  std::unique_ptr<vivaldi::sessions_private::Open::Params> params(
       vivaldi::sessions_private::Open::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
+
+  ::vivaldi::SessionOptions opts;
+  if (params->options.get()) {
+    opts.openInNewWindow_ = params->options->open_in_new_window;
+  }
 
   int error_code = SessionErrorCodes::kNoError;
   base::FilePath path = GenerateFilename(GetProfile(), params->name, false);
@@ -187,9 +196,9 @@ bool SessionsPrivateOpenFunction::RunAsync() {
     error_code = kErrorFileMissing;
   } else {
     Browser* browser = GetActiveBrowser();
-    scoped_ptr<::vivaldi::VivaldiSessionService> service(
+    std::unique_ptr<::vivaldi::VivaldiSessionService> service(
         new ::vivaldi::VivaldiSessionService(GetProfile()));
-    if (!service->Load(path, browser)) {
+    if (!service->Load(path, browser, opts)) {
       error_code = kErrorFileMissing;
     }
   }
@@ -206,7 +215,7 @@ SessionsPrivateDeleteFunction::~SessionsPrivateDeleteFunction() {}
 
 bool SessionsPrivateDeleteFunction::RunAsync() {
   base::ThreadRestrictions::ScopedAllowIO allow_io;
-  scoped_ptr<vivaldi::sessions_private::Delete::Params> params(
+  std::unique_ptr<vivaldi::sessions_private::Delete::Params> params(
       vivaldi::sessions_private::Delete::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
 

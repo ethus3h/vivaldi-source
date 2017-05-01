@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "components/url_matcher/url_matcher_factory.h"
 #include "ipc/ipc_message.h"
 
@@ -17,7 +18,7 @@ using url_matcher::URLMatcherFactory;
 namespace extensions {
 
 EventFilter::EventMatcherEntry::EventMatcherEntry(
-    scoped_ptr<EventMatcher> event_matcher,
+    std::unique_ptr<EventMatcher> event_matcher,
     URLMatcher* url_matcher,
     const URLMatcherConditionSet::Vector& condition_sets)
     : event_matcher_(std::move(event_matcher)), url_matcher_(url_matcher) {
@@ -53,9 +54,9 @@ EventFilter::~EventFilter() {
   }
 }
 
-EventFilter::MatcherID
-EventFilter::AddEventMatcher(const std::string& event_name,
-                             scoped_ptr<EventMatcher> matcher) {
+EventFilter::MatcherID EventFilter::AddEventMatcher(
+    const std::string& event_name,
+    std::unique_ptr<EventMatcher> matcher) {
   MatcherID id = next_id_++;
   URLMatcherConditionSet::Vector condition_sets;
   if (!CreateConditionSets(id, matcher.get(), &condition_sets))
@@ -67,8 +68,8 @@ EventFilter::AddEventMatcher(const std::string& event_name,
         std::make_pair((*it)->id(), id));
   }
   id_to_event_name_[id] = event_name;
-  event_matchers_[event_name][id] = linked_ptr<EventMatcherEntry>(
-      new EventMatcherEntry(std::move(matcher), &url_matcher_, condition_sets));
+  event_matchers_[event_name][id] = base::MakeUnique<EventMatcherEntry>(
+      std::move(matcher), &url_matcher_, condition_sets);
   return id;
 }
 

@@ -5,13 +5,14 @@
 #ifndef JINGLE_NOTIFIER_COMMUNICATOR_SINGLE_LOGIN_ATTEMPT_H_
 #define JINGLE_NOTIFIER_COMMUNICATOR_SINGLE_LOGIN_ATTEMPT_H_
 
+#include <memory>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "jingle/notifier/base/xmpp_connection.h"
 #include "jingle/notifier/communicator/connection_settings.h"
 #include "jingle/notifier/communicator/login_settings.h"
-#include "webrtc/libjingle/xmpp/xmppengine.h"
+#include "third_party/libjingle_xmpp/xmpp/xmppengine.h"
 
 namespace buzz {
 class XmppTaskParentInterface;
@@ -73,7 +74,7 @@ class SingleLoginAttempt : public XmppConnection::Delegate {
   Delegate* const delegate_;
   const ConnectionSettingsList settings_list_;
   ConnectionSettingsList::const_iterator current_settings_;
-  scoped_ptr<XmppConnection> xmpp_connection_;
+  std::unique_ptr<XmppConnection> xmpp_connection_;
 
   DISALLOW_COPY_AND_ASSIGN(SingleLoginAttempt);
 };

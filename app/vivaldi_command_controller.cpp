@@ -2,15 +2,25 @@
 
 #include "app/vivaldi_command_controller.h"
 
+#include "app/vivaldi_commands.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/command_updater.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "app/vivaldi_commands.h"
-
+#include "chrome/browser/ui/browser_finder.h"
 
 #include "extensions/api/show_menu/show_menu_api.h"
+#include "extensions/api/vivaldi_utilities/vivaldi_utilities_api.h"
 
 namespace vivaldi {
+
+void SetVivaldiScrollType(int scrollType) {
+  Browser* browser = chrome::FindLastActive();
+  if (browser) {
+    extensions::VivaldiUtilitiesAPI::GetFactoryInstance()
+         ->Get(browser->profile())->ScrollType(scrollType);
+  }
+}
 
 void UpdateCommandsForVivaldi(CommandUpdater &command_updater_) {
   command_updater_.UpdateCommandEnabled(IDC_TASK_MANAGER, true);
@@ -62,6 +72,12 @@ void UpdateCommandsForVivaldi(CommandUpdater &command_updater_) {
   command_updater_.UpdateCommandEnabled(IDC_VIV_COMMAND_OPEN_SESSION, true);
   command_updater_.UpdateCommandEnabled(IDC_VIV_COMMAND_SAVE_SESSION, true);
   command_updater_.UpdateCommandEnabled(IDC_VIV_COMMAND_SHOW_WELCOME, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_FOCUS_ADDRESSFIELD, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_CAPTURE_PAGE_TO_DISK, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_CAPTURE_PAGE_TO_CLIPBOARD, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_CAPTURE_AREA_TO_DISK, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_CAPTURE_AREA_TO_CLIPBOARD, true);
+  command_updater_.UpdateCommandEnabled(IDC_VIV_HISTORY_PANEL, true);
 }
 
 bool ExecuteVivaldiCommands(Browser *browser, int id) {
@@ -111,8 +127,15 @@ bool ExecuteVivaldiCommands(Browser *browser, int id) {
     case IDC_VIV_COMMAND_OPEN_SESSION:
     case IDC_VIV_COMMAND_SAVE_SESSION:
     case IDC_VIV_COMMAND_SHOW_WELCOME:
+    case IDC_VIV_FOCUS_ADDRESSFIELD:
+    case IDC_VIV_CAPTURE_PAGE_TO_DISK:
+    case IDC_VIV_CAPTURE_PAGE_TO_CLIPBOARD:
+    case IDC_VIV_CAPTURE_AREA_TO_DISK:
+    case IDC_VIV_CAPTURE_AREA_TO_CLIPBOARD:
+    case IDC_VIV_HISTORY_PANEL:
+      // The API is registered with a regular profile.
       extensions::ShowMenuAPI::GetFactoryInstance()
-        ->Get(browser->profile())->CommandExecuted(id);
+        ->Get(browser->profile()->GetOriginalProfile())->CommandExecuted(id);
       break;
 
     default:

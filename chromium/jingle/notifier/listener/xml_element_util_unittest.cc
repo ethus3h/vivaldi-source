@@ -4,14 +4,14 @@
 
 #include "jingle/notifier/listener/xml_element_util.h"
 
+#include <memory>
 #include <sstream>
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/webrtc/libjingle/xmllite/qname.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
-#include "third_party/webrtc/libjingle/xmllite/xmlprinter.h"
+#include "third_party/libjingle_xmpp/xmllite/qname.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlprinter.h"
 
 namespace buzz {
 class XmlElement;
@@ -31,24 +31,22 @@ TEST_F(XmlElementUtilTest, XmlElementToString) {
 }
 
 TEST_F(XmlElementUtilTest, MakeBoolXmlElement) {
-  scoped_ptr<buzz::XmlElement> foo_false(
-      MakeBoolXmlElement("foo", false));
+  std::unique_ptr<buzz::XmlElement> foo_false(MakeBoolXmlElement("foo", false));
   EXPECT_EQ("<foo xmlns=\"\" bool=\"false\"/>", XmlElementToString(*foo_false));
 
-  scoped_ptr<buzz::XmlElement> bar_true(
-      MakeBoolXmlElement("bar", true));
+  std::unique_ptr<buzz::XmlElement> bar_true(MakeBoolXmlElement("bar", true));
   EXPECT_EQ("<bar xmlns=\"\" bool=\"true\"/>", XmlElementToString(*bar_true));
 }
 
 TEST_F(XmlElementUtilTest, MakeIntXmlElement) {
-  scoped_ptr<buzz::XmlElement> int_xml_element(
+  std::unique_ptr<buzz::XmlElement> int_xml_element(
       MakeIntXmlElement("foo", 35));
   EXPECT_EQ("<foo xmlns=\"\" int=\"35\"/>",
             XmlElementToString(*int_xml_element));
 }
 
 TEST_F(XmlElementUtilTest, MakeStringXmlElement) {
-  scoped_ptr<buzz::XmlElement> string_xml_element(
+  std::unique_ptr<buzz::XmlElement> string_xml_element(
       MakeStringXmlElement("foo", "bar"));
   EXPECT_EQ("<foo xmlns=\"\" data=\"bar\"/>",
             XmlElementToString(*string_xml_element));

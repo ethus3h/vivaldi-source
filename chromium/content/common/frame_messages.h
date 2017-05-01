@@ -18,35 +18,48 @@
 #include "cc/surfaces/surface_sequence.h"
 #include "content/common/content_export.h"
 #include "content/common/content_param_traits.h"
+#include "content/common/content_security_policy_header.h"
+#include "content/common/download/mhtml_save_status.h"
 #include "content/common/frame_message_enums.h"
-#include "content/common/frame_param.h"
+#include "content/common/frame_owner_properties.h"
 #include "content/common/frame_replication_state.h"
 #include "content/common/navigation_gesture.h"
 #include "content/common/navigation_params.h"
-#include "content/common/resource_request_body.h"
 #include "content/common/savable_subframe.h"
 #include "content/public/common/color_suggestion.h"
 #include "content/public/common/common_param_traits.h"
 #include "content/public/common/console_message_level.h"
 #include "content/public/common/context_menu_params.h"
+#include "content/public/common/file_chooser_file_info.h"
+#include "content/public/common/file_chooser_params.h"
+#include "content/public/common/form_field_data.h"
 #include "content/public/common/frame_navigate_params.h"
 #include "content/public/common/javascript_message_type.h"
-#include "content/public/common/message_port_types.h"
 #include "content/public/common/page_importance_signals.h"
 #include "content/public/common/page_state.h"
+#include "content/public/common/previews_state.h"
+#include "content/public/common/referrer.h"
 #include "content/public/common/resource_response.h"
+#include "content/public/common/stop_find_action.h"
 #include "content/public/common/three_d_api_types.h"
-#include "content/public/common/transition_element.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_platform_file.h"
+#include "ppapi/features/features.h"
 #include "third_party/WebKit/public/platform/WebFocusType.h"
+#include "third_party/WebKit/public/platform/WebInsecureRequestPolicy.h"
+#include "third_party/WebKit/public/web/WebFindOptions.h"
 #include "third_party/WebKit/public/web/WebFrameOwnerProperties.h"
+#include "third_party/WebKit/public/web/WebFrameSerializerCacheControlPolicy.h"
 #include "third_party/WebKit/public/web/WebTreeScopeType.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/ipc/gfx_param_traits.h"
+#include "ui/gfx/ipc/skia/gfx_skia_param_traits.h"
+#include "ui/gfx/range/range.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 #include "content/common/pepper_renderer_instance_data.h"
 #endif
 
@@ -54,8 +67,10 @@
 #ifndef CONTENT_COMMON_FRAME_MESSAGES_H_
 #define CONTENT_COMMON_FRAME_MESSAGES_H_
 
-using FrameMsg_GetSerializedHtmlWithLocalLinks_Map =
+using FrameMsg_GetSerializedHtmlWithLocalLinks_UrlMap =
     std::map<GURL, base::FilePath>;
+using FrameMsg_GetSerializedHtmlWithLocalLinks_FrameRoutingIdMap =
+    std::map<int, base::FilePath>;
 
 using FrameMsg_SerializeAsMHTML_FrameRoutingIdToContentIdMap =
     std::map<int, std::string>;
@@ -67,9 +82,6 @@ using FrameMsg_SerializeAsMHTML_FrameRoutingIdToContentIdMap =
 
 #define IPC_MESSAGE_START FrameMsgStart
 
-IPC_ENUM_TRAITS_MIN_MAX_VALUE(AccessibilityMode,
-                              AccessibilityModeOff,
-                              AccessibilityModeComplete)
 IPC_ENUM_TRAITS_MIN_MAX_VALUE(content::JavaScriptMessageType,
                               content::JAVASCRIPT_MESSAGE_TYPE_ALERT,
                               content::JAVASCRIPT_MESSAGE_TYPE_PROMPT)
@@ -84,13 +96,26 @@ IPC_ENUM_TRAITS_MAX_VALUE(blink::WebContextMenuData::InputFieldType,
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebFocusType, blink::WebFocusTypeLast)
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebFrameOwnerProperties::ScrollingMode,
                           blink::WebFrameOwnerProperties::ScrollingMode::Last)
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebPermissionType,
+                          blink::WebPermissionTypeLast)
+IPC_ENUM_TRAITS_MAX_VALUE(content::StopFindAction,
+                          content::STOP_FIND_ACTION_LAST)
 IPC_ENUM_TRAITS(blink::WebSandboxFlags)  // Bitmask.
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebTreeScopeType,
                           blink::WebTreeScopeType::Last)
 IPC_ENUM_TRAITS_MAX_VALUE(ui::MenuSourceType, ui::MENU_SOURCE_TYPE_LAST)
-IPC_ENUM_TRAITS_MIN_MAX_VALUE(content::LoFiState,
-                              content::LOFI_UNSPECIFIED,
-                              content::LOFI_ON)
+IPC_ENUM_TRAITS_MIN_MAX_VALUE(content::PreviewsState,
+                              content::PREVIEWS_UNSPECIFIED,
+                              content::PREVIEWS_STATE_LAST)
+IPC_ENUM_TRAITS_MAX_VALUE(content::FileChooserParams::Mode,
+                          content::FileChooserParams::Save)
+
+IPC_STRUCT_TRAITS_BEGIN(blink::WebFindOptions)
+  IPC_STRUCT_TRAITS_MEMBER(forward)
+  IPC_STRUCT_TRAITS_MEMBER(matchCase)
+  IPC_STRUCT_TRAITS_MEMBER(findNext)
+  IPC_STRUCT_TRAITS_MEMBER(force)
+IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::ColorSuggestion)
   IPC_STRUCT_TRAITS_MEMBER(color)
@@ -115,7 +140,7 @@ IPC_STRUCT_TRAITS_BEGIN(content::ContextMenuParams)
   IPC_STRUCT_TRAITS_MEMBER(selection_text)
   IPC_STRUCT_TRAITS_MEMBER(title_text)
   IPC_STRUCT_TRAITS_MEMBER(suggested_filename)
-  IPC_STRUCT_TRAITS_MEMBER(isVivaldiAddressfield)
+  IPC_STRUCT_TRAITS_MEMBER(vivaldi_input_type)
   IPC_STRUCT_TRAITS_MEMBER(misspelled_word)
   IPC_STRUCT_TRAITS_MEMBER(misspelling_hash)
   IPC_STRUCT_TRAITS_MEMBER(dictionary_suggestions)
@@ -125,7 +150,6 @@ IPC_STRUCT_TRAITS_BEGIN(content::ContextMenuParams)
   IPC_STRUCT_TRAITS_MEMBER(writing_direction_left_to_right)
   IPC_STRUCT_TRAITS_MEMBER(writing_direction_right_to_left)
   IPC_STRUCT_TRAITS_MEMBER(edit_flags)
-  IPC_STRUCT_TRAITS_MEMBER(security_info)
   IPC_STRUCT_TRAITS_MEMBER(frame_charset)
   IPC_STRUCT_TRAITS_MEMBER(referrer_policy)
   IPC_STRUCT_TRAITS_MEMBER(custom_context)
@@ -145,15 +169,15 @@ IPC_STRUCT_TRAITS_BEGIN(content::CustomContextMenuContext)
   IPC_STRUCT_TRAITS_MEMBER(link_followed)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_TRAITS_BEGIN(blink::WebFrameOwnerProperties)
-  IPC_STRUCT_TRAITS_MEMBER(scrollingMode)
-  IPC_STRUCT_TRAITS_MEMBER(marginWidth)
-  IPC_STRUCT_TRAITS_MEMBER(marginHeight)
-IPC_STRUCT_TRAITS_END()
-
-IPC_STRUCT_TRAITS_BEGIN(content::TransitionElement)
-  IPC_STRUCT_TRAITS_MEMBER(id)
-  IPC_STRUCT_TRAITS_MEMBER(rect)
+IPC_STRUCT_TRAITS_BEGIN(content::FrameOwnerProperties)
+  IPC_STRUCT_TRAITS_MEMBER(name)
+  IPC_STRUCT_TRAITS_MEMBER(scrolling_mode)
+  IPC_STRUCT_TRAITS_MEMBER(margin_width)
+  IPC_STRUCT_TRAITS_MEMBER(margin_height)
+  IPC_STRUCT_TRAITS_MEMBER(allow_fullscreen)
+  IPC_STRUCT_TRAITS_MEMBER(allow_payment_request)
+  IPC_STRUCT_TRAITS_MEMBER(required_csp)
+  IPC_STRUCT_TRAITS_MEMBER(delegated_permissions)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::PageImportanceSignals)
@@ -177,7 +201,6 @@ IPC_STRUCT_BEGIN(FrameHostMsg_DidFailProvisionalLoadWithError_Params)
 IPC_STRUCT_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::FrameNavigateParams)
-  IPC_STRUCT_TRAITS_MEMBER(page_id)
   IPC_STRUCT_TRAITS_MEMBER(nav_entry_id)
   IPC_STRUCT_TRAITS_MEMBER(frame_unique_name)
   IPC_STRUCT_TRAITS_MEMBER(item_sequence_number)
@@ -188,8 +211,6 @@ IPC_STRUCT_TRAITS_BEGIN(content::FrameNavigateParams)
   IPC_STRUCT_TRAITS_MEMBER(transition)
   IPC_STRUCT_TRAITS_MEMBER(redirects)
   IPC_STRUCT_TRAITS_MEMBER(should_update_history)
-  IPC_STRUCT_TRAITS_MEMBER(searchable_form_url)
-  IPC_STRUCT_TRAITS_MEMBER(searchable_form_encoding)
   IPC_STRUCT_TRAITS_MEMBER(contents_mime_type)
   IPC_STRUCT_TRAITS_MEMBER(socket_address)
 IPC_STRUCT_TRAITS_END()
@@ -209,15 +230,14 @@ IPC_STRUCT_BEGIN_WITH_PARENT(FrameHostMsg_DidCommitProvisionalLoad_Params,
   // Whether this commit created a new entry.
   IPC_STRUCT_MEMBER(bool, did_create_new_entry)
 
-  // Information regarding the security of the connection (empty if the
-  // connection was not secure).
-  IPC_STRUCT_MEMBER(std::string, security_info)
+  // Whether this commit should replace the current entry.
+  IPC_STRUCT_MEMBER(bool, should_replace_current_entry)
 
   // The gesture that initiated this navigation.
   IPC_STRUCT_MEMBER(content::NavigationGesture, gesture)
 
-  // True if this was a post request.
-  IPC_STRUCT_MEMBER(bool, is_post)
+  // The HTTP method used by the navigation.
+  IPC_STRUCT_MEMBER(std::string, method)
 
   // The POST body identifier. -1 if it doesn't exist.
   IPC_STRUCT_MEMBER(int64_t, post_id)
@@ -233,10 +253,6 @@ IPC_STRUCT_BEGIN_WITH_PARENT(FrameHostMsg_DidCommitProvisionalLoad_Params,
   // This flag is used to warn if the renderer is displaying an error page,
   // so that we can set the appropriate page type.
   IPC_STRUCT_MEMBER(bool, url_is_unreachable)
-
-  // True if the connection was proxied.  In this case, socket_address
-  // will represent the address of the proxy, rather than the remote host.
-  IPC_STRUCT_MEMBER(bool, was_fetched_via_proxy)
 
   // Serialized history item state to store in the navigation entry.
   IPC_STRUCT_MEMBER(content::PageState, page_state)
@@ -272,9 +288,18 @@ IPC_STRUCT_BEGIN_WITH_PARENT(FrameHostMsg_DidCommitProvisionalLoad_Params,
   // Timestamp at which the UI action that triggered the navigation originated.
   IPC_STRUCT_MEMBER(base::TimeTicks, ui_timestamp)
 
-  // True if the document for the load is enforcing strict mixed content
-  // checking.
-  IPC_STRUCT_MEMBER(bool, should_enforce_strict_mixed_content_checking)
+  // The insecure request policy the document for the load is enforcing.
+  IPC_STRUCT_MEMBER(blink::WebInsecureRequestPolicy, insecure_request_policy)
+
+  // True if the document for the load is a unique origin that should be
+  // considered potentially trustworthy.
+  IPC_STRUCT_MEMBER(bool, has_potentially_trustworthy_unique_origin)
+
+  // See WebSearchableFormData for a description of these.
+  // Not used by PlzNavigate: in that case these fields are sent to the browser
+  // in BeginNavigationParams.
+  IPC_STRUCT_MEMBER(GURL, searchable_form_url)
+  IPC_STRUCT_MEMBER(std::string, searchable_form_encoding)
 IPC_STRUCT_END()
 
 IPC_STRUCT_BEGIN(FrameMsg_PostMessage_Params)
@@ -298,7 +323,7 @@ IPC_STRUCT_BEGIN(FrameMsg_PostMessage_Params)
   IPC_STRUCT_MEMBER(base::string16, target_origin)
 
   // Information about the MessagePorts this message contains.
-  IPC_STRUCT_MEMBER(std::vector<content::TransferredMessagePort>, message_ports)
+  IPC_STRUCT_MEMBER(std::vector<int>, message_ports)
   IPC_STRUCT_MEMBER(std::vector<int>, new_routing_ids)
 IPC_STRUCT_END()
 
@@ -313,39 +338,46 @@ IPC_STRUCT_TRAITS_BEGIN(content::CommonNavigationParams)
   IPC_STRUCT_TRAITS_MEMBER(report_type)
   IPC_STRUCT_TRAITS_MEMBER(base_url_for_data_url)
   IPC_STRUCT_TRAITS_MEMBER(history_url_for_data_url)
-  IPC_STRUCT_TRAITS_MEMBER(lofi_state)
+  IPC_STRUCT_TRAITS_MEMBER(previews_state)
   IPC_STRUCT_TRAITS_MEMBER(navigation_start)
+  IPC_STRUCT_TRAITS_MEMBER(method)
+  IPC_STRUCT_TRAITS_MEMBER(post_data)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::BeginNavigationParams)
-  IPC_STRUCT_TRAITS_MEMBER(method)
   IPC_STRUCT_TRAITS_MEMBER(headers)
   IPC_STRUCT_TRAITS_MEMBER(load_flags)
   IPC_STRUCT_TRAITS_MEMBER(has_user_gesture)
   IPC_STRUCT_TRAITS_MEMBER(skip_service_worker)
   IPC_STRUCT_TRAITS_MEMBER(request_context_type)
+  IPC_STRUCT_TRAITS_MEMBER(mixed_content_context_type)
+  IPC_STRUCT_TRAITS_MEMBER(searchable_form_url)
+  IPC_STRUCT_TRAITS_MEMBER(searchable_form_encoding)
+  IPC_STRUCT_TRAITS_MEMBER(initiator_origin)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::StartNavigationParams)
-  IPC_STRUCT_TRAITS_MEMBER(is_post)
   IPC_STRUCT_TRAITS_MEMBER(extra_headers)
-  IPC_STRUCT_TRAITS_MEMBER(browser_initiated_post_data)
-#if defined(OS_ANDROID)
-  IPC_STRUCT_TRAITS_MEMBER(has_user_gesture)
-#endif
   IPC_STRUCT_TRAITS_MEMBER(transferred_request_child_id)
   IPC_STRUCT_TRAITS_MEMBER(transferred_request_request_id)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::NavigationTiming)
+  IPC_STRUCT_TRAITS_MEMBER(redirect_start)
+  IPC_STRUCT_TRAITS_MEMBER(redirect_end)
+  IPC_STRUCT_TRAITS_MEMBER(fetch_start)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::RequestNavigationParams)
   IPC_STRUCT_TRAITS_MEMBER(is_overriding_user_agent)
   IPC_STRUCT_TRAITS_MEMBER(redirects)
+  IPC_STRUCT_TRAITS_MEMBER(redirect_response)
   IPC_STRUCT_TRAITS_MEMBER(can_load_local_resources)
-  IPC_STRUCT_TRAITS_MEMBER(request_time)
   IPC_STRUCT_TRAITS_MEMBER(page_state)
-  IPC_STRUCT_TRAITS_MEMBER(page_id)
   IPC_STRUCT_TRAITS_MEMBER(nav_entry_id)
   IPC_STRUCT_TRAITS_MEMBER(is_same_document_history_load)
+  IPC_STRUCT_TRAITS_MEMBER(is_history_navigation_in_new_child)
+  IPC_STRUCT_TRAITS_MEMBER(subframe_unique_names)
   IPC_STRUCT_TRAITS_MEMBER(has_committed_real_load)
   IPC_STRUCT_TRAITS_MEMBER(intended_as_new_entry)
   IPC_STRUCT_TRAITS_MEMBER(pending_history_list_offset)
@@ -354,78 +386,56 @@ IPC_STRUCT_TRAITS_BEGIN(content::RequestNavigationParams)
   IPC_STRUCT_TRAITS_MEMBER(is_view_source)
   IPC_STRUCT_TRAITS_MEMBER(should_clear_history_list)
   IPC_STRUCT_TRAITS_MEMBER(should_create_service_worker)
+  IPC_STRUCT_TRAITS_MEMBER(navigation_timing)
   IPC_STRUCT_TRAITS_MEMBER(service_worker_provider_id)
+  IPC_STRUCT_TRAITS_MEMBER(appcache_host_id)
+  IPC_STRUCT_TRAITS_MEMBER(has_user_gesture)
 #if defined(OS_ANDROID)
   IPC_STRUCT_TRAITS_MEMBER(data_url_as_string)
 #endif
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::FeaturePolicyParsedWhitelist)
+  IPC_STRUCT_TRAITS_MEMBER(feature_name)
+  IPC_STRUCT_TRAITS_MEMBER(matches_all_origins)
+  IPC_STRUCT_TRAITS_MEMBER(origins)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::FrameReplicationState)
   IPC_STRUCT_TRAITS_MEMBER(origin)
   IPC_STRUCT_TRAITS_MEMBER(sandbox_flags)
   IPC_STRUCT_TRAITS_MEMBER(name)
+  IPC_STRUCT_TRAITS_MEMBER(unique_name)
+  IPC_STRUCT_TRAITS_MEMBER(feature_policy_header)
+  IPC_STRUCT_TRAITS_MEMBER(accumulated_csp_headers)
+  IPC_STRUCT_TRAITS_MEMBER(scope)
+  IPC_STRUCT_TRAITS_MEMBER(insecure_request_policy)
+  IPC_STRUCT_TRAITS_MEMBER(has_potentially_trustworthy_unique_origin)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_BEGIN(FrameMsg_NewFrame_WidgetParams)
-  // Gives the routing ID for the RenderWidget that will be attached to the
-  // new RenderFrame. If the RenderFrame does not need a RenderWidget, this
-  // is MSG_ROUTING_NONE and the other parameters are not read.
-  IPC_STRUCT_MEMBER(int, routing_id)
-
-  // Tells the new RenderWidget whether it is initially hidden.
-  IPC_STRUCT_MEMBER(bool, hidden)
-IPC_STRUCT_END()
-
-IPC_STRUCT_BEGIN(FrameMsg_NewFrame_Params)
-  // Specifies the routing ID of the new RenderFrame object.
-  IPC_STRUCT_MEMBER(int, routing_id)
-
-  // If a valid |proxy_routing_id| is provided, the new frame will be
-  // configured to replace the proxy on commit.
-  IPC_STRUCT_MEMBER(int, proxy_routing_id)
-
-  // Specifies the new frame's opener.  The opener will be null if this is
-  // MSG_ROUTING_NONE.
-  IPC_STRUCT_MEMBER(int, opener_routing_id)
-
-  // The new frame should be created as a child of the object
-  // identified by |parent_routing_id| or as top level if that is
-  // MSG_ROUTING_NONE.
-  IPC_STRUCT_MEMBER(int, parent_routing_id)
-
-  // Identifies the previous sibling of the new frame, so that the new frame is
-  // inserted into the correct place in the frame tree.  If this is
-  // MSG_ROUTING_NONE, the frame will be created as the leftmost child of its
-  // parent frame, in front of any other children.
-  IPC_STRUCT_MEMBER(int, previous_sibling_routing_id)
-
-  // When the new frame has a parent, |replication_state| holds the new frame's
-  // properties replicated from the process rendering the parent frame, such as
-  // the new frame's sandbox flags.
-  IPC_STRUCT_MEMBER(content::FrameReplicationState, replication_state)
-
-  // When the new frame has a parent, |frame_owner_properties| holds the
-  // properties of the HTMLFrameOwnerElement from the parent process.
-  // Note that unlike FrameReplicationState, this is not replicated for remote
-  // frames.
-  IPC_STRUCT_MEMBER(blink::WebFrameOwnerProperties, frame_owner_properties)
-
-  // Specifies properties for a new RenderWidget that will be attached to the
-  // new RenderFrame (if one is needed).
-  IPC_STRUCT_MEMBER(FrameMsg_NewFrame_WidgetParams, widget_params)
-IPC_STRUCT_END()
-
-// Parameters included with an OpenURL request.  |frame_unique_name| is only
-// specified if |is_history_navigation_in_new_child| is true, for the case that
-// the browser process should look for an existing history item for the frame.
+// Parameters included with an OpenURL request.
+// |is_history_navigation_in_new_child| is true in the case that the browser
+// process should look for an existing history item for the frame.
 IPC_STRUCT_BEGIN(FrameHostMsg_OpenURL_Params)
   IPC_STRUCT_MEMBER(GURL, url)
+  IPC_STRUCT_MEMBER(bool, uses_post)
+  IPC_STRUCT_MEMBER(scoped_refptr<content::ResourceRequestBodyImpl>,
+                    resource_request_body)
+  IPC_STRUCT_MEMBER(std::string, extra_headers)
   IPC_STRUCT_MEMBER(content::Referrer, referrer)
   IPC_STRUCT_MEMBER(WindowOpenDisposition, disposition)
   IPC_STRUCT_MEMBER(bool, should_replace_current_entry)
   IPC_STRUCT_MEMBER(bool, user_gesture)
   IPC_STRUCT_MEMBER(bool, is_history_navigation_in_new_child)
-  IPC_STRUCT_MEMBER(std::string, frame_unique_name)
+IPC_STRUCT_END()
+
+IPC_STRUCT_BEGIN(FrameHostMsg_DownloadUrl_Params)
+  IPC_STRUCT_MEMBER(int, render_view_id)
+  IPC_STRUCT_MEMBER(int, render_frame_id)
+  IPC_STRUCT_MEMBER(GURL, url)
+  IPC_STRUCT_MEMBER(content::Referrer, referrer)
+  IPC_STRUCT_MEMBER(url::Origin, initiator_origin)
+  IPC_STRUCT_MEMBER(base::string16, suggested_name)
 IPC_STRUCT_END()
 
 IPC_STRUCT_BEGIN(FrameMsg_TextTrackSettings_Params)
@@ -470,6 +480,17 @@ IPC_STRUCT_BEGIN(FrameMsg_SerializeAsMHTML_Params)
   // |mhtml_boundary_marker| should be used for serialization of each frame.
   IPC_STRUCT_MEMBER(std::string, mhtml_boundary_marker)
 
+  // Whether to use binary encoding while serializing.  Binary encoding is not
+  // supported outside of Chrome, so this should not be used if the MHTML is
+  // intended for sharing.
+  IPC_STRUCT_MEMBER(bool, mhtml_binary_encoding)
+
+  IPC_STRUCT_MEMBER(blink::WebFrameSerializerCacheControlPolicy,
+                    mhtml_cache_control_policy)
+
+  // Whether to remove popup overlay while serializing.
+  IPC_STRUCT_MEMBER(bool, mhtml_popup_overlay_removal)
+
   // Frame to content-id map.
   // Keys are routing ids of either RenderFrames or RenderFrameProxies.
   // Values are MHTML content-ids - see WebFrameSerializer::generateMHTMLParts.
@@ -491,6 +512,59 @@ IPC_STRUCT_BEGIN(FrameMsg_SerializeAsMHTML_Params)
   IPC_STRUCT_MEMBER(bool, is_last_frame)
 IPC_STRUCT_END()
 
+// This message is used to send hittesting data from the renderer in order
+// to perform hittesting on the browser process.
+IPC_STRUCT_BEGIN(FrameHostMsg_HittestData_Params)
+  // |surface_id| represents the surface used by this remote frame.
+  IPC_STRUCT_MEMBER(cc::SurfaceId, surface_id)
+
+  // If |ignored_for_hittest| then this surface should be ignored during
+  // hittesting.
+  IPC_STRUCT_MEMBER(bool, ignored_for_hittest)
+IPC_STRUCT_END()
+
+IPC_STRUCT_BEGIN(FrameHostMsg_CreateChildFrame_Params)
+  IPC_STRUCT_MEMBER(int32_t, parent_routing_id)
+  IPC_STRUCT_MEMBER(blink::WebTreeScopeType, scope)
+  IPC_STRUCT_MEMBER(std::string, frame_name)
+  IPC_STRUCT_MEMBER(std::string, frame_unique_name)
+  IPC_STRUCT_MEMBER(blink::WebSandboxFlags, sandbox_flags)
+  IPC_STRUCT_MEMBER(content::FrameOwnerProperties, frame_owner_properties)
+IPC_STRUCT_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::ContentSecurityPolicyHeader)
+  IPC_STRUCT_TRAITS_MEMBER(header_value)
+  IPC_STRUCT_TRAITS_MEMBER(type)
+  IPC_STRUCT_TRAITS_MEMBER(source)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::FormFieldData)
+  IPC_STRUCT_TRAITS_MEMBER(text)
+  IPC_STRUCT_TRAITS_MEMBER(placeholder)
+  IPC_STRUCT_TRAITS_MEMBER(text_input_type)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::FileChooserFileInfo)
+  IPC_STRUCT_TRAITS_MEMBER(file_path)
+  IPC_STRUCT_TRAITS_MEMBER(display_name)
+  IPC_STRUCT_TRAITS_MEMBER(file_system_url)
+  IPC_STRUCT_TRAITS_MEMBER(modification_time)
+  IPC_STRUCT_TRAITS_MEMBER(length)
+  IPC_STRUCT_TRAITS_MEMBER(is_directory)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::FileChooserParams)
+  IPC_STRUCT_TRAITS_MEMBER(mode)
+  IPC_STRUCT_TRAITS_MEMBER(title)
+  IPC_STRUCT_TRAITS_MEMBER(default_file_name)
+  IPC_STRUCT_TRAITS_MEMBER(accept_types)
+  IPC_STRUCT_TRAITS_MEMBER(need_local_path)
+#if defined(OS_ANDROID)
+  IPC_STRUCT_TRAITS_MEMBER(capture)
+#endif
+  IPC_STRUCT_TRAITS_MEMBER(requestor)
+IPC_STRUCT_TRAITS_END()
+
 IPC_STRUCT_BEGIN(FrameMsg_ExtendedLoadingProgress_Params)
   // Loading progress between 0.0 and 1.0
   IPC_STRUCT_MEMBER(double, load_progress)
@@ -505,7 +579,7 @@ IPC_STRUCT_BEGIN(FrameMsg_ExtendedLoadingProgress_Params)
   IPC_STRUCT_MEMBER(int, total_elements)
 IPC_STRUCT_END()
 
-#if defined(OS_MACOSX) || defined(OS_ANDROID)
+#if defined(USE_EXTERNAL_POPUP_MENU)
 // This message is used for supporting popup menus on Mac OS X and Android using
 // native controls. See the FrameHostMsg_ShowPopup message.
 IPC_STRUCT_BEGIN(FrameHostMsg_ShowPopup_Params)
@@ -532,7 +606,17 @@ IPC_STRUCT_BEGIN(FrameHostMsg_ShowPopup_Params)
 IPC_STRUCT_END()
 #endif
 
-#if defined(ENABLE_PLUGINS)
+// Causes a window previously opened via RenderMessageFilter::CreateNewWindow to
+// be shown on the screen. This message is routed to the preexisting frame that
+// opened the window, and |pending_widget_routing_id| corresponds to the
+// widget routing id from the CreateNewWindow reply.
+IPC_MESSAGE_ROUTED4(FrameHostMsg_ShowCreatedWindow,
+                    int /* pending_widget_routing_id */,
+                    WindowOpenDisposition /* disposition */,
+                    gfx::Rect /* initial_rect */,
+                    bool /* opened_by_user_gesture */)
+
+#if BUILDFLAG(ENABLE_PLUGINS)
 IPC_STRUCT_TRAITS_BEGIN(content::PepperRendererInstanceData)
   IPC_STRUCT_TRAITS_MEMBER(render_process_id)
   IPC_STRUCT_TRAITS_MEMBER(render_frame_id)
@@ -544,15 +628,6 @@ IPC_STRUCT_TRAITS_END()
 
 // -----------------------------------------------------------------------------
 // Messages sent from the browser to the renderer.
-
-// Notifies the embedding frame that a new CompositorFrame is ready to be
-// presented. When the frame finishes presenting, a matching
-// FrameHostMsg_CompositorFrameSwappedACK should be sent back to the
-// RenderViewHost that was produced the CompositorFrame.
-//
-// This is used in the ubercomp compositing path.
-IPC_MESSAGE_ROUTED1(FrameMsg_CompositorFrameSwapped,
-                    FrameMsg_CompositorFrameSwapped_Params /* params */)
 
 IPC_MESSAGE_ROUTED4(FrameMsg_SetChildFrameSurface,
                     cc::SurfaceId /* surface_id */,
@@ -569,6 +644,10 @@ IPC_MESSAGE_ROUTED0(FrameMsg_ChildFrameProcessGone)
 IPC_MESSAGE_ROUTED1(FrameMsg_ContextMenuClosed,
                     content::CustomContextMenuContext /* custom_context */)
 
+// Reloads all the Lo-Fi images in the RenderFrame. Ignores the cache and
+// reloads from the network.
+IPC_MESSAGE_ROUTED0(FrameMsg_ReloadLoFiImages)
+
 // Executes custom context menu action that was provided from Blink.
 IPC_MESSAGE_ROUTED2(FrameMsg_CustomContextMenuAction,
                     content::CustomContextMenuContext /* custom_context */,
@@ -583,25 +662,8 @@ IPC_MESSAGE_ROUTED1(FrameMsg_UpdateOpener, int /* opener_routing_id */)
 // commit, activation and frame swap of the current DOM tree in blink.
 IPC_MESSAGE_ROUTED1(FrameMsg_VisualStateRequest, uint64_t /* id */)
 
-// Instructs the renderer to create a new RenderFrame object.
-IPC_MESSAGE_CONTROL1(FrameMsg_NewFrame, FrameMsg_NewFrame_Params /* params */)
-
 // Instructs the renderer to delete the RenderFrame.
 IPC_MESSAGE_ROUTED0(FrameMsg_Delete)
-
-// Instructs the renderer to create a new RenderFrameProxy object with
-// |routing_id|.  |render_view_routing_id| identifies the
-// RenderView to be associated with this proxy.  The new proxy's opener should
-// be set to the object identified by |opener_routing_id|, or to null if that
-// is MSG_ROUTING_NONE.  The new proxy should be created as a child of the
-// object identified by |parent_routing_id| or as top level if that is
-// MSG_ROUTING_NONE.
-IPC_MESSAGE_CONTROL5(FrameMsg_NewFrameProxy,
-                     int /* routing_id */,
-                     int /* render_view_routing_id */,
-                     int /* opener_routing_id */,
-                     int /* parent_routing_id */,
-                     content::FrameReplicationState /* replication_state */)
 
 // Tells the renderer to perform the specified navigation, interrupting any
 // existing navigation.
@@ -612,7 +674,7 @@ IPC_MESSAGE_ROUTED3(FrameMsg_Navigate,
 
 // Instructs the renderer to invoke the frame's beforeunload event handler.
 // Expects the result to be returned via FrameHostMsg_BeforeUnload_ACK.
-IPC_MESSAGE_ROUTED0(FrameMsg_BeforeUnload)
+IPC_MESSAGE_ROUTED1(FrameMsg_BeforeUnload, bool /* is_reload */)
 
 // Instructs the frame to swap out for a cross-site transition, including
 // running the unload event handler and creating a RenderFrameProxy with the
@@ -621,6 +683,14 @@ IPC_MESSAGE_ROUTED3(FrameMsg_SwapOut,
                     int /* proxy_routing_id */,
                     bool /* is_loading */,
                     content::FrameReplicationState /* replication_state */)
+
+// Requests that a provisional RenderFrame swap itself into the frame tree,
+// replacing the RenderFrameProxy that it is associated with.  This is used
+// with remote-to-local frame navigations when the RenderFrameProxy corresponds
+// to a non-live (crashed) frame.  In that case, the browser process will send
+// this message as part of an early commit to stop showing the sad iframe
+// without waiting for the provisional RenderFrame's navigation to commit.
+IPC_MESSAGE_ROUTED0(FrameMsg_SwapIn)
 
 // Instructs the frame to stop the load in progress, if any.
 IPC_MESSAGE_ROUTED0(FrameMsg_Stop)
@@ -633,11 +703,7 @@ IPC_MESSAGE_ROUTED0(FrameMsg_DidStartLoading)
 // RenderFrame has completed loading.
 IPC_MESSAGE_ROUTED0(FrameMsg_DidStopLoading)
 
-// Request for the renderer to insert CSS into the frame.
-IPC_MESSAGE_ROUTED1(FrameMsg_CSSInsertRequest,
-                    std::string  /* css */)
-
-// Add message to the devtools console.
+// Add message to the frame console.
 IPC_MESSAGE_ROUTED2(FrameMsg_AddMessageToConsole,
                     content::ConsoleMessageLevel /* level */,
                     std::string /* message */)
@@ -672,38 +738,10 @@ IPC_MESSAGE_ROUTED4(FrameMsg_JavaScriptExecuteRequestInIsolatedWorld,
                     bool, /* if true, a reply is requested */
                     int /* world_id */)
 
-// Selects between the given start and end offsets in the currently focused
-// editable field.
-IPC_MESSAGE_ROUTED2(FrameMsg_SetEditableSelectionOffsets,
-                    int /* start */,
-                    int /* end */)
-
-// Requests a navigation to the supplied markup, in an iframe with sandbox
-// attributes.
-IPC_MESSAGE_ROUTED1(FrameMsg_SetupTransitionView,
-                    std::string /* markup */)
-
-// Tells the renderer to hide the elements specified by the supplied CSS
-// selector, and activates any exiting-transition stylesheets.
-IPC_MESSAGE_ROUTED2(FrameMsg_BeginExitTransition,
-                    std::string /* css_selector */,
-                    bool /* exit_to_native_app */)
-
-// Tell the renderer to revert the exit transition done before
-IPC_MESSAGE_ROUTED0(FrameMsg_RevertExitTransition)
-
-// Tell the renderer to hide transition elements.
-IPC_MESSAGE_ROUTED1(FrameMsg_HideTransitionElements,
-                    std::string /* css_selector */)
-
-// Tell the renderer to hide transition elements.
-IPC_MESSAGE_ROUTED1(FrameMsg_ShowTransitionElements,
-                    std::string /* css_selector */)
-
-// Tells the renderer to reload the frame, optionally ignoring the cache while
+// Tells the renderer to reload the frame, optionally bypassing the cache while
 // doing so.
 IPC_MESSAGE_ROUTED1(FrameMsg_Reload,
-                    bool /* ignore_cache */)
+                    bool /* bypass_cache */)
 
 // Notifies the color chooser client that the user selected a color.
 IPC_MESSAGE_ROUTED2(FrameMsg_DidChooseColorResponse, unsigned, SkColor)
@@ -711,18 +749,18 @@ IPC_MESSAGE_ROUTED2(FrameMsg_DidChooseColorResponse, unsigned, SkColor)
 // Notifies the color chooser client that the color chooser has ended.
 IPC_MESSAGE_ROUTED1(FrameMsg_DidEndColorChooser, unsigned)
 
-// Notifies the corresponding RenderFrameProxy object to replace itself with the
-// RenderFrame object it is associated with.
+// Requests the corresponding RenderFrameProxy to be deleted and removed from
+// the frame tree.
 IPC_MESSAGE_ROUTED0(FrameMsg_DeleteProxy)
 
 // Request the text surrounding the selection with a |max_length|. The response
 // will be sent via FrameHostMsg_TextSurroundingSelectionResponse.
 IPC_MESSAGE_ROUTED1(FrameMsg_TextSurroundingSelectionRequest,
-                    size_t /* max_length */)
+                    uint32_t /* max_length */)
 
-// Tells the renderer to insert a link to the specified stylesheet. This is
-// needed to support navigation transitions.
-IPC_MESSAGE_ROUTED1(FrameMsg_AddStyleSheetByURL, std::string)
+// Requests information about currently focused text input element from the
+// renderer.
+IPC_MESSAGE_ROUTED1(FrameMsg_FocusedFormFieldDataRequest, int /* request_id */)
 
 // Change the accessibility mode in the renderer process.
 IPC_MESSAGE_ROUTED1(FrameMsg_SetAccessibilityMode,
@@ -736,21 +774,37 @@ IPC_MESSAGE_ROUTED1(FrameMsg_DidUpdateSandboxFlags, blink::WebSandboxFlags)
 
 // Update a proxy's window.name property.  Used when the frame's name is
 // changed in another process.
-IPC_MESSAGE_ROUTED1(FrameMsg_DidUpdateName, std::string /* name */)
+IPC_MESSAGE_ROUTED2(FrameMsg_DidUpdateName,
+                    std::string /* name */,
+                    std::string /* unique_name */)
 
-// Update a proxy's replicated enforcement of strict mixed content
-// checking.  Used when the frame's mixed content setting is changed in
-// another process.
-IPC_MESSAGE_ROUTED1(FrameMsg_EnforceStrictMixedContentChecking,
-                    bool /* should enforce */)
+// Updates replicated ContentSecurityPolicy in a frame proxy.
+IPC_MESSAGE_ROUTED1(FrameMsg_AddContentSecurityPolicy,
+                    content::ContentSecurityPolicyHeader)
+
+// Resets ContentSecurityPolicy in a frame proxy / in RemoteSecurityContext.
+IPC_MESSAGE_ROUTED0(FrameMsg_ResetContentSecurityPolicy)
+
+// Update a proxy's replicated enforcement of insecure request policy.
+// Used when the frame's policy is changed in another process.
+IPC_MESSAGE_ROUTED1(FrameMsg_EnforceInsecureRequestPolicy,
+                    blink::WebInsecureRequestPolicy)
 
 // Update a proxy's replicated origin.  Used when the frame is navigated to a
 // new origin.
-IPC_MESSAGE_ROUTED1(FrameMsg_DidUpdateOrigin, url::Origin /* origin */)
+IPC_MESSAGE_ROUTED2(FrameMsg_DidUpdateOrigin,
+                    url::Origin /* origin */,
+                    bool /* is potentially trustworthy unique origin */)
 
 // Notifies this frame or proxy that it is now focused.  This is used to
 // support cross-process focused frame changes.
 IPC_MESSAGE_ROUTED0(FrameMsg_SetFocusedFrame)
+
+// Sent to a frame proxy when its real frame is preparing to enter fullscreen
+// in another process.  Actually entering fullscreen will be done separately as
+// part of ViewMsg_Resize, once the browser process has resized the tab for
+// fullscreen.
+IPC_MESSAGE_ROUTED0(FrameMsg_WillEnterFullscreen)
 
 // Send to the RenderFrame to set text tracks state and style settings.
 // Sent for top-level frames.
@@ -760,19 +814,50 @@ IPC_MESSAGE_ROUTED1(FrameMsg_SetTextTrackSettings,
 // Posts a message from a frame in another process to the current renderer.
 IPC_MESSAGE_ROUTED1(FrameMsg_PostMessageEvent, FrameMsg_PostMessage_Params)
 
-#if defined(OS_ANDROID)
+// Tells the RenderFrame to clear the focused element (if any).
+IPC_MESSAGE_ROUTED0(FrameMsg_ClearFocusedElement)
 
-// External popup menus.
+#if defined(OS_ANDROID)
+// Request the distance to the nearest find result in a frame from the point at
+// (x, y), defined in fractions of the content document's width and height. The
+// distance will be returned via FrameHostMsg_GetNearestFindResult_Reply.  Note
+// that |nfr_request_id| is a completely seperate ID from the |request_id| used
+// in other find-related IPCs. It is specifically used to uniquely identify a
+// nearest find result request, rather than a find request.
+IPC_MESSAGE_ROUTED3(FrameMsg_GetNearestFindResult,
+                    int /* nfr_request_id */,
+                    float /* x */,
+                    float /* y */)
+
+// Activates a find result. The point (x,y) is in fractions of the content
+// document's width and height.
+IPC_MESSAGE_ROUTED3(FrameMsg_ActivateNearestFindResult,
+                    int /* request_id */,
+                    float /* x */,
+                    float /* y */)
+
+// Sent when the browser wants the bounding boxes of the current find matches.
+//
+// If match rects are already cached on the browser side, |current_version|
+// should be the version number from the FrameHostMsg_FindMatchRects_Reply
+// they came in, so the renderer can tell if it needs to send updated rects.
+// Otherwise just pass -1 to always receive the list of rects.
+//
+// There must be an active search string (it is probably most useful to call
+// this immediately after a FrameHostMsg_Find_Reply message arrives with
+// final_update set to true).
+IPC_MESSAGE_ROUTED1(FrameMsg_FindMatchRects, int /* current_version */)
+#endif
+
+#if defined(USE_EXTERNAL_POPUP_MENU)
+#if defined(OS_MACOSX)
+IPC_MESSAGE_ROUTED1(FrameMsg_SelectPopupMenuItem,
+                    int /* selected index, -1 means no selection */)
+#else
 IPC_MESSAGE_ROUTED2(FrameMsg_SelectPopupMenuItems,
                     bool /* user canceled the popup */,
                     std::vector<int> /* selected indices */)
-
-#elif defined(OS_MACOSX)
-
-// External popup menus.
-IPC_MESSAGE_ROUTED1(FrameMsg_SelectPopupMenuItem,
-                    int /* selected index, -1 means no selection */)
-
+#endif
 #endif
 
 // PlzNavigate
@@ -780,10 +865,10 @@ IPC_MESSAGE_ROUTED1(FrameMsg_SelectPopupMenuItem,
 // request |stream_url| to get access to the stream containing the body of the
 // response.
 IPC_MESSAGE_ROUTED4(FrameMsg_CommitNavigation,
-                    content::ResourceResponseHead,   /* response */
-                    GURL,                            /* stream_url */
-                    content::CommonNavigationParams, /* common_params */
-                    content::RequestNavigationParams /* request_params */)
+                    content::ResourceResponseHead,    /* response */
+                    GURL,                             /* stream_url */
+                    content::CommonNavigationParams,  /* common_params */
+                    content::RequestNavigationParams  /* request_params */)
 
 // PlzNavigate
 // Tells the renderer that a navigation failed with the error code |error_code|
@@ -800,8 +885,9 @@ IPC_MESSAGE_ROUTED0(FrameMsg_GetSavableResourceLinks)
 
 // Get html data by serializing the target frame and replacing all resource
 // links with a path to the local copy passed in the message payload.
-IPC_MESSAGE_ROUTED1(FrameMsg_GetSerializedHtmlWithLocalLinks,
-                    FrameMsg_GetSerializedHtmlWithLocalLinks_Map)
+IPC_MESSAGE_ROUTED2(FrameMsg_GetSerializedHtmlWithLocalLinks,
+                    FrameMsg_GetSerializedHtmlWithLocalLinks_UrlMap,
+                    FrameMsg_GetSerializedHtmlWithLocalLinks_FrameRoutingIdMap)
 
 // Serialize target frame and its resources into MHTML and write it into the
 // provided destination file handle.  Note that when serializing multiple
@@ -811,7 +897,7 @@ IPC_MESSAGE_ROUTED1(FrameMsg_GetSerializedHtmlWithLocalLinks,
 IPC_MESSAGE_ROUTED1(FrameMsg_SerializeAsMHTML, FrameMsg_SerializeAsMHTML_Params)
 
 IPC_MESSAGE_ROUTED1(FrameMsg_SetFrameOwnerProperties,
-                    blink::WebFrameOwnerProperties /* frame_owner_properties */)
+                    content::FrameOwnerProperties /* frame_owner_properties */)
 
 // Request to continue running the sequential focus navigation algorithm in
 // this frame.  |source_routing_id| identifies the frame that issued this
@@ -821,18 +907,66 @@ IPC_MESSAGE_ROUTED2(FrameMsg_AdvanceFocus,
                     blink::WebFocusType /* type */,
                     int32_t /* source_routing_id */)
 
-#if defined(ENABLE_PLUGINS)
+// Sent when the user wants to search for a word on the page (find-in-page).
+IPC_MESSAGE_ROUTED3(FrameMsg_Find,
+                    int /* request_id */,
+                    base::string16 /* search_text */,
+                    blink::WebFindOptions)
+
+// This message notifies the frame that it is no longer the active frame in the
+// current find session, and so it should clear its active find match (and no
+// longer highlight it with special coloring).
+IPC_MESSAGE_ROUTED0(FrameMsg_ClearActiveFindMatch)
+
+// This message notifies the frame that the user has closed the find-in-page
+// window (and what action to take regarding the selection).
+IPC_MESSAGE_ROUTED1(FrameMsg_StopFinding, content::StopFindAction /* action */)
+
+// Copies the image at location x, y to the clipboard (if there indeed is an
+// image at that location).
+IPC_MESSAGE_ROUTED2(FrameMsg_CopyImageAt,
+                    int /* x */,
+                    int /* y */)
+
+// Saves the image at location x, y to the disk (if there indeed is an
+// image at that location).
+IPC_MESSAGE_ROUTED2(FrameMsg_SaveImageAt,
+                    int /* x */,
+                    int /* y */)
+
+#if BUILDFLAG(ENABLE_PLUGINS)
 // Notifies the renderer of updates to the Plugin Power Saver origin whitelist.
 IPC_MESSAGE_ROUTED1(FrameMsg_UpdatePluginContentOriginWhitelist,
                     std::set<url::Origin> /* origin_whitelist */)
-#endif  // defined(ENABLE_PLUGINS)
+
+// This message notifies that the frame that the volume of the Pepper instance
+// for |pp_instance| should be changed to |volume|.
+IPC_MESSAGE_ROUTED2(FrameMsg_SetPepperVolume,
+                    int32_t /* pp_instance */,
+                    double /* volume */)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
+
+// Used to instruct the RenderFrame to go into "view source" mode. This should
+// only be sent to the main frame.
+IPC_MESSAGE_ROUTED0(FrameMsg_EnableViewSourceMode)
+
+// Tells the frame to suppress any further modal dialogs. This ensures that no
+// ScopedPageLoadDeferrer is on the stack for SwapOut.
+IPC_MESSAGE_ROUTED0(FrameMsg_SuppressFurtherDialogs)
+
+// Tells the frame to consider itself to have received a user gesture (based
+// on a user gesture processed in a different process).
+IPC_MESSAGE_ROUTED0(FrameMsg_SetHasReceivedUserGesture)
+
+IPC_MESSAGE_ROUTED1(FrameMsg_RunFileChooserResponse,
+                    std::vector<content::FileChooserFileInfo>)
 
 // -----------------------------------------------------------------------------
 // Messages sent from the renderer to the browser.
 
 // Blink and JavaScript error messages to log to the console
 // or debugger UI.
-IPC_MESSAGE_ROUTED4(FrameHostMsg_AddMessageToConsole,
+IPC_MESSAGE_ROUTED4(FrameHostMsg_DidAddMessageToConsole,
                     int32_t,        /* log level */
                     base::string16, /* msg */
                     int32_t,        /* line number */
@@ -842,14 +976,9 @@ IPC_MESSAGE_ROUTED4(FrameHostMsg_AddMessageToConsole,
 //
 // Each of these messages will have a corresponding FrameHostMsg_Detach message
 // sent when the frame is detached from the DOM.
-IPC_SYNC_MESSAGE_CONTROL5_1(
-    FrameHostMsg_CreateChildFrame,
-    int32_t /* parent_routing_id */,
-    blink::WebTreeScopeType /* scope */,
-    std::string /* frame_name */,
-    blink::WebSandboxFlags /* sandbox flags */,
-    blink::WebFrameOwnerProperties /* frame_owner_properties */,
-    int32_t /* new_routing_id */)
+IPC_SYNC_MESSAGE_CONTROL1_1(FrameHostMsg_CreateChildFrame,
+                            FrameHostMsg_CreateChildFrame_Params,
+                            int32_t /* new_routing_id */)
 
 // Sent by the renderer to the parent RenderFrameHost when a child frame is
 // detached from the DOM.
@@ -888,9 +1017,6 @@ IPC_MESSAGE_ROUTED4(FrameHostMsg_DidFailLoadWithError,
                     base::string16 /* error_description */,
                     bool /* was_ignored_by_handler */)
 
-// Sent when the renderer decides to ignore a navigation.
-IPC_MESSAGE_ROUTED0(FrameHostMsg_DidDropNavigation)
-
 // Sent when the renderer starts loading the page. |to_different_document| will
 // be true unless the load is a fragment navigation, or triggered by
 // history.pushState/replaceState.
@@ -904,14 +1030,38 @@ IPC_MESSAGE_ROUTED0(FrameHostMsg_DidStopLoading)
 IPC_MESSAGE_ROUTED1(FrameHostMsg_UpdateState, content::PageState /* state */)
 
 // Sent when the frame changes its window.name.
-IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeName, std::string /* name */)
+IPC_MESSAGE_ROUTED2(FrameHostMsg_DidChangeName,
+                    std::string /* name */,
+                    std::string /* unique_name */)
 
-// Sent when the frame starts enforcing strict mixed content
-// checking. Sending this information in DidCommitProvisionalLoad isn't
-// sufficient; this message is needed because, for example, a document
-// can dynamically insert a <meta> tag that causes strict mixed content
-// checking to be enforced.
-IPC_MESSAGE_ROUTED0(FrameHostMsg_EnforceStrictMixedContentChecking)
+// Notifies the browser process that a non-empty Feature-Policy HTTP header was
+// delivered with the document being loaded into the frame. |parsed_header| is
+// a list of an origin whitelist for each feature in the policy.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_DidSetFeaturePolicyHeader,
+                    content::ParsedFeaturePolicy /* parsed_header */)
+
+// Notifies the browser process about a new Content Security Policy that needs
+// to be applies to the frame.  This message is sent when a frame commits
+// navigation to a new location (reporting accumulated policies from HTTP
+// headers and/or policies that might have been inherited from the parent frame)
+// or when a new policy has been discovered afterwards (i.e. found in a
+// dynamically added or a static <meta> element).
+IPC_MESSAGE_ROUTED1(FrameHostMsg_DidAddContentSecurityPolicy,
+                    content::ContentSecurityPolicyHeader)
+
+// Sent when the frame starts enforcing an insecure request policy. Sending
+// this information in DidCommitProvisionalLoad isn't sufficient; this
+// message is needed because, for example, a document can dynamically insert
+// a <meta> tag that causes strict mixed content checking to be enforced.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_EnforceInsecureRequestPolicy,
+                    blink::WebInsecureRequestPolicy)
+
+// Sent when the frame is set to a unique origin. TODO(estark): this IPC
+// only exists to support dynamic sandboxing via a CSP delivered in a
+// <meta> tag. This is not supposed to be allowed per the CSP spec and
+// should be ripped out. https://crbug.com/594645
+IPC_MESSAGE_ROUTED1(FrameHostMsg_UpdateToUniqueOrigin,
+                    bool /* is potentially trustworthy unique origin */)
 
 // Sent when the renderer changed the progress of a load.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeLoadProgress,
@@ -924,9 +1074,25 @@ IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeLoadProgressExtended,
 // Requests that the given URL be opened in the specified manner.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_OpenURL, FrameHostMsg_OpenURL_Params)
 
+// If a cross-process navigation was started for the initial history load in
+// this subframe, this tries to cancel it to allow a client redirect to happen
+// instead.
+IPC_MESSAGE_ROUTED0(FrameHostMsg_CancelInitialHistoryLoad)
+
 // Notifies the browser that a frame finished loading.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_DidFinishLoad,
                     GURL /* validated_url */)
+
+// Initiates a download based on user actions like 'ALT+click'.
+IPC_MESSAGE_CONTROL(FrameHostMsg_DownloadUrl, FrameHostMsg_DownloadUrl_Params)
+
+// Asks the browser to save a image (for <canvas> or <img>) from a data URL.
+// Note: |data_url| is the contents of a data:URL, and that it's represented as
+// a string only to work around size limitations for GURLs in IPC messages.
+IPC_MESSAGE_CONTROL3(FrameHostMsg_SaveImageFromDataURL,
+                     int /* render_view_id */,
+                     int /* render_frame_id */,
+                     std::string /* data_url */)
 
 // Sent when after the onload handler has been invoked for the document
 // in this frame. Sent for top-level frames. |report_type| and |ui_timestamp|
@@ -947,9 +1113,6 @@ IPC_MESSAGE_ROUTED0(FrameHostMsg_DidAccessInitialDocument)
 // window.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeOpener, int /* opener_routing_id */)
 
-// Notifies the browser that a page id was assigned.
-IPC_MESSAGE_ROUTED1(FrameHostMsg_DidAssignPageId, int32_t /* page_id */)
-
 // Notifies the browser that sandbox flags have changed for a subframe of this
 // frame.
 IPC_MESSAGE_ROUTED2(FrameHostMsg_DidChangeSandboxFlags,
@@ -960,7 +1123,7 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_DidChangeSandboxFlags,
 // of this frame.
 IPC_MESSAGE_ROUTED2(FrameHostMsg_DidChangeFrameOwnerProperties,
                     int32_t /* subframe_routing_id */,
-                    blink::WebFrameOwnerProperties /* frame_owner_properties */)
+                    content::FrameOwnerProperties /* frame_owner_properties */)
 
 // Changes the title for the page in the UI when the page is navigated or the
 // title changes. Sent for top-level frames.
@@ -981,22 +1144,6 @@ IPC_MESSAGE_ROUTED1(FrameHostMsg_UpdateEncoding,
 IPC_MESSAGE_ROUTED1(FrameHostMsg_DomOperationResponse,
                     std::string  /* json_string */)
 
-// Used to set a cookie. The cookie is set asynchronously, but will be
-// available to a subsequent FrameHostMsg_GetCookies request.
-IPC_MESSAGE_CONTROL4(FrameHostMsg_SetCookie,
-                     int /* render_frame_id */,
-                     GURL /* url */,
-                     GURL /* first_party_for_cookies */,
-                     std::string /* cookie */)
-
-// Used to get cookies for the given URL. This may block waiting for a
-// previous SetCookie message to be processed.
-IPC_SYNC_MESSAGE_CONTROL3_1(FrameHostMsg_GetCookies,
-                            int /* render_frame_id */,
-                            GURL /* url */,
-                            GURL /* first_party_for_cookies */,
-                            std::string /* cookies */)
-
 // Used to check if cookies are enabled for the given URL. This may block
 // waiting for a previous SetCookie message to be processed.
 IPC_SYNC_MESSAGE_CONTROL3_1(FrameHostMsg_CookiesEnabled,
@@ -1013,22 +1160,25 @@ IPC_SYNC_MESSAGE_CONTROL3_1(FrameHostMsg_Are3DAPIsBlocked,
                             content::ThreeDAPIType /* requester */,
                             bool /* blocked */)
 
-// Sent by the renderer process to indicate that a context was lost by
-// client 3D content (Pepper 3D, WebGL) running on the page at the
-// given URL.
-IPC_MESSAGE_CONTROL3(FrameHostMsg_DidLose3DContext,
-                     GURL /* top_origin_url */,
-                     content::ThreeDAPIType /* context_type */,
-                     int /* arb_robustness_status_code */)
+// Message sent from renderer to the browser when focus changes inside the
+// frame. The first parameter says whether the newly focused element needs
+// keyboard input (true for textfields, text areas and content editable divs).
+// The second parameter is the node bounds relative to local root's
+// RenderWidgetHostView.
+IPC_MESSAGE_ROUTED2(FrameHostMsg_FocusedNodeChanged,
+                    bool /* is_editable_node */,
+                    gfx::Rect /* node_bounds */)
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 // Notification sent from a renderer to the browser that a Pepper plugin
 // instance is created in the DOM.
-IPC_MESSAGE_ROUTED0(FrameHostMsg_PepperInstanceCreated)
+IPC_MESSAGE_ROUTED1(FrameHostMsg_PepperInstanceCreated,
+                    int32_t /* pp_instance */)
 
 // Notification sent from a renderer to the browser that a Pepper plugin
 // instance is deleted from the DOM.
-IPC_MESSAGE_ROUTED0(FrameHostMsg_PepperInstanceDeleted)
+IPC_MESSAGE_ROUTED1(FrameHostMsg_PepperInstanceDeleted,
+                    int32_t /* pp_instance */)
 
 // Sent to the browser when the renderer detects it is blocked on a pepper
 // plugin message for too long. This is also sent when it becomes unhung
@@ -1048,10 +1198,22 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_PluginCrashed,
                     base::FilePath /* plugin_path */,
                     base::ProcessId /* plugin_pid */)
 
-// Used to get the list of plugins
-IPC_SYNC_MESSAGE_CONTROL1_1(FrameHostMsg_GetPlugins,
-    bool /* refresh*/,
-    std::vector<content::WebPluginInfo> /* plugins */)
+// Notification sent from a renderer to the browser that a Pepper plugin
+// instance has started playback.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_PepperStartsPlayback,
+                    int32_t /* pp_instance */)
+
+// Notification sent from a renderer to the browser that a Pepper plugin
+// instance has stopped playback.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_PepperStopsPlayback,
+                    int32_t /* pp_instance */)
+
+// Used to get the list of plugins. |main_frame_origin| is used to handle
+// exceptions for plugin content settings.
+IPC_SYNC_MESSAGE_CONTROL2_1(FrameHostMsg_GetPlugins,
+                            bool /* refresh*/,
+                            url::Origin /* main_frame_origin */,
+                            std::vector<content::WebPluginInfo> /* plugins */)
 
 // Return information about a plugin for the given URL and MIME
 // type. If there is no matching plugin, |found| is false.
@@ -1060,7 +1222,7 @@ IPC_SYNC_MESSAGE_CONTROL1_1(FrameHostMsg_GetPlugins,
 IPC_SYNC_MESSAGE_CONTROL4_3(FrameHostMsg_GetPluginInfo,
                             int /* render_frame_id */,
                             GURL /* url */,
-                            GURL /* page_url */,
+                            url::Origin /* main_frame_origin */,
                             std::string /* mime_type */,
                             bool /* found */,
                             content::WebPluginInfo /* plugin info */,
@@ -1072,18 +1234,6 @@ IPC_SYNC_MESSAGE_CONTROL4_3(FrameHostMsg_GetPluginInfo,
 // RenderFrame is destroyed.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_PluginContentOriginAllowed,
                     url::Origin /* content_origin */)
-
-// A renderer sends this to the browser process when it wants to
-// create a plugin.  The browser will create the plugin process if
-// necessary, and will return a handle to the channel on success.
-// On error an empty string is returned.
-IPC_SYNC_MESSAGE_CONTROL4_2(FrameHostMsg_OpenChannelToPlugin,
-                            int /* render_frame_id */,
-                            GURL /* url */,
-                            GURL /* page_url */,
-                            std::string /* mime_type */,
-                            IPC::ChannelHandle /* channel_handle */,
-                            content::WebPluginInfo /* info */)
 
 // A renderer sends this to the browser process when it wants to create a ppapi
 // plugin.  The browser will create the plugin process if necessary, and will
@@ -1155,13 +1305,7 @@ IPC_MESSAGE_CONTROL3(FrameHostMsg_PluginInstanceThrottleStateChange,
                      int /* plugin_child_id */,
                      int32_t /* pp_instance */,
                      bool /* is_throttled */)
-#endif  // defined(ENABLE_PLUGINS)
-
-// Acknowledge that we presented an ubercomp frame.
-//
-// See FrameMsg_CompositorFrameSwapped
-IPC_MESSAGE_ROUTED1(FrameHostMsg_CompositorFrameSwappedACK,
-                    FrameHostMsg_CompositorFrameSwappedACK_Params /* params */)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 // Satisfies a Surface destruction dependency associated with |sequence|.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_SatisfySequence,
@@ -1184,9 +1328,6 @@ IPC_MESSAGE_ROUTED3(FrameHostMsg_BeforeUnload_ACK,
 // Indicates that the current frame has swapped out, after a SwapOut message.
 IPC_MESSAGE_ROUTED0(FrameHostMsg_SwapOut_ACK)
 
-IPC_MESSAGE_ROUTED1(FrameHostMsg_ReclaimCompositorResources,
-                    FrameHostMsg_ReclaimCompositorResources_Params /* params */)
-
 // Forwards an input event to a child.
 // TODO(nick): Temporary bridge, revisit once the browser process can route
 // input directly to subframes. http://crbug.com/339659
@@ -1197,8 +1338,17 @@ IPC_MESSAGE_ROUTED1(FrameHostMsg_ForwardInputEvent,
 // position of a child's ancestor has changed).
 IPC_MESSAGE_ROUTED1(FrameHostMsg_FrameRectChanged, gfx::Rect /* frame_rect */)
 
+// Sent by a parent frame to update its child's viewport intersection rect for
+// use by the IntersectionObserver API.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_UpdateViewportIntersection,
+                    gfx::Rect /* viewport_intersection */)
+
 // Informs the child that the frame has changed visibility.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_VisibilityChanged, bool /* visible */)
+
+// Indicates that this frame recieved a user gesture, so that the state can be
+// propagated to any remote frames.
+IPC_MESSAGE_ROUTED0(FrameHostMsg_SetHasReceivedUserGesture)
 
 // Used to tell the parent that the user right clicked on an area of the
 // content area, and a context menu should be shown for it. The params
@@ -1206,11 +1356,13 @@ IPC_MESSAGE_ROUTED1(FrameHostMsg_VisibilityChanged, bool /* visible */)
 // user right clicked.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_ContextMenu, content::ContextMenuParams)
 
-// Initial drawing parameters for a child frame that has been swapped out to
-// another process.
-IPC_MESSAGE_ROUTED2(FrameHostMsg_InitializeChildFrame,
-                    gfx::Rect /* frame_rect */,
-                    float /* scale_factor */)
+// Notification that the text selection has changed.
+// Note: The second parameter is the character based offset of the
+// base::string16 text in the document.
+IPC_MESSAGE_ROUTED3(FrameHostMsg_SelectionChanged,
+                    base::string16 /* text covers the selection range */,
+                    uint32_t /* the offset of the text in the document */,
+                    gfx::Range /* selection range in the document */)
 
 // Response for FrameMsg_JavaScriptExecuteRequest, sent when a reply was
 // requested. The ID is the parameter supplied to
@@ -1233,9 +1385,8 @@ IPC_SYNC_MESSAGE_ROUTED4_2(FrameHostMsg_RunJavaScriptMessage,
 // Displays a dialog to confirm that the user wants to navigate away from the
 // page. Replies true if yes, and false otherwise. The reply string is ignored,
 // but is included so that we can use OnJavaScriptMessageBoxClosed.
-IPC_SYNC_MESSAGE_ROUTED3_2(FrameHostMsg_RunBeforeUnloadConfirm,
+IPC_SYNC_MESSAGE_ROUTED2_2(FrameHostMsg_RunBeforeUnloadConfirm,
                            GURL,           /* in - originating frame URL */
-                           base::string16  /* in - alert message */,
                            bool            /* in - is a reload */,
                            bool            /* out - success */,
                            base::string16  /* out - This is ignored.*/)
@@ -1254,16 +1405,6 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_SetSelectedColorInColorChooser,
                     int /* id */,
                     SkColor /* color */)
 
-// Notifies the browser that media has started/stopped playing.
-IPC_MESSAGE_ROUTED4(FrameHostMsg_MediaPlayingNotification,
-                    int64_t /* player_cookie, distinguishes instances */,
-                    bool /* has_video */,
-                    bool /* has_audio */,
-                    bool /* is_remote */)
-
-IPC_MESSAGE_ROUTED1(FrameHostMsg_MediaPausedNotification,
-                    int64_t /* player_cookie, distinguishes instances */)
-
 // Notify browser the theme color has been changed.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeThemeColor,
                     SkColor /* theme_color */)
@@ -1272,8 +1413,14 @@ IPC_MESSAGE_ROUTED1(FrameHostMsg_DidChangeThemeColor,
 // |endOffset| are the offsets of the selection in the returned |content|.
 IPC_MESSAGE_ROUTED3(FrameHostMsg_TextSurroundingSelectionResponse,
                     base::string16,  /* content */
-                    size_t, /* startOffset */
-                    size_t /* endOffset */)
+                    uint32_t, /* startOffset */
+                    uint32_t/* endOffset */)
+
+// Response for FrameMsg_FocusedFormFieldDataRequest. Sends info about the
+// currently focused form field.
+IPC_MESSAGE_ROUTED2(FrameHostMsg_FocusedFormFieldDataResponse,
+                    int, /* request_id */
+                    content::FormFieldData /* form field info */)
 
 // Register a new handler for URL requests with the given scheme.
 IPC_MESSAGE_ROUTED4(FrameHostMsg_RegisterProtocolHandler,
@@ -1292,19 +1439,17 @@ IPC_MESSAGE_ROUTED3(FrameHostMsg_UnregisterProtocolHandler,
 // The security info is non empty if the resource was originally loaded over
 // a secure connection.
 // Note: May only be sent once per URL per frame per committed load.
-IPC_MESSAGE_ROUTED5(FrameHostMsg_DidLoadResourceFromMemoryCache,
+IPC_MESSAGE_ROUTED4(FrameHostMsg_DidLoadResourceFromMemoryCache,
                     GURL /* url */,
-                    std::string /* security info */,
                     std::string /* http method */,
                     std::string /* mime type */,
                     content::ResourceType /* resource type */)
 
 // PlzNavigate
 // Tells the browser to perform a navigation.
-IPC_MESSAGE_ROUTED3(FrameHostMsg_BeginNavigation,
+IPC_MESSAGE_ROUTED2(FrameHostMsg_BeginNavigation,
                     content::CommonNavigationParams,
-                    content::BeginNavigationParams,
-                    scoped_refptr<content::ResourceRequestBody>)
+                    content::BeginNavigationParams)
 
 // Sent as a response to FrameMsg_VisualStateRequest.
 // The message is delivered using RenderWidget::QueueMessage.
@@ -1333,16 +1478,13 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_DidRunInsecureContent,
 
 // Sent when the renderer displays content that was loaded with
 // certificate errors.
-IPC_MESSAGE_ROUTED2(FrameHostMsg_DidDisplayContentWithCertificateErrors,
-                    GURL /* resource url */,
-                    std::string /* serialized security info */)
+IPC_MESSAGE_ROUTED1(FrameHostMsg_DidDisplayContentWithCertificateErrors,
+                    GURL /* resource url */)
 
 // Sent when the renderer runs content that was loaded with certificate
 // errors.
-IPC_MESSAGE_ROUTED3(FrameHostMsg_DidRunContentWithCertificateErrors,
-                    GURL /* security_origin */,
-                    GURL /* resource url */,
-                    std::string /* serialized security info */)
+IPC_MESSAGE_ROUTED1(FrameHostMsg_DidRunContentWithCertificateErrors,
+                    GURL /* resource url */)
 
 // Response to FrameMsg_GetSavableResourceLinks.
 IPC_MESSAGE_ROUTED3(FrameHostMsg_SavableResourceLinksResponse,
@@ -1361,11 +1503,12 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_SerializedHtmlWithLocalLinksResponse,
                     bool /* end of data? */)
 
 // Response to FrameMsg_SerializeAsMHTML.
-IPC_MESSAGE_ROUTED3(
+IPC_MESSAGE_ROUTED4(
     FrameHostMsg_SerializeAsMHTMLResponse,
     int /* job_id (used to match responses to requests) */,
-    bool /* true if success, false if error */,
-    std::set<std::string> /* digests of uris of serialized resources */)
+    content::MhtmlSaveStatus /* final success/failure status */,
+    std::set<std::string> /* digests of uris of serialized resources */,
+    base::TimeDelta /* how much time of the main render thread was used */)
 
 // Sent when the renderer updates hint for importance of a tab.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_UpdatePageImportanceSignals,
@@ -1380,13 +1523,61 @@ IPC_MESSAGE_ROUTED2(FrameHostMsg_AdvanceFocus,
                     blink::WebFocusType /* type */,
                     int32_t /* source_routing_id */)
 
-#if defined(OS_MACOSX) || defined(OS_ANDROID)
+// Result of string search in the document.
+// Response to FrameMsg_Find with the results of the requested find-in-page
+// search, the number of matches found and the selection rect (in screen
+// coordinates) for the string found. If |final_update| is false, it signals
+// that this is not the last Find_Reply message - more will be sent as the
+// scoping effort continues.
+IPC_MESSAGE_ROUTED5(FrameHostMsg_Find_Reply,
+                    int /* request_id */,
+                    int /* number of matches */,
+                    gfx::Rect /* selection_rect */,
+                    int /* active_match_ordinal */,
+                    bool /* final_update */)
+
+// Sends hittesting data needed to perform hittesting on the browser process.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_HittestData, FrameHostMsg_HittestData_Params)
+
+// Asks the browser to display the file chooser.  The result is returned in a
+// FrameMsg_RunFileChooserResponse message.
+IPC_MESSAGE_ROUTED1(FrameHostMsg_RunFileChooser, content::FileChooserParams)
+
+#if defined(USE_EXTERNAL_POPUP_MENU)
 
 // Message to show/hide a popup menu using native controls.
 IPC_MESSAGE_ROUTED1(FrameHostMsg_ShowPopup,
                     FrameHostMsg_ShowPopup_Params)
 IPC_MESSAGE_ROUTED0(FrameHostMsg_HidePopup)
 
+#endif
+
+#if defined(OS_ANDROID)
+// Response to FrameMsg_FindMatchRects.
+//
+// |version| will contain the current version number of the renderer's find
+// match list (incremented whenever they change), which should be passed in the
+// next call to FrameMsg_FindMatchRects.
+//
+// |rects| will either contain a list of the enclosing rects of all matches
+// found by the most recent Find operation, or will be empty if |version| is not
+// greater than the |current_version| passed to FrameMsg_FindMatchRects (hence
+// your locally cached rects should still be valid). The rect coords will be
+// custom normalized fractions of the document size. The rects will be sorted by
+// frame traversal order starting in the main frame, then by dom order.
+//
+// |active_rect| will contain the bounding box of the active find-in-page match
+// marker, in similarly normalized coords (or an empty rect if there isn't one).
+IPC_MESSAGE_ROUTED3(FrameHostMsg_FindMatchRects_Reply,
+                    int /* version */,
+                    std::vector<gfx::RectF> /* rects */,
+                    gfx::RectF /* active_rect */)
+
+// Response to FrameMsg_GetNearestFindResult. |distance| is the distance to the
+// nearest find result in the sending frame.
+IPC_MESSAGE_ROUTED2(FrameHostMsg_GetNearestFindResult_Reply,
+                    int /* nfr_request_id */,
+                    float /* distance */)
 #endif
 
 // Adding a new message? Stick to the sort order above: first platform

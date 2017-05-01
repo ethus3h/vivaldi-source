@@ -15,7 +15,6 @@
 #include "components/infobars/core/infobar.h"
 #include "components/omnibox/browser/shortcuts_backend.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/vector_icons_public.h"
 
@@ -31,9 +30,10 @@ void AlternateNavInfoBarDelegate::Create(
   InfoBarService* infobar_service =
       InfoBarService::FromWebContents(web_contents);
   infobar_service->AddInfoBar(AlternateNavInfoBarDelegate::CreateInfoBar(
-      scoped_ptr<AlternateNavInfoBarDelegate>(new AlternateNavInfoBarDelegate(
-          Profile::FromBrowserContext(web_contents->GetBrowserContext()), text,
-          match, search_url))));
+      std::unique_ptr<AlternateNavInfoBarDelegate>(
+          new AlternateNavInfoBarDelegate(
+              Profile::FromBrowserContext(web_contents->GetBrowserContext()),
+              text, match, search_url))));
 }
 
 AlternateNavInfoBarDelegate::AlternateNavInfoBarDelegate(
@@ -108,14 +108,6 @@ AlternateNavInfoBarDelegate::GetIdentifier() const {
   return ALTERNATE_NAV_INFOBAR_DELEGATE;
 }
 
-int AlternateNavInfoBarDelegate::GetIconId() const {
-  return IDR_INFOBAR_ALT_NAV_URL;
-}
-
 gfx::VectorIconId AlternateNavInfoBarDelegate::GetVectorIconId() const {
-#if defined(OS_MACOSX)
-  return gfx::VectorIconId::VECTOR_ICON_NONE;
-#else
   return gfx::VectorIconId::GLOBE;
-#endif
 }

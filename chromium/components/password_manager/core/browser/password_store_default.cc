@@ -8,10 +8,9 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
 #include "components/password_manager/core/browser/password_store_change.h"
-#include "url/origin.h"
+#include "components/prefs/pref_service.h"
 
 using autofill::PasswordForm;
 
@@ -20,7 +19,7 @@ namespace password_manager {
 PasswordStoreDefault::PasswordStoreDefault(
     scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner,
     scoped_refptr<base::SingleThreadTaskRunner> db_thread_runner,
-    scoped_ptr<LoginDatabase> login_db)
+    std::unique_ptr<LoginDatabase> login_db)
     : PasswordStore(main_thread_runner, db_thread_runner),
       login_db_(std::move(login_db)) {}
 
@@ -81,17 +80,16 @@ PasswordStoreChangeList PasswordStoreDefault::RemoveLoginImpl(
   return changes;
 }
 
-PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsByOriginAndTimeImpl(
-    const url::Origin& origin,
+PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsByURLAndTimeImpl(
+    const base::Callback<bool(const GURL&)>& url_filter,
     base::Time delete_begin,
     base::Time delete_end) {
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   PasswordStoreChangeList changes;
   if (login_db_ &&
       login_db_->GetLoginsCreatedBetween(delete_begin, delete_end, &forms)) {
-    for (autofill::PasswordForm* form : forms) {
-      if (origin.IsSameOriginWith(url::Origin(form->origin)) &&
-          login_db_->RemoveLogin(*form))
+    for (const auto& form : forms) {
+      if (url_filter.Run(form->origin) && login_db_->RemoveLogin(*form))
         changes.push_back(
             PasswordStoreChange(PasswordStoreChange::REMOVE, *form));
     }
@@ -104,12 +102,12 @@ PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsByOriginAndTimeImpl(
 PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsCreatedBetweenImpl(
     base::Time delete_begin,
     base::Time delete_end) {
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   PasswordStoreChangeList changes;
   if (login_db_ &&
       login_db_->GetLoginsCreatedBetween(delete_begin, delete_end, &forms)) {
     if (login_db_->RemoveLoginsCreatedBetween(delete_begin, delete_end)) {
-      for (const auto* form : forms) {
+      for (const auto& form : forms) {
         changes.push_back(
             PasswordStoreChange(PasswordStoreChange::REMOVE, *form));
       }
@@ -122,12 +120,12 @@ PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsCreatedBetweenImpl(
 PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsSyncedBetweenImpl(
     base::Time delete_begin,
     base::Time delete_end) {
-  ScopedVector<autofill::PasswordForm> forms;
+  std::vector<std::unique_ptr<PasswordForm>> forms;
   PasswordStoreChangeList changes;
   if (login_db_ &&
       login_db_->GetLoginsSyncedBetween(delete_begin, delete_end, &forms)) {
     if (login_db_->RemoveLoginsSyncedBetween(delete_begin, delete_end)) {
-      for (const auto* form : forms) {
+      for (const auto& form : forms) {
         changes.push_back(
             PasswordStoreChange(PasswordStoreChange::REMOVE, *form));
       }
@@ -137,30 +135,60 @@ PasswordStoreChangeList PasswordStoreDefault::RemoveLoginsSyncedBetweenImpl(
   return changes;
 }
 
-bool PasswordStoreDefault::RemoveStatisticsCreatedBetweenImpl(
+PasswordStoreChangeList PasswordStoreDefault::DisableAutoSignInForOriginsImpl(
+    const base::Callback<bool(const GURL&)>& origin_filter) {
+  std::vector<std::unique_ptr<PasswordForm>> forms;
+  PasswordStoreChangeList changes;
+  if (!login_db_ || !login_db_->GetAutoSignInLogins(&forms))
+    return changes;
+
+  std::set<GURL> origins_to_update;
+  for (const auto& form : forms) {
+    if (origin_filter.Run(form->origin))
+      origins_to_update.insert(form->origin);
+  }
+
+  std::set<GURL> origins_updated;
+  for (const GURL& origin : origins_to_update) {
+    if (login_db_->DisableAutoSignInForOrigin(origin))
+      origins_updated.insert(origin);
+  }
+
+  for (const auto& form : forms) {
+    if (origins_updated.count(form->origin)) {
+      changes.push_back(
+          PasswordStoreChange(PasswordStoreChange::UPDATE, *form));
+    }
+  }
+
+  return changes;
+}
+
+bool PasswordStoreDefault::RemoveStatisticsByOriginAndTimeImpl(
+    const base::Callback<bool(const GURL&)>& origin_filter,
     base::Time delete_begin,
     base::Time delete_end) {
   return login_db_ &&
-         login_db_->stats_table().RemoveStatsBetween(delete_begin, delete_end);
+         login_db_->stats_table().RemoveStatsByOriginAndTime(
+             origin_filter, delete_begin, delete_end);
 }
 
-ScopedVector<autofill::PasswordForm> PasswordStoreDefault::FillMatchingLogins(
-    const autofill::PasswordForm& form,
-    AuthorizationPromptPolicy prompt_policy) {
-  ScopedVector<autofill::PasswordForm> matched_forms;
+std::vector<std::unique_ptr<PasswordForm>>
+PasswordStoreDefault::FillMatchingLogins(const FormDigest& form) {
+  std::vector<std::unique_ptr<PasswordForm>> matched_forms;
   if (login_db_ && !login_db_->GetLogins(form, &matched_forms))
-    return ScopedVector<autofill::PasswordForm>();
+    return std::vector<std::unique_ptr<PasswordForm>>();
   return matched_forms;
 }
 
 bool PasswordStoreDefault::FillAutofillableLogins(
-    ScopedVector<PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   DCHECK(GetBackgroundTaskRunner()->BelongsToCurrentThread());
   return login_db_ && login_db_->GetAutofillableLogins(forms);
 }
 
 bool PasswordStoreDefault::FillBlacklistLogins(
-    ScopedVector<PasswordForm>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) {
   DCHECK(GetBackgroundTaskRunner()->BelongsToCurrentThread());
   return login_db_ && login_db_->GetBlacklistLogins(forms);
 }
@@ -177,11 +205,11 @@ void PasswordStoreDefault::RemoveSiteStatsImpl(const GURL& origin_domain) {
     login_db_->stats_table().RemoveRow(origin_domain);
 }
 
-std::vector<scoped_ptr<InteractionsStats>>
-PasswordStoreDefault::GetSiteStatsImpl(const GURL& origin_domain) {
+std::vector<InteractionsStats> PasswordStoreDefault::GetSiteStatsImpl(
+    const GURL& origin_domain) {
   DCHECK(GetBackgroundTaskRunner()->BelongsToCurrentThread());
   return login_db_ ? login_db_->stats_table().GetRows(origin_domain)
-                   : std::vector<scoped_ptr<InteractionsStats>>();
+                   : std::vector<InteractionsStats>();
 }
 
 void PasswordStoreDefault::ResetLoginDB() {

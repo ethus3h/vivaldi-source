@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <vector>
 
 #include "base/base_export.h"
 #include "base/strings/string16.h"
@@ -63,6 +64,11 @@ inline uint32_t HandleToUint32(HANDLE h) {
   // https://msdn.microsoft.com/en-us/library/aa384203(VS.85).aspx says:
   // 64-bit versions of Windows use 32-bit handles for interoperability.
   return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(h));
+}
+
+inline HANDLE Uint32ToHandle(uint32_t h) {
+  return reinterpret_cast<HANDLE>(
+      static_cast<uintptr_t>(static_cast<int32_t>(h)));
 }
 
 BASE_EXPORT void GetNonClientMetrics(NONCLIENTMETRICS_XP* metrics);
@@ -122,6 +128,10 @@ BASE_EXPORT bool ShouldCrashOnProcessDetach();
 // process is aborted.
 BASE_EXPORT void SetAbortBehaviorForCrashReporting();
 
+// Checks whether the supplied |hwnd| is in Windows 10 tablet mode. Will return
+// false on versions below 10.
+BASE_EXPORT bool IsWindows10TabletMode(HWND hwnd);
+
 // A tablet is a device that is touch enabled and also is being used
 // "like a tablet". This is used by the following:-
 // 1. Metrics:- To gain insight into how users use Chrome.
@@ -144,14 +154,6 @@ BASE_EXPORT bool IsKeyboardPresentOnSlate(std::string* reason);
     offsetof(struct_name, member) + \
     (sizeof static_cast<struct_name*>(NULL)->member)
 
-// Displays the on screen keyboard on Windows 8 and above. Returns true on
-// success.
-BASE_EXPORT bool DisplayVirtualKeyboard();
-
-// Dismisses the on screen keyboard if it is being displayed on Windows 8 and.
-// above. Returns true on success.
-BASE_EXPORT bool DismissVirtualKeyboard();
-
 // Returns true if the machine is enrolled to a domain.
 BASE_EXPORT bool IsEnrolledToDomain();
 
@@ -159,19 +161,28 @@ BASE_EXPORT bool IsEnrolledToDomain();
 // simulate being in a domain and false otherwise.
 BASE_EXPORT void SetDomainStateForTesting(bool state);
 
-// Returns true if the current operating system has support for SHA-256
-// certificates. As its name indicates, this function provides a best-effort
-// answer, which is solely based on comparing version numbers. The function
-// may be re-implemented in the future to return a reliable value, based on
-// run-time detection of this capability.
-BASE_EXPORT bool MaybeHasSHA256Support();
-
 // Returns true if the current process can make USER32 or GDI32 calls such as
 // CreateWindow and CreateDC. Windows 8 and above allow the kernel component
 // of these calls to be disabled which can cause undefined behaviour such as
 // crashes. This function can be used to guard areas of code using these calls
 // and provide a fallback path if necessary.
 BASE_EXPORT bool IsUser32AndGdi32Available();
+
+// Takes a snapshot of the modules loaded in the |process|. The returned
+// HMODULEs are not add-ref'd, so they should not be closed and may be
+// invalidated at any time (should a module be unloaded). |process| requires
+// the PROCESS_QUERY_INFORMATION and PROCESS_VM_READ permissions.
+BASE_EXPORT bool GetLoadedModulesSnapshot(HANDLE process,
+                                          std::vector<HMODULE>* snapshot);
+
+// Adds or removes the MICROSOFT_TABLETPENSERVICE_PROPERTY property with the
+// TABLET_DISABLE_FLICKS & TABLET_DISABLE_FLICKFALLBACKKEYS flags in order to
+// disable pen flick gestures for the given HWND.
+BASE_EXPORT void EnableFlicks(HWND hwnd);
+BASE_EXPORT void DisableFlicks(HWND hwnd);
+
+// Returns true if the process is per monitor DPI aware.
+BASE_EXPORT bool IsProcessPerMonitorDpiAware();
 
 }  // namespace win
 }  // namespace base

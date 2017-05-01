@@ -32,10 +32,11 @@ class OpenPDFInReaderView : public views::ImageView,
   void ShowBubble();
 
   // views::ImageView:
-  void GetAccessibleState(ui::AXViewState* state) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
+  void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;

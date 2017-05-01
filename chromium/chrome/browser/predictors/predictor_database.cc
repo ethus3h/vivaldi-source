@@ -11,8 +11,7 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/metrics/histogram.h"
-#include "base/strings/stringprintf.h"
+#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_table.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor_tables.h"
@@ -55,7 +54,7 @@ class PredictorDatabaseInternal
 
   bool is_resource_prefetch_predictor_enabled_;
   base::FilePath db_path_;
-  scoped_ptr<sql::Connection> db_;
+  std::unique_ptr<sql::Connection> db_;
 
   // TODO(shishir): These tables may not need to be refcounted. Maybe move them
   // to using a WeakPtr instead.
@@ -73,9 +72,8 @@ PredictorDatabaseInternal::PredictorDatabaseInternal(Profile* profile)
       resource_prefetch_tables_(new ResourcePrefetchPredictorTables()) {
   db_->set_histogram_tag("Predictor");
 
-  // TODO(shess): The current mitigation for http://crbug.com/537742 stores
-  // state in the meta table, which this database does not use.
-  db_->set_mmap_disabled();
+  // This db does not use [meta] table, store mmap status data elsewhere.
+  db_->set_mmap_alt_status();
 
   ResourcePrefetchPredictorConfig config;
   is_resource_prefetch_predictor_enabled_ =

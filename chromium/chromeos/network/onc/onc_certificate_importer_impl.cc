@@ -17,7 +17,7 @@
 #include "base/logging.h"
 #include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "chromeos/network/network_event_log.h"
 #include "chromeos/network/onc/onc_utils.h"
@@ -286,12 +286,12 @@ bool CertificateImporterImpl::ParseClientCertificate(
   crypto::ScopedPK11Slot private_slot(nssdb->GetPrivateSlot());
   if (!private_slot)
     return false;
-  scoped_refptr<net::CryptoModule> module(
-      net::CryptoModule::CreateFromHandle(private_slot.get()));
+
   net::CertificateList imported_certs;
 
-  int import_result = nssdb->ImportFromPKCS12(
-      module.get(), decoded_pkcs12, base::string16(), false, &imported_certs);
+  int import_result =
+      nssdb->ImportFromPKCS12(private_slot.get(), decoded_pkcs12,
+                              base::string16(), false, &imported_certs);
   if (import_result != net::OK) {
     std::string error_string = net::ErrorToString(import_result);
     LOG(ERROR) << "Unable to import client certificate, error: "

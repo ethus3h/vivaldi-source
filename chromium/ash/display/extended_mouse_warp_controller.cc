@@ -6,16 +6,19 @@
 
 #include <cmath>
 
-#include "ash/display/display_manager.h"
 #include "ash/display/display_util.h"
 #include "ash/display/shared_display_edge_indicator.h"
 #include "ash/display/window_tree_host_manager.h"
 #include "ash/root_window_controller.h"
-#include "ash/screen_util.h"
 #include "ash/shell.h"
+#include "base/memory/ptr_util.h"
 #include "ui/aura/window.h"
+#include "ui/display/display_layout.h"
+#include "ui/display/manager/display_manager.h"
+#include "ui/display/manager/display_manager_utilities.h"
+#include "ui/display/screen.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/events/event_utils.h"
-#include "ui/gfx/screen.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
 namespace ash {
@@ -31,18 +34,32 @@ const int kMaximumSnapHeight = 16;
 // this, entire edge will be used as a draggable space.
 const int kMinimumIndicatorHeight = 200;
 
-const int kIndicatorThickness = 1;
-
-// Helper method that maps a gfx::Display to an aura::Window.
+// Helper method that maps a display::Display to an aura::Window.
 aura::Window* GetRootWindowForDisplayId(int64_t display_id) {
   return Shell::GetInstance()
       ->window_tree_host_manager()
       ->GetRootWindowForDisplayId(display_id);
 }
 
-// Helper method that maps an aura::Window to a gfx::Display.
-gfx::Display GetDisplayFromWindow(aura::Window* window) {
-  return Shell::GetScreen()->GetDisplayNearestWindow(window);
+// Helper method that maps an aura::Window to display id;
+int64_t GetDisplayIdFromWindow(aura::Window* window) {
+  return display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
+}
+
+// Adjust the edge so that it has |barrier_size| gap at the top to
+// trigger snap window action.
+void AdjustSourceEdgeBounds(const gfx::Rect& display_bounds,
+                            int barrier_size,
+                            gfx::Rect* edge) {
+  DCHECK_GT(edge->height(), edge->width());
+  int target_y = display_bounds.y() + barrier_size;
+  if (target_y < edge->y())
+    return;
+
+  int available_height = edge->height() - kMinimumIndicatorHeight;
+  if (available_height <= 0)
+    return;
+  edge->Inset(0, std::min(available_height, target_y - edge->y()), 0, 0);
 }
 
 }  // namespace
@@ -72,47 +89,43 @@ ExtendedMouseWarpController::WarpRegion::WarpRegion(
 
 ExtendedMouseWarpController::WarpRegion::~WarpRegion() {}
 
+const gfx::Rect&
+ExtendedMouseWarpController::WarpRegion::GetIndicatorBoundsForTest(
+    int64_t id) const {
+  if (a_display_id_ == id)
+    return a_indicator_bounds_;
+  CHECK_EQ(b_display_id_, id);
+  return b_indicator_bounds_;
+}
+
 ExtendedMouseWarpController::ExtendedMouseWarpController(
     aura::Window* drag_source)
-    : drag_source_root_(drag_source),
-      allow_non_native_event_(false) {
-  ash::DisplayManager* display_manager =
+    : drag_source_root_(drag_source), allow_non_native_event_(false) {
+  display::DisplayManager* display_manager =
       Shell::GetInstance()->display_manager();
-
-  // For the time being, 3 or more displays are always always laid out
-  // horizontally, with each display being RIGHT of the previous one.
-  if (display_manager->GetNumDisplays() > 2) {
-    for (size_t i = 1; i < display_manager->GetNumDisplays(); ++i) {
-      const gfx::Display& left = display_manager->GetDisplayAt(i - 1);
-      const gfx::Display& right = display_manager->GetDisplayAt(i);
-
-      AddWarpRegion(CreateVerticalEdgeBounds(left, right, DisplayLayout::RIGHT),
-                    drag_source != nullptr);
-    }
-  } else {
-    // Make sure to set |a| as the primary display, and |b| as the secondary
-    // display. DisplayLayout::Position is defined in terms of primary.
-    DisplayLayout::Position position =
-        display_manager->GetCurrentDisplayLayout().position;
-    const gfx::Display& a = Shell::GetScreen()->GetPrimaryDisplay();
-    const gfx::Display& b = ScreenUtil::GetSecondaryDisplay();
-
-    // TODO(oshima): Use ComputeBondary instead.
-    if (position == DisplayLayout::TOP || position == DisplayLayout::BOTTOM) {
-      AddWarpRegion(CreateHorizontalEdgeBounds(a, b, position),
-                    drag_source != nullptr);
-    } else {
-      AddWarpRegion(CreateVerticalEdgeBounds(a, b, position),
-                    drag_source != nullptr);
+  int64_t drag_source_id = drag_source ? GetDisplayIdFromWindow(drag_source)
+                                       : display::kInvalidDisplayId;
+  display::Displays display_list = display_manager->active_display_list();
+  // Try to create a Warp region for all possible two displays combination.
+  // The following code does it by poping the last element in the list
+  // and then pairing with remaining displays in the list, until the list
+  // becomes single element.
+  while (display_list.size() > 1) {
+    display::Display display = display_list.back();
+    display_list.pop_back();
+    for (const display::Display& peer : display_list) {
+      std::unique_ptr<WarpRegion> region =
+          CreateWarpRegion(display, peer, drag_source_id);
+      if (region)
+        AddWarpRegion(std::move(region), drag_source != nullptr);
     }
   }
 }
 
-ExtendedMouseWarpController::~ExtendedMouseWarpController() {
-}
+ExtendedMouseWarpController::~ExtendedMouseWarpController() {}
 
 bool ExtendedMouseWarpController::WarpMouseCursor(ui::MouseEvent* event) {
-  if (Shell::GetScreen()->GetNumDisplays() <= 1 || !enabled_)
+  if (display::Screen::GetScreen()->GetNumDisplays() <= 1 || !enabled_)
     return false;
 
   aura::Window* target = static_cast<aura::Window*>(event->target());
@@ -127,7 +140,7 @@ bool ExtendedMouseWarpController::WarpMouseCursor(ui::MouseEvent* event) {
     aura::Window* target_root = target->GetRootWindow();
     gfx::Point point_in_native = point_in_screen;
     ::wm::ConvertPointFromScreen(target_root, &point_in_native);
-    target_root->GetHost()->ConvertPointToNativeScreen(&point_in_native);
+    target_root->GetHost()->ConvertDIPToScreenInPixels(&point_in_native);
     return WarpMouseCursorInNativeCoords(point_in_native, point_in_screen,
                                          true);
   }
@@ -140,8 +153,8 @@ bool ExtendedMouseWarpController::WarpMouseCursor(ui::MouseEvent* event) {
   // has access to the logical display layout.
   // Native events in Ozone are in the native window coordinate system. We need
   // to translate them to get the global position.
-  point_in_native.Offset(target->GetHost()->GetBounds().x(),
-                         target->GetHost()->GetBounds().y());
+  point_in_native.Offset(target->GetHost()->GetBoundsInPixels().x(),
+                         target->GetHost()->GetBoundsInPixels().y());
 #endif
 
   return WarpMouseCursorInNativeCoords(point_in_native, point_in_screen, false);
@@ -152,7 +165,7 @@ void ExtendedMouseWarpController::SetEnabled(bool enabled) {
 }
 
 void ExtendedMouseWarpController::AddWarpRegion(
-    scoped_ptr<WarpRegion> warp_region,
+    std::unique_ptr<WarpRegion> warp_region,
     bool has_drag_source) {
   if (has_drag_source) {
     warp_region->shared_display_edge_indicator_.reset(
@@ -168,7 +181,7 @@ bool ExtendedMouseWarpController::WarpMouseCursorInNativeCoords(
     const gfx::Point& point_in_native,
     const gfx::Point& point_in_screen,
     bool update_mouse_location_now) {
-  for (const scoped_ptr<WarpRegion>& warp : warp_regions_) {
+  for (const std::unique_ptr<WarpRegion>& warp : warp_regions_) {
     bool in_a_edge = warp->a_edge_bounds_in_native_.Contains(point_in_native);
     bool in_b_edge = warp->b_edge_bounds_in_native_.Contains(point_in_native);
     if (!in_a_edge && !in_b_edge)
@@ -187,93 +200,27 @@ bool ExtendedMouseWarpController::WarpMouseCursorInNativeCoords(
   return false;
 }
 
-scoped_ptr<ExtendedMouseWarpController::WarpRegion>
-ExtendedMouseWarpController::CreateHorizontalEdgeBounds(
-    const gfx::Display& a,
-    const gfx::Display& b,
-    DisplayLayout::Position position) {
-  bool from_a = a.id() == GetDisplayFromWindow(drag_source_root_).id();
+std::unique_ptr<ExtendedMouseWarpController::WarpRegion>
+ExtendedMouseWarpController::CreateWarpRegion(const display::Display& a,
+                                              const display::Display& b,
+                                              int64_t drag_source_id) {
+  gfx::Rect a_edge;
+  gfx::Rect b_edge;
+  int snap_barrier =
+      drag_source_id == display::kInvalidDisplayId ? 0 : kMaximumSnapHeight;
 
-  const gfx::Rect& a_bounds = a.bounds();
-  const gfx::Rect& b_bounds = b.bounds();
+  if (!display::ComputeBoundary(a, b, &a_edge, &b_edge))
+    return nullptr;
 
-  gfx::Rect a_indicator_bounds;
-  a_indicator_bounds.set_x(std::max(a_bounds.x(), b_bounds.x()));
-  a_indicator_bounds.set_width(std::min(a_bounds.right(), b_bounds.right()) -
-                               a_indicator_bounds.x());
-  a_indicator_bounds.set_height(kIndicatorThickness);
-  a_indicator_bounds.set_y(
-      position == DisplayLayout::TOP
-          ? a_bounds.y() - (from_a ? 0 : kIndicatorThickness)
-          : a_bounds.bottom() - (from_a ? kIndicatorThickness : 0));
-
-  gfx::Rect b_indicator_bounds;
-  b_indicator_bounds = a_indicator_bounds;
-  b_indicator_bounds.set_height(kIndicatorThickness);
-  b_indicator_bounds.set_y(
-      position == DisplayLayout::TOP
-          ? a_bounds.y() - (from_a ? kIndicatorThickness : 0)
-          : a_bounds.bottom() - (from_a ? 0 : kIndicatorThickness));
-
-  return make_scoped_ptr(
-      new WarpRegion(a.id(), b.id(), a_indicator_bounds, b_indicator_bounds));
-}
-
-scoped_ptr<ExtendedMouseWarpController::WarpRegion>
-ExtendedMouseWarpController::CreateVerticalEdgeBounds(
-    const gfx::Display& a,
-    const gfx::Display& b,
-    DisplayLayout::Position position) {
-  int snap_height = drag_source_root_ ? kMaximumSnapHeight : 0;
-  bool in_a = a.id() == GetDisplayFromWindow(drag_source_root_).id();
-
-  const gfx::Rect& a_bounds = a.bounds();
-  const gfx::Rect& b_bounds = b.bounds();
-
-  int upper_shared_y = std::max(a_bounds.y(), b_bounds.y());
-  int lower_shared_y = std::min(a_bounds.bottom(), b_bounds.bottom());
-  int shared_height = lower_shared_y - upper_shared_y;
-
-  gfx::Rect a_indicator_bounds;
-  gfx::Rect b_indicator_bounds;
-
-  int dst_x = position == DisplayLayout::LEFT
-                  ? a_bounds.x() - (in_a ? kIndicatorThickness : 0)
-                  : a_bounds.right() - (in_a ? 0 : kIndicatorThickness);
-  b_indicator_bounds.SetRect(dst_x, upper_shared_y, kIndicatorThickness,
-                             shared_height);
-
-  // The indicator on the source display.
-  a_indicator_bounds.set_width(kIndicatorThickness);
-  a_indicator_bounds.set_x(position == DisplayLayout::LEFT
-                               ? a_bounds.x() - (in_a ? 0 : kIndicatorThickness)
-                               : a_bounds.right() -
-                                     (in_a ? kIndicatorThickness : 0));
-
-  const gfx::Rect& source_bounds = in_a ? a_bounds : b_bounds;
-  int upper_indicator_y = source_bounds.y() + snap_height;
-  int lower_indicator_y = std::min(source_bounds.bottom(), lower_shared_y);
-
-  // This gives a hight that can be used without sacrifying the snap space.
-  int available_space =
-      lower_indicator_y - std::max(upper_shared_y, upper_indicator_y);
-
-  if (shared_height < kMinimumIndicatorHeight) {
-    // If the shared height is smaller than minimum height, use the
-    // entire height.
-    upper_indicator_y = upper_shared_y;
-  } else if (available_space < kMinimumIndicatorHeight) {
-    // Snap to the bottom.
-    upper_indicator_y =
-        std::max(upper_shared_y, lower_indicator_y + kMinimumIndicatorHeight);
-  } else {
-    upper_indicator_y = std::max(upper_indicator_y, upper_shared_y);
+  // Creates the snap window barrirer only when horizontally connected.
+  if (a_edge.height() > a_edge.width()) {
+    if (drag_source_id == a.id())
+      AdjustSourceEdgeBounds(a.bounds(), snap_barrier, &a_edge);
+    else if (drag_source_id == b.id())
+      AdjustSourceEdgeBounds(b.bounds(), snap_barrier, &b_edge);
   }
-  a_indicator_bounds.set_y(upper_indicator_y);
-  a_indicator_bounds.set_height(lower_indicator_y - upper_indicator_y);
 
-  return make_scoped_ptr(
-      new WarpRegion(a.id(), b.id(), a_indicator_bounds, b_indicator_bounds));
+  return base::MakeUnique<WarpRegion>(a.id(), b.id(), a_edge, b_edge);
 }
 
 }  // namespace ash

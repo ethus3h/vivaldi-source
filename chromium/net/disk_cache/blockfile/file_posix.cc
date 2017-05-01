@@ -25,7 +25,10 @@ const int kMaxThreads = 5;
 
 class FileWorkerPool : public base::SequencedWorkerPool {
  public:
-  FileWorkerPool() : base::SequencedWorkerPool(kMaxThreads, "CachePool") {}
+  FileWorkerPool()
+      : base::SequencedWorkerPool(kMaxThreads,
+                                  "CachePool",
+                                  base::TaskPriority::USER_BLOCKING) {}
 
  protected:
   ~FileWorkerPool() override {}
@@ -136,6 +139,8 @@ size_t File::GetLength() {
   DCHECK(base_file_.IsValid());
   int64_t len = base_file_.GetLength();
 
+  if (len < 0)
+    return 0;
   if (len > static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
     return std::numeric_limits<uint32_t>::max();
 

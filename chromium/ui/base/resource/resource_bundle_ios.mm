@@ -44,17 +44,17 @@ base::FilePath GetResourcesPakFilePath(NSString* name, NSString* mac_locale) {
 
 void ResourceBundle::LoadCommonResources() {
   if (IsScaleFactorSupported(SCALE_FACTOR_100P)) {
-    AddDataPackFromPath(GetResourcesPakFilePath(@"vivaldi_100_percent", nil),
+    AddDataPackFromPath(GetResourcesPakFilePath(@"chrome_100_percent", nil),
                         SCALE_FACTOR_100P);
   }
 
   if (IsScaleFactorSupported(SCALE_FACTOR_200P)) {
-    AddDataPackFromPath(GetResourcesPakFilePath(@"vivaldi_200_percent", nil),
+    AddDataPackFromPath(GetResourcesPakFilePath(@"chrome_200_percent", nil),
                         SCALE_FACTOR_200P);
   }
 
   if (IsScaleFactorSupported(SCALE_FACTOR_300P)) {
-    AddDataPackFromPath(GetResourcesPakFilePath(@"vivaldi_300_percent", nil),
+    AddDataPackFromPath(GetResourcesPakFilePath(@"chrome_300_percent", nil),
                         SCALE_FACTOR_300P);
   }
 }
@@ -89,10 +89,7 @@ base::FilePath ResourceBundle::GetLocaleFilePath(const std::string& app_locale,
   return locale_file_path;
 }
 
-gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id, ImageRTL rtl) {
-  // Flipped images are not used on iOS.
-  DCHECK_EQ(rtl, RTL_DISABLED);
-
+gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
   // Check to see if the image is already in the cache.
   {
     base::AutoLock lock(*images_and_fonts_lock_);
@@ -104,7 +101,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id, ImageRTL rtl) {
 
   gfx::Image image;
   if (delegate_)
-    image = delegate_->GetNativeImageNamed(resource_id, rtl);
+    image = delegate_->GetNativeImageNamed(resource_id);
 
   if (image.IsEmpty()) {
     // Load the raw data from the resource pack at the current supported scale
@@ -112,7 +109,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id, ImageRTL rtl) {
     // supported at runtime, based on the device resolution.
     ui::ScaleFactor scale_factor = GetMaxScaleFactor();
 
-    scoped_refptr<base::RefCountedStaticMemory> data(
+    scoped_refptr<base::RefCountedMemory> data(
         LoadDataResourceBytesForScale(resource_id, scale_factor));
 
     if (!data.get()) {
@@ -166,7 +163,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id, ImageRTL rtl) {
     }
 
     // The gfx::Image takes ownership.
-    image = gfx::Image(ui_image.release());
+    image = gfx::Image(ui_image, base::scoped_policy::RETAIN);
   }
 
   base::AutoLock lock(*images_and_fonts_lock_);

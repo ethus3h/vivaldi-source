@@ -6,8 +6,11 @@
 
 #include <stddef.h>
 
+#include <memory>
+#include <string>
+
 #include "base/bind.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/test/test_simple_task_runner.h"
@@ -15,6 +18,7 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
+#include "net/log/net_log_with_source.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_filter.h"
 #include "net/url_request/url_request_interceptor.h"
@@ -50,7 +54,8 @@ class UploadMockURLRequestJob : public net::URLRequestJob {
   void Start() override {
     int rv = upload_stream_->Init(
         base::Bind(&UploadMockURLRequestJob::OnStreamInitialized,
-                   base::Unretained(this)));
+                   base::Unretained(this)),
+        net::NetLogWithSource());
     if (rv == net::ERR_IO_PENDING)
       return;
     OnStreamInitialized(rv);
@@ -86,7 +91,7 @@ class UploadMockURLRequestJob : public net::URLRequestJob {
 
     if (result_.net_error == net::OK)
       NotifyHeadersComplete();
-    else
+    else if (result_.net_error != net::ERR_IO_PENDING)
       NotifyStartError(net::URLRequestStatus::FromError(result_.net_error));
   }
 
@@ -106,7 +111,7 @@ class UploadMockURLRequestJob : public net::URLRequestJob {
 
 class UploadInterceptor : public net::URLRequestInterceptor {
  public:
-  UploadInterceptor() : last_upload_depth_(-1) {}
+  UploadInterceptor() : request_count_(0), last_upload_depth_(-1) {}
 
   ~UploadInterceptor() override {
     EXPECT_TRUE(results_.empty());
@@ -121,6 +126,8 @@ class UploadInterceptor : public net::URLRequestInterceptor {
 
     last_upload_depth_ =
         DomainReliabilityUploader::GetURLRequestUploadDepth(*request);
+
+    ++request_count_;
 
     return new UploadMockURLRequestJob(request, delegate, result);
   }
@@ -150,10 +157,12 @@ class UploadInterceptor : public net::URLRequestInterceptor {
     results_.push_back(result);
   }
 
+  int request_count() const { return request_count_; }
   int last_upload_depth() const { return last_upload_depth_; }
 
  private:
   mutable std::list<MockUploadResult> results_;
+  mutable int request_count_;
   mutable int last_upload_depth_;
 };
 
@@ -189,7 +198,7 @@ class DomainReliabilityUploaderTest : public testing::Test {
         uploader_(DomainReliabilityUploader::Create(
             &time_, url_request_context_getter_)) {
     net::URLRequestFilter::GetInstance()->AddUrlInterceptor(
-        GURL(kUploadURL), make_scoped_ptr(interceptor_));
+        GURL(kUploadURL), base::WrapUnique(interceptor_));
     uploader_->set_discard_uploads(false);
   }
 
@@ -199,16 +208,21 @@ class DomainReliabilityUploaderTest : public testing::Test {
 
   DomainReliabilityUploader* uploader() const { return uploader_.get(); }
   UploadInterceptor* interceptor() const { return interceptor_; }
+  scoped_refptr<net::TestURLRequestContextGetter>
+      url_request_context_getter() {
+    return url_request_context_getter_;
+  }
 
  private:
   base::MessageLoopForIO message_loop_;
   scoped_refptr<net::TestURLRequestContextGetter> url_request_context_getter_;
   UploadInterceptor* interceptor_;
   MockTime time_;
-  scoped_ptr<DomainReliabilityUploader> uploader_;
+  std::unique_ptr<DomainReliabilityUploader> uploader_;
 };
 
 TEST_F(DomainReliabilityUploaderTest, Null) {
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, SuccessfulUpload) {
@@ -219,6 +233,8 @@ TEST_F(DomainReliabilityUploaderTest, SuccessfulUpload) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1u, c.called_count());
   EXPECT_TRUE(c.last_result().is_success());
+
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, NetworkErrorUpload) {
@@ -229,6 +245,8 @@ TEST_F(DomainReliabilityUploaderTest, NetworkErrorUpload) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1u, c.called_count());
   EXPECT_TRUE(c.last_result().is_failure());
+
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, ServerErrorUpload) {
@@ -239,6 +257,8 @@ TEST_F(DomainReliabilityUploaderTest, ServerErrorUpload) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1u, c.called_count());
   EXPECT_TRUE(c.last_result().is_failure());
+
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, RetryAfterUpload) {
@@ -251,6 +271,8 @@ TEST_F(DomainReliabilityUploaderTest, RetryAfterUpload) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1u, c.called_count());
   EXPECT_TRUE(c.last_result().is_retry_after());
+
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, UploadDepth1) {
@@ -262,6 +284,8 @@ TEST_F(DomainReliabilityUploaderTest, UploadDepth1) {
   EXPECT_EQ(1u, c.called_count());
 
   EXPECT_EQ(1, interceptor()->last_upload_depth());
+
+  uploader()->Shutdown();
 }
 
 TEST_F(DomainReliabilityUploaderTest, UploadDepth2) {
@@ -273,6 +297,34 @@ TEST_F(DomainReliabilityUploaderTest, UploadDepth2) {
   EXPECT_EQ(1u, c.called_count());
 
   EXPECT_EQ(2, interceptor()->last_upload_depth());
+
+  uploader()->Shutdown();
+}
+
+TEST_F(DomainReliabilityUploaderTest, UploadCanceledAtShutdown) {
+  interceptor()->ExpectRequestAndReturnError(net::ERR_IO_PENDING);
+
+  TestUploadCallback c;
+  uploader()->UploadReport("{}", 1, GURL(kUploadURL), c.callback());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, interceptor()->request_count());
+  EXPECT_EQ(0u, c.called_count());
+
+  uploader()->Shutdown();
+
+  EXPECT_EQ(0u, c.called_count());
+
+  url_request_context_getter()->GetURLRequestContext()->AssertNoURLRequests();
+}
+
+TEST_F(DomainReliabilityUploaderTest, NoUploadAfterShutdown) {
+  uploader()->Shutdown();
+
+  TestUploadCallback c;
+  uploader()->UploadReport("{}", 1, GURL(kUploadURL), c.callback());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1u, c.called_count());
+  EXPECT_EQ(0, interceptor()->request_count());
 }
 
 }  // namespace

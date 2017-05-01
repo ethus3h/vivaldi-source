@@ -61,6 +61,8 @@ class ScopedUnsetCrashpadInfoOptions {
   ~ScopedUnsetCrashpadInfoOptions() {
     crashpad_info_->set_crashpad_handler_behavior(TriState::kUnset);
     crashpad_info_->set_system_crash_reporter_forwarding(TriState::kUnset);
+    crashpad_info_->set_gather_indirectly_referenced_memory(TriState::kUnset,
+                                                            0);
   }
 
  private:
@@ -69,24 +71,31 @@ class ScopedUnsetCrashpadInfoOptions {
   DISALLOW_COPY_AND_ASSIGN(ScopedUnsetCrashpadInfoOptions);
 };
 
-TEST(CrashpadInfoClientOptions, OneModule) {
-  // Make sure that the initial state has all values unset.
+CrashpadInfoClientOptions SelfProcessSnapshotAndGetCrashpadOptions() {
 #if defined(OS_MACOSX)
   ProcessSnapshotMac process_snapshot;
-  ASSERT_TRUE(process_snapshot.Initialize(mach_task_self()));
+  EXPECT_TRUE(process_snapshot.Initialize(mach_task_self()));
 #elif defined(OS_WIN)
   ProcessSnapshotWin process_snapshot;
-  ASSERT_TRUE(process_snapshot.Initialize(
-      GetCurrentProcess(), ProcessSuspensionState::kRunning, 0));
+  EXPECT_TRUE(process_snapshot.Initialize(
+      GetCurrentProcess(), ProcessSuspensionState::kRunning, 0, 0));
 #else
 #error Port.
 #endif  // OS_MACOSX
 
   CrashpadInfoClientOptions options;
   process_snapshot.GetCrashpadOptions(&options);
+  return options;
+}
+
+TEST(CrashpadInfoClientOptions, OneModule) {
+  // Make sure that the initial state has all values unset.
+  auto options = SelfProcessSnapshotAndGetCrashpadOptions();
 
   EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
   EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+  EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
+  EXPECT_EQ(0u, options.indirectly_referenced_memory_cap);
 
   CrashpadInfo* crashpad_info = CrashpadInfo::GetCrashpadInfo();
   ASSERT_TRUE(crashpad_info);
@@ -96,9 +105,11 @@ TEST(CrashpadInfoClientOptions, OneModule) {
 
     crashpad_info->set_crashpad_handler_behavior(TriState::kEnabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kEnabled, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
+    EXPECT_EQ(0u, options.indirectly_referenced_memory_cap);
   }
 
   {
@@ -106,9 +117,24 @@ TEST(CrashpadInfoClientOptions, OneModule) {
 
     crashpad_info->set_system_crash_reporter_forwarding(TriState::kDisabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kDisabled, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
+    EXPECT_EQ(0u, options.indirectly_referenced_memory_cap);
+  }
+
+  {
+    ScopedUnsetCrashpadInfoOptions unset(crashpad_info);
+
+    crashpad_info->set_gather_indirectly_referenced_memory(TriState::kEnabled,
+                                                           1234);
+
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
+    EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
+    EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kEnabled, options.gather_indirectly_referenced_memory);
+    EXPECT_EQ(1234u, options.indirectly_referenced_memory_cap);
   }
 }
 
@@ -184,23 +210,12 @@ TEST(CrashpadInfoClientOptions, TwoModules) {
       dl_handle.LookUpSymbol<CrashpadInfo* (*)()>("TestModule_GetCrashpadInfo");
   ASSERT_TRUE(TestModule_GetCrashpadInfo);
 
+  auto options = SelfProcessSnapshotAndGetCrashpadOptions();
+
   // Make sure that the initial state has all values unset.
-#if defined(OS_MACOSX)
-  ProcessSnapshotMac process_snapshot;
-  ASSERT_TRUE(process_snapshot.Initialize(mach_task_self()));
-#elif defined(OS_WIN)
-  ProcessSnapshotWin process_snapshot;
-  ASSERT_TRUE(process_snapshot.Initialize(
-      GetCurrentProcess(), ProcessSuspensionState::kRunning, 0));
-#else
-#error Port.
-#endif  // OS_MACOSX
-
-  CrashpadInfoClientOptions options;
-  process_snapshot.GetCrashpadOptions(&options);
-
   EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
   EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+  EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
 
   // Get both CrashpadInfo structures.
   CrashpadInfo* local_crashpad_info = CrashpadInfo::GetCrashpadInfo();
@@ -216,18 +231,20 @@ TEST(CrashpadInfoClientOptions, TwoModules) {
     // When only one module sets a value, it applies to the entire process.
     remote_crashpad_info->set_crashpad_handler_behavior(TriState::kEnabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kEnabled, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
 
     // When more than one module sets a value, the first one in the module list
     // applies to the process. The local module should appear before the remote
     // module, because the local module loaded the remote module.
     local_crashpad_info->set_crashpad_handler_behavior(TriState::kDisabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kDisabled, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kUnset, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
   }
 
   {
@@ -238,9 +255,10 @@ TEST(CrashpadInfoClientOptions, TwoModules) {
     remote_crashpad_info->set_system_crash_reporter_forwarding(
         TriState::kDisabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kDisabled, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
 
     // When more than one module sets a value, the first one in the module list
     // applies to the process. The local module should appear before the remote
@@ -248,9 +266,10 @@ TEST(CrashpadInfoClientOptions, TwoModules) {
     local_crashpad_info->set_system_crash_reporter_forwarding(
         TriState::kEnabled);
 
-    process_snapshot.GetCrashpadOptions(&options);
+    options = SelfProcessSnapshotAndGetCrashpadOptions();
     EXPECT_EQ(TriState::kUnset, options.crashpad_handler_behavior);
     EXPECT_EQ(TriState::kEnabled, options.system_crash_reporter_forwarding);
+    EXPECT_EQ(TriState::kUnset, options.gather_indirectly_referenced_memory);
   }
 }
 

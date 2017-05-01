@@ -7,6 +7,7 @@
 
 #include <jni.h>
 #include <stdint.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,12 +17,11 @@
 #include "media/midi/usb_midi_device.h"
 #include "media/midi/usb_midi_export.h"
 
-namespace media {
 namespace midi {
 
 class USB_MIDI_EXPORT UsbMidiDeviceAndroid : public UsbMidiDevice {
  public:
-  static scoped_ptr<Factory> CreateFactory();
+  static std::unique_ptr<Factory> CreateFactory();
 
   UsbMidiDeviceAndroid(const base::android::JavaRef<jobject>& raw_device,
                        UsbMidiDeviceDelegate* delegate);
@@ -61,6 +61,5 @@ class USB_MIDI_EXPORT UsbMidiDeviceAndroid : public UsbMidiDevice {
 };
 
 }  // namespace midi
-}  // namespace media
 
 #endif  // MEDIA_MIDI_USB_MIDI_DEVICE_ANDROID_H_

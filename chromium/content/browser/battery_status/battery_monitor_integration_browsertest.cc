@@ -7,12 +7,12 @@
 #include "base/callback_list.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/memory/ptr_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/service_registry.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -21,6 +21,7 @@
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "device/battery/battery_monitor.mojom.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
+#include "services/service_manager/public/cpp/interface_registry.h"
 
 // These tests run against a dummy implementation of the BatteryMonitor service.
 // That is, they verify that the service implementation is correctly exposed to
@@ -38,7 +39,7 @@ typedef BatteryUpdateCallbackList::Subscription BatteryUpdateSubscription;
 device::BatteryStatus g_battery_status;
 // Global list of test battery monitors to notify when |g_battery_status|
 // changes.
-base::LazyInstance<BatteryUpdateCallbackList> g_callback_list =
+base::LazyInstance<BatteryUpdateCallbackList>::Leaky g_callback_list =
     LAZY_INSTANCE_INITIALIZER;
 
 // Updates the global battery state and notifies existing test monitors.
@@ -49,18 +50,16 @@ void UpdateBattery(const device::BatteryStatus& battery_status) {
 
 class FakeBatteryMonitor : public device::BatteryMonitor {
  public:
+  FakeBatteryMonitor() {}
+  ~FakeBatteryMonitor() override {}
+
   static void Create(mojo::InterfaceRequest<BatteryMonitor> request) {
-    new FakeBatteryMonitor(std::move(request));
+    mojo::MakeStrongBinding(base::MakeUnique<FakeBatteryMonitor>(),
+                            std::move(request));
   }
 
  private:
-  typedef mojo::Callback<void(device::BatteryStatusPtr)> BatteryStatusCallback;
-
-  FakeBatteryMonitor(mojo::InterfaceRequest<BatteryMonitor> request)
-      : binding_(this, std::move(request)) {}
-  ~FakeBatteryMonitor() override {}
-
-  void QueryNextStatus(const BatteryStatusCallback& callback) override {
+  void QueryNextStatus(const QueryNextStatusCallback& callback) override {
     // We don't expect overlapped calls to QueryNextStatus.
     DCHECK(callback_.is_null());
 
@@ -78,31 +77,41 @@ class FakeBatteryMonitor : public device::BatteryMonitor {
   void DidChange(const device::BatteryStatus& battery_status) {
     if (!callback_.is_null()) {
       callback_.Run(battery_status.Clone());
-      callback_.reset();
+      callback_.Reset();
     }
   }
 
-  scoped_ptr<BatteryUpdateSubscription> subscription_;
-  mojo::StrongBinding<BatteryMonitor> binding_;
-  BatteryStatusCallback callback_;
+  std::unique_ptr<BatteryUpdateSubscription> subscription_;
+  QueryNextStatusCallback callback_;
 };
 
 // Overrides the default service implementation with the test implementation
 // declared above.
 class TestContentBrowserClient : public ContentBrowserClient {
  public:
-  void RegisterRenderProcessMojoServices(ServiceRegistry* registry) override {
-    registry->AddService(base::Bind(&FakeBatteryMonitor::Create));
+  void ExposeInterfacesToRenderer(
+      service_manager::InterfaceRegistry* registry,
+      RenderProcessHost* render_process_host) override {
+    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner =
+        BrowserThread::GetTaskRunnerForThread(BrowserThread::UI);
+    registry->AddInterface(base::Bind(&FakeBatteryMonitor::Create),
+                           ui_task_runner);
+  }
+
+  void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
+                                      int child_process_id) override {
+    // Necessary for passing kIsolateSitesForTesting flag to the renderer.
+    ShellContentBrowserClient::Get()->AppendExtraCommandLineSwitches(
+        command_line, child_process_id);
   }
 
 #if defined(OS_ANDROID)
   void GetAdditionalMappedFilesForChildProcess(
       const base::CommandLine& command_line,
       int child_process_id,
-      FileDescriptorInfo* mappings,
-      std::map<int, base::MemoryMappedFile::Region>* regions) override {
+      FileDescriptorInfo* mappings) override {
     ShellContentBrowserClient::Get()->GetAdditionalMappedFilesForChildProcess(
-        command_line, child_process_id, mappings, regions);
+        command_line, child_process_id, mappings);
   }
 #endif  // defined(OS_ANDROID)
 };

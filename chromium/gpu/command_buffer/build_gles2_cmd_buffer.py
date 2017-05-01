@@ -76,6 +76,8 @@ _CAPABILITY_FLAGS = [
   {'name': 'cull_face'},
   {'name': 'depth_test', 'state_flag': 'framebuffer_state_.clear_state_dirty'},
   {'name': 'dither', 'default': True},
+  {'name': 'framebuffer_srgb_ext', 'default': True, 'no_init': True,
+   'extension_flag': 'ext_srgb_write_control'},
   {'name': 'polygon_offset_fill'},
   {'name': 'sample_alpha_to_coverage'},
   {'name': 'sample_coverage'},
@@ -501,7 +503,8 @@ _STATES = {
   # GL_ACTIVE_TEXTURE
   'LineWidth': {
     'type': 'Normal',
-    'func': 'LineWidth',
+    'custom_function' : True,
+    'func': 'DoLineWidth',
     'enum': 'GL_LINE_WIDTH',
     'states': [
       {
@@ -679,7 +682,7 @@ _NAMED_TYPE_INFO = {
       'GL_RGB', 'GL_RGBA', 'GL_ALPHA', 'GL_NONE'
     ],
   },
-  'FrameBufferTarget': {
+  'FramebufferTarget': {
     'type': 'GLenum',
     'valid': [
       'GL_FRAMEBUFFER',
@@ -811,16 +814,6 @@ _NAMED_TYPE_INFO = {
     'valid': [
     ],
     'valid_es3': [
-      'GL_COMPRESSED_R11_EAC',
-      'GL_COMPRESSED_SIGNED_R11_EAC',
-      'GL_COMPRESSED_RG11_EAC',
-      'GL_COMPRESSED_SIGNED_RG11_EAC',
-      'GL_COMPRESSED_RGB8_ETC2',
-      'GL_COMPRESSED_SRGB8_ETC2',
-      'GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2',
-      'GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2',
-      'GL_COMPRESSED_RGBA8_ETC2_EAC',
-      'GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC',
     ],
   },
   'GLState': {
@@ -994,7 +987,6 @@ _NAMED_TYPE_INFO = {
   },
   'ReadBuffer': {
     'type': 'GLenum',
-    'is_complete': True,
     'valid': [
       'GL_NONE',
       'GL_BACK',
@@ -1176,6 +1168,9 @@ _NAMED_TYPE_INFO = {
       'GL_CONSTANT_ALPHA',
       'GL_ONE_MINUS_CONSTANT_ALPHA',
     ],
+    'valid_es3': [
+      'GL_SRC_ALPHA_SATURATE'
+    ]
   },
   'Capability': {
     'type': 'GLenum',
@@ -1241,6 +1236,17 @@ _NAMED_TYPE_INFO = {
     ],
     'valid_es3': [
       'GL_DEPTH_STENCIL_ATTACHMENT',
+    ],
+  },
+  'AttachmentQuery': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_COLOR_ATTACHMENT0',
+      'GL_DEPTH_ATTACHMENT',
+      'GL_STENCIL_ATTACHMENT',
+    ],
+    'valid_es3': [
+      'GL_DEPTH_STENCIL_ATTACHMENT',
       # For backbuffer.
       'GL_COLOR_EXT',
       'GL_DEPTH_EXT',
@@ -1294,7 +1300,7 @@ _NAMED_TYPE_INFO = {
       'GL_PIXEL_PACK_BUFFER',
     ],
   },
-  'FrameBufferParameter': {
+  'FramebufferParameter': {
     'type': 'GLenum',
     'valid': [
       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE',
@@ -1452,6 +1458,14 @@ _NAMED_TYPE_INFO = {
       'GL_EXTENSIONS',
     ],
   },
+  'IndexedStringType': {
+    'type': 'GLenum',
+    'is_complete': True,
+    'valid': [
+      'GL_EXTENSIONS',
+    ],
+  },
+
   'TextureParameter': {
     'type': 'GLenum',
     'valid': [
@@ -1523,6 +1537,26 @@ _NAMED_TYPE_INFO = {
     'valid': [
       'GL_NONE',
       'GL_COMPARE_REF_TO_TEXTURE',
+    ],
+  },
+  'TextureSrgbDecodeExt': {
+    'type': 'GLenum',
+    'is_complete': True,
+    'valid': [
+      'GL_DECODE_EXT',
+      'GL_SKIP_DECODE_EXT',
+    ],
+  },
+  'TextureSwizzle': {
+    'type': 'GLenum',
+    'is_complete': True,
+    'valid': [
+      'GL_RED',
+      'GL_GREEN',
+      'GL_BLUE',
+      'GL_ALPHA',
+      'GL_ZERO',
+      'GL_ONE',
     ],
   },
   'TextureUsage': {
@@ -1933,6 +1967,97 @@ _NAMED_TYPE_INFO = {
       'GL_BGR',
     ],
   },
+  'TextureUnsizedInternalFormat': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_ALPHA',
+      'GL_LUMINANCE',
+      'GL_LUMINANCE_ALPHA',
+      'GL_RGB',
+      'GL_RGBA',
+    ],
+  },
+  'TextureSizedColorRenderableInternalFormat': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_R8',
+      'GL_R8UI',
+      'GL_R8I',
+      'GL_R16UI',
+      'GL_R16I',
+      'GL_R32UI',
+      'GL_R32I',
+      'GL_RG8',
+      'GL_RG8UI',
+      'GL_RG8I',
+      'GL_RG16UI',
+      'GL_RG16I',
+      'GL_RG32UI',
+      'GL_RG32I',
+      'GL_RGB8',
+      'GL_RGB565',
+      'GL_RGBA8',
+      'GL_SRGB8_ALPHA8',
+      'GL_RGB5_A1',
+      'GL_RGBA4',
+      'GL_RGB10_A2',
+      'GL_RGBA8UI',
+      'GL_RGBA8I',
+      'GL_RGB10_A2UI',
+      'GL_RGBA16UI',
+      'GL_RGBA16I',
+      'GL_RGBA32UI',
+      'GL_RGBA32I',
+    ],
+  },
+  'TextureDepthRenderableInternalFormat': {
+    'type': 'GLenum',
+    'valid': [],
+    'valid_es3': [
+      'GL_DEPTH_COMPONENT16',
+      'GL_DEPTH_COMPONENT24',
+      'GL_DEPTH_COMPONENT32F',
+      'GL_DEPTH24_STENCIL8',
+      'GL_DEPTH32F_STENCIL8',
+    ],
+  },
+  'TextureStencilRenderableInternalFormat': {
+    'type': 'GLenum',
+    'valid': [],
+    'valid_es3': [
+      'GL_STENCIL_INDEX8',
+      'GL_DEPTH24_STENCIL8',
+      'GL_DEPTH32F_STENCIL8',
+    ],
+  },
+  'TextureSizedTextureFilterableInternalFormat': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_R8',
+      'GL_R8_SNORM',
+      'GL_R16F',
+      'GL_RG8',
+      'GL_RG8_SNORM',
+      'GL_RG16F',
+      'GL_RGB8',
+      'GL_SRGB8',
+      'GL_RGB565',
+      'GL_RGB8_SNORM',
+      'GL_R11F_G11F_B10F',
+      'GL_RGB9_E5',
+      'GL_RGB16F',
+      'GL_RGBA8',
+      'GL_SRGB8_ALPHA8',
+      'GL_RGBA8_SNORM',
+      'GL_RGB5_A1',
+      'GL_RGBA4',
+      'GL_RGB10_A2',
+      'GL_RGBA16F',
+      'GL_RGB_YCRCB_420_CHROMIUM',
+      'GL_RGB_YCBCR_422_CHROMIUM',
+      'GL_RGB_YCBCR_420V_CHROMIUM',
+    ],
+  },
   'TextureInternalFormatStorage': {
     'type': 'GLenum',
     'valid': [
@@ -1997,16 +2122,6 @@ _NAMED_TYPE_INFO = {
       'GL_DEPTH_COMPONENT32F',
       'GL_DEPTH24_STENCIL8',
       'GL_DEPTH32F_STENCIL8',
-      'GL_COMPRESSED_R11_EAC',
-      'GL_COMPRESSED_SIGNED_R11_EAC',
-      'GL_COMPRESSED_RG11_EAC',
-      'GL_COMPRESSED_SIGNED_RG11_EAC',
-      'GL_COMPRESSED_RGB8_ETC2',
-      'GL_COMPRESSED_SRGB8_ETC2',
-      'GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2',
-      'GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2',
-      'GL_COMPRESSED_RGBA8_ETC2_EAC',
-      'GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC',
     ],
     'deprecated_es3': [
       'GL_ALPHA8_EXT',
@@ -2024,7 +2139,7 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_RGB',
-      'GL_RGB_YUV_420_CHROMIUM',
+      'GL_RGB_YCRCB_420_CHROMIUM',
       'GL_RGB_YCBCR_422_CHROMIUM',
       'GL_RGB_YCBCR_420V_CHROMIUM',
       'GL_RGBA',
@@ -2034,18 +2149,6 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_READ_WRITE_CHROMIUM',
-    ],
-  },
-  'ValueBufferTarget': {
-    'type': 'GLenum',
-    'valid': [
-      'GL_SUBSCRIBED_VALUES_BUFFER_CHROMIUM',
-    ],
-  },
-  'SubscriptionTarget': {
-    'type': 'GLenum',
-    'valid': [
-      'GL_MOUSE_POSITION_CHROMIUM',
     ],
   },
   'UniformParameter': {
@@ -2142,16 +2245,6 @@ _NAMED_TYPE_INFO = {
       '5',
     ],
   },
-  'FalseOnly': {
-    'type': 'GLboolean',
-    'is_complete': True,
-    'valid': [
-      'false',
-    ],
-    'invalid': [
-      'true',
-    ],
-  },
   'ResetStatus': {
     'type': 'GLenum',
     'is_complete': True,
@@ -2206,6 +2299,19 @@ _NAMED_TYPE_INFO = {
   },
 }
 
+_ETC_COMPRESSED_TEXTURE_FORMATS = [
+  'GL_COMPRESSED_R11_EAC',
+  'GL_COMPRESSED_SIGNED_R11_EAC',
+  'GL_COMPRESSED_RG11_EAC',
+  'GL_COMPRESSED_SIGNED_RG11_EAC',
+  'GL_COMPRESSED_RGB8_ETC2',
+  'GL_COMPRESSED_SRGB8_ETC2',
+  'GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2',
+  'GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2',
+  'GL_COMPRESSED_RGBA8_ETC2_EAC',
+  'GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC',
+]
+
 # This table specifies the different pepper interfaces that are supported for
 # GL commands. 'dev' is true if it's a dev interface.
 _PEPPER_INTERFACES = [
@@ -2236,19 +2342,18 @@ _PEPPER_INTERFACES = [
 # gl_test_func: GL function that is expected to be called when testing.
 # cmd_args:     The arguments to use for the command. This overrides generating
 #               them based on the GL function arguments.
-# gen_cmd:      Whether or not this function geneates a command. Default = True.
 # data_transfer_methods: Array of methods that are used for transfering the
 #               pointer data.  Possible values: 'immediate', 'shm', 'bucket'.
 #               The default is 'immediate' if the command has one pointer
 #               argument, otherwise 'shm'. One command is generated for each
 #               transfer method. Affects only commands which are not of type
-#               'HandWritten', 'GETn' or 'GLcharN'.
+#               'GETn' or 'GLcharN'.
 #               Note: the command arguments that affect this are the final args,
 #               taking cmd_args override into consideration.
 # impl_func:    Whether or not to generate the GLES2Implementation part of this
 #               command.
-# impl_decl:    Whether or not to generate the GLES2Implementation declaration
-#               for this command.
+# internal:     If true, this is an internal command only, not exposed to the
+#               client.
 # needs_size:   If True a data_size field is added to the command.
 # count:        The number of units per element. For PUTn or PUT types.
 # use_count_func: If True the actual data count needs to be computed; the count
@@ -2281,12 +2386,9 @@ _PEPPER_INTERFACES = [
 #               the corresponding feature info flag is enabled. Implies
 #               'extension': True.
 # not_shared:   For GENn types, True if objects can't be shared between contexts
-# unsafe:       True = no validation is implemented on the service side and the
-#               command is only available with --enable-unsafe-es3-apis.
-# use_helper:   True = use explicit helper or decoder functions rather than the
-#               defaults created when unsafe is True.
+# es3:          ES3 API. True if the function requires an ES3 or WebGL2 context.
 # id_mapping:   A list of resource type names whose client side IDs need to be
-#               mapped to service side IDs.  This is only used for unsafe APIs.
+#               mapped to service side IDs.  This is only used for ES3 APIs.
 
 _FUNCTION_INFO = {
   'ActiveTexture': {
@@ -2317,17 +2419,19 @@ _FUNCTION_INFO = {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferBase',
     'gen_func': 'GenBuffersARB',
-    'unsafe': True,
+    'unit_test': False,
+    'es3': True,
   },
   'BindBufferRange': {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferRange',
     'gen_func': 'GenBuffersARB',
+    'unit_test': False,
     'valid_args': {
       '3': '4',
       '4': '4'
     },
-    'unsafe': True,
+    'es3': True,
   },
   'BindFramebuffer': {
     'type': 'Bind',
@@ -2345,8 +2449,7 @@ _FUNCTION_INFO = {
   'BindSampler': {
     'type': 'Bind',
     'decoder_func': 'DoBindSampler',
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'BindTexture': {
     'type': 'Bind',
@@ -2354,12 +2457,14 @@ _FUNCTION_INFO = {
     'gen_func': 'GenTextures',
     # TODO: remove this once client side caching works.
     'client_test': False,
+    'unit_test': False,
     'trace_level': 2,
   },
   'BindTransformFeedback': {
     'type': 'Bind',
-    'id_mapping': [ 'TransformFeedback' ],
-    'unsafe': True,
+    'decoder_func': 'DoBindTransformFeedback',
+    'es3': True,
+    'unit_test': False,
   },
   'BlitFramebufferCHROMIUM': {
     'decoder_func': 'DoBlitFramebufferCHROMIUM',
@@ -2373,7 +2478,8 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'BufferData': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
     'trace_level': 2,
@@ -2396,6 +2502,9 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoClear',
     'defer_draws': True,
     'trace_level': 2,
+    'valid_args': {
+      '0': 'GL_COLOR_BUFFER_BIT'
+    },
   },
   'ClearBufferiv': {
     'type': 'PUT',
@@ -2403,7 +2512,7 @@ _FUNCTION_INFO = {
     'count': 4,
     'decoder_func': 'DoClearBufferiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 2,
   },
   'ClearBufferuiv': {
@@ -2411,7 +2520,7 @@ _FUNCTION_INFO = {
     'count': 4,
     'decoder_func': 'DoClearBufferuiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 2,
   },
   'ClearBufferfv': {
@@ -2420,11 +2529,11 @@ _FUNCTION_INFO = {
     'count': 4,
     'decoder_func': 'DoClearBufferfv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 2,
   },
   'ClearBufferfi': {
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoClearBufferfi',
     'unit_test': False,
     'trace_level': 2,
@@ -2447,7 +2556,7 @@ _FUNCTION_INFO = {
     'data_transfer_methods': ['shm'],
     'cmd_args': 'GLuint sync, GLbitfieldSyncFlushFlags flags, '
                 'GLuint64 timeout, GLenum* result',
-    'unsafe': True,
+    'es3': True,
     'result': ['GLenum'],
     'trace_level': 2,
   },
@@ -2461,85 +2570,36 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoConsumeTextureCHROMIUM',
     'impl_func': False,
     'type': 'PUT',
-    'count': 64,  # GL_MAILBOX_SIZE_CHROMIUM
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'unit_test': False,
     'client_test': False,
     'extension': "CHROMIUM_texture_mailbox",
-    'chromium': True,
     'trace_level': 2,
   },
   'CopyBufferSubData': {
-    'unsafe': True,
+    'decoder_func': 'DoCopyBufferSubData',
+    'unit_test': False,
+    'es3': True,
   },
   'CoverageModulationCHROMIUM': {
     'type': 'StateSet',
     'state': 'CoverageModulationCHROMIUM',
     'decoder_func': 'glCoverageModulationNV',
-    'chromium': True,
     'extension': 'CHROMIUM_framebuffer_mixed_samples',
     'extension_flag': 'chromium_framebuffer_mixed_samples',
   },
   'CreateAndConsumeTextureCHROMIUM': {
-    'decoder_func': 'DoCreateAndConsumeTextureCHROMIUM',
-    'impl_func': False,
-    'type': 'HandWritten',
-    'data_transfer_methods': ['immediate'],
-    'unit_test': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_texture_mailbox",
-    'chromium': True,
     'trace_level': 2,
   },
-  'GenValuebuffersCHROMIUM': {
-    'type': 'GENn',
-    'gl_test_func': 'glGenValuebuffersCHROMIUM',
-    'resource_type': 'Valuebuffer',
-    'resource_types': 'Valuebuffers',
+  'CreateAndConsumeTextureINTERNAL': {
+    'decoder_func': 'DoCreateAndConsumeTextureINTERNAL',
+    'internal': True,
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'DeleteValuebuffersCHROMIUM': {
-    'type': 'DELn',
-    'gl_test_func': 'glDeleteValuebuffersCHROMIUM',
-    'resource_type': 'Valuebuffer',
-    'resource_types': 'Valuebuffers',
-    'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'IsValuebufferCHROMIUM': {
-    'type': 'Is',
-    'decoder_func': 'DoIsValuebufferCHROMIUM',
-    'expectation': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'BindValuebufferCHROMIUM': {
-    'type': 'Bind',
-    'decoder_func': 'DoBindValueBufferCHROMIUM',
-    'gen_func': 'GenValueBuffersCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'SubscribeValueCHROMIUM': {
-    'decoder_func': 'DoSubscribeValueCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'PopulateSubscribedValuesCHROMIUM': {
-    'decoder_func': 'DoPopulateSubscribedValuesCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
-  },
-  'UniformValuebufferCHROMIUM': {
-    'decoder_func': 'DoUniformValueBufferCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_subscribe_uniform',
-    'chromium': True,
+    'trace_level': 2,
   },
   'ClearStencil': {
     'type': 'StateSet',
@@ -2549,23 +2609,20 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'decoder_func': 'DoEnableFeatureCHROMIUM',
-    'expectation': False,
     'cmd_args': 'GLuint bucket_id, GLint* result',
     'result': ['GLint'],
     'extension': 'GL_CHROMIUM_enable_feature',
-    'chromium': True,
     'pepper_interface': 'ChromiumEnableFeature',
   },
   'CompileShader': {'decoder_func': 'DoCompileShader', 'unit_test': False},
   'CompressedTexImage2D': {
-    'type': 'Manual',
+    'type': 'Custom',
     'data_transfer_methods': ['bucket', 'shm'],
     'trace_level': 1,
   },
   'CompressedTexSubImage2D': {
-    'type': 'Data',
+    'type': 'Custom',
     'data_transfer_methods': ['bucket', 'shm'],
-    'decoder_func': 'DoCompressedTexSubImage2D',
     'trace_level': 1,
   },
   'CopyTexImage2D': {
@@ -2580,54 +2637,50 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'CompressedTexImage3D': {
-    'type': 'Manual',
+    'type': 'Custom',
     'data_transfer_methods': ['bucket', 'shm'],
-    'unsafe': True,
+    'es3': True,
     'trace_level': 1,
   },
   'CompressedTexSubImage3D': {
-    'type': 'Data',
+    'type': 'Custom',
     'data_transfer_methods': ['bucket', 'shm'],
-    'decoder_func': 'DoCompressedTexSubImage3D',
-    'unsafe': True,
+    'es3': True,
     'trace_level': 1,
   },
   'CopyTexSubImage3D': {
+    'decoder_func': 'DoCopyTexSubImage3D',
+    'unit_test': False,
     'defer_reads': True,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 1,
   },
   'CreateImageCHROMIUM': {
-    'type': 'Manual',
+    'type': 'NoCommand',
     'cmd_args':
         'ClientBuffer buffer, GLsizei width, GLsizei height, '
         'GLenum internalformat',
     'result': ['GLuint'],
-    'client_test': False,
-    'gen_cmd': False,
-    'expectation': False,
     'extension': "CHROMIUM_image",
-    'chromium': True,
     'trace_level': 1,
   },
   'DestroyImageCHROMIUM': {
-    'type': 'Manual',
-    'client_test': False,
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_image",
-    'chromium': True,
     'trace_level': 1,
   },
   'CreateGpuMemoryBufferImageCHROMIUM': {
-    'type': 'Manual',
+    'type': 'NoCommand',
     'cmd_args':
         'GLsizei width, GLsizei height, GLenum internalformat, GLenum usage',
     'result': ['GLuint'],
-    'client_test': False,
-    'gen_cmd': False,
-    'expectation': False,
     'extension': "CHROMIUM_gpu_memory_buffer_image",
-    'chromium': True,
+    'trace_level': 1,
+  },
+  'DescheduleUntilFinishedCHROMIUM': {
+    'type': 'Custom',
+    'decoder_func': 'DoDescheduleUntilFinishedCHROMIUM',
+    'extension': "CHROMIUM_deschedule",
     'trace_level': 1,
   },
   'CreateProgram': {
@@ -2737,15 +2790,14 @@ _FUNCTION_INFO = {
     'type': 'DELn',
     'resource_type': 'Sampler',
     'resource_types': 'Samplers',
-    'unsafe': True,
-    'use_helper': True
+    'es3': True,
   },
   'DeleteShader': { 'type': 'Delete' },
   'DeleteSync': {
     'type': 'Delete',
     'cmd_args': 'GLuint sync',
     'resource_type': 'Sync',
-    'unsafe': True,
+    'es3': True,
   },
   'DeleteTextures': {
     'type': 'DELn',
@@ -2756,7 +2808,8 @@ _FUNCTION_INFO = {
     'type': 'DELn',
     'resource_type': 'TransformFeedback',
     'resource_types': 'TransformFeedbacks',
-    'unsafe': True,
+    'es3': True,
+    'unit_test': False,
   },
   'DepthRangef': {
     'decoder_func': 'DoDepthRangef',
@@ -2776,16 +2829,18 @@ _FUNCTION_INFO = {
   },
   'DisableVertexAttribArray': {
     'decoder_func': 'DoDisableVertexAttribArray',
-    'impl_decl': False,
+    'impl_func': False,
   },
   'DrawArrays': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count',
     'defer_draws': True,
     'trace_level': 2,
   },
   'DrawElements': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
                 'GLenumIndexType type, GLuint index_offset',
     'client_test': False,
@@ -2793,9 +2848,8 @@ _FUNCTION_INFO = {
     'trace_level': 2,
   },
   'DrawRangeElements': {
-    'type': 'Manual',
-    'gen_cmd': 'False',
-    'unsafe': True,
+    'type': 'NoCommand',
+    'es3': True,
   },
   'Enable': {
     'decoder_func': 'DoEnable',
@@ -2804,12 +2858,13 @@ _FUNCTION_INFO = {
   },
   'EnableVertexAttribArray': {
     'decoder_func': 'DoEnableVertexAttribArray',
-    'impl_decl': False,
+    'impl_func': False,
   },
   'FenceSync': {
     'type': 'Create',
     'client_test': False,
-    'unsafe': True,
+    'decoder_func': 'DoFenceSync',
+    'es3': True,
     'trace_level': 1,
   },
   'Finish': {
@@ -2823,6 +2878,12 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'decoder_func': 'DoFlush',
     'trace_level': 1,
+  },
+  'FlushMappedBufferRange': {
+    'decoder_func': 'DoFlushMappedBufferRange',
+    'trace_level': 1,
+    'unit_test': False,
+    'es3': True,
   },
   'FramebufferRenderbuffer': {
     'decoder_func': 'DoFramebufferRenderbuffer',
@@ -2838,7 +2899,6 @@ _FUNCTION_INFO = {
   'FramebufferTexture2DMultisampleEXT': {
     'decoder_func': 'DoFramebufferTexture2DMultisample',
     'gl_test_func': 'glFramebufferTexture2DMultisampleEXT',
-    'expectation': False,
     'unit_test': False,
     'extension': 'EXT_multisampled_render_to_texture',
     'extension_flag': 'multisampled_render_to_texture',
@@ -2846,7 +2906,8 @@ _FUNCTION_INFO = {
   },
   'FramebufferTextureLayer': {
     'decoder_func': 'DoFramebufferTextureLayer',
-    'unsafe': True,
+    'es3': True,
+    'unit_test': False,
     'trace_level': 1,
   },
   'GenerateMipmap': {
@@ -2861,10 +2922,8 @@ _FUNCTION_INFO = {
     'resource_types': 'Buffers',
   },
   'GenMailboxCHROMIUM': {
-    'type': 'HandWritten',
-    'impl_func': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_texture_mailbox",
-    'chromium': True,
   },
   'GenFramebuffers': {
     'type': 'GENn',
@@ -2882,8 +2941,7 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glGenSamplers',
     'resource_type': 'Sampler',
     'resource_types': 'Samplers',
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'GenTextures': {
     'type': 'GENn',
@@ -2896,7 +2954,7 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glGenTransformFeedbacks',
     'resource_type': 'TransformFeedback',
     'resource_types': 'TransformFeedbacks',
-    'unsafe': True,
+    'es3': True,
   },
   'GetActiveAttrib': {
     'type': 'Custom',
@@ -2926,7 +2984,7 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'result': ['SizedResult<GLint>'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetActiveUniformBlockName': {
     'type': 'Custom',
@@ -2935,7 +2993,7 @@ _FUNCTION_INFO = {
         'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
         'void* result',
     'result': ['int32_t'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetActiveUniformsiv': {
     'type': 'Custom',
@@ -2944,7 +3002,7 @@ _FUNCTION_INFO = {
         'GLidProgram program, uint32_t indices_bucket_id, GLenum pname, '
         'GLint* params',
     'result': ['SizedResult<GLint>'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetAttachedShaders': {
     'type': 'Custom',
@@ -2959,6 +3017,17 @@ _FUNCTION_INFO = {
         'GLidProgram program, uint32_t name_bucket_id, GLint* location',
     'result': ['GLint'],
     'error_return': -1,
+  },
+  'GetBufferSubDataAsyncCHROMIUM': {
+    'type': 'Custom',
+    'data_transfer_methods': ['shm'],
+    'cmd_args': 'GLenumBufferTarget target, GLintptrNotNegative offset, '
+                'GLsizeiptr size, '
+                'uint32_t data_shm_id, uint32_t data_shm_offset',
+    'es3': True,
+    'impl_func': False,
+    'client_test': False,
+    'trace_level': 1,
   },
   'GetFragDataIndexEXT': {
     'type': 'Custom',
@@ -2977,13 +3046,13 @@ _FUNCTION_INFO = {
         'GLidProgram program, uint32_t name_bucket_id, GLint* location',
     'result': ['GLint'],
     'error_return': -1,
-    'unsafe': True,
+    'es3': True,
   },
   'GetBooleanv': {
     'type': 'GETn',
     'result': ['SizedResult<GLboolean>'],
     'decoder_func': 'DoGetBooleanv',
-    'gl_test_func': 'glGetBooleanv',
+    'gl_test_func': 'glGetIntegerv',
   },
   'GetBufferParameteri64v': {
     'type': 'GETn',
@@ -2991,7 +3060,7 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoGetBufferParameteri64v',
     'expectation': False,
     'shadowed': True,
-    'unsafe': True,
+    'es3': True,
   },
   'GetBufferParameteriv': {
     'type': 'GETn',
@@ -3011,7 +3080,7 @@ _FUNCTION_INFO = {
     'type': 'GETn',
     'result': ['SizedResult<GLfloat>'],
     'decoder_func': 'DoGetFloatv',
-    'gl_test_func': 'glGetFloatv',
+    'gl_test_func': 'glGetIntegerv',
   },
   'GetFramebufferAttachmentParameteriv': {
     'type': 'GETn',
@@ -3020,9 +3089,8 @@ _FUNCTION_INFO = {
     'result': ['SizedResult<GLint>'],
   },
   'GetGraphicsResetStatusKHR': {
+    'type': 'NoCommand',
     'extension': True,
-    'client_test': False,
-    'gen_cmd': False,
     'trace_level': 1,
   },
   'GetInteger64v': {
@@ -3030,7 +3098,8 @@ _FUNCTION_INFO = {
     'result': ['SizedResult<GLint64>'],
     'client_test': False,
     'decoder_func': 'DoGetInteger64v',
-    'unsafe': True
+    'gl_test_func': 'glGetIntegerv',
+    'es3': True
   },
   'GetIntegerv': {
     'type': 'GETn',
@@ -3041,14 +3110,20 @@ _FUNCTION_INFO = {
   'GetInteger64i_v': {
     'type': 'GETn',
     'result': ['SizedResult<GLint64>'],
+    'decoder_func': 'DoGetInteger64i_v',
+    'shadowed': True,
     'client_test': False,
-    'unsafe': True
+    'unit_test': False,
+    'es3': True
   },
   'GetIntegeri_v': {
     'type': 'GETn',
     'result': ['SizedResult<GLint>'],
+    'decoder_func': 'DoGetIntegeri_v',
+    'shadowed': True,
     'client_test': False,
-    'unsafe': True
+    'unit_test': False,
+    'es3': True
   },
   'GetInternalformativ': {
     'type': 'Custom',
@@ -3057,7 +3132,7 @@ _FUNCTION_INFO = {
     'cmd_args':
         'GLenumRenderBufferTarget target, GLenumRenderBufferFormat format, '
         'GLenumInternalFormatParameter pname, GLint* params',
-    'unsafe': True,
+    'es3': True,
   },
   'GetMaxValueInBufferCHROMIUM': {
     'type': 'Is',
@@ -3066,7 +3141,6 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'client_test': False,
     'extension': True,
-    'chromium': True,
     'impl_func': False,
   },
   'GetProgramiv': {
@@ -3077,10 +3151,8 @@ _FUNCTION_INFO = {
   },
   'GetProgramInfoCHROMIUM': {
     'type': 'Custom',
-    'expectation': False,
     'impl_func': False,
     'extension': 'CHROMIUM_get_multiple',
-    'chromium': True,
     'client_test': False,
     'cmd_args': 'GLidProgram program, uint32_t bucket_id',
     'result': [
@@ -3103,15 +3175,13 @@ _FUNCTION_INFO = {
     'type': 'GETn',
     'decoder_func': 'DoGetSamplerParameterfv',
     'result': ['SizedResult<GLfloat>'],
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'GetSamplerParameteriv': {
     'type': 'GETn',
     'decoder_func': 'DoGetSamplerParameteriv',
     'result': ['SizedResult<GLint>'],
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'GetShaderiv': {
     'type': 'GETn',
@@ -3149,12 +3219,16 @@ _FUNCTION_INFO = {
     'client_test': False,
     'cmd_args': 'GLenumStringType name, uint32_t bucket_id',
   },
+  'GetStringi': {
+    'type': 'NoCommand',
+    'es3': True,
+  },
   'GetSynciv': {
     'type': 'GETn',
     'cmd_args': 'GLuint sync, GLenumSyncParameter pname, void* values',
     'result': ['SizedResult<GLint>'],
     'id_mapping': ['Sync'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetTexParameterfv': {
     'type': 'GETn',
@@ -3180,29 +3254,25 @@ _FUNCTION_INFO = {
         'GLidProgram program, uint32_t name_bucket_id, GLuint* index',
     'result': ['GLuint'],
     'error_return': 'GL_INVALID_INDEX',
-    'unsafe': True,
+    'es3': True,
   },
   'GetUniformBlocksCHROMIUM': {
     'type': 'Custom',
-    'expectation': False,
     'impl_func': False,
     'extension': True,
-    'chromium': True,
     'client_test': False,
     'cmd_args': 'GLidProgram program, uint32_t bucket_id',
     'result': ['uint32_t'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetUniformsES3CHROMIUM': {
     'type': 'Custom',
-    'expectation': False,
     'impl_func': False,
     'extension': True,
-    'chromium': True,
     'client_test': False,
     'cmd_args': 'GLidProgram program, uint32_t bucket_id',
     'result': ['uint32_t'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetTransformFeedbackVarying': {
     'type': 'Custom',
@@ -3215,18 +3285,16 @@ _FUNCTION_INFO = {
       'int32_t size',
       'uint32_t type',
     ],
-    'unsafe': True,
+    'es3': True,
   },
   'GetTransformFeedbackVaryingsCHROMIUM': {
     'type': 'Custom',
-    'expectation': False,
     'impl_func': False,
     'extension': True,
-    'chromium': True,
     'client_test': False,
     'cmd_args': 'GLidProgram program, uint32_t bucket_id',
     'result': ['uint32_t'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetUniformfv': {
     'type': 'Custom',
@@ -3242,7 +3310,7 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'result': ['SizedResult<GLuint>'],
-    'unsafe': True,
+    'es3': True,
   },
   'GetUniformIndices': {
     'type': 'Custom',
@@ -3250,7 +3318,7 @@ _FUNCTION_INFO = {
     'result': ['SizedResult<GLuint>'],
     'cmd_args': 'GLidProgram program, uint32_t names_bucket_id, '
                 'GLuint* indices',
-    'unsafe': True,
+    'es3': True,
   },
   'GetUniformLocation': {
     'type': 'Custom',
@@ -3263,7 +3331,7 @@ _FUNCTION_INFO = {
   'GetVertexAttribfv': {
     'type': 'GETn',
     'result': ['SizedResult<GLfloat>'],
-    'impl_decl': False,
+    'impl_func': False,
     'decoder_func': 'DoGetVertexAttribfv',
     'expectation': False,
     'client_test': False,
@@ -3271,7 +3339,7 @@ _FUNCTION_INFO = {
   'GetVertexAttribiv': {
     'type': 'GETn',
     'result': ['SizedResult<GLint>'],
-    'impl_decl': False,
+    'impl_func': False,
     'decoder_func': 'DoGetVertexAttribiv',
     'expectation': False,
     'client_test': False,
@@ -3279,20 +3347,20 @@ _FUNCTION_INFO = {
   'GetVertexAttribIiv': {
     'type': 'GETn',
     'result': ['SizedResult<GLint>'],
-    'impl_decl': False,
+    'impl_func': False,
     'decoder_func': 'DoGetVertexAttribIiv',
     'expectation': False,
     'client_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'GetVertexAttribIuiv': {
     'type': 'GETn',
     'result': ['SizedResult<GLuint>'],
-    'impl_decl': False,
+    'impl_func': False,
     'decoder_func': 'DoGetVertexAttribIuiv',
     'expectation': False,
     'client_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'GetVertexAttribPointerv': {
     'type': 'Custom',
@@ -3303,16 +3371,18 @@ _FUNCTION_INFO = {
   'InvalidateFramebuffer': {
     'type': 'PUTn',
     'count': 1,
+    'decoder_func': 'DoInvalidateFramebuffer',
     'client_test': False,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'InvalidateSubFramebuffer': {
     'type': 'PUTn',
     'count': 1,
+    'decoder_func': 'DoInvalidateSubFramebuffer',
     'client_test': False,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'IsBuffer': {
     'type': 'Is',
@@ -3350,15 +3420,15 @@ _FUNCTION_INFO = {
     'type': 'Is',
     'decoder_func': 'DoIsSampler',
     'expectation': False,
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'IsSync': {
     'type': 'Is',
     'id_mapping': [ 'Sync' ],
     'cmd_args': 'GLuint sync',
+    'decoder_func': 'DoIsSync',
     'expectation': False,
-    'unsafe': True,
+    'es3': True,
   },
   'IsTexture': {
     'type': 'Is',
@@ -3367,9 +3437,15 @@ _FUNCTION_INFO = {
   },
   'IsTransformFeedback': {
     'type': 'Is',
-    'id_mapping': [ 'TransformFeedback' ],
+    'decoder_func': 'DoIsTransformFeedback',
     'expectation': False,
-    'unsafe': True,
+    'es3': True,
+  },
+  'GetLastFlushIdCHROMIUM': {
+    'type': 'NoCommand',
+    'impl_func': False,
+    'result': ['GLuint'],
+    'extension': True,
   },
   'LinkProgram': {
     'decoder_func': 'DoLinkProgram',
@@ -3377,25 +3453,19 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'MapBufferCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_pixel_transfer_buffer_object",
-    'chromium': True,
-    'client_test': False,
     'trace_level': 1,
   },
   'MapBufferSubDataCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': 'CHROMIUM_map_sub',
-    'chromium': True,
-    'client_test': False,
     'pepper_interface': 'ChromiumMapSub',
     'trace_level': 1,
   },
   'MapTexSubImage2DCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_sub_image",
-    'chromium': True,
-    'client_test': False,
     'pepper_interface': 'ChromiumMapSub',
     'trace_level': 1,
   },
@@ -3406,42 +3476,49 @@ _FUNCTION_INFO = {
                 'GLsizeiptr size, GLbitfieldMapBufferAccess access, '
                 'uint32_t data_shm_id, uint32_t data_shm_offset, '
                 'uint32_t result_shm_id, uint32_t result_shm_offset',
-    'unsafe': True,
+    'es3': True,
     'result': ['uint32_t'],
     'trace_level': 1,
   },
-  'PauseTransformFeedback': {
-    'unsafe': True,
+  'OverlayPromotionHintCHROMIUM': {
+    'decoder_func': 'DoOverlayPromotionHintCHROMIUM',
+    'extension': "CHROMIUM_uniform_stream_texture_matrix",
+    'unit_test': False,
+    'client_test': False,
   },
-  'PixelStorei': {'type': 'Manual'},
+  'PauseTransformFeedback': {
+    'decoder_func': 'DoPauseTransformFeedback',
+    'unit_test': False,
+    'es3': True,
+  },
+  'PixelStorei': {
+    'type': 'Custom',
+    'impl_func': False,
+  },
   'PostSubBufferCHROMIUM': {
-      'type': 'Custom',
-      'impl_func': False,
-      'unit_test': False,
-      'client_test': False,
-      'extension': True,
-      'chromium': True,
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'extension': True,
   },
   'ProduceTextureCHROMIUM': {
     'decoder_func': 'DoProduceTextureCHROMIUM',
     'impl_func': False,
     'type': 'PUT',
-    'count': 64,  # GL_MAILBOX_SIZE_CHROMIUM
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'unit_test': False,
     'client_test': False,
     'extension': "CHROMIUM_texture_mailbox",
-    'chromium': True,
     'trace_level': 1,
   },
   'ProduceTextureDirectCHROMIUM': {
     'decoder_func': 'DoProduceTextureDirectCHROMIUM',
     'impl_func': False,
     'type': 'PUT',
-    'count': 64,  # GL_MAILBOX_SIZE_CHROMIUM
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'unit_test': False,
     'client_test': False,
     'extension': "CHROMIUM_texture_mailbox",
-    'chromium': True,
     'trace_level': 1,
   },
   'RenderbufferStorage': {
@@ -3455,7 +3532,6 @@ _FUNCTION_INFO = {
         '// GL_CHROMIUM_framebuffer_multisample\n',
     'decoder_func': 'DoRenderbufferStorageMultisampleCHROMIUM',
     'gl_test_func': 'glRenderbufferStorageMultisampleCHROMIUM',
-    'expectation': False,
     'unit_test': False,
     'extension': 'chromium_framebuffer_multisample',
     'extension_flag': 'chromium_framebuffer_multisample',
@@ -3468,14 +3544,13 @@ _FUNCTION_INFO = {
         '// GL_EXT_multisampled_render_to_texture\n',
     'decoder_func': 'DoRenderbufferStorageMultisampleEXT',
     'gl_test_func': 'glRenderbufferStorageMultisampleEXT',
-    'expectation': False,
     'unit_test': False,
     'extension': 'EXT_multisampled_render_to_texture',
     'extension_flag': 'multisampled_render_to_texture',
     'trace_level': 1,
   },
   'ReadBuffer': {
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoReadBuffer',
     'trace_level': 1,
   },
@@ -3508,15 +3583,16 @@ _FUNCTION_INFO = {
     'unit_test': False,
   },
   'ResumeTransformFeedback': {
-    'unsafe': True,
+    'decoder_func': 'DoResumeTransformFeedback',
+    'unit_test': False,
+    'es3': True,
   },
   'SamplerParameterf': {
     'valid_args': {
       '2': 'GL_NEAREST'
     },
     'decoder_func': 'DoSamplerParameterf',
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'SamplerParameterfv': {
     'type': 'PUT',
@@ -3525,16 +3601,14 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glSamplerParameterf',
     'decoder_func': 'DoSamplerParameterfv',
     'first_element_only': True,
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'SamplerParameteri': {
     'valid_args': {
       '2': 'GL_NEAREST'
     },
     'decoder_func': 'DoSamplerParameteri',
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'SamplerParameteriv': {
     'type': 'PUT',
@@ -3543,8 +3617,7 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glSamplerParameteri',
     'decoder_func': 'DoSamplerParameteriv',
     'first_element_only': True,
-    'unsafe': True,
-    'use_helper': True,
+    'es3': True,
   },
   'ShaderBinary': {
     'type': 'Custom',
@@ -3580,6 +3653,12 @@ _FUNCTION_INFO = {
     'extension': True,
     'trace_level': 1,
   },
+  'SwapBuffersWithDamageCHROMIUM': {
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'extension': True,
+  },
   'SwapInterval': {
     'impl_func': False,
     'decoder_func': 'DoSwapInterval',
@@ -3589,16 +3668,18 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'TexImage2D': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
     'trace_level': 2,
   },
   'TexImage3D': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 2,
   },
   'TexParameterf': {
@@ -3630,11 +3711,14 @@ _FUNCTION_INFO = {
     'first_element_only': True,
   },
   'TexStorage3D': {
-    'unsafe': True,
+    'es3': True,
+    'unit_test': False,
+    'decoder_func': 'DoTexStorage3D',
     'trace_level': 2,
   },
   'TexSubImage2D': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
     'trace_level': 2,
@@ -3645,7 +3729,8 @@ _FUNCTION_INFO = {
                 'const void* pixels, GLboolean internal'
   },
   'TexSubImage3D': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
     'trace_level': 2,
@@ -3654,7 +3739,7 @@ _FUNCTION_INFO = {
                 'GLsizei width, GLsizei height, GLsizei depth, '
                 'GLenumTextureFormat format, GLenumPixelType type, '
                 'const void* pixels, GLboolean internal',
-    'unsafe': True,
+    'es3': True,
   },
   'TransformFeedbackVaryings': {
     'type': 'PUTSTR',
@@ -3663,7 +3748,7 @@ _FUNCTION_INFO = {
     'cmd_args':
         'GLuint program, const char** varyings, GLenum buffermode',
     'expectation': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform1f': {'type': 'PUTXn', 'count': 1},
   'Uniform1fv': {
@@ -3682,14 +3767,14 @@ _FUNCTION_INFO = {
     'type': 'PUTXn',
     'count': 1,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform1uiv': {
     'type': 'PUTn',
     'count': 1,
     'decoder_func': 'DoUniform1uiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform2i': {'type': 'PUTXn', 'count': 2},
   'Uniform2f': {'type': 'PUTXn', 'count': 2},
@@ -3707,14 +3792,14 @@ _FUNCTION_INFO = {
     'type': 'PUTXn',
     'count': 2,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform2uiv': {
     'type': 'PUTn',
     'count': 2,
     'decoder_func': 'DoUniform2uiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform3i': {'type': 'PUTXn', 'count': 3},
   'Uniform3f': {'type': 'PUTXn', 'count': 3},
@@ -3732,14 +3817,14 @@ _FUNCTION_INFO = {
     'type': 'PUTXn',
     'count': 3,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform3uiv': {
     'type': 'PUTn',
     'count': 3,
     'decoder_func': 'DoUniform3uiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform4i': {'type': 'PUTXn', 'count': 4},
   'Uniform4f': {'type': 'PUTXn', 'count': 4},
@@ -3757,96 +3842,101 @@ _FUNCTION_INFO = {
     'type': 'PUTXn',
     'count': 4,
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'Uniform4uiv': {
     'type': 'PUTn',
     'count': 4,
     'decoder_func': 'DoUniform4uiv',
     'unit_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix2fv': {
     'type': 'PUTn',
     'count': 4,
     'decoder_func': 'DoUniformMatrix2fv',
+    'unit_test': False,
   },
   'UniformMatrix2x3fv': {
     'type': 'PUTn',
     'count': 6,
     'decoder_func': 'DoUniformMatrix2x3fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix2x4fv': {
     'type': 'PUTn',
     'count': 8,
     'decoder_func': 'DoUniformMatrix2x4fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix3fv': {
     'type': 'PUTn',
     'count': 9,
     'decoder_func': 'DoUniformMatrix3fv',
+    'unit_test': False,
   },
   'UniformMatrix3x2fv': {
     'type': 'PUTn',
     'count': 6,
     'decoder_func': 'DoUniformMatrix3x2fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix3x4fv': {
     'type': 'PUTn',
     'count': 12,
     'decoder_func': 'DoUniformMatrix3x4fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix4fv': {
     'type': 'PUTn',
     'count': 16,
     'decoder_func': 'DoUniformMatrix4fv',
+    'unit_test': False,
+  },
+  'UniformMatrix4fvStreamTextureMatrixCHROMIUM': {
+    'type': 'PUT',
+    'count': 16,
+    'decoder_func': 'DoUniformMatrix4fvStreamTextureMatrixCHROMIUM',
+    'extension': "CHROMIUM_uniform_stream_texture_matrix",
+    'unit_test': False,
+    'client_test': False,
   },
   'UniformMatrix4x2fv': {
     'type': 'PUTn',
     'count': 8,
     'decoder_func': 'DoUniformMatrix4x2fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformMatrix4x3fv': {
     'type': 'PUTn',
     'count': 12,
     'decoder_func': 'DoUniformMatrix4x3fv',
-    'unsafe': True,
+    'es3': True,
   },
   'UniformBlockBinding': {
     'type': 'Custom',
     'impl_func': False,
-    'unsafe': True,
+    'es3': True,
   },
   'UnmapBufferCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_pixel_transfer_buffer_object",
-    'chromium': True,
-    'client_test': False,
     'trace_level': 1,
   },
   'UnmapBufferSubDataCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': 'CHROMIUM_map_sub',
-    'chromium': True,
-    'client_test': False,
     'pepper_interface': 'ChromiumMapSub',
     'trace_level': 1,
   },
   'UnmapBuffer': {
     'type': 'Custom',
-    'unsafe': True,
+    'es3': True,
     'trace_level': 1,
   },
   'UnmapTexSubImage2DCHROMIUM': {
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_sub_image",
-    'chromium': True,
-    'client_test': False,
     'pepper_interface': 'ChromiumMapSub',
     'trace_level': 1,
   },
@@ -3880,35 +3970,37 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoVertexAttrib4fv',
   },
   'VertexAttribI4i': {
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoVertexAttribI4i',
   },
   'VertexAttribI4iv': {
     'type': 'PUT',
     'count': 4,
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoVertexAttribI4iv',
   },
   'VertexAttribI4ui': {
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoVertexAttribI4ui',
   },
   'VertexAttribI4uiv': {
     'type': 'PUT',
     'count': 4,
-    'unsafe': True,
+    'es3': True,
     'decoder_func': 'DoVertexAttribI4uiv',
   },
   'VertexAttribIPointer': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLuint indx, GLintVertexAttribSize size, '
                 'GLenumVertexAttribIType type, GLsizei stride, '
                 'GLuint offset',
     'client_test': False,
-    'unsafe': True,
+    'es3': True,
   },
   'VertexAttribPointer': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLuint indx, GLintVertexAttribSize size, '
                 'GLenumVertexAttribType type, GLboolean normalized, '
                 'GLsizei stride, GLuint offset',
@@ -3920,7 +4012,7 @@ _FUNCTION_INFO = {
                 'GLuint64 timeout',
     'impl_func': False,
     'client_test': False,
-    'unsafe': True,
+    'es3': True,
     'trace_level': 1,
   },
   'Scissor': {
@@ -3928,14 +4020,13 @@ _FUNCTION_INFO = {
     'state': 'Scissor',
   },
   'Viewport': {
+    'impl_func': False,
     'decoder_func': 'DoViewport',
   },
   'ResizeCHROMIUM': {
     'type': 'Custom',
     'impl_func': False,
-    'unit_test': False,
     'extension': True,
-    'chromium': True,
     'trace_level': 1,
   },
   'GetRequestableExtensionsCHROMIUM': {
@@ -3943,7 +4034,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'cmd_args': 'uint32_t bucket_id',
     'extension': True,
-    'chromium': True,
   },
   'RequestExtensionCHROMIUM': {
     'type': 'Custom',
@@ -3951,47 +4041,37 @@ _FUNCTION_INFO = {
     'client_test': False,
     'cmd_args': 'uint32_t bucket_id',
     'extension': 'CHROMIUM_request_extension',
-    'chromium': True,
-  },
-  'TexImageIOSurface2DCHROMIUM': {
-    'decoder_func': 'DoTexImageIOSurface2DCHROMIUM',
-    'unit_test': False,
-    'extension': True,
-    'chromium': True,
-    'trace_level': 1,
   },
   'CopyTextureCHROMIUM': {
     'decoder_func': 'DoCopyTextureCHROMIUM',
     'unit_test': False,
     'extension': "CHROMIUM_copy_texture",
-    'chromium': True,
     'trace_level': 2,
   },
   'CopySubTextureCHROMIUM': {
     'decoder_func': 'DoCopySubTextureCHROMIUM',
     'unit_test': False,
     'extension': "CHROMIUM_copy_texture",
-    'chromium': True,
     'trace_level': 2,
   },
   'CompressedCopyTextureCHROMIUM': {
     'decoder_func': 'DoCompressedCopyTextureCHROMIUM',
     'unit_test': False,
     'extension': 'CHROMIUM_copy_compressed_texture',
-    'chromium': True,
   },
   'TexStorage2DEXT': {
     'unit_test': False,
     'extension': 'EXT_texture_storage',
+    'extension_flag': 'ext_texture_storage',
     'decoder_func': 'DoTexStorage2DEXT',
     'trace_level': 2,
   },
   'DrawArraysInstancedANGLE': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count, '
                 'GLsizei primcount',
     'extension': 'ANGLE_instanced_arrays',
-    'unit_test': False,
     'pepper_interface': 'InstancedArrays',
     'defer_draws': True,
     'trace_level': 2,
@@ -4009,21 +4089,21 @@ _FUNCTION_INFO = {
     'trace_level': 2,
   },
   'DrawElementsInstancedANGLE': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
                 'GLenumIndexType type, GLuint index_offset, GLsizei primcount',
     'extension': 'ANGLE_instanced_arrays',
-    'unit_test': False,
     'client_test': False,
     'pepper_interface': 'InstancedArrays',
     'defer_draws': True,
     'trace_level': 2,
   },
   'VertexAttribDivisorANGLE': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLuint index, GLuint divisor',
     'extension': 'ANGLE_instanced_arrays',
-    'unit_test': False,
     'pepper_interface': 'InstancedArrays',
   },
   'GenQueriesEXT': {
@@ -4046,13 +4126,13 @@ _FUNCTION_INFO = {
     'extension': "occlusion_query_EXT",
   },
   'IsQueryEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'pepper_interface': 'Query',
     'extension': "occlusion_query_EXT",
   },
   'BeginQueryEXT': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumQueryTarget target, GLidQuery id, void* sync_data',
     'data_transfer_methods': ['shm'],
     'gl_test_func': 'glBeginQuery',
@@ -4060,10 +4140,13 @@ _FUNCTION_INFO = {
     'extension': "occlusion_query_EXT",
   },
   'BeginTransformFeedback': {
-    'unsafe': True,
+    'decoder_func': 'DoBeginTransformFeedback',
+    'unit_test': False,
+    'es3': True,
   },
   'EndQueryEXT': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLenumQueryTarget target, GLuint submit_count',
     'gl_test_func': 'glEndnQuery',
     'client_test': False,
@@ -4071,24 +4154,25 @@ _FUNCTION_INFO = {
     'extension': "occlusion_query_EXT",
   },
   'EndTransformFeedback': {
-    'unsafe': True,
+    'decoder_func': 'DoEndTransformFeedback',
+    'unit_test': False,
+    'es3': True,
   },
   'FlushDriverCachesCHROMIUM': {
     'decoder_func': 'DoFlushDriverCachesCHROMIUM',
     'unit_test': False,
     'extension': True,
-    'chromium': True,
     'trace_level': 1,
   },
   'GetQueryivEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'gl_test_func': 'glGetQueryiv',
     'pepper_interface': 'Query',
     'extension': "occlusion_query_EXT",
   },
   'QueryCounterEXT' : {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'cmd_args': 'GLidQuery id, GLenumQueryTarget target, '
                 'void* sync_data, GLuint submit_count',
     'data_transfer_methods': ['shm'],
@@ -4096,37 +4180,33 @@ _FUNCTION_INFO = {
     'extension': "disjoint_timer_query_EXT",
   },
   'GetQueryObjectivEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjectiv',
     'extension': "disjoint_timer_query_EXT",
   },
   'GetQueryObjectuivEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjectuiv',
     'pepper_interface': 'Query',
     'extension': "occlusion_query_EXT",
   },
   'GetQueryObjecti64vEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjecti64v',
     'extension': "disjoint_timer_query_EXT",
   },
   'GetQueryObjectui64vEXT': {
-    'gen_cmd': False,
-    'client_test': False,
+    'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjectui64v',
     'extension': "disjoint_timer_query_EXT",
   },
   'SetDisjointValueSyncCHROMIUM': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'data_transfer_methods': ['shm'],
     'client_test': False,
     'cmd_args': 'void* sync_data',
     'extension': True,
-    'chromium': True,
   },
   'BindFragDataLocationEXT': {
     'type': 'GLchar',
@@ -4203,7 +4283,6 @@ _FUNCTION_INFO = {
     'extension': 'OES_vertex_array_object',
     'gl_test_func': 'glIsVertexArrayOES',
     'decoder_func': 'DoIsVertexArrayOES',
-    'expectation': False,
     'unit_test': False,
     'pepper_interface': 'VertexArrayObject',
   },
@@ -4211,34 +4290,23 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoBindTexImage2DCHROMIUM',
     'unit_test': False,
     'extension': "CHROMIUM_image",
-    'chromium': True,
   },
   'ReleaseTexImage2DCHROMIUM': {
     'decoder_func': 'DoReleaseTexImage2DCHROMIUM',
     'unit_test': False,
     'extension': "CHROMIUM_image",
-    'chromium': True,
   },
   'ShallowFinishCHROMIUM': {
-    'impl_func': False,
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': True,
-    'chromium': True,
-    'client_test': False,
   },
   'ShallowFlushCHROMIUM': {
-    'impl_func': False,
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_miscellaneous",
-    'chromium': True,
-    'client_test': False,
   },
   'OrderingBarrierCHROMIUM': {
-    'impl_func': False,
-    'gen_cmd': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_miscellaneous",
-    'chromium': True,
-    'client_test': False,
   },
   'TraceBeginCHROMIUM': {
     'type': 'Custom',
@@ -4246,7 +4314,6 @@ _FUNCTION_INFO = {
     'client_test': False,
     'cmd_args': 'GLuint category_bucket_id, GLuint name_bucket_id',
     'extension': 'CHROMIUM_trace_marker',
-    'chromium': True,
   },
   'TraceEndCHROMIUM': {
     'impl_func': False,
@@ -4254,7 +4321,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoTraceEndCHROMIUM',
     'unit_test': False,
     'extension': 'CHROMIUM_trace_marker',
-    'chromium': True,
   },
   'DiscardFramebufferEXT': {
     'type': 'PUTn',
@@ -4270,23 +4336,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoLoseContextCHROMIUM',
     'unit_test': False,
     'extension': 'CHROMIUM_lose_context',
-    'chromium': True,
-    'trace_level': 1,
-  },
-  'InsertSyncPointCHROMIUM': {
-    'type': 'HandWritten',
-    'impl_func': False,
-    'extension': "CHROMIUM_sync_point",
-    'chromium': True,
-    'trace_level': 1,
-  },
-  'WaitSyncPointCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'unit_test': False,
-    'client_test': False,
-    'extension': "CHROMIUM_sync_point",
-    'chromium': True,
     'trace_level': 1,
   },
   'InsertFenceSyncCHROMIUM': {
@@ -4294,26 +4343,19 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'cmd_args': 'GLuint64 release_count',
     'extension': "CHROMIUM_sync_point",
-    'chromium': True,
     'trace_level': 1,
   },
   'GenSyncTokenCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_sync_point",
-    'chromium': True,
   },
   'GenUnverifiedSyncTokenCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_sync_point",
-    'chromium': True,
   },
   'VerifySyncTokensCHROMIUM' : {
-    'type': 'Custom',
-    'impl_func': False,
+    'type': 'NoCommand',
     'extension': "CHROMIUM_sync_point",
-    'chromium': True,
   },
   'WaitSyncTokenCHROMIUM': {
     'type': 'Custom',
@@ -4323,33 +4365,41 @@ _FUNCTION_INFO = {
                 'GLuint64 release_count',
     'client_test': False,
     'extension': "CHROMIUM_sync_point",
-    'chromium': True,
   },
   'DiscardBackbufferCHROMIUM': {
     'type': 'Custom',
-    'impl_func': True,
     'extension': True,
-    'chromium': True,
     'trace_level': 2,
   },
   'ScheduleOverlayPlaneCHROMIUM': {
     'type': 'Custom',
-    'impl_func': True,
-    'unit_test': False,
     'client_test': False,
     'extension': 'CHROMIUM_schedule_overlay_plane',
-    'chromium': True,
+  },
+  'ScheduleCALayerSharedStateCHROMIUM': {
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLfloat opacity, GLboolean is_clipped, '
+                'GLint sorting_context_id, GLuint shm_id, GLuint shm_offset',
+    'extension': 'CHROMIUM_schedule_ca_layer',
   },
   'ScheduleCALayerCHROMIUM': {
     'type': 'Custom',
     'impl_func': False,
     'client_test': False,
-    'cmd_args': 'GLuint contents_texture_id, GLfloat opacity, '
-                'GLuint background_color, GLuint edge_aa_mask, '
-                'GLboolean is_clipped, GLint sorting_context_id, '
-                'GLuint shm_id, GLuint shm_offset',
+    'cmd_args': 'GLuint contents_texture_id, GLuint background_color, '
+                'GLuint edge_aa_mask, GLuint filter, GLuint shm_id, '
+                'GLuint shm_offset',
     'extension': 'CHROMIUM_schedule_ca_layer',
-    'chromium': True,
+  },
+  'ScheduleCALayerInUseQueryCHROMIUM': {
+    'type': 'PUTn',
+    'count': 1,
+    'decoder_func': 'DoScheduleCALayerInUseQueryCHROMIUM',
+    'cmd_args': 'GLsizei count, const GLuint* textures',
+    'extension': 'CHROMIUM_schedule_ca_layer',
+    'unit_test': False,
   },
   'CommitOverlayPlanesCHROMIUM': {
     'impl_func': False,
@@ -4357,7 +4407,6 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'client_test': False,
     'extension': 'CHROMIUM_commit_overlay_planes',
-    'chromium': True,
   },
   'MatrixLoadfCHROMIUM': {
     'type': 'PUT',
@@ -4365,21 +4414,18 @@ _FUNCTION_INFO = {
     'data_type': 'GLfloat',
     'decoder_func': 'DoMatrixLoadfCHROMIUM',
     'gl_test_func': 'glMatrixLoadfEXT',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'MatrixLoadIdentityCHROMIUM': {
     'decoder_func': 'DoMatrixLoadIdentityCHROMIUM',
     'gl_test_func': 'glMatrixLoadIdentityEXT',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'GenPathsCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLuint first_client_id, GLsizei range',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
@@ -4387,8 +4433,6 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'cmd_args': 'GLuint first_client_id, GLsizei range',
     'impl_func': False,
-    'unit_test': False,
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
@@ -4396,26 +4440,23 @@ _FUNCTION_INFO = {
     'type': 'Is',
     'decoder_func': 'DoIsPathCHROMIUM',
     'gl_test_func': 'glIsPathNV',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'PathCommandsCHROMIUM': {
-    'type': 'Manual',
+    'type': 'Custom',
+    'impl_func': False,
     'immediate': False,
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'PathParameterfCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'PathParameteriCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
@@ -4423,79 +4464,66 @@ _FUNCTION_INFO = {
     'type': 'StateSet',
     'state': 'PathStencilFuncCHROMIUM',
     'decoder_func': 'glPathStencilFuncNV',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilFillPathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilStrokePathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'CoverFillPathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'CoverStrokePathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilThenCoverFillPathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilThenCoverStrokePathCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilFillPathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilStrokePathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'CoverFillPathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'CoverStrokePathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilThenCoverFillPathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
   'StencilThenCoverStrokePathInstancedCHROMIUM': {
     'type': 'Custom',
-    'chromium': True,
     'extension': 'CHROMIUM_path_rendering',
     'extension_flag': 'chromium_path_rendering',
   },
@@ -4550,6 +4578,34 @@ def CachedStateName(item):
   if item.get('cached', False):
     return 'cached_' + item['name']
   return item['name']
+
+def GuardState(state, operation):
+  if 'manual' in state:
+    assert state['manual']
+    return ""
+
+  result = []
+  result_end = []
+  if 'es3' in state:
+    assert state['es3']
+    result.append("  if (feature_info_->IsES3Capable()) {\n");
+    result_end.append("  }\n")
+  if 'extension_flag' in state:
+    result.append("  if (feature_info_->feature_flags().%s) {\n  " %
+                     (state['extension_flag']))
+    result_end.append("  }\n")
+  if 'gl_version_flag' in state:
+    name = state['gl_version_flag']
+    inverted = ''
+    if name[0] == '!':
+      inverted = '!'
+      name = name[1:]
+    result.append("  if (%sfeature_info_->gl_version_info().%s) {\n" %
+                      (inverted, name))
+    result_end.append("  }\n")
+
+  result.append(operation)
+  return ''.join(result + result_end)
 
 def ToGLExtensionString(extension_flag):
   """Returns GL-type extension string of a extension flag."""
@@ -4740,10 +4796,10 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
 
   def WriteHandlerImplementation(self, func, f):
     """Writes the handler implementation for this command."""
-    if func.IsUnsafe() and func.GetInfo('id_mapping'):
+    if func.IsES3() and func.GetInfo('id_mapping'):
       code_no_gen = """  if (!group_->Get%(type)sServiceId(
         %(var)s, &%(service_var)s)) {
-    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "%(func)s", "invalid %(var)s id");
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "%(func)s", "invalid %(var)s id");
     return error::kNoError;
   }
 """
@@ -4795,6 +4851,10 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
         args.append("nullptr")
       else:
         args.append(arg.name)
+
+    if func.GetInfo('type') == 'GETn' and func.name != 'GetSynciv':
+      args.append('num_values')
+
     f.write("  %s(%s);\n" %
                (func.GetGLFunctionName(), ", ".join(args)))
 
@@ -4835,7 +4895,7 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
 
   def __WriteIdMapping(self, func, f):
     """Writes client side / service side ID mapping."""
-    if not func.IsUnsafe() or not func.GetInfo('id_mapping'):
+    if not func.IsES3() or not func.GetInfo('id_mapping'):
       return
     for id_type in func.GetInfo('id_mapping'):
       f.write("  group_->Get%sServiceId(%s, &%s);\n" %
@@ -4856,22 +4916,19 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
   def WriteServiceHandlerFunctionHeader(self, func, f):
     """Writes function header for service implementation handlers."""
     f.write("""error::Error GLES2DecoderImpl::Handle%(name)s(
-        uint32_t immediate_data_size, const void* cmd_data) {
+        uint32_t immediate_data_size, const volatile void* cmd_data) {
       """ % {'name': func.name})
-    if func.IsUnsafe():
-      f.write("""if (!unsafe_es3_apis_enabled())
+    if func.IsES3():
+      f.write("""if (!feature_info_->IsWebGL2OrES3Context())
           return error::kUnknownCommand;
         """)
-    f.write("""const gles2::cmds::%(name)s& c =
-          *static_cast<const gles2::cmds::%(name)s*>(cmd_data);
-      (void)c;
-      """ % {'name': func.name})
+    if func.GetCmdArgs():
+      f.write("""const volatile gles2::cmds::%(name)s& c =
+            *static_cast<const volatile gles2::cmds::%(name)s*>(cmd_data);
+        """ % {'name': func.name})
 
-  def WriteServiceImplementation(self, func, f):
-    """Writes the service implementation for a command."""
-    self.WriteServiceHandlerFunctionHeader(func, f)
-    self.WriteHandlerExtensionCheck(func, f)
-    self.WriteHandlerDeferReadWrite(func, f);
+  def WriteServiceHandlerArgGetCode(self, func, f):
+    """Writes the argument unpack code for service handlers."""
     if len(func.GetOriginalArgs()) > 0:
       last_arg = func.GetLastOriginalArg()
       all_but_last_arg = func.GetOriginalArgs()[:-1]
@@ -4879,6 +4936,29 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
         arg.WriteGetCode(f)
       self.WriteGetDataSizeCode(func, f)
       last_arg.WriteGetCode(f)
+
+  def WriteImmediateServiceHandlerArgGetCode(self, func, f):
+    """Writes the argument unpack code for immediate service handlers."""
+    for arg in func.GetOriginalArgs():
+      if arg.IsPointer():
+        self.WriteGetDataSizeCode(func, f)
+      arg.WriteGetCode(f)
+
+  def WriteBucketServiceHandlerArgGetCode(self, func, f):
+    """Writes the argument unpack code for bucket service handlers."""
+    for arg in func.GetCmdArgs():
+      arg.WriteGetCode(f)
+    for arg in func.GetOriginalArgs():
+      if arg.IsConstant():
+        arg.WriteGetCode(f)
+    self.WriteGetDataSizeCode(func, f)
+
+  def WriteServiceImplementation(self, func, f):
+    """Writes the service implementation for a command."""
+    self.WriteServiceHandlerFunctionHeader(func, f)
+    self.WriteHandlerExtensionCheck(func, f)
+    self.WriteHandlerDeferReadWrite(func, f);
+    self.WriteServiceHandlerArgGetCode(func, f)
     func.WriteHandlerValidation(f)
     func.WriteHandlerImplementation(f)
     f.write("  return error::kNoError;\n")
@@ -4890,10 +4970,7 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
     self.WriteServiceHandlerFunctionHeader(func, f)
     self.WriteHandlerExtensionCheck(func, f)
     self.WriteHandlerDeferReadWrite(func, f);
-    for arg in func.GetOriginalArgs():
-      if arg.IsPointer():
-        self.WriteGetDataSizeCode(func, f)
-      arg.WriteGetCode(f)
+    self.WriteImmediateServiceHandlerArgGetCode(func, f)
     func.WriteHandlerValidation(f)
     func.WriteHandlerImplementation(f)
     f.write("  return error::kNoError;\n")
@@ -4905,10 +4982,54 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
     self.WriteServiceHandlerFunctionHeader(func, f)
     self.WriteHandlerExtensionCheck(func, f)
     self.WriteHandlerDeferReadWrite(func, f);
-    for arg in func.GetCmdArgs():
-      arg.WriteGetCode(f)
+    self.WriteBucketServiceHandlerArgGetCode(func, f)
     func.WriteHandlerValidation(f)
     func.WriteHandlerImplementation(f)
+    f.write("  return error::kNoError;\n")
+    f.write("}\n")
+    f.write("\n")
+
+  def WritePassthroughServiceFunctionHeader(self, func, f):
+    """Writes function header for service passthrough handlers."""
+    f.write("""error::Error GLES2DecoderPassthroughImpl::Handle%(name)s(
+        uint32_t immediate_data_size, const volatile void* cmd_data) {
+      """ % {'name': func.name})
+    if func.GetCmdArgs():
+      f.write("""const volatile gles2::cmds::%(name)s& c =
+            *static_cast<const volatile gles2::cmds::%(name)s*>(cmd_data);
+        """ % {'name': func.name})
+
+  def WritePassthroughServiceFunctionDoerCall(self, func, f):
+    """Writes the function call to the passthrough service doer."""
+    f.write("""  error::Error error = Do%(name)s(%(args)s);
+  if (error != error::kNoError) {
+    return error;
+  }""" % {'name': func.original_name,
+          'args': func.MakePassthroughServiceDoerArgString("")})
+
+  def WritePassthroughServiceImplementation(self, func, f):
+    """Writes the service implementation for a command."""
+    self.WritePassthroughServiceFunctionHeader(func, f)
+    self.WriteServiceHandlerArgGetCode(func, f)
+    self.WritePassthroughServiceFunctionDoerCall(func, f)
+    f.write("  return error::kNoError;\n")
+    f.write("}\n")
+    f.write("\n")
+
+  def WritePassthroughImmediateServiceImplementation(self, func, f):
+    """Writes the service implementation for a command."""
+    self.WritePassthroughServiceFunctionHeader(func, f)
+    self.WriteImmediateServiceHandlerArgGetCode(func, f)
+    self.WritePassthroughServiceFunctionDoerCall(func, f)
+    f.write("  return error::kNoError;\n")
+    f.write("}\n")
+    f.write("\n")
+
+  def WritePassthroughBucketServiceImplementation(self, func, f):
+    """Writes the service implementation for a command."""
+    self.WritePassthroughServiceFunctionHeader(func, f)
+    self.WriteBucketServiceHandlerArgGetCode(func, f)
+    self.WritePassthroughServiceFunctionDoerCall(func, f)
     f.write("  return error::kNoError;\n")
     f.write("}\n")
     f.write("\n")
@@ -4936,7 +5057,7 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
 
   def WriteValidUnitTest(self, func, f, test, *extras):
     """Writes a valid unit test for the service implementation."""
-    if func.GetInfo('expectation') == False:
+    if not func.GetInfo('expectation', True):
       test = self._remove_expected_call_re.sub('', test)
     name = func.name
     arg_strings = [
@@ -4964,7 +5085,7 @@ static_assert(offsetof(%(cmd_name)s::Result, %(field_name)s) == %(offset)d,
 
   def WriteInvalidUnitTest(self, func, f, test, *extras):
     """Writes an invalid unit test for the service implementation."""
-    if func.IsUnsafe():
+    if func.IsES3():
       return
     for invalid_arg_index, invalid_arg in enumerate(func.GetOriginalArgs()):
       # Service implementation does not test constants, as they are not part of
@@ -5033,24 +5154,14 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
   cmd.Init(%(args)s);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
-}
-"""
-    else:
-      valid_test += """
+    valid_test += """
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     self.WriteValidUnitTest(func, f, valid_test, *extras)
 
-    if not func.IsUnsafe():
+    if not func.IsES3():
       invalid_test = """
 TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s)).Times(0);
@@ -5076,12 +5187,10 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGLES2ImplementationDeclaration(self, func, f):
     """Writes the GLES2 Implemention declaration."""
-    impl_decl = func.GetInfo('impl_decl')
-    if impl_decl == None or impl_decl == True:
-      f.write("%s %s(%s) override;\n" %
-                 (func.return_type, func.original_name,
-                  func.MakeTypedOriginalArgString("")))
-      f.write("\n")
+    f.write("%s %s(%s) override;\n" %
+               (func.return_type, func.original_name,
+                func.MakeTypedOriginalArgString("")))
+    f.write("\n")
 
   def WriteGLES2CLibImplementation(self, func, f):
     f.write("%s GL_APIENTRY GLES2%s(%s) {\n" %
@@ -5140,13 +5249,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGLES2Implementation(self, func, f):
     """Writes the GLES2 Implemention."""
-    impl_func = func.GetInfo('impl_func')
-    impl_decl = func.GetInfo('impl_decl')
-    gen_cmd = func.GetInfo('gen_cmd')
-    if (func.can_auto_generate and
-        (impl_func == None or impl_func == True) and
-        (impl_decl == None or impl_decl == True) and
-        (gen_cmd == None or gen_cmd == True)):
+    impl_func = func.GetInfo('impl_func', True)
+    if func.can_auto_generate and impl_func:
       f.write("%s GLES2Implementation::%s(%s) {\n" %
                  (func.return_type, func.original_name,
                   func.MakeTypedOriginalArgString("")))
@@ -5168,35 +5272,6 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
                (func.return_type, func.original_name,
                 func.MakeTypedOriginalArgString("")))
 
-  def WriteMojoGLES2ImplHeader(self, func, f):
-    """Writes the Mojo GLES2 implementation header."""
-    f.write("%s %s(%s) override;\n" %
-               (func.return_type, func.original_name,
-                func.MakeTypedOriginalArgString("")))
-
-  def WriteMojoGLES2Impl(self, func, f):
-    """Writes the Mojo GLES2 implementation."""
-    f.write("%s MojoGLES2Impl::%s(%s) {\n" %
-               (func.return_type, func.original_name,
-                func.MakeTypedOriginalArgString("")))
-    is_core_gl_func = func.IsCoreGLFunction()
-    is_ext = bool(func.GetInfo("extension"))
-    is_safe = not func.IsUnsafe()
-    if is_core_gl_func or (is_safe and is_ext):
-      f.write("MojoGLES2MakeCurrent(context_);");
-      func_return = "gl" + func.original_name + "(" + \
-          func.MakeOriginalArgString("") + ");"
-      if func.return_type == "void":
-        f.write(func_return);
-      else:
-        f.write("return " + func_return);
-    else:
-      f.write("NOTREACHED() << \"Unimplemented %s.\";\n" %
-                 func.original_name);
-      if func.return_type != "void":
-        f.write("return 0;")
-    f.write("}")
-
   def WriteGLES2InterfaceStub(self, func, f):
     """Writes the GLES2 Interface stub declaration."""
     f.write("%s %s(%s) override;\n" %
@@ -5216,9 +5291,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGLES2ImplementationUnitTest(self, func, f):
     """Writes the GLES2 Implemention unit test."""
-    client_test = func.GetInfo('client_test')
-    if (func.can_auto_generate and
-        (client_test == None or client_test == True)):
+    client_test = func.GetInfo('client_test', True)
+    if func.can_auto_generate and client_test:
       code = """
 TEST_F(GLES2ImplementationTest, %(name)s) {
   struct Cmds {
@@ -5553,8 +5627,9 @@ class StateSetNamedParameter(TypeHandler):
                  (state['name'], args[1].name))
       f.write("        state_.%s = %s;\n" % (state['name'], args[1].name))
       if not func.GetInfo("no_gl"):
-        f.write("        %s(%s);\n" %
-                   (func.GetGLFunctionName(), func.MakeOriginalArgString("")))
+        operation = "        %s(%s);\n" % \
+                    (func.GetGLFunctionName(), func.MakeOriginalArgString(""))
+        f.write(GuardState(state, operation))
       f.write("      }\n")
       f.write("      break;\n")
     f.write("    default:\n")
@@ -5565,6 +5640,15 @@ class StateSetNamedParameter(TypeHandler):
 class CustomHandler(TypeHandler):
   """Handler for commands that are auto-generated but require minor tweaks."""
 
+  def InitFunction(self, func):
+    """Overrriden from TypeHandler."""
+    if (func.name.startswith('CompressedTex') and func.name.endswith('Bucket')):
+      # Remove imageSize argument, take the size from the bucket instead.
+      func.cmd_args = [arg for arg in func.cmd_args if arg.name != 'imageSize']
+      func.AddCmdArg(Argument('bucket_id', 'GLuint'))
+    else:
+      TypeHandler.InitFunction(self, func)
+
   def WriteServiceImplementation(self, func, f):
     """Overrriden from TypeHandler."""
     pass
@@ -5574,6 +5658,18 @@ class CustomHandler(TypeHandler):
     pass
 
   def WriteBucketServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    pass
+
+  def WritePassthroughServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    pass
+
+  def WritePassthroughImmediateServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    pass
+
+  def WritePassthroughBucketServiceImplementation(self, func, f):
     """Overrriden from TypeHandler."""
     pass
 
@@ -5614,134 +5710,18 @@ class CustomHandler(TypeHandler):
     f.write("\n")
 
 
-class HandWrittenHandler(CustomHandler):
-  """Handler for comands where everything must be written by hand."""
-
-  def InitFunction(self, func):
-    """Add or adjust anything type specific for this function."""
-    CustomHandler.InitFunction(self, func)
-    func.can_auto_generate = False
-
-  def NeedsDataTransferFunction(self, func):
-    """Overriden from TypeHandler."""
-    # If specified explicitly, force the data transfer method.
-    if func.GetInfo('data_transfer_methods'):
-      return True
-    return False
-
-  def WriteStruct(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteDocs(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteServiceUnitTest(self, func, f, *extras):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateServiceUnitTest(self, func, f, *extras):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteBucketServiceUnitTest(self, func, f, *extras):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteBucketServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateCmdHelper(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteCmdHelper(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteFormatTest(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateFormatTest(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-
-class ManualHandler(CustomHandler):
-  """Handler for commands who's handlers must be written by hand."""
-
-  def InitFunction(self, func):
-    """Overrriden from TypeHandler."""
-    if (func.name == 'CompressedTexImage2DBucket' or
-        func.name == 'CompressedTexImage3DBucket'):
-      func.cmd_args = func.cmd_args[:-1]
-      func.AddCmdArg(Argument('bucket_id', 'GLuint'))
-    else:
-      CustomHandler.InitFunction(self, func)
-
-  def WriteServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteBucketServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteServiceUnitTest(self, func, f, *extras):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateServiceUnitTest(self, func, f, *extras):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
-
-  def WriteImmediateFormatTest(self, func, f):
-    """Overrriden from TypeHandler."""
-    pass
+class NoCommandHandler(CustomHandler):
+  """Handler for functions that don't use commands"""
 
   def WriteGLES2Implementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    if func.GetInfo('impl_func'):
-      super(ManualHandler, self).WriteGLES2Implementation(func, f)
+    pass
 
-  def WriteGLES2ImplementationHeader(self, func, f):
-    """Overrriden from TypeHandler."""
-    f.write("%s %s(%s) override;\n" %
-               (func.return_type, func.original_name,
-                func.MakeTypedOriginalArgString("")))
-    f.write("\n")
-
-  def WriteImmediateCmdGetTotalSize(self, func, f):
-    """Overrriden from TypeHandler."""
-    # TODO: Move this data to _FUNCTION_INFO?
-    CustomHandler.WriteImmediateCmdGetTotalSize(self, func, f)
+  def WriteGLES2ImplementationUnitTest(self, func, f):
+    pass
 
 
 class DataHandler(TypeHandler):
-  """Handler for glBufferData, glBufferSubData, glTexImage*D, glTexSubImage*D,
-     glCompressedTexImage*D, glCompressedTexImageSub*D."""
-
-  def InitFunction(self, func):
-    """Overrriden from TypeHandler."""
-    if (func.name == 'CompressedTexSubImage2DBucket' or
-        func.name == 'CompressedTexSubImage3DBucket'):
-      func.cmd_args = func.cmd_args[:-1]
-      func.AddCmdArg(Argument('bucket_id', 'GLuint'))
+  """Handler for glBufferData, glBufferSubData, glTex{Sub}Image*D."""
 
   def WriteGetDataSizeCode(self, func, f):
     """Overrriden from TypeHandler."""
@@ -5751,16 +5731,6 @@ class DataHandler(TypeHandler):
       name = name[0:-9]
     if name == 'BufferData' or name == 'BufferSubData':
       f.write("  uint32_t data_size = size;\n")
-    elif (name == 'CompressedTexImage2D' or
-          name == 'CompressedTexSubImage2D' or
-          name == 'CompressedTexImage3D' or
-          name == 'CompressedTexSubImage3D'):
-      f.write("  uint32_t data_size = imageSize;\n")
-    elif (name == 'CompressedTexSubImage2DBucket' or
-          name == 'CompressedTexSubImage3DBucket'):
-      f.write("  Bucket* bucket = GetBucket(c.bucket_id);\n")
-      f.write("  uint32_t data_size = bucket->size();\n")
-      f.write("  GLsizei imageSize = data_size;\n")
     elif name == 'TexImage2D' or name == 'TexSubImage2D':
       code = """  uint32_t data_size;
   if (!GLES2Util::ComputeImageDataSize(
@@ -5813,13 +5783,6 @@ class DataHandler(TypeHandler):
     """Overrriden from TypeHandler."""
     pass
 
-  def WriteBucketServiceImplementation(self, func, f):
-    """Overrriden from TypeHandler."""
-    if ((not func.name == 'CompressedTexSubImage2DBucket') and
-        (not func.name == 'CompressedTexSubImage3DBucket')):
-      TypeHandler.WriteBucketServiceImplemenation(self, func, f)
-
-
 class BindHandler(TypeHandler):
   """Handler for glBind___ type functions."""
 
@@ -5832,18 +5795,7 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args)s);"""
-      if func.IsUnsafe():
-        valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
-}
-"""
-      else:
-        valid_test += """
+  cmd.Init(%(args)s);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
@@ -5872,18 +5824,7 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args)s);"""
-      if func.IsUnsafe():
-        valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
-}
-"""
-      else:
-        valid_test += """
+  cmd.Init(%(args)s);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
@@ -5897,19 +5838,7 @@ TEST_P(%(test_name)s, %(name)sValidArgsNewId) {
      .WillOnce(SetArgumentPointee<1>(kNewServiceId));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args_with_new_id)s);"""
-        if func.IsUnsafe():
-          valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_TRUE(Get%(resource_type)s(kNewClientId) != NULL);
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
-}
-"""
-        else:
-          valid_test += """
+  cmd.Init(%(args_with_new_id)s);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
   EXPECT_TRUE(Get%(resource_type)s(kNewClientId) != NULL);
@@ -5946,13 +5875,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
   def WriteGLES2Implementation(self, func, f):
     """Writes the GLES2 Implemention."""
 
-    impl_func = func.GetInfo('impl_func')
-    impl_decl = func.GetInfo('impl_decl')
-
-    if (func.can_auto_generate and
-          (impl_func == None or impl_func == True) and
-          (impl_decl == None or impl_decl == True)):
-
+    impl_func = func.GetInfo('impl_func', True)
+    if func.can_auto_generate and impl_func:
       f.write("%s GLES2Implementation::%s(%s) {\n" %
                  (func.return_type, func.original_name,
                   func.MakeTypedOriginalArgString("")))
@@ -5982,8 +5906,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGLES2ImplementationUnitTest(self, func, f):
     """Overrriden from TypeHandler."""
-    client_test = func.GetInfo('client_test')
-    if client_test == False:
+    client_test = func.GetInfo('client_test', True)
+    if not client_test:
       return
     code = """
 TEST_F(GLES2ImplementationTest, %(name)s) {
@@ -5995,7 +5919,7 @@ TEST_F(GLES2ImplementationTest, %(name)s) {
 
   gl_->%(name)s(%(args)s);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));"""
-    if not func.IsUnsafe():
+    if not func.IsES3():
       code += """
   ClearCommands();
   gl_->%(name)s(%(args)s);
@@ -6035,32 +5959,18 @@ class GENnHandler(TypeHandler):
 
   def WriteHandlerImplementation (self, func, f):
     """Overrriden from TypeHandler."""
-    f.write("  if (!%sHelper(n, %s)) {\n"
-               "    return error::kInvalidArguments;\n"
-               "  }\n" %
-               (func.name, func.GetLastOriginalArg().name))
+    raise NotImplementedError("GENn functions are immediate")
 
   def WriteImmediateHandlerImplementation(self, func, f):
     """Overrriden from TypeHandler."""
-    if func.IsUnsafe() and not func.UseHelper():
-      f.write("""  for (GLsizei ii = 0; ii < n; ++ii) {
-    if (group_->Get%(resource_name)sServiceId(%(last_arg_name)s[ii], NULL)) {
-      return error::kInvalidArguments;
-    }
-  }
-  scoped_ptr<GLuint[]> service_ids(new GLuint[n]);
-  gl%(func_name)s(n, service_ids.get());
-  for (GLsizei ii = 0; ii < n; ++ii) {
-    group_->Add%(resource_name)sId(%(last_arg_name)s[ii], service_ids[ii]);
-  }
-""" % { 'func_name': func.original_name,
-        'last_arg_name': func.GetLastOriginalArg().name,
-        'resource_name': func.GetInfo('resource_type') })
-    else:
-      f.write("  if (!%sHelper(n, %s)) {\n"
-                 "    return error::kInvalidArguments;\n"
-                 "  }\n" %
-                 (func.original_name, func.GetLastOriginalArg().name))
+    param_name = func.GetLastOriginalArg().name
+    f.write("  auto %(name)s_copy = base::MakeUnique<GLuint[]>(n);\n"
+            "  GLuint* %(name)s_safe = %(name)s_copy.get();\n"
+            "  std::copy(%(name)s, %(name)s + n, %(name)s_safe);\n"
+            "  if (!CheckUniqueAndNonNullIds(n, %(name)s_safe) ||\n"
+            "      !%(func)sHelper(n, %(name)s_safe)) {\n"
+            "    return error::kInvalidArguments;\n"
+            "  }\n" % {'name': param_name, 'func': func.original_name})
 
   def WriteGLES2Implementation(self, func, f):
     """Overrriden from TypeHandler."""
@@ -6137,44 +6047,7 @@ TEST_F(GLES2ImplementationTest, %(name)s) {
 
   def WriteServiceUnitTest(self, func, f, *extras):
     """Overrriden from TypeHandler."""
-    valid_test = """
-TEST_P(%(test_name)s, %(name)sValidArgs) {
-  EXPECT_CALL(*gl_, %(gl_func_name)s(1, _))
-      .WillOnce(SetArgumentPointee<1>(kNewServiceId));
-  GetSharedMemoryAs<GLuint*>()[0] = kNewClientId;
-  SpecializedSetup<cmds::%(name)s, 0>(true);
-  cmds::%(name)s cmd;
-  cmd.Init(%(args)s);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe() and not func.UseHelper():
-      valid_test += """
-  GLuint service_id;
-  EXPECT_TRUE(Get%(resource_name)sServiceId(kNewClientId, &service_id));
-  EXPECT_EQ(kNewServiceId, service_id)
-}
-"""
-    else:
-      valid_test += """
-  EXPECT_TRUE(Get%(resource_name)s(kNewClientId, &service_id) != NULL);
-}
-"""
-    self.WriteValidUnitTest(func, f, valid_test, {
-        'resource_name': func.GetInfo('resource_type'),
-      }, *extras)
-    invalid_test = """
-TEST_P(%(test_name)s, %(name)sInvalidArgs) {
-  EXPECT_CALL(*gl_, %(gl_func_name)s(_, _)).Times(0);
-  GetSharedMemoryAs<GLuint*>()[0] = client_%(resource_name)s_id_;
-  SpecializedSetup<cmds::%(name)s, 0>(false);
-  cmds::%(name)s cmd;
-  cmd.Init(%(args)s);
-  EXPECT_EQ(error::kInvalidArguments, ExecuteCmd(cmd));
-}
-"""
-    self.WriteValidUnitTest(func, f, invalid_test, {
-          'resource_name': func.GetInfo('resource_type').lower(),
-        }, *extras)
+    raise NotImplementedError("GENn functions are immediate")
 
   def WriteImmediateServiceUnitTest(self, func, f, *extras):
     """Overrriden from TypeHandler."""
@@ -6184,31 +6057,36 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
       .WillOnce(SetArgumentPointee<1>(kNewServiceId));
   cmds::%(name)s* cmd = GetImmediateAs<cmds::%(name)s>();
   GLuint temp = kNewClientId;
-  SpecializedSetup<cmds::%(name)s, 0>(true);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  SpecializedSetup<cmds::%(name)s, 0>(true);
   cmd->Init(1, &temp);
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(*cmd, sizeof(temp)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe() and not func.UseHelper():
-      valid_test += """
-  GLuint service_id;
-  EXPECT_TRUE(Get%(resource_name)sServiceId(kNewClientId, &service_id));
-  EXPECT_EQ(kNewServiceId, service_id);
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand,
-            ExecuteImmediateCmd(*cmd, sizeof(temp)));
-}
-"""
-    else:
-      valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
   EXPECT_TRUE(Get%(resource_name)s(kNewClientId) != NULL);
 }
 """
     self.WriteValidUnitTest(func, f, valid_test, {
+        'resource_name': func.GetInfo('resource_type'),
+      }, *extras)
+    duplicate_id_test = """
+TEST_P(%(test_name)s, %(name)sDuplicateOrNullIds) {
+  EXPECT_CALL(*gl_, %(gl_func_name)s(_, _)).Times(0);
+  cmds::%(name)s* cmd = GetImmediateAs<cmds::%(name)s>();
+  GLuint temp[3] = {kNewClientId, kNewClientId + 1, kNewClientId};
+  SpecializedSetup<cmds::%(name)s, 1>(true);
+  cmd->Init(3, temp);
+  EXPECT_EQ(error::kInvalidArguments,
+            ExecuteImmediateCmd(*cmd, sizeof(temp)));
+  EXPECT_TRUE(Get%(resource_name)s(kNewClientId) == NULL);
+  EXPECT_TRUE(Get%(resource_name)s(kNewClientId + 1) == NULL);
+  GLuint null_id[2] = {kNewClientId, 0};
+  cmd->Init(2, null_id);
+  EXPECT_EQ(error::kInvalidArguments,
+            ExecuteImmediateCmd(*cmd, sizeof(temp)));
+  EXPECT_TRUE(Get%(resource_name)s(kNewClientId) == NULL);
+}
+    """
+    self.WriteValidUnitTest(func, f, duplicate_id_test, {
         'resource_name': func.GetInfo('resource_type'),
       }, *extras)
     invalid_test = """
@@ -6216,17 +6094,7 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(_, _)).Times(0);
   cmds::%(name)s* cmd = GetImmediateAs<cmds::%(name)s>();
   SpecializedSetup<cmds::%(name)s, 0>(false);
-  cmd->Init(1, &client_%(resource_name)s_id_);"""
-    if func.IsUnsafe():
-      invalid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kInvalidArguments,
-            ExecuteImmediateCmd(*cmd, sizeof(&client_%(resource_name)s_id_)));
-  decoder_->set_unsafe_es3_apis_enabled(false);
-}
-"""
-    else:
-      invalid_test += """
+  cmd->Init(1, &client_%(resource_name)s_id_);
   EXPECT_EQ(error::kInvalidArguments,
             ExecuteImmediateCmd(*cmd, sizeof(&client_%(resource_name)s_id_)));
 }
@@ -6348,20 +6216,14 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
       .WillOnce(Return(%(const_service_id)s));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args)s%(comma)skNewClientId);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  cmd.Init(%(args)s%(comma)skNewClientId);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
+    if func.IsES3():
       valid_test += """
   %(return_type)s service_id = 0;
   EXPECT_TRUE(Get%(resource_type)sServiceId(kNewClientId, &service_id));
   EXPECT_EQ(%(const_service_id)s, service_id);
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
 }
 """
     else:
@@ -6405,7 +6267,7 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteHandlerImplementation (self, func, f):
     """Overrriden from TypeHandler."""
-    if func.IsUnsafe():
+    if func.IsES3():
       code = """  uint32_t client_id = c.client_id;
   %(return_type)s service_id = 0;
   if (group_->Get%(resource_name)sServiceId(client_id, &service_id)) {
@@ -6462,13 +6324,16 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
     f.write("}\n")
     f.write("\n")
 
+  def WritePassthroughServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    pass
 
 class DeleteHandler(TypeHandler):
   """Handler for glDelete___ single resource type functions."""
 
   def WriteServiceImplementation(self, func, f):
     """Overrriden from TypeHandler."""
-    if func.IsUnsafe():
+    if func.IsES3():
       TypeHandler.WriteServiceImplementation(self, func, f)
     # HandleDeleteShader and HandleDeleteProgram are manually written.
     pass
@@ -6495,21 +6360,7 @@ class DeleteHandler(TypeHandler):
     """Overrriden from TypeHandler."""
     assert len(func.GetOriginalArgs()) == 1
     arg = func.GetOriginalArgs()[0]
-    if func.IsUnsafe() and not func.UseHelper():
-      f.write("""  %(arg_type)s service_id = 0;
-  if (group_->Get%(resource_type)sServiceId(%(arg_name)s, &service_id)) {
-    glDelete%(resource_type)s(service_id);
-    group_->Remove%(resource_type)sId(%(arg_name)s);
-  } else {
-     LOCAL_SET_GL_ERROR(
-         GL_INVALID_VALUE, "gl%(func_name)s", "unknown %(arg_name)s");
-  }
-""" % { 'resource_type': func.GetInfo('resource_type'),
-        'arg_name': arg.name,
-        'arg_type': arg.type,
-        'func_name': func.original_name })
-    else:
-      f.write("  %sHelper(%s);\n" % (func.original_name, arg.name))
+    f.write("  %sHelper(%s);\n" % (func.original_name, arg.name))
 
 class DELnHandler(TypeHandler):
   """Handler for glDelete___ type functions."""
@@ -6588,25 +6439,10 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
       .Times(1);
   cmds::%(name)s& cmd = *GetImmediateAs<cmds::%(name)s>();
   SpecializedSetup<cmds::%(name)s, 0>(true);
-  cmd.Init(1, &client_%(resource_name)s_id_);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  cmd.Init(1, &client_%(resource_name)s_id_);
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(client_%(resource_name)s_id_)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe() and not func.UseHelper():
-      valid_test += """
-  EXPECT_FALSE(Get%(upper_resource_name)sServiceId(
-      client_%(resource_name)s_id_, NULL));
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand,
-            ExecuteImmediateCmd(cmd, sizeof(client_%(resource_name)s_id_)));
-}
-"""
-    else:
-      valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
   EXPECT_TRUE(
       Get%(upper_resource_name)s(client_%(resource_name)s_id_) == NULL);
 }
@@ -6620,19 +6456,7 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
   cmds::%(name)s& cmd = *GetImmediateAs<cmds::%(name)s>();
   SpecializedSetup<cmds::%(name)s, 0>(false);
   GLuint temp = kInvalidClientId;
-  cmd.Init(1, &temp);"""
-    if func.IsUnsafe():
-      invalid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::kNoError,
-            ExecuteImmediateCmd(cmd, sizeof(temp)));
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand,
-            ExecuteImmediateCmd(cmd, sizeof(temp)));
-}
-"""
-    else:
-      invalid_test += """
+  cmd.Init(1, &temp);
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(temp)));
 }
@@ -6646,25 +6470,13 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
 
   def WriteImmediateHandlerImplementation (self, func, f):
     """Overrriden from TypeHandler."""
-    if func.IsUnsafe() and not func.UseHelper():
-      f.write("""  for (GLsizei ii = 0; ii < n; ++ii) {
-    GLuint service_id = 0;
-    if (group_->Get%(resource_type)sServiceId(
-            %(last_arg_name)s[ii], &service_id)) {
-      glDelete%(resource_type)ss(1, &service_id);
-      group_->Remove%(resource_type)sId(%(last_arg_name)s[ii]);
-    }
-  }
-""" % { 'resource_type': func.GetInfo('resource_type'),
-        'last_arg_name': func.GetLastOriginalArg().name })
-    else:
-      f.write("  %sHelper(n, %s);\n" %
-                 (func.original_name, func.GetLastOriginalArg().name))
+    f.write("  %sHelper(n, %s);\n" %
+            (func.original_name, func.GetLastOriginalArg().name))
 
   def WriteGLES2Implementation(self, func, f):
     """Overrriden from TypeHandler."""
-    impl_decl = func.GetInfo('impl_decl')
-    if impl_decl == None or impl_decl == True:
+    impl_func = func.GetInfo('impl_func', True)
+    if impl_func:
       args = {
           'return_type': func.return_type,
           'name': func.original_name,
@@ -6795,6 +6607,19 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
 class GETnHandler(TypeHandler):
   """Handler for GETn for glGetBooleanv, glGetFloatv, ... type functions."""
 
+  def InitFunction(self, func):
+    """Overrriden from TypeHandler."""
+    TypeHandler.InitFunction(self, func)
+
+    if func.name == 'GetSynciv':
+      return
+
+    arg_insert_point = len(func.passthrough_service_doer_args) - 1;
+    func.passthrough_service_doer_args.insert(
+        arg_insert_point, Argument('length', 'GLsizei*'))
+    func.passthrough_service_doer_args.insert(
+        arg_insert_point, Argument('bufsize', 'GLsizei'))
+
   def NeedsDataTransferFunction(self, func):
     """Overriden from TypeHandler."""
     return False
@@ -6810,7 +6635,10 @@ class GETnHandler(TypeHandler):
 
     code = """  typedef cmds::%(func_name)s::Result Result;
   GLsizei num_values = 0;
-  GetNumValuesReturnedForGLGet(pname, &num_values);
+  if (!GetNumValuesReturnedForGLGet(pname, &num_values)) {
+    LOCAL_SET_GL_ERROR_INVALID_ENUM(":%(func_name)s", pname, "pname");
+    return error::kNoError;
+  }
   Result* result = GetSharedMemoryAs<Result*>(
       c.%(last_arg_name)s_shm_id, c.%(last_arg_name)s_shm_offset,
       Result::ComputeSize(num_values));
@@ -6848,10 +6676,50 @@ class GETnHandler(TypeHandler):
 """
     f.write(code % {'func_name': func.name})
 
+  def WritePassthroughServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    self.WritePassthroughServiceFunctionHeader(func, f)
+    last_arg = func.GetLastOriginalArg()
+    # All except shm_id and shm_offset.
+    all_but_last_args = func.GetCmdArgs()[:-2]
+    for arg in all_but_last_args:
+      arg.WriteGetCode(f)
+
+    code = """  unsigned int buffer_size = 0;
+  typedef cmds::%(func_name)s::Result Result;
+  Result* result = GetSharedMemoryAndSizeAs<Result*>(
+      c.%(last_arg_name)s_shm_id, c.%(last_arg_name)s_shm_offset,
+      &buffer_size);
+  %(last_arg_type)s %(last_arg_name)s = result ? result->GetData() : NULL;
+  if (%(last_arg_name)s == NULL) {
+    return error::kOutOfBounds;
+  }
+  GLsizei bufsize = Result::ComputeMaxResults(buffer_size);
+  GLsizei written_values = 0;
+  GLsizei* length = &written_values;
+"""
+    f.write(code % {
+        'last_arg_type': last_arg.type,
+        'last_arg_name': last_arg.name,
+        'func_name': func.name,
+      })
+
+    self.WritePassthroughServiceFunctionDoerCall(func, f)
+
+    code = """  if (written_values > bufsize) {
+    return error::kOutOfBounds;
+  }
+  result->SetNumResults(written_values);
+  return error::kNoError;
+}
+
+"""
+    f.write(code % {'func_name': func.name})
+
   def WriteGLES2Implementation(self, func, f):
     """Overrriden from TypeHandler."""
-    impl_decl = func.GetInfo('impl_decl')
-    if impl_decl == None or impl_decl == True:
+    impl_func = func.GetInfo('impl_func', True)
+    if impl_func:
       f.write("%s GLES2Implementation::%s(%s) {\n" %
                  (func.return_type, func.original_name,
                   func.MakeTypedOriginalArgString("")))
@@ -6966,21 +6834,12 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(local_gl_args)s));
   result->size = 0;
   cmds::%(name)s cmd;
-  cmd.Init(%(cmd_args)s);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  cmd.Init(%(cmd_args)s);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(
                 %(valid_pname)s),
             result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));"""
-    valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     gl_arg_strings = []
@@ -7019,7 +6878,7 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
         'valid_pname': valid_pname,
       }, *extras)
 
-    if not func.IsUnsafe():
+    if not func.IsES3():
       invalid_test = """
 TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s)).Times(0);
@@ -7109,21 +6968,10 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   cmd.Init(%(gl_client_args)s, &temp[0]);
   EXPECT_CALL(
       *gl_,
-      %(gl_func_name)s(%(gl_args)s, %(data_ref)sreinterpret_cast<
-          %(data_type)s*>(ImmediateDataAddress(&cmd))));"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+      %(gl_func_name)s(%(gl_args)s, %(expectation)s));
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(temp)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand,
-            ExecuteImmediateCmd(cmd, sizeof(temp)));"""
-    valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     gl_client_arg_strings = [
@@ -7133,11 +6981,16 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
       arg.GetValidGLArg(func) for arg in func.GetOriginalArgs()[0:-1]
     ]
     gl_any_strings = ["_"] * len(gl_arg_strings)
+    data_count = self.GetArrayCount(func)
+    if func.GetInfo('first_element_only'):
+      expectation = "temp[0]"
+    else:
+      expectation = "PointsToArray(temp, %s)" % data_count
 
     extra = {
-      'data_ref': ("*" if func.GetInfo('first_element_only') else ""),
+      'expectation': expectation,
       'data_type': self.GetArrayType(func),
-      'data_count': self.GetArrayCount(func),
+      'data_count': data_count,
       'data_value': func.GetInfo('data_value') or '0',
       'gl_client_args': ", ".join(gl_client_arg_strings),
       'gl_args': ", ".join(gl_arg_strings),
@@ -7148,7 +7001,7 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
     invalid_test = """
 TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
   cmds::%(name)s& cmd = *GetImmediateAs<cmds::%(name)s>();"""
-    if func.IsUnsafe():
+    if func.IsES3():
       invalid_test += """
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_any_args)s, _)).Times(1);
 """
@@ -7159,17 +7012,7 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
     invalid_test += """
   SpecializedSetup<cmds::%(name)s, 0>(false);
   %(data_type)s temp[%(data_count)s] = { %(data_value)s, };
-  cmd.Init(%(all_but_last_args)s, &temp[0]);"""
-    if func.IsUnsafe():
-      invalid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);
-  EXPECT_EQ(error::%(parse_result)s,
-            ExecuteImmediateCmd(cmd, sizeof(temp)));
-  decoder_->set_unsafe_es3_apis_enabled(false);
-}
-"""
-    else:
-      invalid_test += """
+  cmd.Init(%(all_but_last_args)s, &temp[0]);
   EXPECT_EQ(error::%(parse_result)s,
             ExecuteImmediateCmd(cmd, sizeof(temp)));
   %(gl_error_test)s
@@ -7180,7 +7023,7 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
   def WriteGetDataSizeCode(self, func, f):
     """Overrriden from TypeHandler."""
     code = """  uint32_t data_size;
-  if (!ComputeDataSize(1, sizeof(%s), %d, &data_size)) {
+  if (!GLES2Util::ComputeDataSize(1, sizeof(%s), %d, &data_size)) {
     return error::kOutOfBounds;
   }
 """
@@ -7225,8 +7068,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGLES2ImplementationUnitTest(self, func, f):
     """Writes the GLES2 Implemention unit test."""
-    client_test = func.GetInfo('client_test')
-    if (client_test != None and client_test != True):
+    client_test = func.GetInfo('client_test', True)
+    if not client_test:
       return;
     code = """
 TEST_F(GLES2ImplementationTest, %(name)s) {
@@ -7432,26 +7275,16 @@ TEST_P(%(test_name)s, %(name)sValidArgsCountTooLarge) {
     valid_test = """
 TEST_P(%(test_name)s, %(name)sValidArgs) {
   cmds::%(name)s& cmd = *GetImmediateAs<cmds::%(name)s>();
+  SpecializedSetup<cmds::%(name)s, 0>(true);
+  %(data_type)s temp[%(data_count)s * 2] = { 0, };
   EXPECT_CALL(
       *gl_,
       %(gl_func_name)s(%(gl_args)s,
-          reinterpret_cast<%(data_type)s*>(ImmediateDataAddress(&cmd))));
-  SpecializedSetup<cmds::%(name)s, 0>(true);
-  %(data_type)s temp[%(data_count)s * 2] = { 0, };
-  cmd.Init(%(args)s, &temp[0]);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+          PointsToArray(temp, %(data_count)s)));
+  cmd.Init(%(args)s, &temp[0]);
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(temp)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand,
-            ExecuteImmediateCmd(cmd, sizeof(temp)));"""
-    valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     gl_arg_strings = []
@@ -7486,12 +7319,14 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
 
   def WriteGetDataSizeCode(self, func, f):
     """Overrriden from TypeHandler."""
-    code = """  uint32_t data_size;
-  if (!ComputeDataSize(count, sizeof(%s), %d, &data_size)) {
+    code = """  uint32_t data_size = 0;
+  if (count >= 0 &&
+      !GLES2Util::ComputeDataSize(count, sizeof(%s), %d, &data_size)) {
     return error::kOutOfBounds;
   }
 """
-    f.write(code % (self.GetArrayType(func), self.GetArrayCount(func)))
+    f.write(code % (self.GetArrayType(func),
+                    self.GetArrayCount(func)))
     if func.IsImmediate():
       f.write("  if (data_size > immediate_data_size) {\n")
       f.write("    return error::kOutOfBounds;\n")
@@ -7972,13 +7807,7 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   SetBucketAsCStrings(kBucketId, 1, kSource, 1, kValidStrEnd);
   cmds::%(name)s cmd;
   cmd.Init(%(cmd_args)s);
-  decoder_->set_unsafe_es3_apis_enabled(true);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));"""
-    if func.IsUnsafe():
-      test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));
-"""
     test += """
 }
 """
@@ -7993,7 +7822,6 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
   const char kSource0[] = "hello";
   const char* kSource[] = { kSource0 };
   const char kValidStrEnd = 0;
-  decoder_->set_unsafe_es3_apis_enabled(true);
   cmds::%(name)s cmd;
   // Test no bucket.
   cmd.Init(%(cmd_args)s);
@@ -8023,7 +7851,6 @@ TEST_P(%(test_name)s, %(name)sInvalidHeader) {
       std::numeric_limits<GLsizei>::max(),
       -1,
   };
-  decoder_->set_unsafe_es3_apis_enabled(true);
   for (size_t ii = 0; ii < arraysize(kTests); ++ii) {
     SetBucketAsCStrings(kBucketId, 1, kSource, kTests[ii], kValidStrEnd);
     cmds::%(name)s cmd;
@@ -8045,7 +7872,6 @@ TEST_P(%(test_name)s, %(name)sInvalidStringEnding) {
   SetBucketAsCStrings(kBucketId, 1, kSource, 1, kInvalidStrEnd);
   cmds::%(name)s cmd;
   cmd.Init(%(cmd_args)s);
-  decoder_->set_unsafe_es3_apis_enabled(true);
   EXPECT_EQ(error::kInvalidArguments, ExecuteCmd(cmd));
 }
 """
@@ -8085,18 +7911,9 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   EXPECT_CALL(*gl_, %(name)sv(%(local_args)s));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args)s);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  cmd.Init(%(args)s);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));"""
-    valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     args = func.GetOriginalArgs()
@@ -8282,6 +8099,7 @@ class IsHandler(TypeHandler):
     func.AddCmdArg(Argument("result_shm_offset", 'uint32_t'))
     if func.GetInfo('result') == None:
       func.AddInfo('result', ['uint32_t'])
+    func.passthrough_service_doer_args.append(Argument('result', 'uint32_t*'))
 
   def WriteServiceUnitTest(self, func, f, *extras):
     """Overrriden from TypeHandler."""
@@ -8290,18 +8108,9 @@ TEST_P(%(test_name)s, %(name)sValidArgs) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s));
   SpecializedSetup<cmds::%(name)s, 0>(true);
   cmds::%(name)s cmd;
-  cmd.Init(%(args)s%(comma)sshared_memory_id_, shared_memory_offset_);"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    valid_test += """
+  cmd.Init(%(args)s%(comma)sshared_memory_id_, shared_memory_offset_);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());"""
-    if func.IsUnsafe():
-      valid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(false);
-  EXPECT_EQ(error::kUnknownCommand, ExecuteCmd(cmd));"""
-    valid_test += """
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 """
     comma = ""
@@ -8327,20 +8136,12 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs%(arg_index)d_%(value_index)d) {
     invalid_test = """
 TEST_P(%(test_name)s, %(name)sInvalidArgsBadSharedMemoryId) {
   EXPECT_CALL(*gl_, %(gl_func_name)s(%(gl_args)s)).Times(0);
-  SpecializedSetup<cmds::%(name)s, 0>(false);"""
-    if func.IsUnsafe():
-      invalid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    invalid_test += """
+  SpecializedSetup<cmds::%(name)s, 0>(false);
   cmds::%(name)s cmd;
   cmd.Init(%(args)s%(comma)skInvalidSharedMemoryId, shared_memory_offset_);
   EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
   cmd.Init(%(args)s%(comma)sshared_memory_id_, kInvalidSharedMemoryOffset);
-  EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));"""
-    if func.IsUnsafe():
-      invalid_test += """
-  decoder_->set_unsafe_es3_apis_enabled(true);"""
-    invalid_test += """
+  EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
 }
 """
     self.WriteValidUnitTest(func, f, invalid_test, {
@@ -8364,25 +8165,34 @@ TEST_P(%(test_name)s, %(name)sInvalidArgsBadSharedMemoryId) {
 """
     f.write(code % {'func_name': func.name})
     func.WriteHandlerValidation(f)
-    if func.IsUnsafe() and not func.UseHelper():
-      assert func.GetInfo('id_mapping')
-      assert len(func.GetInfo('id_mapping')) == 1
-      assert len(args) == 1
-      id_type = func.GetInfo('id_mapping')[0]
-      f.write("  %s service_%s = 0;\n" % (args[0].type, id_type.lower()))
-      f.write("  *result_dst = group_->Get%sServiceId(%s, &service_%s);\n" %
-                 (id_type, id_type.lower(), id_type.lower()))
-    else:
-      f.write("  *result_dst = %s(%s);\n" %
-                 (func.GetGLFunctionName(), func.MakeOriginalArgString("")))
+    f.write("  *result_dst = %s(%s);\n" %
+            (func.GetGLFunctionName(), func.MakeOriginalArgString("")))
+    f.write("  return error::kNoError;\n")
+    f.write("}\n")
+    f.write("\n")
+
+  def WritePassthroughServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    self.WritePassthroughServiceFunctionHeader(func, f)
+    self.WriteServiceHandlerArgGetCode(func, f)
+
+    code = """  typedef cmds::%(func_name)s::Result Result;
+  Result* result = GetSharedMemoryAs<Result*>(
+      c.result_shm_id, c.result_shm_offset, sizeof(*result));
+  if (!result) {
+    return error::kOutOfBounds;
+  }
+"""
+    f.write(code % {'func_name': func.name})
+    self.WritePassthroughServiceFunctionDoerCall(func, f)
     f.write("  return error::kNoError;\n")
     f.write("}\n")
     f.write("\n")
 
   def WriteGLES2Implementation(self, func, f):
     """Overrriden from TypeHandler."""
-    impl_func = func.GetInfo('impl_func')
-    if impl_func == None or impl_func == True:
+    impl_func = func.GetInfo('impl_func', True)
+    if impl_func:
       error_value = func.GetInfo("error_value") or "GL_FALSE"
       f.write("%s GLES2Implementation::%s(%s) {\n" %
                  (func.return_type, func.original_name,
@@ -8418,8 +8228,8 @@ TEST_P(%(test_name)s, %(name)sInvalidArgsBadSharedMemoryId) {
 
   def WriteGLES2ImplementationUnitTest(self, func, f):
     """Overrriden from TypeHandler."""
-    client_test = func.GetInfo('client_test')
-    if client_test == None or client_test == True:
+    client_test = func.GetInfo('client_test', True)
+    if client_test:
       code = """
 TEST_F(GLES2ImplementationTest, %(name)s) {
   struct Cmds {
@@ -8565,6 +8375,10 @@ TEST_P(%(test_name)s, %(name)sInvalidArgs) {
     self.WriteValidUnitTest(func, f, invalid_test, *extras)
 
   def WriteServiceImplementation(self, func, f):
+    """Overrriden from TypeHandler."""
+    pass
+
+  def WritePassthroughServiceImplementation(self, func, f):
     """Overrriden from TypeHandler."""
     pass
 
@@ -8867,8 +8681,6 @@ class SizeArgument(Argument):
 
   def WriteValidationCode(self, f, func):
     """overridden from Argument."""
-    if func.IsUnsafe():
-      return
     code = """  if (%(var_name)s < 0) {
     LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "gl%(func_name)s", "%(var_name)s < 0");
     return error::kNoError;
@@ -8905,8 +8717,7 @@ class SizeNotNegativeArgument(SizeArgument):
 
 
 class EnumBaseArgument(Argument):
-  """Base class for EnumArgument, IntArgument, BitfieldArgument, and
-  ValidatedBoolArgument."""
+  """Base class for EnumArgument, IntArgument, and BitfieldArgument."""
 
   def __init__(self, name, gl_type, type, gl_error):
     Argument.__init__(self, name, gl_type)
@@ -8923,8 +8734,6 @@ class EnumBaseArgument(Argument):
     return self.named_type.GetConstantValue()
 
   def WriteValidationCode(self, f, func):
-    if func.IsUnsafe():
-      return
     if self.named_type.IsConstant():
       return
     f.write("  if (!validators_->%s.IsValid(%s)) {\n" %
@@ -9028,21 +8837,6 @@ class IntArgument(EnumBaseArgument):
     EnumBaseArgument.__init__(self, name, "GLint", type, "GL_INVALID_VALUE")
 
 
-class ValidatedBoolArgument(EnumBaseArgument):
-  """A class for a GLboolean argument that can only accept specific values.
-
-  For example glUniformMatrix takes a GLboolean for it's transpose but it
-  must be false.
-  """
-
-  def __init__(self, name, type):
-    EnumBaseArgument.__init__(self, name, "GLboolean", type, "GL_INVALID_VALUE")
-
-  def GetLogArg(self):
-    """Overridden from Argument."""
-    return 'GLES2Util::GetStringBool(%s)' % self.name
-
-
 class BitFieldArgument(EnumBaseArgument):
   """A class for a GLbitfield argument that can only accept specific values.
 
@@ -9075,9 +8869,8 @@ class ImmediatePointerArgument(Argument):
 
   def WriteGetCode(self, f):
     """Overridden from Argument."""
-    f.write(
-      "  %s %s = GetImmediateDataAs<%s>(\n" %
-      (self.type, self.name, self.type))
+    f.write("  volatile %s %s = GetImmediateDataAs<volatile %s>(\n" %
+            (self.type, self.name, self.type))
     f.write("      c, data_size, immediate_data_size);\n")
 
   def WriteValidationCode(self, f, func):
@@ -9361,7 +9154,7 @@ class Int64Argument(Argument):
 
   def WriteArgAccessor(self, f):
     """Writes specialized accessor for compound members."""
-    f.write("  %s %s() const {\n" % (self.type, self.name))
+    f.write("  %s %s() const volatile {\n" % (self.type, self.name))
     f.write("    return static_cast<%s>(\n" % self.type)
     f.write("        GLES2Util::MapTwoUint32ToUint64(\n")
     f.write("            %s_0,\n" % self.name)
@@ -9397,9 +9190,8 @@ class Function(object):
     'GETn': GETnHandler(),
     'GLchar': GLcharHandler(),
     'GLcharN': GLcharNHandler(),
-    'HandWritten': HandWrittenHandler(),
     'Is': IsHandler(),
-    'Manual': ManualHandler(),
+    'NoCommand': NoCommandHandler(),
     'PUT': PUTHandler(),
     'PUTn': PUTnHandler(),
     'PUTSTR': PUTSTRHandler(),
@@ -9422,6 +9214,8 @@ class Function(object):
       self.args_for_cmds = self.ParseArgs(info['cmd_args'])
     else:
       self.args_for_cmds = self.original_args[:]
+
+    self.passthrough_service_doer_args = self.original_args[:]
 
     self.return_type = info['return_type']
     if self.return_type != 'void':
@@ -9483,13 +9277,9 @@ class Function(object):
     """Returns whether the function is immediate data function or not."""
     return False
 
-  def IsUnsafe(self):
-    """Returns whether the function has service side validation or not."""
-    return self.GetInfo('unsafe', False)
-
-  def UseHelper(self):
-    """Returns whether the function uses explicit helper functions."""
-    return self.GetInfo('use_helper', False)
+  def IsES3(self):
+    """Returns whether the function requires an ES3 context or not."""
+    return self.GetInfo('es3', False)
 
   def GetInfo(self, name, default = None):
     """Returns a value from the function info for this function."""
@@ -9520,7 +9310,7 @@ class Function(object):
   def IsCoreGLFunction(self):
     return (not self.IsExtension() and
             not self.GetInfo('pepper_interface') and
-            not self.IsUnsafe())
+            not self.IsES3())
 
   def InPepperInterface(self, interface):
     ext = self.GetInfo('pepper_interface')
@@ -9584,6 +9374,10 @@ class Function(object):
     """Gets the original arguments to this function."""
     return self.original_args
 
+  def GetPassthroughServiceDoerArgs(self):
+    """Gets the original arguments to this function."""
+    return self.passthrough_service_doer_args
+
   def GetLastOriginalArg(self):
     """Gets the last original argument to this function."""
     return self.original_args[len(self.original_args) - 1]
@@ -9614,6 +9408,15 @@ class Function(object):
   def MakeOriginalArgString(self, prefix, add_comma = False, separator = ", "):
     """Gets the list of arguments as they are in GL."""
     args = self.GetOriginalArgs()
+    arg_string = separator.join(
+        ["%s%s" % (prefix, arg.name) for arg in args])
+    return self._MaybePrependComma(arg_string, add_comma)
+
+  def MakePassthroughServiceDoerArgString(self, prefix, add_comma = False,
+                                          separator = ", "):
+    """Gets the list of arguments as they are in used by the passthrough
+       service doer function."""
+    args = self.GetPassthroughServiceDoerArgs()
     arg_string = separator.join(
         ["%s%s" % (prefix, arg.name) for arg in args])
     return self._MaybePrependComma(arg_string, add_comma)
@@ -9791,6 +9594,10 @@ class Function(object):
     """Writes the service implementation for a command."""
     self.type_handler.WriteServiceImplementation(self, f)
 
+  def WritePassthroughServiceImplementation(self, f):
+    """Writes the service implementation for a command."""
+    self.type_handler.WritePassthroughServiceImplementation(self, f)
+
   def WriteServiceUnitTest(self, f, *extras):
     """Writes the service implementation for a command."""
     self.type_handler.WriteServiceUnitTest(self, f, *extras)
@@ -9802,14 +9609,6 @@ class Function(object):
   def WriteGLES2InterfaceHeader(self, f):
     """Writes the GLES2 Interface declaration."""
     self.type_handler.WriteGLES2InterfaceHeader(self, f)
-
-  def WriteMojoGLES2ImplHeader(self, f):
-    """Writes the Mojo GLES2 implementation header declaration."""
-    self.type_handler.WriteMojoGLES2ImplHeader(self, f)
-
-  def WriteMojoGLES2Impl(self, f):
-    """Writes the Mojo GLES2 implementation declaration."""
-    self.type_handler.WriteMojoGLES2Impl(self, f)
 
   def WriteGLES2InterfaceStub(self, f):
     """Writes the GLES2 Interface Stub declaration."""
@@ -9915,6 +9714,10 @@ class ImmediateFunction(Function):
     """Overridden from Function"""
     self.type_handler.WriteImmediateServiceImplementation(self, f)
 
+  def WritePassthroughServiceImplementation(self, f):
+    """Overridden from Function"""
+    self.type_handler.WritePassthroughImmediateServiceImplementation(self, f)
+
   def WriteHandlerImplementation(self, f):
     """Overridden from Function"""
     self.type_handler.WriteImmediateHandlerImplementation(self, f)
@@ -9990,6 +9793,10 @@ class BucketFunction(Function):
     """Overridden from Function"""
     self.type_handler.WriteBucketServiceImplementation(self, f)
 
+  def WritePassthroughServiceImplementation(self, f):
+    """Overridden from Function"""
+    self.type_handler.WritePassthroughBucketServiceImplementation(self, f)
+
   def WriteHandlerImplementation(self, f):
     """Overridden from Function"""
     self.type_handler.WriteBucketHandlerImplementation(self, f)
@@ -10037,8 +9844,6 @@ def CreateArg(arg_string):
     return EnumArgument(arg_name, arg_type)
   elif t.startswith('GLbitfield') and t != 'GLbitfield':
     return BitFieldArgument(arg_name, arg_type)
-  elif t.startswith('GLboolean') and t != 'GLboolean':
-    return ValidatedBoolArgument(arg_name, arg_type)
   elif t.startswith('GLboolean'):
     return BoolArgument(arg_name, arg_type)
   elif t.startswith('GLintUniformLocation'):
@@ -10124,14 +9929,15 @@ class GLGenerator(object):
             func_info[k] = parsed_func_info[k]
 
         f = Function(func_name, func_info)
-        self.original_functions.append(f)
+        if not f.GetInfo('internal'):
+          self.original_functions.append(f)
 
         #for arg in f.GetOriginalArgs():
         #  if not isinstance(arg, EnumArgument) and arg.type == 'GLenum':
         #    self.Log("%s uses bare GLenum %s." % (func_name, arg.name))
 
-        gen_cmd = f.GetInfo('gen_cmd')
-        if gen_cmd == True or gen_cmd == None:
+        func_type = f.GetInfo('type')
+        if func_type != 'NoCommand':
           if f.type_handler.NeedsDataTransferFunction(f):
             methods = f.GetDataTransferMethods()
             if 'immediate' in methods:
@@ -10167,12 +9973,13 @@ class GLGenerator(object):
       f.write("\n")
 
       f.write("enum CommandId {\n")
-      f.write("  kStartPoint = cmd::kLastCommonId,  "
+      f.write("  kOneBeforeStartPoint = cmd::kLastCommonId,  "
                  "// All GLES2 commands start after this.\n")
       f.write("#define GLES2_CMD_OP(name) k ## name,\n")
       f.write("  GLES2_COMMAND_LIST(GLES2_CMD_OP)\n")
       f.write("#undef GLES2_CMD_OP\n")
-      f.write("  kNumCommands\n")
+      f.write("  kNumCommands,\n")
+      f.write("  kFirstGLES2Command = kOneBeforeStartPoint + 1\n")
       f.write("};\n")
       f.write("\n")
     self.generated_cpp_filenames.append(filename)
@@ -10191,10 +9998,7 @@ class GLGenerator(object):
         f.write("#define %s %s\n" % (enum, enum_defines[enum]))
       f.write('\n')
       for func in self.functions:
-        if True:
-        #gen_cmd = func.GetInfo('gen_cmd')
-        #if gen_cmd == True or gen_cmd == None:
-          func.WriteStruct(f)
+        func.WriteStruct(f)
       f.write("\n")
     self.generated_cpp_filenames.append(filename)
 
@@ -10202,10 +10006,7 @@ class GLGenerator(object):
     """Writes the command buffer doc version of the commands"""
     with CHeaderWriter(filename) as f:
       for func in self.functions:
-        if True:
-        #gen_cmd = func.GetInfo('gen_cmd')
-        #if gen_cmd == True or gen_cmd == None:
-          func.WriteDocs(f)
+        func.WriteDocs(f)
       f.write("\n")
     self.generated_cpp_filenames.append(filename)
 
@@ -10215,20 +10016,14 @@ class GLGenerator(object):
                "// It is included by gles2_cmd_format_test.cc\n\n")
     with CHeaderWriter(filename, comment) as f:
       for func in self.functions:
-        if True:
-        #gen_cmd = func.GetInfo('gen_cmd')
-        #if gen_cmd == True or gen_cmd == None:
-          func.WriteFormatTest(f)
+        func.WriteFormatTest(f)
     self.generated_cpp_filenames.append(filename)
 
   def WriteCmdHelperHeader(self, filename):
     """Writes the gles2 command helper."""
     with CHeaderWriter(filename) as f:
       for func in self.functions:
-        if True:
-        #gen_cmd = func.GetInfo('gen_cmd')
-        #if gen_cmd == True or gen_cmd == None:
-          func.WriteCmdHelper(f)
+        func.WriteCmdHelper(f)
     self.generated_cpp_filenames.append(filename)
 
   def WriteServiceContextStateHeader(self, filename):
@@ -10399,6 +10194,10 @@ void ContextState::InitCapabilities(const ContextState* prev_state) const {
       def WriteCapabilities(test_prev, es3_caps):
         for capability in _CAPABILITY_FLAGS:
           capability_name = capability['name']
+          capability_no_init = 'no_init' in capability and \
+              capability['no_init'] == True
+          if capability_no_init:
+            continue
           capability_es3 = 'es3' in capability and capability['es3'] == True
           if capability_es3 and not es3_caps or not capability_es3 and es3_caps:
             continue
@@ -10460,45 +10259,28 @@ void ContextState::InitState(const ContextState *prev_state) const {
             for item in state['states']:
               item_name = CachedStateName(item)
 
-              if 'manual' in item:
-                assert item['manual']
-                continue
-              if 'es3' in item:
-                assert item['es3']
-                f.write("  if (feature_info_->IsES3Capable()) {\n");
-              if 'extension_flag' in item:
-                f.write("  if (feature_info_->feature_flags().%s) {\n  " %
-                           item['extension_flag'])
+              operation = []
               if test_prev:
                 if isinstance(item['default'], list):
-                  f.write("  if (memcmp(prev_state->%s, %s, "
-                             "sizeof(%s) * %d)) {\n" %
-                             (item_name, item_name, item['type'],
-                              len(item['default'])))
+                  operation.append("  if (memcmp(prev_state->%s, %s, "
+                                      "sizeof(%s) * %d)) {\n" %
+                                      (item_name, item_name, item['type'],
+                                      len(item['default'])))
                 else:
-                  f.write("  if (prev_state->%s != %s) {\n  " %
-                             (item_name, item_name))
-              if 'gl_version_flag' in item:
-                item_name = item['gl_version_flag']
-                inverted = ''
-                if item_name[0] == '!':
-                  inverted = '!'
-                  item_name = item_name[1:]
-                f.write("  if (%sfeature_info_->gl_version_info().%s) {\n" %
-                           (inverted, item_name))
-              f.write("  gl%s(%s, %s);\n" %
-                         (state['func'],
-                          (item['enum_set']
-                             if 'enum_set' in item else item['enum']),
-                          item['name']))
-              if 'gl_version_flag' in item or 'es3' in item:
-                f.write("  }\n")
+                  operation.append("  if (prev_state->%s != %s) {\n  " %
+                                      (item_name, item_name))
+
+              operation.append("  gl%s(%s, %s);\n" %
+                             (state['func'],
+                             (item['enum_set']
+                                 if 'enum_set' in item else item['enum']),
+                             item['name']))
+
               if test_prev:
-                if 'extension_flag' in item:
-                  f.write("  ")
-                f.write("  }")
-              if 'extension_flag' in item:
-                f.write("  }")
+                operation.append("  }")
+
+              guarded_operation = GuardState(item, ''.join(operation))
+              f.write(guarded_operation)
           else:
             if 'extension_flag' in state:
               f.write("  if (feature_info_->feature_flags().%s)\n  " %
@@ -10516,7 +10298,10 @@ void ContextState::InitState(const ContextState *prev_state) const {
                            (item_name, item_name))
             if test_prev:
               f.write("    )\n")
-            f.write("  gl%s(%s);\n" % (state['func'], ", ".join(args)))
+            if 'custom_function' in state:
+              f.write("  %s(%s);\n" % (state['func'], ", ".join(args)))
+            else:
+              f.write("  gl%s(%s);\n" % (state['func'], ", ".join(args)))
 
       f.write("  if (prev_state) {")
       WriteStates(True)
@@ -10600,10 +10385,7 @@ bool ClientContextState::SetCapabilityState(
     comment = "// It is included by gles2_cmd_decoder.cc\n"
     with CHeaderWriter(filename, comment) as f:
       for func in self.functions:
-        if True:
-        #gen_cmd = func.GetInfo('gen_cmd')
-        #if gen_cmd == True or gen_cmd == None:
-          func.WriteServiceImplementation(f)
+        func.WriteServiceImplementation(f)
 
       f.write("""
 bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
@@ -10639,6 +10421,29 @@ bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
 """)
     self.generated_cpp_filenames.append(filename)
 
+  def WritePassthroughServiceImplementation(self, filename):
+    """Writes the passthrough service decorder implementation."""
+    with CWriter(filename) as f:
+      header = """
+#include \"gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h\"
+
+namespace gpu {
+namespace gles2 {
+
+""";
+      f.write(header);
+
+      for func in self.functions:
+        func.WritePassthroughServiceImplementation(f)
+
+      footer = """
+}  // namespace gles2
+}  // namespace gpu
+
+""";
+      f.write(footer);
+    self.generated_cpp_filenames.append(filename)
+
   def WriteServiceUnitTests(self, filename_pattern):
     """Writes the service decorder unit tests."""
     num_tests = len(self.functions)
@@ -10650,12 +10455,14 @@ bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
       comment = "// It is included by gles2_cmd_decoder_unittest_%d.cc\n" \
                 % count
       with CHeaderWriter(filename, comment) as f:
-        test_name = 'GLES2DecoderTest%d' % count
         end = test_num + FUNCTIONS_PER_FILE
         if end > num_tests:
           end = num_tests
         for idx in range(test_num, end):
           func = self.functions[idx]
+          test_name = 'GLES2DecoderTest%d' % count
+          if func.IsES3():
+            test_name = 'GLES3DecoderTest%d' % count
 
           # Do any filtering of the functions here, so that the functions
           # will not move between the numbered files if filtering properties
@@ -10663,13 +10470,10 @@ bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
           if func.GetInfo('extension_flag'):
             continue
 
-          if True:
-          #gen_cmd = func.GetInfo('gen_cmd')
-          #if gen_cmd == True or gen_cmd == None:
-            if func.GetInfo('unit_test') != False:
-              func.WriteServiceUnitTest(f, {
-                'test_name': test_name
-              })
+          if func.GetInfo('unit_test') != False:
+            func.WriteServiceUnitTest(f, {
+              'test_name': test_name
+            })
       self.generated_cpp_filenames.append(filename)
 
     comment = "// It is included by gles2_cmd_decoder_unittest_base.cc\n"
@@ -10679,6 +10483,10 @@ bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
 """void GLES2DecoderTestBase::SetupInitCapabilitiesExpectations(
       bool es3_capable) {""")
       for capability in _CAPABILITY_FLAGS:
+        capability_no_init = 'no_init' in capability and \
+            capability['no_init'] == True
+        if capability_no_init:
+            continue
         capability_es3 = 'es3' in capability and capability['es3'] == True
         if capability_es3:
           continue
@@ -10702,6 +10510,7 @@ bool GLES2DecoderImpl::SetCapabilityState(GLenum cap, bool enabled) {
 }
 
 void GLES2DecoderTestBase::SetupInitStateExpectations(bool es3_capable) {
+  auto* feature_info_ = group_->feature_info();
 """)
       # We need to sort the keys so the expectations match
       for state_name in sorted(_STATES.keys()):
@@ -10722,32 +10531,23 @@ void GLES2DecoderTestBase::SetupInitStateExpectations(bool es3_capable) {
             f.write("      .RetiresOnSaturation();\n")
         elif state['type'] == 'NamedParameter':
           for item in state['states']:
-            if 'manual' in item:
-              assert item['manual']
-              continue
-            if 'extension_flag' in item:
-              f.write("  if (group_->feature_info()->feature_flags().%s) {\n" %
-                         item['extension_flag'])
-              f.write("  ")
-            if 'es3' in item:
-              assert item['es3']
-              f.write("  if (es3_capable) {\n")
-              f.write("  ")
             expect_value = item['default']
             if isinstance(expect_value, list):
               # TODO: Currently we do not check array values.
               expect_value = "_"
 
-            f.write(
-                "  EXPECT_CALL(*gl_, %s(%s, %s))\n" %
-                (state['func'],
-                 (item['enum_set']
-                             if 'enum_set' in item else item['enum']),
-                 expect_value))
-            f.write("      .Times(1)\n")
-            f.write("      .RetiresOnSaturation();\n")
-            if 'extension_flag' in item or 'es3' in item:
-              f.write("  }\n")
+            operation = []
+            operation.append(
+                             "  EXPECT_CALL(*gl_, %s(%s, %s))\n" %
+                             (state['func'],
+                              (item['enum_set']
+                                  if 'enum_set' in item else item['enum']),
+                              expect_value))
+            operation.append("      .Times(1)\n")
+            operation.append("      .RetiresOnSaturation();\n")
+
+            guarded_operation = GuardState(item, ''.join(operation))
+            f.write(guarded_operation)
         else:
           if 'extension_flag' in state:
             f.write("  if (group_->feature_info()->feature_flags().%s) {\n" %
@@ -10761,10 +10561,14 @@ void GLES2DecoderTestBase::SetupInitStateExpectations(bool es3_capable) {
               args.append(item['default'])
           # TODO: Currently we do not check array values.
           args = ["_" if isinstance(arg, list) else arg for arg in args]
-          f.write("  EXPECT_CALL(*gl_, %s(%s))\n" %
-                     (state['func'], ", ".join(args)))
-          f.write("      .Times(1)\n")
-          f.write("      .RetiresOnSaturation();\n")
+          if 'custom_function' in state:
+            f.write("  SetupInitStateManualExpectationsFor%s(%s);\n" %
+                       (state['func'], ", ".join(args)))
+          else:
+            f.write("  EXPECT_CALL(*gl_, %s(%s))\n" %
+                       (state['func'], ", ".join(args)))
+            f.write("      .Times(1)\n")
+            f.write("      .RetiresOnSaturation();\n")
           if 'extension_flag' in state:
             f.write("  }\n")
       f.write("  SetupInitStateManualExpectations(es3_capable);\n")
@@ -10785,8 +10589,11 @@ void GLES2DecoderTestBase::SetupInitStateExpectations(bool es3_capable) {
           if func.GetInfo('unit_test') != False:
             extension = ToCamelCase(
               ToGLExtensionString(func.GetInfo('extension_flag')))
+            test_name = 'GLES2DecoderTestWith%s' % extension
+            if func.IsES3():
+              test_name = 'GLES3DecoderTestWith%s' % extension
             func.WriteServiceUnitTest(f, {
-              'test_name': 'GLES2DecoderTestWith%s' % extension
+              'test_name': test_name
             })
     self.generated_cpp_filenames.append(filename)
 
@@ -10828,60 +10635,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     with CHeaderWriter(filename, comment) as f:
       for func in self.original_functions:
         func.WriteGLES2InterfaceHeader(f)
-    self.generated_cpp_filenames.append(filename)
-
-  def WriteMojoGLES2ImplHeader(self, filename):
-    """Writes the Mojo GLES2 implementation header."""
-    comment = ("// This file is included by gles2_interface.h to declare the\n"
-               "// GL api functions.\n")
-    code = """
-#include "gpu/command_buffer/client/gles2_interface.h"
-#include "mojo/public/c/gles2/gles2.h"
-
-namespace mojo {
-
-class MojoGLES2Impl : public gpu::gles2::GLES2Interface {
- public:
-  explicit MojoGLES2Impl(MojoGLES2Context context) {
-    context_ = context;
-  }
-  ~MojoGLES2Impl() override {}
-    """
-    with CHeaderWriter(filename, comment) as f:
-      f.write(code);
-      for func in self.original_functions:
-        func.WriteMojoGLES2ImplHeader(f)
-      code = """
- private:
-  MojoGLES2Context context_;
-};
-
-}  // namespace mojo
-      """
-      f.write(code);
-    self.generated_cpp_filenames.append(filename)
-
-  def WriteMojoGLES2Impl(self, filename):
-    """Writes the Mojo GLES2 implementation."""
-    code = """
-#include "mojo/gpu/mojo_gles2_impl_autogen.h"
-
-#include "base/logging.h"
-#include "mojo/public/c/gles2/chromium_extension.h"
-#include "mojo/public/c/gles2/gles2.h"
-
-namespace mojo {
-
-    """
-    with CWriter(filename) as f:
-      f.write(code);
-      for func in self.original_functions:
-        func.WriteMojoGLES2Impl(f)
-      code = """
-
-}  // namespace mojo
-    """
-      f.write(code);
     self.generated_cpp_filenames.append(filename)
 
   def WriteGLES2InterfaceStub(self, filename):
@@ -11070,6 +10823,17 @@ namespace mojo {
 """
           f.write(code % {
             'name': ToUnderscore(name),
+          })
+      f.write("}\n\n");
+
+      f.write("void Validators::UpdateETCCompressedTextureFormats() {\n")
+      for name in ['CompressedTextureFormat', 'TextureInternalFormatStorage']:
+        for fmt in _ETC_COMPRESSED_TEXTURE_FORMATS:
+          code = """  %(name)s.AddValue(%(format)s);
+"""
+          f.write(code % {
+            'name': ToUnderscore(name),
+            'format': fmt,
           })
       f.write("}\n\n");
     self.generated_cpp_filenames.append(filename)
@@ -11325,31 +11089,6 @@ const size_t GLES2Util::enum_to_string_table_len_ =
         f.write("}\n\n")
     self.generated_cpp_filenames.append(filename)
 
-  def WriteMojoGLCallVisitor(self, filename):
-    """Provides the GL implementation for mojo"""
-    with CWriter(filename) as f:
-      for func in self.original_functions:
-        if not func.IsCoreGLFunction():
-          continue
-        f.write("VISIT_GL_CALL(%s, %s, (%s), (%s))\n" %
-                               (func.name, func.return_type,
-                                func.MakeTypedOriginalArgString(""),
-                                func.MakeOriginalArgString("")))
-    self.generated_cpp_filenames.append(filename)
-
-  def WriteMojoGLCallVisitorForExtension(self, filename):
-    """Provides the GL implementation for mojo for all extensions"""
-    with CWriter(filename) as f:
-      for func in self.original_functions:
-        if not func.GetInfo("extension"):
-          continue
-        if func.IsUnsafe():
-          continue
-        f.write("VISIT_GL_CALL(%s, %s, (%s), (%s))\n" %
-                               (func.name, func.return_type,
-                                func.MakeTypedOriginalArgString(""),
-                                func.MakeOriginalArgString("")))
-    self.generated_cpp_filenames.append(filename)
 
 def Format(generated_files):
   formatter = "clang-format"
@@ -11421,10 +11160,6 @@ def main(argv):
     "gpu/command_buffer/common/gles2_cmd_format_test_autogen.h")
   gen.WriteGLES2InterfaceHeader(
     "gpu/command_buffer/client/gles2_interface_autogen.h")
-  gen.WriteMojoGLES2ImplHeader(
-    "mojo/gpu/mojo_gles2_impl_autogen.h")
-  gen.WriteMojoGLES2Impl(
-    "mojo/gpu/mojo_gles2_impl_autogen.cc")
   gen.WriteGLES2InterfaceStub(
     "gpu/command_buffer/client/gles2_interface_stub_autogen.h")
   gen.WriteGLES2InterfaceStubImpl(
@@ -11445,6 +11180,9 @@ def main(argv):
     "gpu/command_buffer/client/gles2_cmd_helper_autogen.h")
   gen.WriteServiceImplementation(
     "gpu/command_buffer/service/gles2_cmd_decoder_autogen.h")
+  gen.WritePassthroughServiceImplementation(
+    "gpu/command_buffer/service/" +
+    "gles2_cmd_decoder_passthrough_handlers_autogen.cc")
   gen.WriteServiceContextStateHeader(
     "gpu/command_buffer/service/context_state_autogen.h")
   gen.WriteServiceContextStateImpl(
@@ -11469,9 +11207,6 @@ def main(argv):
     "gpu/command_buffer/common/gles2_cmd_utils_implementation_autogen.h")
   gen.WriteGLES2Header("gpu/GLES2/gl2chromium_autogen.h")
   mojo_gles2_prefix = ("mojo/public/c/gles2/gles2_call_visitor")
-  gen.WriteMojoGLCallVisitor(mojo_gles2_prefix + "_autogen.h")
-  gen.WriteMojoGLCallVisitorForExtension(
-      mojo_gles2_prefix + "_chromium_extension_autogen.h")
 
   Format(gen.generated_cpp_filenames)
 

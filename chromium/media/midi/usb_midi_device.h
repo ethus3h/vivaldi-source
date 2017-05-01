@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <vector>
 
 #include "base/callback.h"
@@ -15,10 +16,8 @@
 #include "base/time/time.h"
 #include "media/midi/usb_midi_export.h"
 
-namespace media {
 namespace midi {
 
-class MidiManagerUsb;
 class UsbMidiDevice;
 
 // Delegate class for UsbMidiDevice.
@@ -35,7 +34,7 @@ class USB_MIDI_EXPORT UsbMidiDeviceDelegate {
                                   base::TimeTicks time) = 0;
 
   // Called when a USB-MIDI device is attached.
-  virtual void OnDeviceAttached(scoped_ptr<UsbMidiDevice> device) = 0;
+  virtual void OnDeviceAttached(std::unique_ptr<UsbMidiDevice> device) = 0;
   // Called when a USB-MIDI device is detached.
   virtual void OnDeviceDetached(size_t index) = 0;
 };
@@ -86,6 +85,5 @@ class USB_MIDI_EXPORT UsbMidiDevice {
 };
 
 }  // namespace midi
-}  // namespace media
 
 #endif  // MEDIA_MIDI_USB_MIDI_DEVICE_H_

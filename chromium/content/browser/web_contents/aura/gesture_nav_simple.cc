@@ -51,7 +51,7 @@ bool ShouldNavigateBack(const NavigationController& controller,
 template <class T>
 class DeleteAfterAnimation : public ui::ImplicitAnimationObserver {
  public:
-  explicit DeleteAfterAnimation(scoped_ptr<T> object)
+  explicit DeleteAfterAnimation(std::unique_ptr<T> object)
       : object_(std::move(object)) {}
 
  private:
@@ -67,7 +67,7 @@ class DeleteAfterAnimation : public ui::ImplicitAnimationObserver {
     BrowserThread::DeleteSoon(BrowserThread::UI, FROM_HERE, this);
   }
 
-  scoped_ptr<T> object_;
+  std::unique_ptr<T> object_;
   DISALLOW_COPY_AND_ASSIGN(DeleteAfterAnimation);
 };
 
@@ -109,10 +109,6 @@ class ArrowLayerDelegate : public ui::LayerDelegate {
   void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
 
   void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
-
-  base::Closure PrepareForLayerBoundsChange() override {
-    return base::Closure();
-  }
 
   const gfx::Image& image_;
   const bool left_arrow_;

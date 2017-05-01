@@ -5,14 +5,15 @@
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_SERVICE_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_SERVICE_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "extensions/features/features.h"
 
 class ChromeDownloadManagerDelegate;
 class DownloadHistory;
 class ExtensionDownloadsEventRouter;
-class Profile;
 
 namespace content {
 class DownloadManager;
@@ -37,7 +38,7 @@ class DownloadService : public KeyedService {
   // no HistoryService for profile. Virtual for testing.
   virtual DownloadHistory* GetDownloadHistory() = 0;
 
-#if defined(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   virtual extensions::ExtensionDownloadsEventRouter*
   GetExtensionEventRouter() = 0;
 #endif
@@ -62,7 +63,7 @@ class DownloadService : public KeyedService {
   // its DownloadManager.  Takes ownership of |delegate|, and destroys
   // the previous delegate.  For testing.
   virtual void SetDownloadManagerDelegateForTesting(
-      scoped_ptr<ChromeDownloadManagerDelegate> delegate) = 0;
+      std::unique_ptr<ChromeDownloadManagerDelegate> delegate) = 0;
 
   // Returns false if at least one extension has disabled the shelf, true
   // otherwise.

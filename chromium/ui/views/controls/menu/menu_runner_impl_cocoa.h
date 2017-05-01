@@ -5,13 +5,13 @@
 #ifndef UI_VIEWS_CONTROLS_MENU_MENU_RUNNER_IMPL_COCOA_H_
 #define UI_VIEWS_CONTROLS_MENU_MENU_RUNNER_IMPL_COCOA_H_
 
-#include "ui/views/controls/menu/menu_runner_impl_interface.h"
-
 #include <stdint.h>
 
+#include "base/callback.h"
 #import "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #include "base/time/time.h"
+#include "ui/views/controls/menu/menu_runner_impl_interface.h"
 
 @class MenuController;
 
@@ -21,7 +21,8 @@ namespace internal {
 // A menu runner implementation that uses NSMenu to show a context menu.
 class VIEWS_EXPORT MenuRunnerImplCocoa : public MenuRunnerImplInterface {
  public:
-  explicit MenuRunnerImplCocoa(ui::MenuModel* menu);
+  MenuRunnerImplCocoa(ui::MenuModel* menu,
+                      const base::Closure& on_menu_closed_callback);
 
   bool IsRunning() const override;
   void Release() override;
@@ -31,7 +32,7 @@ class VIEWS_EXPORT MenuRunnerImplCocoa : public MenuRunnerImplInterface {
                                   MenuAnchorPosition anchor,
                                   int32_t run_types) override;
   void Cancel() override;
-  base::TimeDelta GetClosingEventTime() const override;
+  base::TimeTicks GetClosingEventTime() const override;
 
  private:
   ~MenuRunnerImplCocoa() override;
@@ -39,11 +40,17 @@ class VIEWS_EXPORT MenuRunnerImplCocoa : public MenuRunnerImplInterface {
   // The Cocoa menu controller that this instance is bridging.
   base::scoped_nsobject<MenuController> menu_controller_;
 
+  // Are we in run waiting for it to return?
+  bool running_;
+
   // Set if |running_| and Release() has been invoked.
   bool delete_after_run_;
 
   // The timestamp of the event which closed the menu - or 0.
-  base::TimeDelta closing_event_time_;
+  base::TimeTicks closing_event_time_;
+
+  // Invoked before RunMenuAt() returns, except upon a Release().
+  base::Closure on_menu_closed_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuRunnerImplCocoa);
 };

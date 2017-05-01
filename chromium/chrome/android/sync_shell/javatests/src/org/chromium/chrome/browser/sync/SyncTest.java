@@ -6,35 +6,39 @@ package org.chromium.chrome.browser.sync;
 
 import android.accounts.Account;
 import android.app.Activity;
-import android.test.suitebuilder.annotation.LargeTest;
+import android.support.test.filters.LargeTest;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.FlakyTest;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.signin.AccountIdProvider;
 import org.chromium.chrome.browser.signin.AccountTrackerService;
 import org.chromium.chrome.browser.signin.SigninHelper;
+import org.chromium.chrome.browser.signin.SigninManager;
 import org.chromium.chrome.test.util.browser.signin.MockChangeEventChecker;
 import org.chromium.chrome.test.util.browser.signin.SigninTestUtil;
 import org.chromium.chrome.test.util.browser.sync.SyncTestUtil;
+import org.chromium.components.sync.AndroidSyncSettings;
 import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.sync.AndroidSyncSettings;
-import org.chromium.sync.signin.ChromeSigninController;
 
 /**
  * Test suite for Sync.
  */
+@RetryOnFailure  // crbug.com/637448
 public class SyncTest extends SyncTestBase {
     private static final String TAG = "SyncTest";
 
     @LargeTest
     @Feature({"Sync"})
     public void testFlushDirectoryDoesntBreakSync() throws Throwable {
-        setUpTestAccountAndSignInToSync();
+        setUpTestAccountAndSignIn();
         final Activity activity = getActivity();
 
         runTestOnUiThread(new Runnable() {
@@ -50,23 +54,55 @@ public class SyncTest extends SyncTestBase {
     @LargeTest
     @Feature({"Sync"})
     public void testSignInAndOut() throws InterruptedException {
-        Account account = setUpTestAccountAndSignInToSync();
+        Account account = setUpTestAccountAndSignIn();
 
         // Signing out should disable sync.
         signOut();
-        SyncTestUtil.verifySyncIsSignedOut(mContext);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         // Signing back in should re-enable sync.
         signIn(account);
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
+        SyncTestUtil.waitForSyncActive();
     }
 
     @LargeTest
     @Feature({"Sync"})
-    public void testRename() throws InterruptedException {
+    public void testStopAndClear() {
+        setUpTestAccountAndSignIn();
+        CriteriaHelper.pollUiThread(
+                new Criteria("Timed out checking that isSignedInOnNative() == true") {
+                    @Override
+                    public boolean isSatisfied() {
+                        return SigninManager.get(mContext).isSignedInOnNative();
+                    }
+                },
+                SyncTestUtil.TIMEOUT_MS, SyncTestUtil.INTERVAL_MS);
+
+        clearServerData();
+
+        // Clearing server data should turn off sync and sign out of chrome.
+        assertNull(SigninTestUtil.getCurrentAccount());
+        assertFalse(SyncTestUtil.isSyncRequested());
+        CriteriaHelper.pollUiThread(
+                new Criteria("Timed out checking that isSignedInOnNative() == false") {
+                    @Override
+                    public boolean isSatisfied() {
+                        return !SigninManager.get(mContext).isSignedInOnNative();
+                    }
+                },
+                SyncTestUtil.TIMEOUT_MS, SyncTestUtil.INTERVAL_MS);
+    }
+
+    /*
+     * @FlakyTest
+     * @LargeTest
+     * @Feature({"Sync"})
+     */
+    @DisabledTest(message = "crbug.com/588050,crbug.com/595893")
+    public void testRename() {
         // The two accounts object that would represent the account rename.
-        final Account oldAccount = setUpTestAccountAndSignInToSync();
-        final Account newAccount = SigninTestUtil.get().addTestAccount("test2@gmail.com");
+        final Account oldAccount = setUpTestAccountAndSignIn();
+        final Account newAccount = SigninTestUtil.addTestAccount("test2@gmail.com");
 
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
             @Override
@@ -76,6 +112,7 @@ public class SyncTest extends SyncTestBase {
                 // real account rename events instead of the mocks.
                 MockChangeEventChecker eventChecker = new MockChangeEventChecker();
                 eventChecker.insertRenameEvent(oldAccount.name, newAccount.name);
+                SigninHelper.resetAccountRenameEventIndex(mContext);
                 SigninHelper.updateAccountRenameData(mContext, eventChecker);
 
                 // Tell the fake content resolver that a rename had happen and copy over the sync
@@ -86,8 +123,9 @@ public class SyncTest extends SyncTestBase {
                 // Inform the AccountTracker, these would normally be done by account validation
                 // or signin. We will only be calling the testing versions of it.
                 AccountIdProvider provider = AccountIdProvider.getInstance();
-                String[] accountNames = {newAccount.name};
-                String[] accountIds = {provider.getAccountId(mContext, accountNames[0])};
+                String[] accountNames = {oldAccount.name, newAccount.name};
+                String[] accountIds = {provider.getAccountId(mContext, accountNames[0]),
+                                       provider.getAccountId(mContext, accountNames[1])};
                 AccountTrackerService.get(mContext).syncForceRefreshForTest(
                         accountIds, accountNames);
 
@@ -97,75 +135,77 @@ public class SyncTest extends SyncTestBase {
             }
         });
 
-        CriteriaHelper.pollForCriteria(new Criteria() {
+        CriteriaHelper.pollInstrumentationThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
-                return newAccount.equals(ChromeSigninController.get(mContext).getSignedInUser());
+                return newAccount.equals(SigninTestUtil.getCurrentAccount());
             }
         });
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, newAccount);
-    }
-
-    @LargeTest
-    @Feature({"Sync"})
-    public void testStopAndStartSync() throws InterruptedException {
-        Account account = setUpTestAccountAndSignInToSync();
-
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
-        stopSync();
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
-        startSyncAndWait();
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
-    }
-
-    @LargeTest
-    @Feature({"Sync"})
-    public void testStopAndStartSyncThroughAndroid() throws InterruptedException {
-        Account account = setUpTestAccountAndSignInToSync();
         SyncTestUtil.waitForSyncActive();
+    }
+
+    @LargeTest
+    @Feature({"Sync"})
+    public void testStopAndStartSync() {
+        Account account = setUpTestAccountAndSignIn();
+
+        stopSync();
+        assertEquals(account, SigninTestUtil.getCurrentAccount());
+        assertFalse(SyncTestUtil.isSyncRequested());
+
+        startSyncAndWait();
+    }
+
+    /*
+     * @LargeTest
+     * @Feature({"Sync"})
+     */
+    @FlakyTest(message = "crbug.com/594558")
+    public void testStopAndStartSyncThroughAndroid() {
+        Account account = setUpTestAccountAndSignIn();
 
         String authority = AndroidSyncSettings.getContractAuthority(mContext);
 
         // Disabling Android sync should turn Chrome sync engine off.
         mSyncContentResolver.setSyncAutomatically(account, authority, false);
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         // Enabling Android sync should turn Chrome sync engine on.
         mSyncContentResolver.setSyncAutomatically(account, authority, true);
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
+        SyncTestUtil.waitForSyncActive();
 
         // Disabling Android's master sync should turn Chrome sync engine off.
         mSyncContentResolver.setMasterSyncAutomatically(false);
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         // Enabling Android's master sync should turn Chrome sync engine on.
         mSyncContentResolver.setMasterSyncAutomatically(true);
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
+        SyncTestUtil.waitForSyncActive();
 
         // Disabling both should definitely turn sync off.
         mSyncContentResolver.setSyncAutomatically(account, authority, false);
         mSyncContentResolver.setMasterSyncAutomatically(false);
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         // Re-enabling master sync should not turn sync back on.
         mSyncContentResolver.setMasterSyncAutomatically(true);
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         // But then re-enabling Chrome sync should.
         mSyncContentResolver.setSyncAutomatically(account, authority, true);
-        SyncTestUtil.verifySyncIsActiveForAccount(mContext, account);
+        SyncTestUtil.waitForSyncActive();
     }
 
     @LargeTest
     @Feature({"Sync"})
-    public void testMasterSyncBlocksSyncStart() throws InterruptedException {
-        Account account = setUpTestAccountAndSignInToSync();
+    public void testMasterSyncBlocksSyncStart() {
+        setUpTestAccountAndSignIn();
         stopSync();
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
 
         mSyncContentResolver.setMasterSyncAutomatically(false);
         startSync();
-        SyncTestUtil.verifySyncIsDisabled(mContext, account);
+        assertFalse(SyncTestUtil.isSyncRequested());
     }
 
     private static ContentViewCore getContentViewCore(ChromeActivity activity) {

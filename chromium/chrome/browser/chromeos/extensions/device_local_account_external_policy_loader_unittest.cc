@@ -5,6 +5,7 @@
 #include "chrome/browser/chromeos/extensions/device_local_account_external_policy_loader.h"
 
 #include <string>
+#include <utility>
 
 #include "base/callback.h"
 #include "base/files/file_util.h"
@@ -14,7 +15,7 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "build/build_config.h"
@@ -24,10 +25,12 @@
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
+#include "components/policy/policy_constants.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/external_install_info.h"
 #include "extensions/browser/external_provider_interface.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/browser/updater/extension_downloader.h"
@@ -38,7 +41,6 @@
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_test_util.h"
-#include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -48,9 +50,13 @@
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #endif  // defined(OS_CHROMEOS)
 
+using ::testing::Field;
 using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
+using ::testing::StrEq;
 using ::testing::_;
+using extensions::ExternalInstallInfoFile;
+using extensions::ExternalInstallInfoUpdateUrl;
 
 namespace chromeos {
 
@@ -70,23 +76,18 @@ class MockExternalPolicyProviderVisitor
   MockExternalPolicyProviderVisitor();
   virtual ~MockExternalPolicyProviderVisitor();
 
-  MOCK_METHOD7(OnExternalExtensionFileFound,
-               bool(const std::string&,
-                    const base::Version*,
-                    const base::FilePath&,
-                    extensions::Manifest::Location,
-                    int,
-                    bool,
-                    bool));
-  MOCK_METHOD6(OnExternalExtensionUpdateUrlFound,
-               bool(const std::string&,
-                    const std::string&,
-                    const GURL&,
-                    extensions::Manifest::Location,
-                    int,
-                    bool));
+  MOCK_METHOD1(OnExternalExtensionFileFound,
+               bool(const ExternalInstallInfoFile&));
+  MOCK_METHOD2(OnExternalExtensionUpdateUrlFound,
+               bool(const ExternalInstallInfoUpdateUrl&, bool));
   MOCK_METHOD1(OnExternalProviderReady,
                void(const extensions::ExternalProviderInterface* provider));
+  MOCK_METHOD4(
+      OnExternalProviderUpdateComplete,
+      void(const extensions::ExternalProviderInterface*,
+           const std::vector<std::unique_ptr<ExternalInstallInfoUpdateUrl>>&,
+           const std::vector<std::unique_ptr<ExternalInstallInfoFile>>&,
+           const std::set<std::string>& removed_extensions));
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockExternalPolicyProviderVisitor);
@@ -120,7 +121,7 @@ class DeviceLocalAccountExternalPolicyLoaderTest : public testing::Test {
 
   scoped_refptr<DeviceLocalAccountExternalPolicyLoader> loader_;
   MockExternalPolicyProviderVisitor visitor_;
-  scoped_ptr<extensions::ExternalProviderImpl> provider_;
+  std::unique_ptr<extensions::ExternalProviderImpl> provider_;
 
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper_;
 
@@ -141,7 +142,7 @@ DeviceLocalAccountExternalPolicyLoaderTest::
 
 void DeviceLocalAccountExternalPolicyLoaderTest::SetUp() {
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-  cache_dir_ = temp_dir_.path().Append(kCacheDir);
+  cache_dir_ = temp_dir_.GetPath().Append(kCacheDir);
   ASSERT_TRUE(base::CreateDirectoryAndGetError(cache_dir_, NULL));
   request_context_getter_ =
       new net::TestURLRequestContextGetter(base::ThreadTaskRunnerHandle::Get());
@@ -168,16 +169,15 @@ void DeviceLocalAccountExternalPolicyLoaderTest::TearDown() {
 void DeviceLocalAccountExternalPolicyLoaderTest::
     VerifyAndResetVisitorCallExpectations() {
   Mock::VerifyAndClearExpectations(&visitor_);
-  EXPECT_CALL(visitor_, OnExternalExtensionFileFound(_, _, _, _, _, _, _))
-      .Times(0);
-  EXPECT_CALL(visitor_, OnExternalExtensionUpdateUrlFound(_, _, _, _, _, _))
-      .Times(0);
+  EXPECT_CALL(visitor_, OnExternalExtensionFileFound(_)).Times(0);
+  EXPECT_CALL(visitor_, OnExternalExtensionUpdateUrlFound(_, _)).Times(0);
   EXPECT_CALL(visitor_, OnExternalProviderReady(_))
       .Times(0);
+  EXPECT_CALL(visitor_, OnExternalProviderUpdateComplete(_, _, _, _)).Times(0);
 }
 
 void DeviceLocalAccountExternalPolicyLoaderTest::SetForceInstallListPolicy() {
-  scoped_ptr<base::ListValue> forcelist(new base::ListValue);
+  std::unique_ptr<base::ListValue> forcelist(new base::ListValue);
   forcelist->AppendString("invalid");
   forcelist->AppendString(base::StringPrintf(
       "%s;%s",
@@ -185,10 +185,8 @@ void DeviceLocalAccountExternalPolicyLoaderTest::SetForceInstallListPolicy() {
       extension_urls::GetWebstoreUpdateUrl().spec().c_str()));
   store_.policy_map_.Set(policy::key::kExtensionInstallForcelist,
                          policy::POLICY_LEVEL_MANDATORY,
-                         policy::POLICY_SCOPE_USER,
-                         policy::POLICY_SOURCE_CLOUD,
-                         forcelist.release(),
-                         NULL);
+                         policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+                         std::move(forcelist), nullptr);
   store_.NotifyStoreLoaded();
 }
 
@@ -203,7 +201,6 @@ TEST_F(DeviceLocalAccountExternalPolicyLoaderTest, CacheNotStarted) {
   loader_->StartLoading();
 
   EXPECT_FALSE(loader_->IsCacheRunning());
-  EXPECT_TRUE(base::MessageLoop::current()->IsIdleForTesting());
 }
 
 // Verifies that the cache can be started and stopped correctly.
@@ -247,7 +244,7 @@ TEST_F(DeviceLocalAccountExternalPolicyLoaderTest, ForceInstallListSet) {
   net::TestURLFetcherFactory factory;
   EXPECT_CALL(visitor_, OnExternalProviderReady(provider_.get()))
       .Times(1);
-  base::MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   // Verify that a downloader has started and is attempting to download an
   // update manifest.
@@ -278,9 +275,9 @@ TEST_F(DeviceLocalAccountExternalPolicyLoaderTest, ForceInstallListSet) {
   // Create a temporary CRX file and return its path to the downloader.
   EXPECT_TRUE(base::CopyFile(
       test_dir_.Append(kExtensionCRXSourceDir).Append(kExtensionCRXFile),
-      temp_dir_.path().Append(kExtensionCRXFile)));
+      temp_dir_.GetPath().Append(kExtensionCRXFile)));
   fetcher->set_response_code(200);
-  fetcher->SetResponseFilePath(temp_dir_.path().Append(kExtensionCRXFile));
+  fetcher->SetResponseFilePath(temp_dir_.GetPath().Append(kExtensionCRXFile));
   fetcher->delegate()->OnURLFetchComplete(fetcher);
 
   // Spin the loop. Verify that the loader announces the presence of a new CRX
@@ -288,14 +285,14 @@ TEST_F(DeviceLocalAccountExternalPolicyLoaderTest, ForceInstallListSet) {
   const base::FilePath cached_crx_path = cache_dir_.Append(base::StringPrintf(
       "%s-%s.crx", kExtensionId, kExtensionCRXVersion));
   base::RunLoop cache_run_loop;
-  EXPECT_CALL(visitor_, OnExternalExtensionFileFound(
-      kExtensionId,
-      _,
-      cached_crx_path,
-      extensions::Manifest::EXTERNAL_POLICY,
-      _,
-      _,
-      _));
+  EXPECT_CALL(
+      visitor_,
+      OnExternalExtensionFileFound(AllOf(
+          Field(&extensions::ExternalInstallInfoFile::extension_id,
+                StrEq(kExtensionId)),
+          Field(&extensions::ExternalInstallInfoFile::path, cached_crx_path),
+          Field(&extensions::ExternalInstallInfoFile::crx_location,
+                extensions::Manifest::EXTERNAL_POLICY))));
   EXPECT_CALL(visitor_, OnExternalProviderReady(provider_.get()))
       .Times(1)
       .WillOnce(InvokeWithoutArgs(&cache_run_loop, &base::RunLoop::Quit));

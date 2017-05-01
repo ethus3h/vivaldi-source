@@ -5,22 +5,26 @@
 package org.chromium.chrome.browser.sync;
 
 import android.accounts.Account;
-import android.test.suitebuilder.annotation.MediumTest;
+import android.support.test.filters.MediumTest;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.test.util.browser.sync.SyncTestUtil;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 
+import java.util.concurrent.Callable;
+
 /**
  * Test suite for the GmsCoreSyncListener.
  */
+@RetryOnFailure  // crbug.com/637448
 public class GmsCoreSyncListenerTest extends SyncTestBase {
     private static final String PASSPHRASE = "passphrase";
 
     static class CountingGmsCoreSyncListener extends GmsCoreSyncListener {
-        private int mCallCount = 0;
+        private int mCallCount;
 
         @Override
         public void updateEncryptionKey(byte[] key) {
@@ -60,7 +64,7 @@ public class GmsCoreSyncListenerTest extends SyncTestBase {
     @MediumTest
     @Feature({"Sync"})
     public void testGetsKey() throws Throwable {
-        Account account = setUpTestAccountAndSignInToSync();
+        Account account = setUpTestAccountAndSignIn();
         assertEquals(0, mListener.callCount());
         encryptWithPassphrase(PASSPHRASE);
         waitForCallCount(1);
@@ -74,17 +78,17 @@ public class GmsCoreSyncListenerTest extends SyncTestBase {
     @MediumTest
     @Feature({"Sync"})
     public void testClearData() throws Throwable {
-        setUpTestAccountAndSignInToSync();
+        setUpTestAccountAndSignIn();
         assertEquals(0, mListener.callCount());
         encryptWithPassphrase(PASSPHRASE);
         waitForCallCount(1);
         clearServerData();
-        startSyncAndWait();
+        setUpTestAccountAndSignIn();
         encryptWithPassphrase(PASSPHRASE);
         waitForCallCount(2);
     }
 
-    private void encryptWithPassphrase(final String passphrase) throws InterruptedException {
+    private void encryptWithPassphrase(final String passphrase) {
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
             @Override
             public void run() {
@@ -96,7 +100,7 @@ public class GmsCoreSyncListenerTest extends SyncTestBase {
         SyncTestUtil.triggerSyncAndWaitForCompletion();
     }
 
-    private void decryptWithPassphrase(final String passphrase) throws InterruptedException {
+    private void decryptWithPassphrase(final String passphrase) {
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
             @Override
             public void run() {
@@ -105,8 +109,8 @@ public class GmsCoreSyncListenerTest extends SyncTestBase {
         });
     }
 
-    private void waitForCryptographer() throws InterruptedException {
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria(
+    private void waitForCryptographer() {
+        CriteriaHelper.pollUiThread(new Criteria(
                 "Timed out waiting for cryptographer to be ready.") {
             @Override
             public boolean isSatisfied() {
@@ -117,13 +121,12 @@ public class GmsCoreSyncListenerTest extends SyncTestBase {
         });
     }
 
-    private void waitForCallCount(final int count) throws InterruptedException {
-        CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+    private void waitForCallCount(int count) {
+        CriteriaHelper.pollUiThread(Criteria.equals(count, new Callable<Integer>() {
             @Override
-            public boolean isSatisfied() {
-                return mListener.callCount() == count;
+            public Integer call() {
+                return mListener.callCount();
             }
-        });
-        assertEquals(count, mListener.callCount());
+        }));
     }
 }

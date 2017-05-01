@@ -14,7 +14,6 @@
 #include "base/i18n/case_conversion.h"
 #include "base/strings/string_util.h"
 #include "net/base/escape.h"
-#include "net/base/net_util.h"
 
 namespace {
 // The maximum number of characters to consider from an URL and page title
@@ -59,10 +58,6 @@ TermMatches DeoverlapMatches(const TermMatches& sorted_matches) {
         return out.empty() ||
                match.offset >= (out.back().offset + out.back().length); });
   return out;
-}
-
-TermMatches SortAndDeoverlapMatches(const TermMatches& matches) {
-  return DeoverlapMatches(SortMatches(matches));
 }
 
 std::vector<size_t> OffsetsFromTermMatches(const TermMatches& matches) {
@@ -156,11 +151,14 @@ Char16Set Char16SetFromString16(const base::string16& term) {
 // HistoryInfoMapValue ---------------------------------------------------------
 
 HistoryInfoMapValue::HistoryInfoMapValue() {}
+HistoryInfoMapValue::HistoryInfoMapValue(const HistoryInfoMapValue& other) =
+    default;
 HistoryInfoMapValue::~HistoryInfoMapValue() {}
 
 // RowWordStarts ---------------------------------------------------------------
 
 RowWordStarts::RowWordStarts() {}
+RowWordStarts::RowWordStarts(const RowWordStarts& other) = default;
 RowWordStarts::~RowWordStarts() {}
 
 void RowWordStarts::Clear() {

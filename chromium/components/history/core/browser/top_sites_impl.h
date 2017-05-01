@@ -73,9 +73,6 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   bool SetPageThumbnail(const GURL& url,
                         const gfx::Image& thumbnail,
                         const ThumbnailScore& score) override;
-  bool SetPageThumbnailToJPEGBytes(const GURL& url,
-                                   const base::RefCountedMemory* memory,
-                                   const ThumbnailScore& score) override;
   void GetMostVisitedURLs(const GetMostVisitedURLsCallback& callback,
                           bool include_forced_urls) override;
   bool GetPageThumbnail(const GURL& url,
@@ -90,9 +87,7 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   void RemoveBlacklistedURL(const GURL& url) override;
   bool IsBlacklisted(const GURL& url) override;
   void ClearBlacklistedURLs() override;
-  base::CancelableTaskTracker::TaskId StartQueryForMostVisited() override;
   bool IsKnownURL(const GURL& url) override;
-  const std::string& GetCanonicalURLString(const GURL& url) const override;
   bool IsNonForcedFull() override;
   bool IsForcedFull() override;
   PrepopulatedPageList GetPrepopulatedPages() override;
@@ -100,6 +95,9 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   bool AddForcedURL(const GURL& url, const base::Time& time) override;
   void OnNavigationCommitted(const GURL& url) override;
   bool HasPageThumbnail(const GURL& url) override;
+
+  // Vivaldi: Remove thumbnail for given url.
+  void RemoveThumbnailForUrl(const GURL& url) override;
 
   // RefcountedKeyedService:
   void ShutdownOnUIThread() override;
@@ -137,6 +135,8 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   typedef std::pair<GURL, Images> TempImage;
   typedef std::list<TempImage> TempImages;
   typedef std::vector<PendingCallback> PendingCallbacks;
+
+  void StartQueryForMostVisited();
 
   // Generates the diff of things that happened between "old" and "new."
   //
@@ -256,6 +256,7 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   // Vivaldi:: Rebuilds the database, removing on free/deleted pages.
   void Vacuum();
   void VacuumOnDBThread();
+  void RemoveThumbnailForUrlOnDBThread(const GURL& url);
 
   // Ensures that non thread-safe methods are called on the correct thread.
   base::ThreadChecker thread_checker_;
@@ -263,12 +264,12 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   scoped_refptr<TopSitesBackend> backend_;
 
   // The top sites data.
-  scoped_ptr<TopSitesCache> cache_;
+  std::unique_ptr<TopSitesCache> cache_;
 
   // Copy of the top sites data that may be accessed on any thread (assuming
   // you hold |lock_|). The data in |thread_safe_cache_| has blacklisted and
   // pinned urls applied (|cache_| does not).
-  scoped_ptr<TopSitesCache> thread_safe_cache_;
+  std::unique_ptr<TopSitesCache> thread_safe_cache_;
 
   // Lock used to access |thread_safe_cache_|.
   mutable base::Lock lock_;

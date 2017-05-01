@@ -16,10 +16,6 @@ namespace blink {
 class WebFrame;
 }
 
-namespace gin {
-class Arguments;
-}
-
 namespace contextual_search {
 
 // Wrapper for injecting Contextual Search JavaScript
@@ -55,7 +51,7 @@ class ContextualSearchWrapper : public gin::Wrappable<ContextualSearchWrapper>,
   bool EnsureServiceConnected();
 
   // The service to notify when API calls are made.
-  ContextualSearchJsApiServicePtr contextual_search_js_api_service_;
+  mojom::ContextualSearchJsApiServicePtr contextual_search_js_api_service_;
 
   DISALLOW_COPY_AND_ASSIGN(ContextualSearchWrapper);
 };

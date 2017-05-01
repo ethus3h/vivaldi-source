@@ -60,7 +60,7 @@ void TokenHandleUtil::DeleteHandle(const AccountId& account_id) {
   const base::DictionaryValue* dict = nullptr;
   if (!user_manager::known_user::FindPrefs(account_id, &dict))
     return;
-  scoped_ptr<base::DictionaryValue> dict_copy(dict->DeepCopy());
+  std::unique_ptr<base::DictionaryValue> dict_copy(dict->DeepCopy());
   dict_copy->Remove(kTokenHandlePref, nullptr);
   dict_copy->Remove(kTokenHandleStatusPref, nullptr);
   user_manager::known_user::UpdatePrefs(account_id, *dict_copy.get(),
@@ -86,16 +86,16 @@ void TokenHandleUtil::CheckToken(const AccountId& account_id,
   }
 
   if (!gaia_client_.get()) {
-    auto request_context =
+    auto* request_context =
         chromeos::ProfileHelper::Get()->GetSigninProfile()->GetRequestContext();
     gaia_client_.reset(new gaia::GaiaOAuthClient(request_context));
   }
 
-  validation_delegates_.set(
-      token, scoped_ptr<TokenDelegate>(new TokenDelegate(
-                 weak_factory_.GetWeakPtr(), account_id, token, callback)));
+  validation_delegates_[token] =
+      std::unique_ptr<TokenDelegate>(new TokenDelegate(
+          weak_factory_.GetWeakPtr(), account_id, token, callback));
   gaia_client_->GetTokenHandleInfo(token, kMaxRetries,
-                                   validation_delegates_.get(token));
+                                   validation_delegates_[token].get());
 }
 
 void TokenHandleUtil::StoreTokenHandle(const AccountId& account_id,
@@ -107,10 +107,6 @@ void TokenHandleUtil::StoreTokenHandle(const AccountId& account_id,
 
 void TokenHandleUtil::OnValidationComplete(const std::string& token) {
   validation_delegates_.erase(token);
-}
-
-void TokenHandleUtil::OnObtainTokenComplete(const AccountId& account_id) {
-  obtain_delegates_.erase(account_id);
 }
 
 TokenHandleUtil::TokenDelegate::TokenDelegate(
@@ -144,7 +140,7 @@ void TokenHandleUtil::TokenDelegate::OnNetworkError(int response_code) {
 }
 
 void TokenHandleUtil::TokenDelegate::OnGetTokenInfoResponse(
-    scoped_ptr<base::DictionaryValue> token_info) {
+    std::unique_ptr<base::DictionaryValue> token_info) {
   TokenHandleStatus outcome = UNKNOWN;
   if (!token_info->HasKey("error")) {
     int expires_in = 0;

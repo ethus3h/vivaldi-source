@@ -31,7 +31,7 @@ class CONTENT_EXPORT WebRtcAudioDeviceNotImpl
   // Only adding very basic support for now without triggering any callback
   // in the webrtc::AudioDeviceObserver interface.
   int64_t TimeUntilNextProcess() override;
-  int32_t Process() override;
+  void Process() override;
 
   // Methods in webrtc::AudioDeviceModule which are not yet implemented.
   // The idea is that we can move methods from this class to the real
@@ -103,7 +103,15 @@ class CONTENT_EXPORT WebRtcAudioDeviceNotImpl
   int32_t SetAGC(bool enable) override;
   bool AGC() const override;
   bool BuiltInAECIsAvailable() const override;
+  bool BuiltInAGCIsAvailable() const override;
+  bool BuiltInNSIsAvailable() const override;
   int32_t EnableBuiltInAEC(bool enable) override;
+  int32_t EnableBuiltInAGC(bool enable) override;
+  int32_t EnableBuiltInNS(bool enable) override;
+#if defined(OS_IOS)
+  int GetPlayoutAudioParameters(AudioParameters* params) const override;
+  int GetRecordAudioParameters(AudioParameters* params) const override;
+#endif  // OS_IOS
 
  protected:
   ~WebRtcAudioDeviceNotImpl() override{};

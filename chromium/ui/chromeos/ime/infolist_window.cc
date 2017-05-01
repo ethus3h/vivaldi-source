@@ -121,14 +121,14 @@ InfolistEntryView::InfolistEntryView(const ui::InfolistEntry& entry,
   title_label_ = new views::Label(entry.title, title_font_list);
   title_label_->SetPosition(gfx::Point(0, 0));
   title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  title_label_->SetBorder(views::Border::CreateEmptyBorder(4, 7, 2, 4));
+  title_label_->SetBorder(views::CreateEmptyBorder(4, 7, 2, 4));
 
   description_label_ = new views::Label(entry.body, description_font_list);
   description_label_->SetPosition(gfx::Point(0, 0));
   description_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   description_label_->SetMultiLine(true);
   description_label_->SizeToFit(kInfolistEntryWidth);
-  description_label_->SetBorder(views::Border::CreateEmptyBorder(2, 17, 4, 4));
+  description_label_->SetBorder(views::CreateEmptyBorder(2, 17, 4, 4));
   AddChildView(title_label_);
   AddChildView(description_label_);
   UpdateBackground();
@@ -155,13 +155,12 @@ void InfolistEntryView::UpdateBackground() {
     set_background(
       views::Background::CreateSolidBackground(GetNativeTheme()->GetSystemColor(
           ui::NativeTheme::kColorId_TextfieldSelectionBackgroundFocused)));
-    SetBorder(views::Border::CreateSolidBorder(
-        1,
-        GetNativeTheme()->GetSystemColor(
-            ui::NativeTheme::kColorId_FocusedBorderColor)));
+    SetBorder(views::CreateSolidBorder(
+        1, GetNativeTheme()->GetSystemColor(
+               ui::NativeTheme::kColorId_FocusedBorderColor)));
   } else {
     set_background(NULL);
-    SetBorder(views::Border::CreateEmptyBorder(1, 1, 1, 1));
+    SetBorder(views::CreateEmptyBorder(1, 1, 1, 1));
   }
   SchedulePaint();
 }
@@ -171,10 +170,11 @@ void InfolistEntryView::UpdateBackground() {
 
 InfolistWindow::InfolistWindow(views::View* candidate_window,
                                const std::vector<ui::InfolistEntry>& entries)
-    : views::BubbleDelegateView(candidate_window, views::BubbleBorder::NONE),
+    : views::BubbleDialogDelegateView(candidate_window,
+                                      views::BubbleBorder::NONE),
       title_font_list_(gfx::Font(kJapaneseFontName, kFontSizeDelta + 15)),
-      description_font_list_(gfx::Font(kJapaneseFontName,
-                                       kFontSizeDelta + 11)) {
+      description_font_list_(
+          gfx::Font(kJapaneseFontName, kFontSizeDelta + 11)) {
   set_can_activate(false);
   set_accept_events(false);
   set_margins(gfx::Insets());
@@ -182,10 +182,9 @@ InfolistWindow::InfolistWindow(views::View* candidate_window,
   set_background(
       views::Background::CreateSolidBackground(GetNativeTheme()->GetSystemColor(
           ui::NativeTheme::kColorId_WindowBackground)));
-  SetBorder(views::Border::CreateSolidBorder(
-      1,
-      GetNativeTheme()->GetSystemColor(
-          ui::NativeTheme::kColorId_MenuBorderColor)));
+  SetBorder(views::CreateSolidBorder(
+      1, GetNativeTheme()->GetSystemColor(
+             ui::NativeTheme::kColorId_MenuBorderColor)));
 
   SetLayoutManager(new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
 
@@ -194,7 +193,7 @@ InfolistWindow::InfolistWindow(views::View* candidate_window,
   caption_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   caption_label->SetEnabledColor(GetNativeTheme()->GetSystemColor(
       ui::NativeTheme::kColorId_LabelEnabledColor));
-  caption_label->SetBorder(views::Border::CreateEmptyBorder(2, 2, 2, 2));
+  caption_label->SetBorder(views::CreateEmptyBorder(2, 2, 2, 2));
   caption_label->set_background(views::Background::CreateSolidBackground(
       color_utils::AlphaBlend(SK_ColorBLACK,
                               GetNativeTheme()->GetSystemColor(
@@ -214,14 +213,14 @@ InfolistWindow::~InfolistWindow() {
 }
 
 void InfolistWindow::InitWidget() {
-  views::Widget* widget = views::BubbleDelegateView::CreateBubble(this);
+  views::Widget* widget = views::BubbleDialogDelegateView::CreateBubble(this);
   wm::SetWindowVisibilityAnimationType(
       widget->GetNativeView(),
       wm::WINDOW_VISIBILITY_ANIMATION_TYPE_FADE);
 
   // BubbleFrameView will be initialized through CreateBubble.
   GetBubbleFrameView()->SetBubbleBorder(
-      scoped_ptr<views::BubbleBorder>(new InfolistBorder()));
+      std::unique_ptr<views::BubbleBorder>(new InfolistBorder()));
   SizeToContents();
 }
 
@@ -277,6 +276,10 @@ void InfolistWindow::HideImmediately() {
 
 const char* InfolistWindow::GetClassName() const {
   return "InfolistWindow";
+}
+
+int InfolistWindow::GetDialogButtons() const {
+  return ui::DIALOG_BUTTON_NONE;
 }
 
 void InfolistWindow::WindowClosing() {

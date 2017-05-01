@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/message_loop/message_loop.h"
-#include "base/threading/sequenced_worker_pool.h"
+#include "base/task_scheduler/post_task.h"
 #include "chrome/common/chrome_utility_messages.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
@@ -22,7 +22,7 @@ using content::UtilityProcessHost;
 namespace {
 
 // Creates the destination zip file only if it does not already exist.
-base::File OpenFileHandleOnBlockingThreadPool(const base::FilePath& zip_path) {
+base::File OpenFileHandleAsync(const base::FilePath& zip_path) {
   return base::File(zip_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
 }
 
@@ -45,10 +45,9 @@ ZipFileCreator::ZipFileCreator(
 void ZipFileCreator::Start() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  base::PostTaskAndReplyWithResult(
-      BrowserThread::GetBlockingPool(),
-      FROM_HERE,
-      base::Bind(&OpenFileHandleOnBlockingThreadPool, dest_file_),
+  base::PostTaskWithTraitsAndReplyWithResult(
+      FROM_HERE, base::TaskTraits().MayBlock(),
+      base::Bind(&OpenFileHandleAsync, dest_file_),
       base::Bind(&ZipFileCreator::OnOpenFileHandle, this));
 }
 
@@ -93,8 +92,7 @@ void ZipFileCreator::StartProcessOnIOThread(base::File dest_file) {
   base::FileDescriptor dest_fd(std::move(dest_file));
 
   UtilityProcessHost* host = UtilityProcessHost::Create(
-      this,
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI).get());
+      this, BrowserThread::GetTaskRunnerForThread(BrowserThread::UI).get());
   host->SetName(
       l10n_util::GetStringUTF16(IDS_UTILITY_PROCESS_ZIP_FILE_CREATOR_NAME));
   host->SetExposedDir(src_dir_);

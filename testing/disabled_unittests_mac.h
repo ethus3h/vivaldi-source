@@ -6,74 +6,56 @@
 //    DISABLE(foo,bar)
 //    DISABLE(foo,baz)
 
-  DISABLE(BrowserTest, BeforeUnloadVsBeforeReload)
-
-  DISABLE(DevToolsSanityTest, TestNetworkSize)
-  DISABLE(DevToolsSanityTest, TestNetworkRawHeadersText)
-
-  DISABLE(DumpAccessibilityTreeTest, AccessibilityInputDate)
   DISABLE(DumpAccessibilityTreeTest, AccessibilityInputTime)
 
-  DISABLE(SearchProviderTest, TestIsSearchProviderInstalled)
-
-  DISABLE(SitePerProcessBrowserTest, FrameOwnerPropertiesPropagationScrolling)
-
-  DISABLE(TabCaptureApiTest, GrantForChromePages)
-
-  DISABLE(WebViewInteractiveTest, NewWindow_WebViewNameTakesPrecedence)
-  DISABLE(WebViewInteractiveTest, NewWindow_Redirect)
-
-  // TODO: Disabled in Vivaldi due to WebKit keyhandling changes
-  DISABLE(WebViewInteractiveTest, PopupPositioningBasic)
-  DISABLE(WebViewInteractiveTest, PopupPositioningMoved)
-  // *******
-
-  // Suspected regressions since v47 (some pre-v47 disablings included, though)
-  DISABLE(AppShimInteractiveTest, Launch)
-  DISABLE(AppShimInteractiveTest, ShowWindow)
-
-  DISABLE(BrowserActionButtonUiTest, AddExtensionWithMenuOpen)
-  DISABLE(BrowserActionButtonUiTest, ContextMenusOnMainAndOverflow)
-  DISABLE(BrowserActionButtonUiTest, TestOverflowContainerLayout)
-
-  DISABLE(BrowserWindowCocoaTest, TestMinimizeState)
-
-  DISABLE(BrowserWindowFullScreenControllerTest, TestActivate)
-  DISABLE(BrowserWindowFullScreenControllerTest, TestFullscreen)
-
-  DISABLE(ConstrainedWindowMacTest, BrowserWindowFullscreen)
-  DISABLE(DevToolsSanityTest, TestNetworkSyncSize)
-  DISABLE(DumpAccessibilityTreeTest, AccessibilityContenteditableDescendants)
-  DISABLE(DumpAccessibilityTreeTest, AccessibilityContenteditableDescendantsWithSelection)
+  //DISABLE(SearchProviderTest, TestIsSearchProviderInstalled)
 
   DISABLE(ExtensionApiTest, Bookmarks)
-  DISABLE(ExtensionApiTest, FocusWindowDoesNotExitFullscreen)
 
+  //DISABLE(ExtensionLoadingTest, RuntimeValidWhileDevToolsOpen)
+
+  //DISABLE(FullscreenControllerTest, PermissionContentSettings)
+
+  //DISABLE_MULTI(NativeAppWindowCocoaBrowserTest, Minimize)
+  //DISABLE_MULTI(NativeAppWindowCocoaBrowserTest, MinimizeMaximize)
+
+  //DISABLE(PlatformAppBrowserTest, WindowsApiProperties)
+
+  //DISABLE(SpeechViewTest, ClickMicButton)
+
+  // Broke in v52
+  DISABLE(BrowserWindowControllerTest, FullscreenResizeFlags)
   DISABLE(ExtensionInstallUIBrowserTest, TestInstallThemeInFullScreen)
+  DISABLE(FullscreenControllerTest, FullscreenOnFileURL)
 
-  DISABLE(FullscreenControllerTest, PermissionContentSettings)
+  // Broke in v53
+  DISABLE(BrowserWindowControllerTest,
+          FullscreenToolbarExposedForTabstripChanges)
 
-  DISABLE(MediaScanManagerTest, MergeRedundantVerifyNoOvercount)
-  DISABLE(MediaScanManagerTest, SingleResult)
+  //DISABLE(ExtensionWindowCreateTest,AcceptState)
+  DISABLE_MULTI(SavePageOriginalVsSavedComparisonTest, ObjectElementsViaFile)
 
-  DISABLE_MULTI(NativeAppWindowCocoaBrowserTest, Minimize)
-  DISABLE_MULTI(NativeAppWindowCocoaBrowserTest, MinimizeMaximize)
+  // Broke in v55
+  DISABLE(ServiceProcessControlBrowserTest, LaunchAndReconnect)
+  DISABLE(FindBarBrowserTest, EscapeKey)
 
-  DISABLE(PlatformAppBrowserTest, WindowsApiProperties)
+  // Broke in v56
+  DISABLE(WebstoreInlineInstallerTest,
+          BlockInlineInstallFromFullscreenForBrowser)
+  DISABLE(WebstoreInlineInstallerTest, BlockInlineInstallFromFullscreenForTab)
 
-  DISABLE(PolicyTest, Disable3DAPIs)
+  // Broke due to features::kNativeNotifications being enabled by us
+  DISABLE_ALL(NotificationsTest)
+  DISABLE(PlatformNotificationServiceTest, DisplayPageNotificationMatches)
+  DISABLE(PlatformNotificationServiceTest, DisplayPersistentNotificationMatches)
+  DISABLE(PlatformNotificationServiceTest, PersistentNotificationDisplay)
 
-  DISABLE(PrerenderBrowserTest, PrerenderExcessiveMemory)
+  // Flaky in v56?
+  //DISABLE(AppShimMenuControllerUITest, WindowCycling)
 
-  DISABLE(ProfileListDesktopBrowserTest, SignOut)
-
-  DISABLE(ScreenCaptureNotificationUICocoaTest, MinimizeWindow)
-  DISABLE(ServiceProcessControlMac, TestGTMSMJobSubmitRemove)
-
-  DISABLE(ShowAppListNonDefaultInteractiveTest, ShowAppListNonDefaultProfile)
-
-  DISABLE(SpinnerViewTest, StopAnimationOnMiniaturize)
-  DISABLE(SpriteViewTest, StopAnimationOnMiniaturize)
-
-  DISABLE(StackedPanelBrowserTest, AddNewPanelNotWithSystemMinimizedDetachedPanel)
-  DISABLE(StackedPanelBrowserTest, AddNewPanelNotWithSystemMinimizedStack)
+  // Broke in v57
+  DISABLE(BrowserWindowControllerTest,
+          FullscreenToolbarIsVisibleAccordingToPrefs)
+  DISABLE(SessionRestoreTest, TabWithDownloadDoesNotGetRestored)
+  DISABLE(SBNavigationObserverBrowserTest,
+          DownloadViaHTML5FileApiWithUserGesture)

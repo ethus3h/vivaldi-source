@@ -28,71 +28,32 @@
 
 #include "core/CoreExport.h"
 #include "core/events/EventDispatcher.h"
-#include "core/events/MouseRelatedEvent.h"
-#include "platform/PlatformGestureEvent.h"
+#include "core/events/UIEventWithKeyState.h"
+#include "public/platform/WebGestureEvent.h"
 
 namespace blink {
 
-enum GestureSource {
-    GestureSourceUninitialized,
-    GestureSourceTouchpad,
-    GestureSourceTouchscreen
-};
+class CORE_EXPORT GestureEvent final : public UIEventWithKeyState {
+ public:
+  static GestureEvent* create(AbstractView*, const WebGestureEvent&);
+  ~GestureEvent() override {}
 
-class CORE_EXPORT GestureEvent final : public MouseRelatedEvent {
-public:
-    ~GestureEvent() override { }
+  bool isGestureEvent() const override;
 
-    static PassRefPtrWillBeRawPtr<GestureEvent> create(PassRefPtrWillBeRawPtr<AbstractView>, const PlatformGestureEvent&);
+  const AtomicString& interfaceName() const override;
 
-    bool isGestureEvent() const override;
+  const WebGestureEvent& nativeEvent() const { return m_nativeEvent; }
 
-    const AtomicString& interfaceName() const override;
+  DECLARE_VIRTUAL_TRACE();
 
-    float deltaX() const { return m_deltaX; }
-    float deltaY() const { return m_deltaY; }
-    float velocityX() const { return m_velocityX; }
-    float velocityY() const { return m_velocityY; }
-    bool inertial() const { return m_inertial; }
+ private:
+  GestureEvent(const AtomicString&, AbstractView*, const WebGestureEvent&);
 
-    GestureSource source() const { return m_source; }
-    int resendingPluginId() const { return m_resendingPluginId; }
-
-    PassRefPtrWillBeRawPtr<EventDispatchMediator> createMediator() override;
-
-    DECLARE_VIRTUAL_TRACE();
-
-private:
-    GestureEvent();
-    GestureEvent(const AtomicString& type, PassRefPtrWillBeRawPtr<AbstractView>, int screenX, int screenY, int clientX, int clientY, PlatformEvent::Modifiers, float deltaX, float deltaY, float velocityX, float velocityY, bool inertial, double platformTimeStamp, int resendingPluginId, GestureSource);
-
-    float m_deltaX;
-    float m_deltaY;
-    float m_velocityX;
-    float m_velocityY;
-    bool m_inertial;
-
-    GestureSource m_source;
-    int m_resendingPluginId;
-};
-
-class GestureEventDispatchMediator final : public EventDispatchMediator {
-public:
-    static PassRefPtrWillBeRawPtr<GestureEventDispatchMediator> create(PassRefPtrWillBeRawPtr<GestureEvent> gestureEvent)
-    {
-        return adoptRefWillBeNoop(new GestureEventDispatchMediator(gestureEvent));
-    }
-
-private:
-    explicit GestureEventDispatchMediator(PassRefPtrWillBeRawPtr<GestureEvent>);
-
-    GestureEvent& event() const;
-
-    bool dispatchEvent(EventDispatcher&) const override;
+  WebGestureEvent m_nativeEvent;
 };
 
 DEFINE_EVENT_TYPE_CASTS(GestureEvent);
 
-} // namespace blink
+}  // namespace blink
 
-#endif // GestureEvent_h
+#endif  // GestureEvent_h

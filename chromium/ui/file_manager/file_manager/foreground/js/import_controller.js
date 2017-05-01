@@ -71,6 +71,13 @@ importer.ImportController =
    */
   this.lastActivityState_ = importer.ActivityState.HIDDEN;
 
+  /**
+   * Whether the window was opened by plugging a media device and user hadn't
+   * navigated to other directories.
+   * @private {boolean}
+   */
+  this.isRightAfterPluggingMedia_ = false;
+
   var listener = this.onScanEvent_.bind(this);
   this.scanner_.addObserver(listener);
   // Remove the observer when the foreground window is closed.
@@ -163,16 +170,12 @@ importer.ImportController.prototype.onVolumeUnmounted_ = function(volumeId) {
  * @private
  */
 importer.ImportController.prototype.onDirectoryChanged_ = function(event) {
-  if (!event.previousDirEntry &&
-      event.newDirEntry &&
-      importer.isMediaDirectory(event.newDirEntry, this.environment_)) {
-    this.commandWidget_.setDetailsVisible(true);
-  }
+  this.isRightAfterPluggingMedia_ = !event.previousDirEntry;
 
   this.scanManager_.reset();
   if (this.isCurrentDirectoryScannable_()) {
     this.checkState_(
-        this.scanManager_.getDirectoryScan());
+        this.scanManager_.getDirectoryScan(importer.ScanMode.HISTORY));
   } else {
     this.checkState_();
   }
@@ -199,7 +202,7 @@ importer.ImportController.prototype.onSelectionChanged_ = function() {
   if (this.environment_.getSelection().length === 0 &&
       this.isCurrentDirectoryScannable_()) {
     this.checkState_(
-        this.scanManager_.getDirectoryScan());
+        this.scanManager_.getDirectoryScan(importer.ScanMode.HISTORY));
   } else {
     this.checkState_();
   }
@@ -223,7 +226,7 @@ importer.ImportController.prototype.onScanInvalidated_ = function() {
   if (this.environment_.getSelection().length === 0 &&
       this.isCurrentDirectoryScannable_()) {
     this.checkState_(
-        this.scanManager_.getDirectoryScan());
+        this.scanManager_.getDirectoryScan(importer.ScanMode.HISTORY));
   } else {
     this.checkState_();
   }
@@ -279,13 +282,12 @@ importer.ImportController.prototype.onClick_ =
 };
 
 /**
- * Executes import against the current directory. Should only
- * be called when the current directory has been validated
- * by calling "update" on this class.
+ * Executes import against the current context. Should only be called
+ * after the current context has been validated by a scan.
  *
  * @private
  */
-importer.ImportController.prototype.execute_ = function() {
+importer.ImportController.prototype.startImportTask_ = function() {
   console.assert(!this.activeImport_,
       'Cannot execute while an import task is already active.');
 
@@ -305,6 +307,17 @@ importer.ImportController.prototype.execute_ = function() {
   };
   var taskFinished = this.onImportFinished_.bind(this, importTask);
   importTask.whenFinished.then(taskFinished).catch(taskFinished);
+}
+
+/**
+ * Executes import against the current context. Should only be called
+ * when user clicked an import button after the current context has
+ * been validated by a scan.
+ *
+ * @private
+ */
+importer.ImportController.prototype.execute_ = function() {
+  this.startImportTask_();
   this.checkState_();
 };
 
@@ -354,7 +367,7 @@ importer.ImportController.prototype.checkState_ = function(opt_scan) {
     // NOTE, that tryScan_ lazily initializes scans...so if
     // no scan is returned, no scan is possible for the
     // current context.
-    var scan = this.tryScan_();
+    var scan = this.tryScan_(importer.ScanMode.HISTORY);
     // If no scan is created, then no scan is possible in
     // the current context...so hide the UI.
     if (!scan) {
@@ -372,7 +385,15 @@ importer.ImportController.prototype.checkState_ = function(opt_scan) {
   }
 
   if (opt_scan.getFileEntries().length === 0) {
-    this.updateUi_(importer.ActivityState.NO_MEDIA);
+    if (opt_scan.getDuplicateFileEntries().length === 0) {
+      this.updateUi_(importer.ActivityState.NO_MEDIA);
+      return;
+    }
+    // Some scanned files found already exist in Drive.
+    // It means those files weren't marked as already backed up but need to be.
+    // Trigger sync for that purpose, but no files will actually be copied.
+    this.startImportTask_();
+    this.updateUi_(importer.ActivityState.IMPORTING, this.activeImport_.scan);
     return;
   }
 
@@ -390,6 +411,10 @@ importer.ImportController.prototype.checkState_ = function(opt_scan) {
         this.updateUi_(
             importer.ActivityState.READY,  // to import...
             opt_scan);
+        if (this.isRightAfterPluggingMedia_) {
+          this.isRightAfterPluggingMedia_ = false;
+          this.commandWidget_.setDetailsVisible(true);
+        }
       }.bind(this))
       .catch(importer.getLogger().catcher('import-controller-check-state'));
 };
@@ -438,19 +463,20 @@ importer.ImportController.prototype.fitsInAvailableSpace_ =
 /**
  * Attempts to scan the current context.
  *
+ * @param {importer.ScanMode} mode How to detect new files.
  * @return {importer.ScanResult} A scan object,
  *     or null if scan is not possible in current context.
  * @private
  */
-importer.ImportController.prototype.tryScan_ = function() {
+importer.ImportController.prototype.tryScan_ = function(mode) {
   var entries = this.environment_.getSelection();
   if (entries.length) {
     if (entries.every(
         importer.isEligibleEntry.bind(null, this.environment_))) {
-      return this.scanManager_.getSelectionScan(entries);
+      return this.scanManager_.getSelectionScan(entries, mode);
     }
   } else if (this.isCurrentDirectoryScannable_()) {
-    return this.scanManager_.getDirectoryScan();
+    return this.scanManager_.getDirectoryScan(mode);
   }
 
   return null;
@@ -516,7 +542,8 @@ importer.ClickSource = {
 importer.RuntimeCommandWidget = function() {
 
   /** @private {HTMLElement} */
-  this.detailsPanel_ = document.getElementById('cloud-import-details');
+  this.detailsPanel_ = /** @type {HTMLElement} */(
+      document.getElementById('cloud-import-details'));
   this.detailsPanel_.addEventListener(
       'transitionend',
       this.onDetailsTransitionEnd_.bind(this),
@@ -596,6 +623,10 @@ importer.RuntimeCommandWidget = function() {
   this.clickListener_;
 
   document.addEventListener('keydown', this.onKeyDown_.bind(this));
+
+  /** @private{number} */
+  this.cloudImportButtonTabIndex_ =
+      document.querySelector('button#cloud-import-button').tabIndex;
 };
 
 /**
@@ -604,8 +635,8 @@ importer.RuntimeCommandWidget = function() {
  * @private
  */
 importer.RuntimeCommandWidget.prototype.onKeyDown_ = function(event) {
-  switch (util.getKeyModifiers(event) + event.keyIdentifier) {
-    case 'U+001B':
+  switch (util.getKeyModifiers(event) + event.key) {
+    case 'Escape':
       this.setDetailsVisible(false);
   }
 };
@@ -745,6 +776,19 @@ importer.RuntimeCommandWidget.prototype.onDetailsFocusLost_ =
   this.setDetailsVisible(false);
 };
 
+/**
+ * Overwrites the tabIndexes of all anchors under the given element.
+ *
+ * @param {Element} root The root node of all nodes to process.
+ * @param {number} newTabIndex The tabindex value to be given to <a> elements.
+ * @private
+ */
+importer.RuntimeCommandWidget.prototype.updateTabindexOfAnchors_ =
+    function(root, newTabIndex) {
+  var anchors = root.querySelectorAll('a');
+  anchors.forEach(element => { element.tabIndex = newTabIndex; });
+};
+
 /** @override */
 importer.RuntimeCommandWidget.prototype.update =
     function(activityState, opt_scan) {
@@ -754,8 +798,8 @@ importer.RuntimeCommandWidget.prototype.update =
 
       this.comboButton_.hidden = true;
 
-      this.toolbarIcon_.setAttribute('icon', 'cloud-off');
-      this.statusIcon_.setAttribute('icon', 'cloud-off');
+      this.toolbarIcon_.setAttribute('icon', 'files:cloud-off');
+      this.statusIcon_.setAttribute('icon', 'files:cloud-off');
 
       break;
 
@@ -775,8 +819,8 @@ importer.RuntimeCommandWidget.prototype.update =
       this.cancelButton_.hidden = false;
       this.progressContainer_.hidden = true;
 
-      this.toolbarIcon_.setAttribute('icon', 'autorenew');
-      this.statusIcon_.setAttribute('icon', 'autorenew');
+      this.toolbarIcon_.setAttribute('icon', 'files:autorenew');
+      this.statusIcon_.setAttribute('icon', 'files:autorenew');
 
       break;
 
@@ -794,8 +838,8 @@ importer.RuntimeCommandWidget.prototype.update =
       this.cancelButton_.hidden = true;
       this.progressContainer_.hidden = true;
 
-      this.toolbarIcon_.setAttribute('icon', 'cloud-off');
-      this.statusIcon_.setAttribute('icon', 'image:photo');
+      this.toolbarIcon_.setAttribute('icon', 'files:cloud-off');
+      this.statusIcon_.setAttribute('icon', 'files:photo');
       break;
 
     case importer.ActivityState.NO_MEDIA:
@@ -809,8 +853,8 @@ importer.RuntimeCommandWidget.prototype.update =
       this.cancelButton_.hidden = true;
       this.progressContainer_.hidden = true;
 
-      this.toolbarIcon_.setAttribute('icon', 'cloud-done');
-      this.statusIcon_.setAttribute('icon', 'cloud-done');
+      this.toolbarIcon_.setAttribute('icon', 'files:cloud-done');
+      this.statusIcon_.setAttribute('icon', 'files:cloud-done');
       break;
 
     case importer.ActivityState.READY:
@@ -828,8 +872,8 @@ importer.RuntimeCommandWidget.prototype.update =
       this.cancelButton_.hidden = true;
       this.progressContainer_.hidden = true;
 
-      this.toolbarIcon_.setAttribute('icon', 'cloud-upload');
-      this.statusIcon_.setAttribute('icon', 'image:photo');
+      this.toolbarIcon_.setAttribute('icon', 'files:cloud-upload');
+      this.statusIcon_.setAttribute('icon', 'files:photo');
       break;
 
     case importer.ActivityState.SCANNING:
@@ -850,13 +894,17 @@ importer.RuntimeCommandWidget.prototype.update =
       var stats = opt_scan.getStatistics();
       this.progressBar_.style.width = stats.progress + '%';
 
-      this.toolbarIcon_.setAttribute('icon', 'autorenew');
-      this.statusIcon_.setAttribute('icon', 'autorenew');
+      this.toolbarIcon_.setAttribute('icon', 'files:autorenew');
+      this.statusIcon_.setAttribute('icon', 'files:autorenew');
       break;
 
     default:
       assertNotReached('Unrecognized response id: ' + activityState);
   }
+  // Make all anchors synthesized from the localized text focusable.
+  if (this.cloudImportButtonTabIndex_)
+    this.updateTabindexOfAnchors_(this.statusContent_,
+                                  this.cloudImportButtonTabIndex_);
 };
 
 /**
@@ -948,27 +996,29 @@ importer.ScanManager.prototype.isActiveScan = function(scan) {
  * selection.
  *
  * @param {!Array<!FileEntry>} entries
+ * @param {!importer.ScanMode} mode
  *
  * @return {!importer.ScanResult}
  */
-importer.ScanManager.prototype.getSelectionScan = function(entries) {
+importer.ScanManager.prototype.getSelectionScan = function(entries, mode) {
   console.assert(!this.selectionScan_,
       'Cannot create new selection scan with another in the cache.');
-  this.selectionScan_ = this.scanner_.scanFiles(entries);
+  this.selectionScan_ = this.scanner_.scanFiles(entries, mode);
   return this.selectionScan_;
 };
 
 /**
  * Returns a scan for the directory.
  *
+ * @param {!importer.ScanMode} mode
  * @return {importer.ScanResult}
  */
-importer.ScanManager.prototype.getDirectoryScan = function() {
+importer.ScanManager.prototype.getDirectoryScan = function(mode) {
   if (!this.directoryScan_) {
     var directory = this.environment_.getCurrentDirectory();
     if (directory) {
       this.directoryScan_ = this.scanner_.scanDirectory(
-          /** @type {!DirectoryEntry} */ (directory));
+          /** @type {!DirectoryEntry} */ (directory), mode);
     }
   }
   return this.directoryScan_;
@@ -1182,7 +1232,7 @@ importer.RuntimeControllerEnvironment.prototype.addDirectoryChangedListener =
 importer.RuntimeControllerEnvironment.prototype.addSelectionChangedListener =
     function(listener) {
   this.selectionHandler_.addEventListener(
-      FileSelectionHandler.EventType.CHANGE,
+      FileSelectionHandler.EventType.CHANGE_THROTTLED,
       listener);
 };
 

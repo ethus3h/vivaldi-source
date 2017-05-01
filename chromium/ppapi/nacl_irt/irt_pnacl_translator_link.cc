@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/macros.h"
+#include "base/run_loop.h"
 #include "build/build_config.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sync_channel.h"
@@ -63,7 +64,7 @@ class TranslatorLinkListener : public IPC::Listener {
     Send(reply_msg);
   }
 
-  scoped_ptr<IPC::Channel> channel_;
+  std::unique_ptr<IPC::Channel> channel_;
   CallbackFunc func_;
 
   DISALLOW_COPY_AND_ASSIGN(TranslatorLinkListener);
@@ -71,10 +72,8 @@ class TranslatorLinkListener : public IPC::Listener {
 
 void ServeLinkRequest(CallbackFunc func) {
   base::MessageLoop loop;
-  int fd = ppapi::GetRendererIPCFileDescriptor();
-  IPC::ChannelHandle handle("NaCl IPC", base::FileDescriptor(fd, false));
-  new TranslatorLinkListener(handle, func);
-  loop.Run();
+  new TranslatorLinkListener(ppapi::GetRendererIPCChannelHandle(), func);
+  base::RunLoop().Run();
 }
 
 }

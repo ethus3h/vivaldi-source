@@ -35,6 +35,7 @@ enum TapMultipleTargetsStrategy {
 
 struct CONTENT_EXPORT RendererPreferences {
   RendererPreferences();
+  RendererPreferences(const RendererPreferences& other);
   ~RendererPreferences();
 
   // Whether the renderer's current browser context accept drops from the OS
@@ -112,8 +113,10 @@ struct CONTENT_EXPORT RendererPreferences {
   // in webrtc_ip_handling_policy.h.
   std::string webrtc_ip_handling_policy;
 
-  // Default page zoom level.
-  double default_zoom_level;
+  // This is the range of UDP ports allowed to be used by WebRTC. A value of
+  // zero in both fields means all ports are allowed.
+  uint16_t webrtc_udp_min_port;
+  uint16_t webrtc_udp_max_port;
 
   // The user agent given to WebKit when it requests one and the user agent is
   // being overridden for the current navigation.
@@ -144,12 +147,12 @@ struct CONTENT_EXPORT RendererPreferences {
   // encrypted video.  Currently only used by Android.
   bool use_video_overlay_for_embedded_encrypted_video;
 
-  // Use video-overlay (hole-punching) should be used for all video, not just
-  // encrypted video.  Currently only used by Android.
-  bool use_view_overlay_for_all_video;
-
   // Country iso of the mobile network for content detection purpose.
   std::string network_contry_iso;
+
+#if defined(OS_LINUX)
+  std::string system_font_family_name;
+#endif
 
 #if defined(OS_WIN)
   // The default system font settings for caption, small caption, menu and

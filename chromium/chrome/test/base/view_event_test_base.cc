@@ -8,7 +8,7 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/test/base/chrome_unit_test_suite.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -31,6 +31,12 @@ class TestView : public views::View {
   }
 
   void Layout() override {
+    // Permit a test to remove the view being tested from the hierarchy, then
+    // still handle a _NET_WM_STATE event on Linux during teardown that triggers
+    // layout.
+    if (!has_children())
+      return;
+
     View* child_view = child_at(0);
     child_view->SetBounds(0, 0, width(), height());
   }
@@ -68,12 +74,17 @@ void ViewEventTestBase::SetUp() {
 
   // The ContextFactory must exist before any Compositors are created.
   bool enable_pixel_output = false;
-  ui::ContextFactory* context_factory =
-      ui::InitializeContextFactoryForTests(enable_pixel_output);
+  ui::ContextFactory* context_factory = nullptr;
+  ui::ContextFactoryPrivate* context_factory_private = nullptr;
+
+  ui::InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
+                                       &context_factory_private);
   views_delegate_.set_context_factory(context_factory);
+  views_delegate_.set_context_factory_private(context_factory_private);
   views_delegate_.set_use_desktop_native_widgets(true);
 
-  platform_part_.reset(ViewEventTestPlatformPart::Create(context_factory));
+  platform_part_.reset(ViewEventTestPlatformPart::Create(
+      context_factory, context_factory_private));
   gfx::NativeWindow context = platform_part_->GetContext();
   window_ = views::Widget::CreateWindowWithContext(this, context);
   window_->Show();

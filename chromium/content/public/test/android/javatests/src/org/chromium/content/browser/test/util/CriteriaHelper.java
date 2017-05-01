@@ -26,13 +26,16 @@ import java.util.concurrent.Callable;
  * <pre>
  * Sample Usage:
  * <code>
- * public void waitForTabTitle(final Tab tab, final String title) {
- *     CriteriaHelper.pollForUIThreadCriteria(new Criteria() {
+ * public void waitForTabFullyLoaded(final Tab tab) {
+ *     CriteriaHelper.pollUiThread(new Criteria() {
  *         {@literal @}Override
- *         public boolean isSatisified() {
- *             updateFailureReason("Tab title did not match -- expected: " + title
- *                     + ", actual: " + tab.getTitle());
- *             return TextUtils.equals(tab.getTitle(), title);
+ *         public boolean isSatisfied() {
+ *             if (tab.getWebContents() == null) {
+ *                 updateFailureReason("Tab has no web contents");
+ *                 return false;
+ *             }
+ *             updateFailureReason("Tab not fully loaded");
+ *             return tab.isLoading();
  *         }
  *     });
  * }
@@ -49,18 +52,28 @@ public class CriteriaHelper {
     /**
      * Checks whether the given Criteria is satisfied at a given interval, until either
      * the criteria is satisfied, or the specified maxTimeoutMs number of ms has elapsed.
+     *
+     * <p>
+     * This evaluates the Criteria on the Instrumentation thread, which more often than not is not
+     * correct in an InstrumentationTest. Use
+     * {@link #pollUiThread(Criteria, long, long)} instead.
+     *
      * @param criteria The Criteria that will be checked.
      * @param maxTimeoutMs The maximum number of ms that this check will be performed for
-     * before timeout.
+     *                     before timeout.
      * @param checkIntervalMs The number of ms between checks.
-     * @throws InterruptedException
      */
-    public static void pollForCriteria(Criteria criteria, long maxTimeoutMs,
-            long checkIntervalMs) throws InterruptedException {
+    public static void pollInstrumentationThread(Criteria criteria, long maxTimeoutMs,
+            long checkIntervalMs) {
         boolean isSatisfied = criteria.isSatisfied();
         long startTime = SystemClock.uptimeMillis();
         while (!isSatisfied && SystemClock.uptimeMillis() - startTime < maxTimeoutMs) {
-            Thread.sleep(checkIntervalMs);
+            try {
+                Thread.sleep(checkIntervalMs);
+            } catch (InterruptedException e) {
+                // Catch the InterruptedException. If the exception occurs before maxTimeoutMs
+                // and the criteria is not satisfied, the while loop will run again.
+            }
             isSatisfied = criteria.isSatisfied();
         }
         Assert.assertTrue(criteria.getFailureReason(), isSatisfied);
@@ -69,12 +82,16 @@ public class CriteriaHelper {
     /**
      * Checks whether the given Criteria is satisfied polling at a default interval.
      *
+     * <p>
+     * This evaluates the Criteria on the test thread, which more often than not is not correct
+     * in an InstrumentationTest.  Use {@link #pollUiThread(Criteria)} instead.
+     *
      * @param criteria The Criteria that will be checked.
-     * @throws InterruptedException
-     * @see #pollForCriteria(Criteria, long, long)
+     *
+     * @see #pollInstrumentationThread(Criteria, long, long)
      */
-    public static void pollForCriteria(Criteria criteria) throws InterruptedException {
-        pollForCriteria(criteria, DEFAULT_MAX_TIME_TO_POLL, DEFAULT_POLLING_INTERVAL);
+    public static void pollInstrumentationThread(Criteria criteria) {
+        pollInstrumentationThread(criteria, DEFAULT_MAX_TIME_TO_POLL, DEFAULT_POLLING_INTERVAL);
     }
 
     /**
@@ -83,13 +100,13 @@ public class CriteriaHelper {
      *
      * @param criteria The Criteria that will be checked.
      * @param maxTimeoutMs The maximum number of ms that this check will be performed for
-     * before timeout.
+     *                     before timeout.
      * @param checkIntervalMs The number of ms between checks.
-     * @throws InterruptedException
-     * @see #pollForCriteria(Criteria)
+     *
+     * @see #pollInstrumentationThread(Criteria)
      */
-    public static void pollForUIThreadCriteria(final Criteria criteria, long maxTimeoutMs,
-            long checkIntervalMs) throws InterruptedException {
+    public static void pollUiThread(final Criteria criteria, long maxTimeoutMs,
+            long checkIntervalMs) {
         final Callable<Boolean> callable = new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
@@ -97,7 +114,7 @@ public class CriteriaHelper {
             }
         };
 
-        pollForCriteria(new Criteria() {
+        pollInstrumentationThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 return ThreadUtils.runOnUiThreadBlockingNoException(callable);
@@ -114,11 +131,10 @@ public class CriteriaHelper {
      * Checks whether the given Criteria is satisfied polling at a default interval on the UI
      * thread.
      * @param criteria The Criteria that will be checked.
-     * @throws InterruptedException
-     * @see #pollForCriteria(Criteria)
+     *
+     * @see #pollInstrumentationThread(Criteria)
      */
-    public static void pollForUIThreadCriteria(final Criteria criteria)
-            throws InterruptedException {
-        pollForUIThreadCriteria(criteria, DEFAULT_MAX_TIME_TO_POLL, DEFAULT_POLLING_INTERVAL);
+    public static void pollUiThread(final Criteria criteria) {
+        pollUiThread(criteria, DEFAULT_MAX_TIME_TO_POLL, DEFAULT_POLLING_INTERVAL);
     }
 }

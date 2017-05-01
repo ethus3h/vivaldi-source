@@ -45,11 +45,12 @@
 #include "app/vivaldi_apptools.h"
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 
@@ -89,7 +90,6 @@ ExtensionHost::ExtensionHost(const Extension* extension,
   // recreating.
   if (vivaldi::IsVivaldiRunning() &&
       extension_host_type_ == VIEW_TYPE_EXTENSION_BACKGROUND_PAGE) {
-
     auto guest_view_manager =
         guest_view::GuestViewManager::FromBrowserContext(browser_context_);
     if (!guest_view_manager) {
@@ -100,16 +100,18 @@ ExtensionHost::ExtensionHost(const Extension* extension,
     }
 
     if (guest_view_manager) {
-      WebContents::CreateParams r =
-          WebContents::CreateParams(browser_context_, site_instance);
-      r.initially_hidden = true;
+      WebContents::CreateParams guest_create_params =
+          WebContents::CreateParams(browser_context_);
 
-      guest_owner_contents_.reset(WebContents::Create(r));
-      content::WebContents *t =
+      guest_owner_contents_.reset(WebContents::Create(guest_create_params));
+      content::WebContents* guest_content =
           guest_view_manager->CreateGuestWithWebContentsParams(
-              WebViewGuest::Type, guest_owner_contents_.get(), create_params);
-      // TODO: Should remove the webview tag so it does not show in taskmanager
-      create_params.guest_delegate = WebViewGuest::FromWebContents(t);
+              WebViewGuest::Type, guest_owner_contents_.get(),
+              guest_create_params);
+      // We don't need to clutter the taskmanager with this.
+      task_manager::WebContentsTags::ClearTag(guest_content);
+      auto guest = WebViewGuest::FromWebContents(guest_content);
+      create_params.guest_delegate = guest;
     }
   }
 
@@ -146,11 +148,10 @@ ExtensionHost::~ExtensionHost() {
       extensions::NOTIFICATION_EXTENSION_HOST_DESTROYED,
       content::Source<BrowserContext>(browser_context_),
       content::Details<ExtensionHost>(this));
-  FOR_EACH_OBSERVER(ExtensionHostObserver, observer_list_,
-                    OnExtensionHostDestroyed(this));
-  FOR_EACH_OBSERVER(DeferredStartRenderHostObserver,
-                    deferred_start_render_host_observer_list_,
-                    OnDeferredStartRenderHostDestroyed(this));
+  for (auto& observer : observer_list_)
+    observer.OnExtensionHostDestroyed(this);
+  for (auto& observer : deferred_start_render_host_observer_list_)
+    observer.OnDeferredStartRenderHostDestroyed(this);
 
   // Remove ourselves from the queue as late as possible (before effectively
   // destroying self, but after everything else) so that queues that are
@@ -269,18 +270,18 @@ void ExtensionHost::OnBackgroundEventDispatched(const std::string& event_name,
                                                 int event_id) {
   CHECK(IsBackgroundPage());
   unacked_messages_.insert(event_id);
-  FOR_EACH_OBSERVER(ExtensionHostObserver, observer_list_,
-                    OnBackgroundEventDispatched(this, event_name, event_id));
+  for (auto& observer : observer_list_)
+    observer.OnBackgroundEventDispatched(this, event_name, event_id);
 }
 
 void ExtensionHost::OnNetworkRequestStarted(uint64_t request_id) {
-  FOR_EACH_OBSERVER(ExtensionHostObserver, observer_list_,
-                    OnNetworkRequestStarted(this, request_id));
+  for (auto& observer : observer_list_)
+    observer.OnNetworkRequestStarted(this, request_id);
 }
 
 void ExtensionHost::OnNetworkRequestDone(uint64_t request_id) {
-  FOR_EACH_OBSERVER(ExtensionHostObserver, observer_list_,
-                    OnNetworkRequestDone(this, request_id));
+  for (auto& observer : observer_list_)
+    observer.OnNetworkRequestDone(this, request_id);
 }
 
 const GURL& ExtensionHost::GetURL() const {
@@ -345,9 +346,8 @@ void ExtensionHost::RenderProcessGone(base::TerminationStatus status) {
 
 void ExtensionHost::DidStartLoading() {
   if (!has_loaded_once_) {
-    FOR_EACH_OBSERVER(DeferredStartRenderHostObserver,
-                      deferred_start_render_host_observer_list_,
-                      OnDeferredStartRenderHostDidStartFirstLoad(this));
+    for (auto& observer : deferred_start_render_host_observer_list_)
+      observer.OnDeferredStartRenderHostDidStartFirstLoad(this);
   }
 }
 
@@ -366,9 +366,8 @@ void ExtensionHost::DidStopLoading() {
         extensions::NOTIFICATION_EXTENSION_HOST_DID_STOP_FIRST_LOAD,
         content::Source<BrowserContext>(browser_context_),
         content::Details<ExtensionHost>(this));
-    FOR_EACH_OBSERVER(DeferredStartRenderHostObserver,
-                      deferred_start_render_host_observer_list_,
-                      OnDeferredStartRenderHostDidStopFirstLoad(this));
+    for (auto& observer : deferred_start_render_host_observer_list_)
+      observer.OnDeferredStartRenderHostDidStopFirstLoad(this);
   }
 }
 
@@ -436,8 +435,8 @@ void ExtensionHost::OnEventAck(int event_id) {
   // sent by the renderer is one that this ExtensionHost expects to receive.
   // This way if a renderer _is_ compromised, it can really only affect itself.
   if (unacked_messages_.erase(event_id) > 0) {
-    FOR_EACH_OBSERVER(ExtensionHostObserver, observer_list_,
-                      OnBackgroundEventAcked(this, event_id));
+    for (auto& observer : observer_list_)
+      observer.OnBackgroundEventAcked(this, event_id);
   } else {
     // We have received an unexpected event id from the renderer.  It might be
     // compromised or it might have some other issue.  Kill it just to be safe.
@@ -484,6 +483,10 @@ void ExtensionHost::AddNewContents(WebContents* source,
                                    const gfx::Rect& initial_rect,
                                    bool user_gesture,
                                    bool* was_blocked) {
+  if (vivaldi::IsVivaldiRunning() &&
+      disposition == WindowOpenDisposition::NEW_POPUP) {
+    disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  }
   // First, if the creating extension view was associated with a tab contents,
   // use that tab content's delegate. We must be careful here that the
   // associated tab contents has the same profile as the new tab contents. In
@@ -492,15 +495,13 @@ void ExtensionHost::AddNewContents(WebContents* source,
   // vice versa.
   // Note that we don't do this for popup windows, because we need to associate
   // those with their extension_app_id.
-  if (disposition != NEW_POPUP) {
+  if (disposition != WindowOpenDisposition::NEW_POPUP) {
     WebContents* associated_contents = GetAssociatedWebContents();
     if (associated_contents &&
         associated_contents->GetBrowserContext() ==
             new_contents->GetBrowserContext()) {
       WebContentsDelegate* delegate = associated_contents->GetDelegate();
       if (delegate) {
-        // Make sure we do not interfere with script loading.
-        new_contents->delayed_open_url().reset();
         delegate->AddNewContents(
             associated_contents, new_contents, disposition, initial_rect,
             user_gesture, was_blocked);
@@ -514,11 +515,9 @@ void ExtensionHost::AddNewContents(WebContents* source,
 }
 
 content::WebContents *ExtensionHost::GetAssociatedWebContents() const {
-  chrome::HostDesktopType active_desktop = chrome::GetActiveDesktop();
   bool match_original_profiles = true;
   Profile *profile = Profile::FromBrowserContext(browser_context_);
-  Browser *browser = chrome::FindTabbedBrowser(profile, match_original_profiles,
-                                               active_desktop);
+  Browser *browser = chrome::FindTabbedBrowser(profile, match_original_profiles);
   if (browser) {
     TabStripModel *tab_strip = browser->tab_strip_model();
     return tab_strip->GetActiveWebContents();
@@ -531,6 +530,14 @@ void ExtensionHost::RenderViewReady() {
       extensions::NOTIFICATION_EXTENSION_HOST_CREATED,
       content::Source<BrowserContext>(browser_context_),
       content::Details<ExtensionHost>(this));
+  if (vivaldi::IsVivaldiRunning()) {
+    // This is needed when running as Vivaldi since a BrowserPluginGuest is not
+    // visible, and hence the content is throttled causing timers to be stalled
+    // etc., until it is attached.
+    content::WebContentsImpl* contentsimpl =
+        static_cast<content::WebContentsImpl*>(host_contents_.get());
+    contentsimpl->WasShown();
+  }
 }
 
 void ExtensionHost::RequestMediaAccessPermission(

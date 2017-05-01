@@ -243,7 +243,10 @@ cr.define('options.network', function() {
     set iconType(type) {
       if (isNetworkType(type)) {
         var networkIcon = this.getNetworkIcon();
-        networkIcon.networkType = type;
+        networkIcon.networkState = {
+          GUID: '',
+          Type: /** @type {CrOnc.Type} */ (type),
+        };
       } else {
         // Special cases. e.g. 'add-connection'. Background images are
         // defined in browser_options.css.
@@ -1083,8 +1086,8 @@ cr.define('options.network', function() {
         return;
       }
 
-      if (e.keyIdentifier == 'Enter' ||
-          e.keyIdentifier == 'U+0020' /* Space */) {
+      if (e.key == 'Enter' ||
+          e.key == ' ' /* Space */) {
         var selectedListItem = this.getListItemByIndex(
             this.selectionModel.selectedIndex);
         if (selectedListItem) {

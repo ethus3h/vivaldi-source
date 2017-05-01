@@ -6,28 +6,32 @@
 #define ANDROID_WEBVIEW_NATIVE_AW_CONTENTS_H_
 
 #include <jni.h>
+
 #include <list>
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "android_webview/browser/aw_browser_permission_request_delegate.h"
-#include "android_webview/browser/aw_message_port_message_filter.h"
+#include "android_webview/browser/aw_render_process_gone_delegate.h"
+#include "android_webview/browser/aw_safe_browsing_ui_manager.h"
 #include "android_webview/browser/browser_view_renderer.h"
 #include "android_webview/browser/browser_view_renderer_client.h"
 #include "android_webview/browser/find_helper.h"
 #include "android_webview/browser/gl_view_renderer_manager.h"
 #include "android_webview/browser/icon_helper.h"
+#include "android_webview/browser/render_thread_manager.h"
+#include "android_webview/browser/render_thread_manager_client.h"
 #include "android_webview/browser/renderer_host/aw_render_view_host_ext.h"
 #include "android_webview/native/permission/permission_request_handler_client.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
+#include "content/public/browser/web_contents_observer.h"
 
 class SkBitmap;
 class TabContents;
-struct AwDrawGLInfo;
 
 namespace content {
 class WebContents;
@@ -37,9 +41,9 @@ namespace android_webview {
 
 class AwContentsContainer;
 class AwContentsClientBridge;
+class AwGLFunctor;
 class AwPdfExporter;
 class AwWebContentsDelegate;
-class HardwareRenderer;
 class PermissionRequestHandler;
 
 // Native side of java-class of same name.
@@ -60,7 +64,10 @@ class AwContents : public FindHelper::Listener,
                    public AwRenderViewHostExtClient,
                    public BrowserViewRendererClient,
                    public PermissionRequestHandlerClient,
-                   public AwBrowserPermissionRequestDelegate {
+                   public AwBrowserPermissionRequestDelegate,
+                   public AwRenderProcessGoneDelegate,
+                   public content::WebContentsObserver,
+                   public AwSafeBrowsingUIManager::UIManagerClient {
  public:
   // Returns the AwContents instance associated with |web_contents|, or NULL.
   static AwContents* FromWebContents(content::WebContents* web_contents);
@@ -71,7 +78,9 @@ class AwContents : public FindHelper::Listener,
 
   static std::string GetLocale();
 
-  AwContents(scoped_ptr<content::WebContents> web_contents);
+  static std::string GetLocaleList();
+
+  AwContents(std::unique_ptr<content::WebContents> web_contents);
   ~AwContents() override;
 
   AwRenderViewHostExt* render_view_host_ext() {
@@ -99,6 +108,9 @@ class AwContents : public FindHelper::Listener,
   base::android::ScopedJavaLocalRef<jobject> GetWebContents(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj);
+  void SetAwGLFunctor(JNIEnv* env,
+                      const base::android::JavaParamRef<jobject>& obj,
+                      jlong gl_functor);
 
   void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
   void DocumentHasImages(JNIEnv* env,
@@ -160,6 +172,9 @@ class AwContents : public FindHelper::Listener,
   void SetBackgroundColor(JNIEnv* env,
                           const base::android::JavaParamRef<jobject>& obj,
                           jint color);
+  void ZoomBy(JNIEnv* env,
+              const base::android::JavaParamRef<jobject>& obj,
+              jfloat delta);
   void OnComputeScroll(JNIEnv* env,
                        const base::android::JavaParamRef<jobject>& obj,
                        jlong animation_time_millis);
@@ -173,8 +188,6 @@ class AwContents : public FindHelper::Listener,
               jint visible_top,
               jint visible_right,
               jint visible_bottom);
-  jlong GetAwDrawGLViewContext(JNIEnv* env,
-                               const base::android::JavaParamRef<jobject>& obj);
   jlong CapturePicture(JNIEnv* env,
                        const base::android::JavaParamRef<jobject>& obj,
                        int width,
@@ -259,9 +272,7 @@ class AwContents : public FindHelper::Listener,
   void OnWebLayoutContentsSizeChanged(const gfx::Size& contents_size) override;
 
   // BrowserViewRendererClient implementation.
-  bool RequestDrawGL(bool wait_for_completion) override;
   void PostInvalidate() override;
-  void DetachFunctorFromView() override;
   void OnNewPicture() override;
   gfx::Point GetLocationOnScreen() override;
   void ScrollContainerViewTo(const gfx::Vector2d& new_value) override;
@@ -272,14 +283,13 @@ class AwContents : public FindHelper::Listener,
                          float max_page_scale_factor) override;
   void DidOverscroll(const gfx::Vector2d& overscroll_delta,
                      const gfx::Vector2dF& overscroll_velocity) override;
-
-  void ParentDrawConstraintsUpdated(
-      const ParentCompositorDrawConstraints& draw_constraints) override {}
+  ui::TouchHandleDrawable* CreateDrawable() override;
 
   void ClearCache(JNIEnv* env,
                   const base::android::JavaParamRef<jobject>& obj,
                   jboolean include_disk_files);
-  void SetPendingWebContentsForPopup(scoped_ptr<content::WebContents> pending);
+  void SetPendingWebContentsForPopup(
+      std::unique_ptr<content::WebContents> pending);
   jlong ReleasePopupAwContents(JNIEnv* env,
                                const base::android::JavaParamRef<jobject>& obj);
 
@@ -298,7 +308,7 @@ class AwContents : public FindHelper::Listener,
   void SetSaveFormData(bool enabled);
 
   // Sets the java client
-  void SetAwAutofillClient(jobject client);
+  void SetAwAutofillClient(const base::android::JavaRef<jobject>& client);
 
   void SetJsOnlineProperty(JNIEnv* env,
                            const base::android::JavaParamRef<jobject>& obj,
@@ -307,8 +317,6 @@ class AwContents : public FindHelper::Listener,
                   const base::android::JavaParamRef<jobject>& obj,
                   jint level,
                   jboolean visible);
-
-  scoped_refptr<AwMessagePortMessageFilter> GetMessagePortMessageFilter();
   void PostMessageToFrame(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
@@ -329,6 +337,19 @@ class AwContents : public FindHelper::Listener,
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj);
 
+  // content::WebContentsObserver overrides
+  void RenderViewHostChanged(content::RenderViewHost* old_host,
+                             content::RenderViewHost* new_host) override;
+  void DidAttachInterstitialPage() override;
+  void DidDetachInterstitialPage() override;
+
+  // AwSafeBrowsingUIManager::UIManagerClient implementation
+  bool CanShowInterstitial() override;
+
+  // AwRenderProcessGoneDelegate overrides
+  void OnRenderProcessGone(int child_process_id) override;
+  bool OnRenderProcessGoneDetail(int child_process_id, bool crashed) override;
+
  private:
   void InitAutofillIfNecessary(bool enabled);
 
@@ -338,18 +359,20 @@ class AwContents : public FindHelper::Listener,
 
   void SetDipScaleInternal(float dip_scale);
 
+  void SetAwGLFunctor(AwGLFunctor* functor);
+
   JavaObjectWeakGlobalRef java_ref_;
+  AwGLFunctor* functor_;
   BrowserViewRenderer browser_view_renderer_;  // Must outlive |web_contents_|.
-  scoped_ptr<AwWebContentsDelegate> web_contents_delegate_;
-  scoped_ptr<AwContentsClientBridge> contents_client_bridge_;
-  scoped_ptr<content::WebContents> web_contents_;
-  scoped_ptr<AwRenderViewHostExt> render_view_host_ext_;
-  scoped_ptr<FindHelper> find_helper_;
-  scoped_ptr<IconHelper> icon_helper_;
-  scoped_ptr<AwContents> pending_contents_;
-  scoped_ptr<AwPdfExporter> pdf_exporter_;
-  scoped_ptr<PermissionRequestHandler> permission_request_handler_;
-  scoped_refptr<AwMessagePortMessageFilter> message_port_message_filter_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  std::unique_ptr<AwWebContentsDelegate> web_contents_delegate_;
+  std::unique_ptr<AwContentsClientBridge> contents_client_bridge_;
+  std::unique_ptr<AwRenderViewHostExt> render_view_host_ext_;
+  std::unique_ptr<FindHelper> find_helper_;
+  std::unique_ptr<IconHelper> icon_helper_;
+  std::unique_ptr<AwContents> pending_contents_;
+  std::unique_ptr<AwPdfExporter> pdf_exporter_;
+  std::unique_ptr<PermissionRequestHandler> permission_request_handler_;
 
   // GURL is supplied by the content layer as requesting frame.
   // Callback is supplied by the content layer, and is invoked with the result

@@ -5,54 +5,84 @@
 #include "content/browser/renderer_host/input/synthetic_pointer_action.h"
 
 #include "base/logging.h"
-#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebInputEvent.h"
 #include "ui/events/latency_info.h"
 
 namespace content {
 
 SyntheticPointerAction::SyntheticPointerAction(
-    SyntheticGestureParams::GestureSourceType gesture_source_type,
-    PointerActionType pointer_action_type,
-    SyntheticPointer* synthetic_pointer,
-    gfx::PointF position,
-    int index)
-    : gesture_source_type_(gesture_source_type),
-      pointer_action_type_(pointer_action_type),
-      position_(position),
-      index_(index),
-      synthetic_pointer_(synthetic_pointer) {}
+    const SyntheticPointerActionListParams& params)
+    : params_(params),
+      gesture_source_type_(SyntheticGestureParams::DEFAULT_INPUT),
+      state_(UNINITIALIZED),
+      num_actions_dispatched_(0U) {}
 
 SyntheticPointerAction::~SyntheticPointerAction() {}
 
 SyntheticGesture::Result SyntheticPointerAction::ForwardInputEvents(
     const base::TimeTicks& timestamp,
     SyntheticGestureTarget* target) {
-  if (gesture_source_type_ == SyntheticGestureParams::DEFAULT_INPUT)
-    gesture_source_type_ = target->GetDefaultSyntheticGestureSourceType();
+  if (state_ == UNINITIALIZED) {
+    gesture_source_type_ = params_.gesture_source_type;
+    if (gesture_source_type_ == SyntheticGestureParams::DEFAULT_INPUT)
+      gesture_source_type_ = target->GetDefaultSyntheticGestureSourceType();
+
+    if (!synthetic_pointer_driver_) {
+      synthetic_pointer_driver_ =
+          SyntheticPointerDriver::Create(gesture_source_type_);
+    }
+    state_ = RUNNING;
+  }
 
   DCHECK_NE(gesture_source_type_, SyntheticGestureParams::DEFAULT_INPUT);
+  if (gesture_source_type_ == SyntheticGestureParams::DEFAULT_INPUT)
+    return SyntheticGesture::GESTURE_SOURCE_TYPE_NOT_IMPLEMENTED;
 
-  ForwardTouchOrMouseInputEvents(timestamp, target);
-  return SyntheticGesture::GESTURE_FINISHED;
+  state_ = ForwardTouchOrMouseInputEvents(timestamp, target);
+
+  if (state_ == INVALID)
+    return POINTER_ACTION_INPUT_INVALID;
+
+  return (state_ == DONE) ? SyntheticGesture::GESTURE_FINISHED
+                          : SyntheticGesture::GESTURE_RUNNING;
 }
 
-void SyntheticPointerAction::ForwardTouchOrMouseInputEvents(
+SyntheticPointerAction::GestureState
+SyntheticPointerAction::ForwardTouchOrMouseInputEvents(
     const base::TimeTicks& timestamp,
     SyntheticGestureTarget* target) {
-  switch (pointer_action_type_) {
-    case SyntheticGesture::PRESS:
-      synthetic_pointer_->Press(position_.x(), position_.y(), target,
-                                timestamp);
-      break;
-    case SyntheticGesture::MOVE:
-      synthetic_pointer_->Move(index_, position_.x(), position_.y(), target,
-                               timestamp);
-      break;
-    case SyntheticGesture::RELEASE:
-      synthetic_pointer_->Release(index_, target, timestamp);
-      break;
+  DCHECK_LT(num_actions_dispatched_, params_.params.size());
+  SyntheticPointerActionListParams::ParamList& param_list =
+      params_.params[num_actions_dispatched_];
+  for (const SyntheticPointerActionParams& param : param_list) {
+    if (!synthetic_pointer_driver_->UserInputCheck(param))
+      return INVALID;
+
+    switch (param.pointer_action_type()) {
+      case SyntheticPointerActionParams::PointerActionType::PRESS:
+        synthetic_pointer_driver_->Press(param.position().x(),
+                                         param.position().y(), param.index(),
+                                         param.button());
+        break;
+      case SyntheticPointerActionParams::PointerActionType::MOVE:
+        synthetic_pointer_driver_->Move(param.position().x(),
+                                        param.position().y(), param.index());
+        break;
+      case SyntheticPointerActionParams::PointerActionType::RELEASE:
+        synthetic_pointer_driver_->Release(param.index(), param.button());
+        break;
+      case SyntheticPointerActionParams::PointerActionType::IDLE:
+        break;
+      case SyntheticPointerActionParams::PointerActionType::NOT_INITIALIZED:
+        return INVALID;
+    }
   }
-  synthetic_pointer_->DispatchEvent(target, timestamp);
+  synthetic_pointer_driver_->DispatchEvent(target, timestamp);
+  num_actions_dispatched_++;
+  if (num_actions_dispatched_ == params_.params.size())
+    return DONE;
+  else
+    return RUNNING;
 }
 
 }  // namespace content

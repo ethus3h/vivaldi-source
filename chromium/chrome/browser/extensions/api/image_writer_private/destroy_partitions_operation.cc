@@ -20,18 +20,19 @@ const int kPartitionTableSize = 2 * 4096;
 DestroyPartitionsOperation::DestroyPartitionsOperation(
     base::WeakPtr<OperationManager> manager,
     const ExtensionId& extension_id,
-    const std::string& storage_unit_id)
-    : Operation(manager, extension_id, storage_unit_id) {}
+    const std::string& storage_unit_id,
+    const base::FilePath& download_folder)
+    : Operation(manager, extension_id, storage_unit_id, download_folder) {}
 
 DestroyPartitionsOperation::~DestroyPartitionsOperation() {}
 
 void DestroyPartitionsOperation::StartImpl() {
-  if (!base::CreateTemporaryFileInDir(temp_dir_.path(), &image_path_)) {
+  if (!base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &image_path_)) {
     Error(error::kTempFileError);
     return;
   }
 
-  scoped_ptr<char[]> buffer(new char[kPartitionTableSize]);
+  std::unique_ptr<char[]> buffer(new char[kPartitionTableSize]);
   memset(buffer.get(), 0, kPartitionTableSize);
 
   if (base::WriteFile(image_path_, buffer.get(), kPartitionTableSize) !=

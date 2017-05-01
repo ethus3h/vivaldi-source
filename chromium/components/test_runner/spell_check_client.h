@@ -8,55 +8,72 @@
 #include <stdint.h>
 
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "components/test_runner/mock_spell_check.h"
-#include "components/test_runner/web_task.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
 #include "third_party/WebKit/public/web/WebSpellCheckClient.h"
+#include "v8/include/v8.h"
+
+namespace blink {
+class WebTextCheckingCompletion;
+}  // namespace blink
 
 namespace test_runner {
 
+class TestRunner;
 class WebTestDelegate;
-class WebTestProxyBase;
 
 class SpellCheckClient : public blink::WebSpellCheckClient {
  public:
-  explicit SpellCheckClient(WebTestProxyBase* web_test_proxy);
+  explicit SpellCheckClient(TestRunner* test_runner);
   virtual ~SpellCheckClient();
 
   void SetDelegate(WebTestDelegate* delegate);
+  void SetEnabled(bool enabled);
 
-  WebTaskList* mutable_task_list() { return &task_list_; }
-  MockSpellCheck* MockSpellCheckWord() { return &spell_check_; }
+  // Sets a callback that will be invoked after each request is revoled.
+  void SetSpellCheckResolvedCallback(v8::Local<v8::Function> callback);
+
+  // Remove the above callback. Beware: don't call it inside the callback.
+  void RemoveSpellCheckResolvedCallback();
+
+  void Reset();
 
   // blink::WebSpellCheckClient implementation.
-  void spellCheck(
+  void checkSpelling(
       const blink::WebString& text,
       int& offset,
       int& length,
       blink::WebVector<blink::WebString>* optional_suggestions) override;
-  void checkTextOfParagraph(
-      const blink::WebString& text,
-      blink::WebTextCheckingTypeMask mask,
-      blink::WebVector<blink::WebTextCheckingResult>* web_results) override;
   void requestCheckingOfText(
       const blink::WebString& text,
       const blink::WebVector<uint32_t>& markers,
       const blink::WebVector<unsigned>& marker_offsets,
       blink::WebTextCheckingCompletion* completion) override;
+  void cancelAllPendingRequests() override;
 
  private:
   void FinishLastTextCheck();
 
-  // The mock spellchecker used in spellCheck().
+  void RequestResolved();
+
+  // Do not perform any checking when |enabled_ == false|.
+  // Tests related to spell checking should enable it manually.
+  bool enabled_ = false;
+
+  // The mock spellchecker used in checkSpelling().
   MockSpellCheck spell_check_;
 
   blink::WebString last_requested_text_check_string_;
   blink::WebTextCheckingCompletion* last_requested_text_checking_completion_;
 
-  WebTaskList task_list_;
+  v8::Persistent<v8::Function> resolved_callback_;
 
+  TestRunner* test_runner_;
   WebTestDelegate* delegate_;
 
-  WebTestProxyBase* web_test_proxy_;
+  base::WeakPtrFactory<SpellCheckClient> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(SpellCheckClient);
 };

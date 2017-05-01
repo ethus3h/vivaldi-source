@@ -9,20 +9,19 @@
 #include <stdint.h>
 
 #include <map>
-#include <set>
-#include <vector>
+#include <memory>
 
+#include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
-#include "courgette/disassembler.h"
+#include "base/memory/free_deleter.h"
+#include "courgette/courgette.h"
 #include "courgette/image_utils.h"
+#include "courgette/label_manager.h"
 #include "courgette/memory_allocator.h"
 
 namespace courgette {
 
 class EncodedProgram;
-
-typedef std::map<RVA, Label*> RVAToLabel;
 
 // Opcodes of simple assembly language
 enum OP {
@@ -56,7 +55,48 @@ class Instruction {
   DISALLOW_COPY_AND_ASSIGN(Instruction);
 };
 
-typedef NoThrowBuffer<Instruction*> InstructionVector;
+// An interface to receive emitted instructions parsed from an executable.
+class InstructionReceptor {
+ public:
+  InstructionReceptor() = default;
+  virtual ~InstructionReceptor() = default;
+
+  // Generates an entire base relocation table.
+  virtual CheckBool EmitPeRelocs() = 0;
+
+  // Generates an ELF style relocation table for X86.
+  virtual CheckBool EmitElfRelocation() = 0;
+
+  // Generates an ELF style relocation table for ARM.
+  virtual CheckBool EmitElfARMRelocation() = 0;
+
+  // Following instruction will be assembled at address 'rva'.
+  virtual CheckBool EmitOrigin(RVA rva) = 0;
+
+  // Generates a single byte of data or machine instruction.
+  virtual CheckBool EmitSingleByte(uint8_t byte) = 0;
+
+  // Generates multiple bytes of data or machine instructions.
+  virtual CheckBool EmitMultipleBytes(const uint8_t* bytes, size_t len) = 0;
+
+  // Generates a 4-byte relative reference to address of 'label'.
+  virtual CheckBool EmitRel32(Label* label) = 0;
+
+  // Generates a 4-byte relative reference to address of 'label' for ARM.
+  virtual CheckBool EmitRel32ARM(uint16_t op,
+                                 Label* label,
+                                 const uint8_t* arm_op,
+                                 uint16_t op_size) = 0;
+
+  // Generates a 4-byte absolute reference to address of 'label'.
+  virtual CheckBool EmitAbs32(Label* label) = 0;
+
+  // Generates an 8-byte absolute reference to address of 'label'.
+  virtual CheckBool EmitAbs64(Label* label) = 0;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(InstructionReceptor);
+};
 
 // An AssemblyProgram is the result of disassembling an executable file.
 //
@@ -76,90 +116,97 @@ typedef NoThrowBuffer<Instruction*> InstructionVector;
 // AssemblyProgram.  The modification process should call UnassignIndexes, do
 // its own assignment, and then call AssignRemainingIndexes to ensure all
 // indexes are assigned.
-//
+
 class AssemblyProgram {
  public:
-  explicit AssemblyProgram(ExecutableType kind);
+  using LabelHandler = base::Callback<void(Label*)>;
+  using LabelHandlerMap = std::map<OP, LabelHandler>;
+
+  // A callback for GenerateInstructions() to emit instructions. The first
+  // argument (AssemblyProgram*) is provided for Label-related feature access.
+  // The second argument (InstructionReceptor*) is a receptor for instructions.
+  // The callback (which gets called in 2 passes) should return true on success,
+  // and false otherwise.
+  using InstructionGenerator =
+      base::Callback<CheckBool(AssemblyProgram*, InstructionReceptor*)>;
+
+  AssemblyProgram(ExecutableType kind, uint64_t image_base);
   ~AssemblyProgram();
 
   ExecutableType kind() const { return kind_; }
 
-  void set_image_base(uint64_t image_base) { image_base_ = image_base; }
+  // Traverses RVAs in |abs32_visitor| and |rel32_visitor| to precompute Labels.
+  void PrecomputeLabels(RvaVisitor* abs32_visitor, RvaVisitor* rel32_visitor);
 
+  // Removes underused Labels. Thresholds used (0 = no trimming) is
+  // architecture-dependent.
+  void TrimLabels();
+
+  void UnassignIndexes();
+  void DefaultAssignIndexes();
+  void AssignRemainingIndexes();
+
+  // Looks up abs32 label. Returns null if none found.
+  Label* FindAbs32Label(RVA rva);
+
+  // Looks up rel32 label. Returns null if none found.
+  Label* FindRel32Label(RVA rva);
+
+  std::unique_ptr<EncodedProgram> Encode() const;
+
+  // For each |instruction| in |instructions_|, looks up its opcode from
+  // |handler_map| for a handler. If a handler exists, invoke it by passing the
+  // |instruction|'s label. We assume that |handler_map| has correct keys, i.e.,
+  // opcodes for an instruction that have label.
+  void HandleInstructionLabels(const LabelHandlerMap& handler_map) const;
+
+  // Calls |gen| in 2 passes to emit instructions. In pass 1 we provide a
+  // receptor to count space requirement. In pass 2 we provide a receptor to
+  // store instructions.
+  CheckBool GenerateInstructions(const InstructionGenerator& gen);
+
+  // TODO(huangs): Implement these in InstructionStoreReceptor.
   // Instructions will be assembled in the order they are emitted.
 
   // Generates an entire base relocation table.
-  CheckBool EmitPeRelocsInstruction() WARN_UNUSED_RESULT;
+  CheckBool EmitPeRelocs() WARN_UNUSED_RESULT;
 
   // Generates an ELF style relocation table for X86.
-  CheckBool EmitElfRelocationInstruction() WARN_UNUSED_RESULT;
+  CheckBool EmitElfRelocation() WARN_UNUSED_RESULT;
 
   // Generates an ELF style relocation table for ARM.
-  CheckBool EmitElfARMRelocationInstruction() WARN_UNUSED_RESULT;
+  CheckBool EmitElfARMRelocation() WARN_UNUSED_RESULT;
 
   // Following instruction will be assembled at address 'rva'.
-  CheckBool EmitOriginInstruction(RVA rva) WARN_UNUSED_RESULT;
+  CheckBool EmitOrigin(RVA rva) WARN_UNUSED_RESULT;
 
   // Generates a single byte of data or machine instruction.
-  CheckBool EmitByteInstruction(uint8_t byte) WARN_UNUSED_RESULT;
+  CheckBool EmitSingleByte(uint8_t byte) WARN_UNUSED_RESULT;
 
   // Generates multiple bytes of data or machine instructions.
-  CheckBool EmitBytesInstruction(const uint8_t* value,
-                                 size_t len) WARN_UNUSED_RESULT;
+  CheckBool EmitMultipleBytes(const uint8_t* bytes,
+                              size_t len) WARN_UNUSED_RESULT;
 
-  // Generates 4-byte relative reference to address of 'label'.
+  // Generates a 4-byte relative reference to address of 'label'.
   CheckBool EmitRel32(Label* label) WARN_UNUSED_RESULT;
 
-  // Generates 4-byte relative reference to address of 'label' for
-  // ARM.
+  // Generates a 4-byte relative reference to address of 'label' for ARM.
   CheckBool EmitRel32ARM(uint16_t op,
                          Label* label,
                          const uint8_t* arm_op,
                          uint16_t op_size) WARN_UNUSED_RESULT;
 
-  // Generates 4-byte absolute reference to address of 'label'.
+  // Generates a 4-byte absolute reference to address of 'label'.
   CheckBool EmitAbs32(Label* label) WARN_UNUSED_RESULT;
 
-  // Generates 8-byte absolute reference to address of 'label'.
+  // Generates an 8-byte absolute reference to address of 'label'.
   CheckBool EmitAbs64(Label* label) WARN_UNUSED_RESULT;
 
-  // Looks up a label or creates a new one.  Might return NULL.
-  Label* FindOrMakeAbs32Label(RVA rva);
-
-  // Looks up a label or creates a new one.  Might return NULL.
-  Label* FindOrMakeRel32Label(RVA rva);
-
-  void DefaultAssignIndexes();
-  void UnassignIndexes();
-  void AssignRemainingIndexes();
-
-  EncodedProgram* Encode() const;
-
-  // Accessor for instruction list.
-  const InstructionVector& instructions() const {
-    return instructions_;
-  }
-
-  // Returns the label if the instruction contains an absolute 32-bit address,
-  // otherwise returns NULL.
-  Label* InstructionAbs32Label(const Instruction* instruction) const;
-
-  // Returns the label if the instruction contains an absolute 64-bit address,
-  // otherwise returns NULL.
-  Label* InstructionAbs64Label(const Instruction* instruction) const;
-
-  // Returns the label if the instruction contains a rel32 offset,
-  // otherwise returns NULL.
-  Label* InstructionRel32Label(const Instruction* instruction) const;
-
-  // Trim underused labels
-  CheckBool TrimLabels();
-
  private:
-  using ScopedInstruction =
-      scoped_ptr<Instruction, UncheckedDeleter<Instruction>>;
+  using InstructionVector = NoThrowBuffer<Instruction*>;
 
-  ExecutableType kind_;
+  using ScopedInstruction =
+      std::unique_ptr<Instruction, UncheckedDeleter<Instruction>>;
 
   CheckBool Emit(ScopedInstruction instruction) WARN_UNUSED_RESULT;
   CheckBool EmitShared(Instruction* instruction) WARN_UNUSED_RESULT;
@@ -169,27 +216,30 @@ class AssemblyProgram {
   // Looks up a label or creates a new one.  Might return NULL.
   Label* FindLabel(RVA rva, RVAToLabel* labels);
 
-  // Helper methods for the public versions.
-  static void UnassignIndexes(RVAToLabel* labels);
-  static void DefaultAssignIndexes(RVAToLabel* labels);
-  static void AssignRemainingIndexes(RVAToLabel* labels);
-
   // Sharing instructions that emit a single byte saves a lot of space.
   Instruction* GetByteInstruction(uint8_t byte);
-  scoped_ptr<Instruction* [], base::FreeDeleter> byte_instruction_cache_;
 
-  uint64_t image_base_;  // Desired or mandated base address of image.
+  const ExecutableType kind_;
+  const uint64_t image_base_;  // Desired or mandated base address of image.
+
+  std::unique_ptr<Instruction* [], base::FreeDeleter> byte_instruction_cache_;
 
   InstructionVector instructions_;  // All the instructions in program.
 
-  // These are lookup maps to find the label associated with a given address.
-  // We have separate label spaces for addresses referenced by rel32 labels and
-  // abs32 labels.  This is somewhat arbitrary.
-  RVAToLabel rel32_labels_;
-  RVAToLabel abs32_labels_;
+  // Storage and lookup of Labels associated with target addresses. We use
+  // separate abs32 and rel32 labels.
+  LabelManager abs32_label_manager_;
+  LabelManager rel32_label_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(AssemblyProgram);
 };
 
+// Converts |program| into encoded form, returning it as |*output|.
+// Returns C_OK if succeeded, otherwise returns an error status and sets
+// |*output| to null.
+Status Encode(const AssemblyProgram& program,
+              std::unique_ptr<EncodedProgram>* output);
+
 }  // namespace courgette
+
 #endif  // COURGETTE_ASSEMBLY_PROGRAM_H_

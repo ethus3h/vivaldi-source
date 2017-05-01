@@ -4,9 +4,11 @@
 
 #include "components/bubble/bubble_manager.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "components/bubble/bubble_controller.h"
 #include "components/bubble/bubble_manager_mocks.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +23,7 @@ class ChainShowBubbleDelegate : public MockBubbleDelegate {
   // |chained_bubble| can be nullptr if not interested in getting a reference to
   // the chained bubble.
   ChainShowBubbleDelegate(BubbleManager* manager,
-                          scoped_ptr<BubbleDelegate> delegate,
+                          std::unique_ptr<BubbleDelegate> delegate,
                           BubbleReference* chained_bubble)
       : manager_(manager),
         delegate_(std::move(delegate)),
@@ -32,8 +34,8 @@ class ChainShowBubbleDelegate : public MockBubbleDelegate {
 
   ~ChainShowBubbleDelegate() override { EXPECT_TRUE(closed_); }
 
-  void DidClose() override {
-    MockBubbleDelegate::DidClose();
+  void DidClose(BubbleCloseReason reason) override {
+    MockBubbleDelegate::DidClose(reason);
     BubbleReference ref = manager_->ShowBubble(std::move(delegate_));
     if (chained_bubble_)
       *chained_bubble_ = ref;
@@ -42,7 +44,7 @@ class ChainShowBubbleDelegate : public MockBubbleDelegate {
 
  private:
   BubbleManager* manager_;
-  scoped_ptr<BubbleDelegate> delegate_;
+  std::unique_ptr<BubbleDelegate> delegate_;
   BubbleReference* chained_bubble_;
   bool closed_;
 
@@ -60,7 +62,7 @@ class ChainCloseBubbleDelegate : public MockBubbleDelegate {
 
   ~ChainCloseBubbleDelegate() override {}
 
-  void DidClose() override {
+  void DidClose(BubbleCloseReason reason) override {
     manager_->CloseAllBubbles(BUBBLE_CLOSE_FOCUS_LOST);
   }
 
@@ -82,6 +84,11 @@ class MockBubbleManagerObserver : public BubbleManager::BubbleManagerObserver {
   DISALLOW_COPY_AND_ASSIGN(MockBubbleManagerObserver);
 };
 
+class BubbleManagerSubclass : public BubbleManager {
+ public:
+  using BubbleManager::CloseBubblesOwnedBy;
+};
+
 class BubbleManagerTest : public testing::Test {
  public:
   BubbleManagerTest();
@@ -91,7 +98,7 @@ class BubbleManagerTest : public testing::Test {
   void TearDown() override;
 
  protected:
-  scoped_ptr<BubbleManager> manager_;
+  std::unique_ptr<BubbleManagerSubclass> manager_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(BubbleManagerTest);
@@ -101,7 +108,7 @@ BubbleManagerTest::BubbleManagerTest() {}
 
 void BubbleManagerTest::SetUp() {
   testing::Test::SetUp();
-  manager_.reset(new BubbleManager);
+  manager_.reset(new BubbleManagerSubclass);
 }
 
 void BubbleManagerTest::TearDown() {
@@ -110,7 +117,7 @@ void BubbleManagerTest::TearDown() {
 }
 
 TEST_F(BubbleManagerTest, ManagerShowsBubbleUi) {
-  scoped_ptr<MockBubbleDelegate> delegate = MockBubbleDelegate::Default();
+  std::unique_ptr<MockBubbleDelegate> delegate = MockBubbleDelegate::Default();
 
   MockBubbleUi* bubble_ui = delegate->bubble_ui();
   EXPECT_CALL(*bubble_ui, Destroyed());
@@ -122,7 +129,7 @@ TEST_F(BubbleManagerTest, ManagerShowsBubbleUi) {
 }
 
 TEST_F(BubbleManagerTest, ManagerUpdatesBubbleUiAnchor) {
-  scoped_ptr<MockBubbleDelegate> delegate = MockBubbleDelegate::Default();
+  std::unique_ptr<MockBubbleDelegate> delegate = MockBubbleDelegate::Default();
 
   MockBubbleUi* bubble_ui = delegate->bubble_ui();
   EXPECT_CALL(*bubble_ui, Destroyed());
@@ -254,6 +261,38 @@ TEST_F(BubbleManagerTest, CloseBubbleShouldOnlylCloseSelf) {
   EXPECT_TRUE(ref3);
 }
 
+TEST_F(BubbleManagerTest, CloseOwnedByShouldLeaveUnowned) {
+  std::unique_ptr<MockBubbleDelegate> delegate1 = MockBubbleDelegate::Default();
+  std::unique_ptr<MockBubbleDelegate> delegate2 = MockBubbleDelegate::Default();
+  std::unique_ptr<MockBubbleDelegate> delegate3 = MockBubbleDelegate::Default();
+  MockBubbleDelegate& delegate1_ref = *delegate1;
+  MockBubbleDelegate& delegate2_ref = *delegate2;
+  MockBubbleDelegate& delegate3_ref = *delegate3;
+  BubbleReference ref1 = manager_->ShowBubble(std::move(delegate1));
+  BubbleReference ref2 = manager_->ShowBubble(std::move(delegate2));
+  BubbleReference ref3 = manager_->ShowBubble(std::move(delegate3));
+
+  // These pointers are only compared for equality, not dereferenced.
+  const content::RenderFrameHost* const frame1 =
+      reinterpret_cast<const content::RenderFrameHost*>(&ref1);
+  const content::RenderFrameHost* const frame2 =
+      reinterpret_cast<const content::RenderFrameHost*>(&ref2);
+
+  EXPECT_CALL(delegate1_ref, OwningFrame())
+      .WillRepeatedly(testing::Return(frame1));
+  EXPECT_CALL(delegate2_ref, OwningFrame())
+      .WillRepeatedly(testing::Return(frame2));
+  EXPECT_CALL(delegate3_ref, OwningFrame())
+      .WillRepeatedly(testing::Return(nullptr));
+  EXPECT_CALL(delegate1_ref, ShouldClose(BUBBLE_CLOSE_FRAME_DESTROYED))
+      .WillOnce(testing::Return(true));
+
+  manager_->CloseBubblesOwnedBy(frame1);
+  EXPECT_FALSE(ref1);
+  EXPECT_TRUE(ref2);
+  EXPECT_TRUE(ref3);
+}
+
 TEST_F(BubbleManagerTest, UpdateAllShouldWorkWithoutBubbles) {
   // Manager shouldn't crash if bubbles have never been added.
   manager_->UpdateAllBubbleAnchors();
@@ -283,7 +322,7 @@ TEST_F(BubbleManagerTest, CloseAllShouldWorkWithoutBubbles) {
 TEST_F(BubbleManagerTest, AllowBubbleChainingOnClose) {
   BubbleReference chained_bubble;
   BubbleReference ref =
-      manager_->ShowBubble(make_scoped_ptr(new ChainShowBubbleDelegate(
+      manager_->ShowBubble(base::WrapUnique(new ChainShowBubbleDelegate(
           manager_.get(), MockBubbleDelegate::Default(), &chained_bubble)));
   ASSERT_FALSE(chained_bubble);  // Bubble not yet visible.
   ASSERT_TRUE(manager_->CloseBubble(ref, BUBBLE_CLOSE_FORCED));
@@ -295,7 +334,7 @@ TEST_F(BubbleManagerTest, AllowBubbleChainingOnClose) {
 TEST_F(BubbleManagerTest, AllowBubbleChainingOnCloseAll) {
   BubbleReference chained_bubble;
   BubbleReference ref =
-      manager_->ShowBubble(make_scoped_ptr(new ChainShowBubbleDelegate(
+      manager_->ShowBubble(base::WrapUnique(new ChainShowBubbleDelegate(
           manager_.get(), MockBubbleDelegate::Default(), &chained_bubble)));
   ASSERT_FALSE(chained_bubble);  // Bubble not yet visible.
   manager_->CloseAllBubbles(BUBBLE_CLOSE_FORCED);
@@ -313,12 +352,12 @@ TEST_F(BubbleManagerTest, BubblesDoNotChainOnDestroy) {
   EXPECT_CALL(metrics, OnBubbleClosed(testing::_, BUBBLE_CLOSE_FORCED));
   manager_->AddBubbleManagerObserver(&metrics);
 
-  scoped_ptr<MockBubbleDelegate> chained_delegate(new MockBubbleDelegate);
+  std::unique_ptr<MockBubbleDelegate> chained_delegate(new MockBubbleDelegate);
   EXPECT_CALL(*chained_delegate->bubble_ui(), Show(testing::_)).Times(0);
   EXPECT_CALL(*chained_delegate, ShouldClose(testing::_)).Times(0);
-  EXPECT_CALL(*chained_delegate, DidClose()).Times(0);
+  EXPECT_CALL(*chained_delegate, DidClose(testing::_)).Times(0);
 
-  manager_->ShowBubble(make_scoped_ptr(new ChainShowBubbleDelegate(
+  manager_->ShowBubble(base::WrapUnique(new ChainShowBubbleDelegate(
       manager_.get(), std::move(chained_delegate), nullptr)));
   manager_.reset();
 }
@@ -339,7 +378,7 @@ TEST_F(BubbleManagerTest, BubbleCloseReasonIsCalled) {
 // In a close chain, it should be possible for the bubble in the second close
 // event to close.
 TEST_F(BubbleManagerTest, BubbleCloseChainCloseClose) {
-  scoped_ptr<ChainCloseBubbleDelegate> closing_bubble(
+  std::unique_ptr<ChainCloseBubbleDelegate> closing_bubble(
       new ChainCloseBubbleDelegate(manager_.get()));
   EXPECT_CALL(*closing_bubble, ShouldClose(testing::_))
       .WillOnce(testing::Return(true));
@@ -362,7 +401,7 @@ TEST_F(BubbleManagerTest, BubbleCloseChainCloseClose) {
 // In a close chain, it should be possible for the bubble in the second close
 // event to remain open because close is a request.
 TEST_F(BubbleManagerTest, BubbleCloseChainCloseNoClose) {
-  scoped_ptr<ChainCloseBubbleDelegate> closing_bubble(
+  std::unique_ptr<ChainCloseBubbleDelegate> closing_bubble(
       new ChainCloseBubbleDelegate(manager_.get()));
   EXPECT_CALL(*closing_bubble, ShouldClose(testing::_))
       .WillOnce(testing::Return(true));
@@ -386,7 +425,7 @@ TEST_F(BubbleManagerTest, BubbleCloseChainCloseNoClose) {
 // bubbles if it's closed, but it doesn't want to close. Sending a close request
 // should keep it open without starting a close chain.
 TEST_F(BubbleManagerTest, BubbleCloseChainNoCloseNoClose) {
-  scoped_ptr<ChainCloseBubbleDelegate> closing_bubble(
+  std::unique_ptr<ChainCloseBubbleDelegate> closing_bubble(
       new ChainCloseBubbleDelegate(manager_.get()));
   EXPECT_CALL(*closing_bubble, ShouldClose(testing::_))
       .WillRepeatedly(testing::Return(false));

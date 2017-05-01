@@ -11,12 +11,10 @@
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
 #include "third_party/WebKit/public/platform/WebFocusType.h"
+#include "third_party/WebKit/public/platform/WebInsecureRequestPolicy.h"
 #include "third_party/WebKit/public/web/WebRemoteFrame.h"
 #include "third_party/WebKit/public/web/WebRemoteFrameClient.h"
 #include "url/origin.h"
-
-struct FrameMsg_BuffersSwapped_Params;
-struct FrameMsg_CompositorFrameSwapped_Params;
 
 namespace blink {
 class WebInputEvent;
@@ -24,7 +22,7 @@ struct WebRect;
 }
 
 namespace cc {
-struct SurfaceId;
+class SurfaceId;
 struct SurfaceSequence;
 }
 
@@ -33,6 +31,9 @@ namespace content {
 class ChildFrameCompositingHelper;
 class RenderFrameImpl;
 class RenderViewImpl;
+class RenderWidget;
+struct ContentSecurityPolicyHeader;
+struct FrameOwnerProperties;
 struct FrameReplicationState;
 
 // When a page's frames are rendered by multiple processes, each renderer has a
@@ -76,10 +77,9 @@ class CONTENT_EXPORT RenderFrameProxy
   // for example, after a cross-process navigation or after the addition of a
   // new frame local to some other process. |routing_id| will be the ID of the
   // newly created RenderFrameProxy. |render_view_routing_id| identifies the
-  // RenderView to be associated with this frame.  |opener_routing_id|, if
-  // valid, is the routing ID of the new frame's opener.  |parent_routing_id|
-  // is the routing ID of the RenderFrameProxy to which the new frame is
-  // parented.
+  // RenderView to be associated with this frame.  |opener|, if supplied, is the
+  // new frame's opener.  |parent_routing_id| is the routing ID of the
+  // RenderFrameProxy to which the new frame is parented.
   //
   // |parent_routing_id| always identifies a RenderFrameProxy (never a
   // RenderFrame) because a new child of a local frame should always start out
@@ -87,7 +87,7 @@ class CONTENT_EXPORT RenderFrameProxy
   static RenderFrameProxy* CreateFrameProxy(
       int routing_id,
       int render_view_routing_id,
-      int opener_routing_id,
+      blink::WebFrame* opener,
       int parent_routing_id,
       const FrameReplicationState& replicated_state);
 
@@ -103,6 +103,10 @@ class CONTENT_EXPORT RenderFrameProxy
   bool Send(IPC::Message* msg) override;
 
   // Out-of-process child frames receive a signal from RenderWidgetCompositor
+  // when a compositor frame will begin.
+  void WillBeginCompositorFrame();
+
+  // Out-of-process child frames receive a signal from RenderWidgetCompositor
   // when a compositor frame has committed.
   void DidCommitCompositorFrame();
 
@@ -110,28 +114,25 @@ class CONTENT_EXPORT RenderFrameProxy
   // RenderFrameProxy's WebRemoteFrame.
   void SetReplicatedState(const FrameReplicationState& state);
 
-  // Navigating a top-level frame cross-process does not swap the WebLocalFrame
-  // for a WebRemoteFrame in the frame tree. In this case, this WebRemoteFrame
-  // is not attached to the frame tree and there is no blink::Frame associated
-  // with it, so it is not in state where most operations on it will succeed.
-  bool IsMainFrameDetachedFromTree() const;
-
   int routing_id() { return routing_id_; }
   RenderViewImpl* render_view() { return render_view_; }
   blink::WebRemoteFrame* web_frame() { return web_frame_; }
 
+  // Returns the widget used for the local frame root.
+  RenderWidget* render_widget() { return render_widget_; }
+
   // blink::WebRemoteFrameClient implementation:
   void frameDetached(DetachType type) override;
-  void postMessageEvent(blink::WebLocalFrame* sourceFrame,
-                        blink::WebRemoteFrame* targetFrame,
-                        blink::WebSecurityOrigin target,
-                        blink::WebDOMMessageEvent event) override;
-  void initializeChildFrame(const blink::WebRect& frame_rect,
-                            float scale_factor) override;
+  void forwardPostMessage(blink::WebLocalFrame* sourceFrame,
+                          blink::WebRemoteFrame* targetFrame,
+                          blink::WebSecurityOrigin target,
+                          blink::WebDOMMessageEvent event) override;
   void navigate(const blink::WebURLRequest& request,
                 bool should_replace_current_entry) override;
   void forwardInputEvent(const blink::WebInputEvent* event) override;
   void frameRectsChanged(const blink::WebRect& frame_rect) override;
+  void updateRemoteViewportIntersection(
+      const blink::WebRect& viewportIntersection) override;
   void visibilityChanged(bool visible) override;
   void didChangeOpener(blink::WebFrame* opener) override;
   void advanceFocus(blink::WebFocusType type,
@@ -144,7 +145,9 @@ class CONTENT_EXPORT RenderFrameProxy
  private:
   RenderFrameProxy(int routing_id, int frame_routing_id);
 
-  void Init(blink::WebRemoteFrame* frame, RenderViewImpl* render_view);
+  void Init(blink::WebRemoteFrame* frame,
+            RenderViewImpl* render_view,
+            RenderWidget* render_widget);
 
   // IPC::Listener
   bool OnMessageReceived(const IPC::Message& msg) override;
@@ -161,11 +164,17 @@ class CONTENT_EXPORT RenderFrameProxy
   void OnDidStopLoading();
   void OnDidUpdateSandboxFlags(blink::WebSandboxFlags flags);
   void OnDispatchLoad();
-  void OnDidUpdateName(const std::string& name);
-  void OnEnforceStrictMixedContentChecking(bool should_enforce);
-  void OnDidUpdateOrigin(const url::Origin& origin);
+  void OnDidUpdateName(const std::string& name, const std::string& unique_name);
+  void OnAddContentSecurityPolicy(const ContentSecurityPolicyHeader& header);
+  void OnResetContentSecurityPolicy();
+  void OnEnforceInsecureRequestPolicy(blink::WebInsecureRequestPolicy policy);
+  void OnSetFrameOwnerProperties(const FrameOwnerProperties& properties);
+  void OnDidUpdateOrigin(const url::Origin& origin,
+                         bool is_potentially_trustworthy_unique_origin);
   void OnSetPageFocus(bool is_focused);
   void OnSetFocusedFrame();
+  void OnWillEnterFullscreen();
+  void OnSetHasReceivedUserGesture();
 
   // The routing ID by which this RenderFrameProxy is known.
   const int routing_id_;
@@ -179,6 +188,7 @@ class CONTENT_EXPORT RenderFrameProxy
   scoped_refptr<ChildFrameCompositingHelper> compositing_helper_;
 
   RenderViewImpl* render_view_;
+  RenderWidget* render_widget_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderFrameProxy);
 };

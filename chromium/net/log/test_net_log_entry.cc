@@ -12,11 +12,11 @@
 
 namespace net {
 
-TestNetLogEntry::TestNetLogEntry(NetLog::EventType type,
+TestNetLogEntry::TestNetLogEntry(NetLogEventType type,
                                  const base::TimeTicks& time,
-                                 NetLog::Source source,
-                                 NetLog::EventPhase phase,
-                                 scoped_ptr<base::DictionaryValue> params)
+                                 NetLogSource source,
+                                 NetLogEventPhase phase,
+                                 std::unique_ptr<base::DictionaryValue> params)
     : type(type),
       time(time),
       source(source),

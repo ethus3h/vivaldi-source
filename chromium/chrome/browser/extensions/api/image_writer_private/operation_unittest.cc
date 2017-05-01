@@ -35,8 +35,9 @@ class OperationForTest : public Operation {
  public:
   OperationForTest(base::WeakPtr<OperationManager> manager_,
                    const ExtensionId& extension_id,
-                   const std::string& device_path)
-      : Operation(manager_, extension_id, device_path) {}
+                   const std::string& device_path,
+                   const base::FilePath& download_path)
+      : Operation(manager_, extension_id, device_path, download_path) {}
 
   void StartImpl() override {}
 
@@ -85,7 +86,8 @@ class ImageWriterOperationTest : public ImageWriterUnitTestBase {
     operation_ =
         new OperationForTest(manager_.AsWeakPtr(),
                              kDummyExtensionId,
-                             test_utils_.GetDevicePath().AsUTF8Unsafe());
+                             test_utils_.GetDevicePath().AsUTF8Unsafe(),
+                             base::FilePath(FILE_PATH_LITERAL("/var/tmp")));
     operation_->SetImagePath(test_utils_.GetImagePath());
   }
 
@@ -99,7 +101,7 @@ class ImageWriterOperationTest : public ImageWriterUnitTestBase {
   base::FilePath image_path_;
   base::FilePath zip_file_;
 
-  scoped_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfile> profile_;
 
   MockOperationManager manager_;
   scoped_refptr<OperationForTest> operation_;

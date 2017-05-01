@@ -15,11 +15,13 @@
 
 namespace cc {
 
-FloatClipDisplayItem::FloatClipDisplayItem(const gfx::RectF& clip_rect) {
+FloatClipDisplayItem::FloatClipDisplayItem(const gfx::RectF& clip_rect)
+    : DisplayItem(FLOAT_CLIP) {
   SetNew(clip_rect);
 }
 
-FloatClipDisplayItem::FloatClipDisplayItem(const proto::DisplayItem& proto) {
+FloatClipDisplayItem::FloatClipDisplayItem(const proto::DisplayItem& proto)
+    : DisplayItem(FLOAT_CLIP) {
   DCHECK_EQ(proto::DisplayItem::Type_FloatClip, proto.type());
 
   const proto::FloatClipDisplayItem& details = proto.float_clip_item();
@@ -43,7 +45,6 @@ void FloatClipDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
 }
 
 void FloatClipDisplayItem::Raster(SkCanvas* canvas,
-                                  const gfx::Rect& canvas_target_playback_rect,
                                   SkPicture::AbortCallback* callback) const {
   canvas->save();
   canvas->clipRect(gfx::RectFToSkRect(clip_rect_));
@@ -57,14 +58,12 @@ void FloatClipDisplayItem::AsValueInto(
       clip_rect_.ToString().c_str(), visual_rect.ToString().c_str()));
 }
 
-size_t FloatClipDisplayItem::ExternalMemoryUsage() const {
-  return 0;
-}
-
-EndFloatClipDisplayItem::EndFloatClipDisplayItem() {}
+EndFloatClipDisplayItem::EndFloatClipDisplayItem()
+    : DisplayItem(END_FLOAT_CLIP) {}
 
 EndFloatClipDisplayItem::EndFloatClipDisplayItem(
-    const proto::DisplayItem& proto) {
+    const proto::DisplayItem& proto)
+    : DisplayItem(END_FLOAT_CLIP) {
   DCHECK_EQ(proto::DisplayItem::Type_EndFloatClip, proto.type());
 }
 
@@ -77,7 +76,6 @@ void EndFloatClipDisplayItem::ToProtobuf(proto::DisplayItem* proto) const {
 
 void EndFloatClipDisplayItem::Raster(
     SkCanvas* canvas,
-    const gfx::Rect& canvas_target_playback_rect,
     SkPicture::AbortCallback* callback) const {
   canvas->restore();
 }
@@ -88,10 +86,6 @@ void EndFloatClipDisplayItem::AsValueInto(
   array->AppendString(
       base::StringPrintf("EndFloatClipDisplayItem visualRect: [%s]",
                          visual_rect.ToString().c_str()));
-}
-
-size_t EndFloatClipDisplayItem::ExternalMemoryUsage() const {
-  return 0;
 }
 
 }  // namespace cc

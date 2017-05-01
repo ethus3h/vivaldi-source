@@ -8,13 +8,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
 #include "content/common/p2p_socket_type.h"
 #include "content/public/browser/render_process_host.h"
 #include "net/base/ip_endpoint.h"
-#include "net/udp/datagram_socket.h"
+#include "net/socket/datagram_socket.h"
 
 namespace IPC {
 class Sender;
@@ -31,33 +33,6 @@ struct PacketOptions;
 namespace content {
 class P2PMessageThrottler;
 
-namespace packet_processing_helpers {
-
-// This method can handle only RTP packet, otherwise this method must not be
-// called. It will try to do, 1. update absolute send time extension header
-// if present with current time and 2. update HMAC in RTP packet.
-// If abs_send_time is 0, ApplyPacketOption will get current time from system.
-CONTENT_EXPORT bool ApplyPacketOptions(char* data,
-                                       size_t length,
-                                       const rtc::PacketOptions& options,
-                                       uint32_t abs_send_time);
-
-// Helper method which finds RTP ofset and length if the packet is encapsulated
-// in a TURN Channel Message or TURN Send Indication message.
-CONTENT_EXPORT bool GetRtpPacketStartPositionAndLength(
-    const char* data,
-    size_t length,
-    size_t* rtp_start_pos,
-    size_t* rtp_packet_length);
-
-// Helper method which updates absoulute send time extension if present.
-CONTENT_EXPORT bool UpdateRtpAbsSendTimeExtension(char* rtp,
-                                                  size_t length,
-                                                  int extension_id,
-                                                  uint32_t abs_send_time);
-
-}  // packet_processing_helpers
-
 // Base class for P2P sockets.
 class CONTENT_EXPORT P2PSocketHost {
  public:
@@ -71,8 +46,18 @@ class CONTENT_EXPORT P2PSocketHost {
 
   virtual ~P2PSocketHost();
 
-  // Initalizes the socket. Returns false when initiazations fails.
+  // Initalizes the socket. Returns false when initialization fails.
+  // |min_port| and |max_port| specify the valid range of allowed ports.
+  // |min_port| must be less than or equal to |max_port|.
+  // If |min_port| is zero, |max_port| must also be zero and it means all ports
+  // are valid.
+  // If |local_address.port()| is zero, the socket will be initialized to a port
+  // in the valid range.
+  // If |local_address.port()| is nonzero and not in the valid range,
+  // initialization will fail.
   virtual bool Init(const net::IPEndPoint& local_address,
+                    uint16_t min_port,
+                    uint16_t max_port,
                     const P2PHostAndIPEndPoint& remote_address) = 0;
 
   // Sends |data| on the socket to |to|.
@@ -81,8 +66,9 @@ class CONTENT_EXPORT P2PSocketHost {
                     const rtc::PacketOptions& options,
                     uint64_t packet_id) = 0;
 
-  virtual P2PSocketHost* AcceptIncomingTcpConnection(
-      const net::IPEndPoint& remote_address, int id) = 0;
+  virtual std::unique_ptr<P2PSocketHost> AcceptIncomingTcpConnection(
+      const net::IPEndPoint& remote_address,
+      int id) = 0;
 
   virtual bool SetOption(P2PSocketOption option, int value) = 0;
 
@@ -142,11 +128,13 @@ class CONTENT_EXPORT P2PSocketHost {
                                 StunMessageType* type);
   static bool IsRequestOrResponse(StunMessageType type);
 
+  static void ReportSocketError(int result, const char* histogram_name);
+
   // Calls |packet_dump_callback_| to record the RTP header.
   void DumpRtpPacket(const char* packet, size_t length, bool incoming);
 
   // A helper to dump the packet on the IO thread.
-  void DumpRtpPacketOnIOThread(scoped_ptr<uint8_t[]> packet_header,
+  void DumpRtpPacketOnIOThread(std::unique_ptr<uint8_t[]> packet_header,
                                size_t header_length,
                                size_t packet_length,
                                bool incoming);

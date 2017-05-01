@@ -30,37 +30,30 @@
 
 #include "public/platform/WebRTCVoidRequest.h"
 
-#include "platform/mediastream/RTCVoidRequest.h"
-#include "wtf/PassOwnPtr.h"
+#include "platform/peerconnection/RTCVoidRequest.h"
 #include "wtf/text/WTFString.h"
 
 namespace blink {
 
 WebRTCVoidRequest::WebRTCVoidRequest(RTCVoidRequest* constraints)
-    : m_private(constraints)
-{
+    : m_private(constraints) {}
+
+void WebRTCVoidRequest::assign(const WebRTCVoidRequest& other) {
+  m_private = other.m_private;
 }
 
-void WebRTCVoidRequest::assign(const WebRTCVoidRequest& other)
-{
-    m_private = other.m_private;
+void WebRTCVoidRequest::reset() {
+  m_private.reset();
 }
 
-void WebRTCVoidRequest::reset()
-{
-    m_private.reset();
-}
-
-void WebRTCVoidRequest::requestSucceeded() const
-{
-    ASSERT(m_private.get());
+void WebRTCVoidRequest::requestSucceeded() const {
+  if (m_private.get())
     m_private->requestSucceeded();
 }
 
-void WebRTCVoidRequest::requestFailed(const WebString& error) const
-{
-    ASSERT(m_private.get());
+void WebRTCVoidRequest::requestFailed(const WebString& error) const {
+  if (m_private.get())
     m_private->requestFailed(error);
 }
 
-} // namespace blink
+}  // namespace blink

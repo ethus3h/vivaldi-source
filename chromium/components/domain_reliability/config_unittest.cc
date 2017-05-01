@@ -4,30 +4,32 @@
 
 #include "components/domain_reliability/config.h"
 
+#include <memory>
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace domain_reliability {
 namespace {
 
-scoped_ptr<DomainReliabilityConfig> MakeBaseConfig() {
+std::unique_ptr<DomainReliabilityConfig> MakeBaseConfig() {
   DomainReliabilityConfig* config = new DomainReliabilityConfig();
   config->origin = GURL("https://example/");
   config->include_subdomains = false;
-  config->collectors.push_back(new GURL("https://example/upload"));
+  config->collectors.push_back(
+      base::MakeUnique<GURL>("https://example/upload"));
   config->failure_sample_rate = 1.0;
   config->success_sample_rate = 0.0;
   EXPECT_TRUE(config->IsValid());
-  return scoped_ptr<DomainReliabilityConfig>(config);
+  return std::unique_ptr<DomainReliabilityConfig>(config);
 }
 
-scoped_ptr<DomainReliabilityConfig> MakeSampleConfig() {
-  scoped_ptr<DomainReliabilityConfig> config(MakeBaseConfig());
-  config->path_prefixes.push_back(new std::string("/css/"));
-  config->path_prefixes.push_back(new std::string("/js/"));
+std::unique_ptr<DomainReliabilityConfig> MakeSampleConfig() {
+  std::unique_ptr<DomainReliabilityConfig> config(MakeBaseConfig());
+  config->path_prefixes.push_back(base::MakeUnique<std::string>("/css/"));
+  config->path_prefixes.push_back(base::MakeUnique<std::string>("/js/"));
   EXPECT_TRUE(config->IsValid());
   return config;
 }
@@ -35,7 +37,7 @@ scoped_ptr<DomainReliabilityConfig> MakeSampleConfig() {
 class DomainReliabilityConfigTest : public testing::Test { };
 
 TEST_F(DomainReliabilityConfigTest, IsValid) {
-  scoped_ptr<DomainReliabilityConfig> config;
+  std::unique_ptr<DomainReliabilityConfig> config;
 
   config = MakeSampleConfig();
   EXPECT_TRUE(config->IsValid());
@@ -49,8 +51,7 @@ TEST_F(DomainReliabilityConfigTest, IsValid) {
   EXPECT_FALSE(config->IsValid());
 
   config = MakeSampleConfig();
-  delete config->collectors[0];
-  config->collectors[0] = new GURL();
+  config->collectors[0] = base::MakeUnique<GURL>();
   EXPECT_FALSE(config->IsValid());
 
   config = MakeSampleConfig();
@@ -75,7 +76,7 @@ TEST_F(DomainReliabilityConfigTest, FromJSON) {
     "  \"success_sample_rate\": 0.01"
     "}";
 
-  scoped_ptr<const DomainReliabilityConfig> config(
+  std::unique_ptr<const DomainReliabilityConfig> config(
       DomainReliabilityConfig::FromJSON(config_json));
 
   EXPECT_TRUE(config);

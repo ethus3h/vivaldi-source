@@ -14,8 +14,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/sys_byteorder.h"
 #include "base/values.h"
-#include "content/browser/speech/google_streaming_remote_engine.h"
 #include "content/browser/speech/proto/google_streaming_api.pb.h"
+#include "content/browser/speech/speech_recognition_engine.h"
 #include "content/browser/speech/speech_recognition_manager_impl.h"
 #include "net/base/escape.h"
 #include "net/base/net_errors.h"
@@ -30,9 +30,9 @@ namespace content {
 MockGoogleStreamingServer::MockGoogleStreamingServer(Delegate* delegate)
     : delegate_(delegate),
       kDownstreamUrlFetcherId(
-          GoogleStreamingRemoteEngine::kDownstreamUrlFetcherIdForTesting),
+          SpeechRecognitionEngine::kDownstreamUrlFetcherIdForTesting),
       kUpstreamUrlFetcherId(
-          GoogleStreamingRemoteEngine::kUpstreamUrlFetcherIdForTesting) {
+          SpeechRecognitionEngine::kUpstreamUrlFetcherIdForTesting) {
   url_fetcher_factory_.SetDelegateForTests(this);
 }
 
@@ -46,9 +46,9 @@ void MockGoogleStreamingServer::OnRequestStart(int fetcher_id) {
   // Extract request argument from the the request URI.
   std::string query = GetURLFetcher(true)->GetOriginalURL().query();
   const net::UnescapeRule::Type kUnescapeAll =
-      net::UnescapeRule::NORMAL |
-      net::UnescapeRule::SPACES |
-      net::UnescapeRule::URL_SPECIAL_CHARS |
+      net::UnescapeRule::NORMAL | net::UnescapeRule::SPACES |
+      net::UnescapeRule::PATH_SEPARATORS |
+      net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
       net::UnescapeRule::REPLACE_PLUS_WITH_SPACE;
   for (const base::StringPiece& query_param :
        base::SplitStringPiece(query, "&", base::KEEP_WHITESPACE,
@@ -137,7 +137,7 @@ void MockGoogleStreamingServer::SimulateServerResponse(
       net::URLRequestStatus::FromError(success ? net::OK : net::ERR_FAILED));
   fetcher->set_response_code(success ? 200 : 500);
   fetcher->SetResponseString(http_response);
-  fetcher->delegate()->OnURLFetchDownloadProgress(fetcher, 0, 0);
+  fetcher->delegate()->OnURLFetchDownloadProgress(fetcher, 0, 0, 0);
 }
 
 // Can return NULL if the SpeechRecognizer has not requested the connection yet.

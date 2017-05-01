@@ -9,6 +9,7 @@
 #include "base/auto_reset.h"
 #include "base/logging.h"
 #include "ui/events/event.h"
+#include "ui/events/event_utils.h"
 #include "ui/events/gesture_detection/gesture_configuration.h"
 #include "ui/events/gesture_detection/gesture_event_data.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
@@ -36,42 +37,51 @@ bool GestureProviderAura::OnTouchEvent(TouchEvent* event) {
   if (!result.succeeded)
     return false;
 
-  event->set_may_cause_scrolling(result.did_generate_scroll);
+  event->set_may_cause_scrolling(result.moved_beyond_slop_region);
   pointer_state_.CleanupRemovedTouchPoints(*event);
   return true;
 }
 
-void GestureProviderAura::OnTouchEventAck(uint32_t unique_event_id,
-                                          bool event_consumed) {
+void GestureProviderAura::OnTouchEventAck(uint32_t unique_touch_event_id,
+    bool event_consumed) {
   DCHECK(pending_gestures_.empty());
   DCHECK(!handling_event_);
   base::AutoReset<bool> handling_event(&handling_event_, true);
-  filtered_gesture_provider_.OnTouchEventAck(unique_event_id, event_consumed);
+  filtered_gesture_provider_.OnTouchEventAck(unique_touch_event_id,
+      event_consumed);
 }
 
-void GestureProviderAura::OnGestureEvent(
-    const GestureEventData& gesture) {
-  scoped_ptr<ui::GestureEvent> event(
+void GestureProviderAura::OnGestureEvent(const GestureEventData& gesture) {
+  std::unique_ptr<ui::GestureEvent> event(
       new ui::GestureEvent(gesture.x, gesture.y, gesture.flags,
-                           gesture.time - base::TimeTicks(), gesture.details));
+                           gesture.time, gesture.details,
+                           gesture.unique_touch_event_id));
 
   if (!handling_event_) {
     // Dispatching event caused by timer.
     client_->OnGestureEvent(gesture_consumer_, event.get());
   } else {
-    // Memory managed by ScopedVector pending_gestures_.
     pending_gestures_.push_back(std::move(event));
   }
 }
 
-ScopedVector<GestureEvent>* GestureProviderAura::GetAndResetPendingGestures() {
-  if (pending_gestures_.empty())
-    return NULL;
-  // Caller is responsible for deleting old_pending_gestures.
-  ScopedVector<GestureEvent>* old_pending_gestures =
-      new ScopedVector<GestureEvent>();
-  old_pending_gestures->swap(pending_gestures_);
-  return old_pending_gestures;
+std::vector<std::unique_ptr<GestureEvent>>
+GestureProviderAura::GetAndResetPendingGestures() {
+  std::vector<std::unique_ptr<GestureEvent>> result;
+  result.swap(pending_gestures_);
+  return result;
+}
+
+void GestureProviderAura::OnTouchEnter(int pointer_id, float x, float y) {
+  std::unique_ptr<TouchEvent> touch_event(new TouchEvent(
+      ET_TOUCH_PRESSED, gfx::Point(), EF_IS_SYNTHESIZED, pointer_id,
+      ui::EventTimeForNow(), 0.0f, 0.0f, 0.0f, 0.0f));
+  gfx::PointF point(x, y);
+  touch_event->set_location_f(point);
+  touch_event->set_root_location_f(point);
+
+  OnTouchEvent(touch_event.get());
+  OnTouchEventAck(touch_event->unique_event_id(), true);
 }
 
 }  // namespace content

@@ -10,6 +10,10 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "ui/web_dialogs/web_dialogs_export.h"
 
+namespace content {
+class BrowserContext;
+}
+
 namespace ui {
 
 // This class implements (and mostly ignores) most of
@@ -71,7 +75,7 @@ class WEB_DIALOGS_EXPORT WebDialogWebContentsDelegate
   // Weak pointer.  Always an original profile.
   content::BrowserContext* browser_context_;
 
-  scoped_ptr<WebContentsHandler> handler_;
+  std::unique_ptr<WebContentsHandler> handler_;
 
   DISALLOW_COPY_AND_ASSIGN(WebDialogWebContentsDelegate);
 };

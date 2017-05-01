@@ -5,9 +5,10 @@
 #ifndef UI_VIEWS_CONTROLS_BUTTON_IMAGE_BUTTON_H_
 #define UI_VIEWS_CONTROLS_BUTTON_IMAGE_BUTTON_H_
 
+#include <memory>
+
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "ui/base/layout.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/button/custom_button.h"
@@ -17,11 +18,9 @@ namespace views {
 class Painter;
 
 // An image button.
-
 // Note that this type of button is not focusable by default and will not be
-// part of the focus chain.  Call SetFocusable(true) to make it part of the
-// focus chain.
-
+// part of the focus chain, unless in accessibility mode. Call
+// SetFocusForPlatform() to make it part of the focus chain.
 class VIEWS_EXPORT ImageButton : public CustomButton {
  public:
   static const char kViewClassName[];
@@ -45,7 +44,12 @@ class VIEWS_EXPORT ImageButton : public CustomButton {
   virtual const gfx::ImageSkia& GetImage(ButtonState state) const;
 
   // Set the image the button should use for the provided state.
-  virtual void SetImage(ButtonState state, const gfx::ImageSkia* image);
+  void SetImage(ButtonState state, const gfx::ImageSkia* image);
+
+  // As above, but takes a const ref. TODO(estade): all callers should be
+  // updated to use this version, and then the implementations can be
+  // consolidated.
+  virtual void SetImage(ButtonState state, const gfx::ImageSkia& image);
 
   // Set the background details.
   void SetBackground(SkColor color,
@@ -56,7 +60,7 @@ class VIEWS_EXPORT ImageButton : public CustomButton {
   void SetImageAlignment(HorizontalAlignment h_align,
                          VerticalAlignment v_align);
 
-  void SetFocusPainter(scoped_ptr<Painter> focus_painter);
+  void SetFocusPainter(std::unique_ptr<Painter> focus_painter);
 
   // The minimum size of the contents (not including the border). The contents
   // will be at least this size, but may be larger if the image itself is
@@ -113,7 +117,7 @@ class VIEWS_EXPORT ImageButton : public CustomButton {
   // resources.
   bool draw_image_mirrored_;
 
-  scoped_ptr<Painter> focus_painter_;
+  std::unique_ptr<Painter> focus_painter_;
 
   DISALLOW_COPY_AND_ASSIGN(ImageButton);
 };
@@ -143,12 +147,12 @@ class VIEWS_EXPORT ToggleImageButton : public ImageButton {
 
   // Overridden from ImageButton:
   const gfx::ImageSkia& GetImage(ButtonState state) const override;
-  void SetImage(ButtonState state, const gfx::ImageSkia* image) override;
+  void SetImage(ButtonState state, const gfx::ImageSkia& image) override;
 
   // Overridden from View:
   bool GetTooltipText(const gfx::Point& p,
                       base::string16* tooltip) const override;
-  void GetAccessibleState(ui::AXViewState* state) override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
  private:
   // The parent class's images_ member is used for the current images,

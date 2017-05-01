@@ -4,13 +4,14 @@
 
 #include "ui/compositor/test/test_compositor_host.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -19,7 +20,8 @@ namespace ui {
 class TestCompositorHostOzone : public TestCompositorHost {
  public:
   TestCompositorHostOzone(const gfx::Rect& bounds,
-                          ui::ContextFactory* context_factory);
+                          ui::ContextFactory* context_factory,
+                          ui::ContextFactoryPrivate* context_factory_private);
   ~TestCompositorHostOzone() override;
 
  private:
@@ -29,8 +31,6 @@ class TestCompositorHostOzone : public TestCompositorHost {
 
   gfx::Rect bounds_;
 
-  ui::ContextFactory* context_factory_;
-
   ui::Compositor compositor_;
 
   DISALLOW_COPY_AND_ASSIGN(TestCompositorHostOzone);
@@ -38,10 +38,13 @@ class TestCompositorHostOzone : public TestCompositorHost {
 
 TestCompositorHostOzone::TestCompositorHostOzone(
     const gfx::Rect& bounds,
-    ui::ContextFactory* context_factory)
+    ui::ContextFactory* context_factory,
+    ui::ContextFactoryPrivate* context_factory_private)
     : bounds_(bounds),
-      context_factory_(context_factory),
-      compositor_(context_factory, base::ThreadTaskRunnerHandle::Get()) {}
+      compositor_(context_factory_private->AllocateFrameSinkId(),
+                  context_factory,
+                  context_factory_private,
+                  base::ThreadTaskRunnerHandle::Get()) {}
 
 TestCompositorHostOzone::~TestCompositorHostOzone() {}
 
@@ -55,6 +58,7 @@ void TestCompositorHostOzone::Show() {
   // available: http://crbug.com/255128
   compositor_.SetAcceleratedWidget(1);
   compositor_.SetScaleAndSize(1.0f, bounds_.size());
+  compositor_.SetVisible(true);
 }
 
 ui::Compositor* TestCompositorHostOzone::GetCompositor() {
@@ -64,8 +68,10 @@ ui::Compositor* TestCompositorHostOzone::GetCompositor() {
 // static
 TestCompositorHost* TestCompositorHost::Create(
     const gfx::Rect& bounds,
-    ui::ContextFactory* context_factory) {
-  return new TestCompositorHostOzone(bounds, context_factory);
+    ui::ContextFactory* context_factory,
+    ui::ContextFactoryPrivate* context_factory_private) {
+  return new TestCompositorHostOzone(bounds, context_factory,
+                                     context_factory_private);
 }
 
 }  // namespace ui

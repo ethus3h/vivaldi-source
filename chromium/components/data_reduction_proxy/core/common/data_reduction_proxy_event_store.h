@@ -7,18 +7,17 @@
 
 #include <stdint.h>
 
-#include <deque>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_storage_delegate.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_headers.h"
 
 namespace base {
 class DictionaryValue;
-class TimeDelta;
 class Value;
 }
 
@@ -31,43 +30,39 @@ class DataReductionProxyEventStore
   // constants dictionary.
   static void AddConstants(base::DictionaryValue* constants_dict);
 
-  // Constructs a DataReductionProxyEventStore object
+  // Constructs a DataReductionProxyEventStore object.
   DataReductionProxyEventStore();
 
   virtual ~DataReductionProxyEventStore();
 
   // Creates a Value summary of Data Reduction Proxy related information:
-  // - Whether the proxy is enabled
-  // - The proxy configuration
-  // - The state of the last secure proxy check response
+  // - Whether the proxy is enabled,
+  // - The proxy configuration,
+  // - The state of the last secure proxy check response,
   // - A stream of the last Data Reduction Proxy related events.
-  // The caller is responsible for deleting the returned value.
-  base::Value* GetSummaryValue() const;
+  std::unique_ptr<base::DictionaryValue> GetSummaryValue() const;
 
   // Adds DATA_REDUCTION_PROXY event with no parameters to the event store.
-  void AddEvent(scoped_ptr<base::Value> event) override;
+  void AddEvent(std::unique_ptr<base::Value> event) override;
 
   // Override of DataReductionProxyEventStorageDelegate.
-  // Put |entry| on the deque of stored events and set |current_configuration_|.
-  void AddEnabledEvent(scoped_ptr<base::Value> entry, bool enabled) override;
+  // Adds |entry| to the event store and sets |current_configuration_|.
+  void AddEnabledEvent(std::unique_ptr<base::Value> entry,
+                       bool enabled) override;
 
   // Override of DataReductionProxyEventStorageDelegate.
-  // Put |entry| on a deque of events to store and set
-  // |secure_proxy_check_state_|
-  void AddEventAndSecureProxyCheckState(scoped_ptr<base::Value> entry,
+  // Adds |entry| to the event store and sets |secure_proxy_check_state_|.
+  void AddEventAndSecureProxyCheckState(std::unique_ptr<base::Value> entry,
                                         SecureProxyCheckState state) override;
 
   // Override of DataReductionProxyEventStorageDelegate.
-  // Put |entry| on a deque of events to store and set |last_bypass_event_| and
-  // |expiration_ticks_|
-  void AddAndSetLastBypassEvent(scoped_ptr<base::Value> entry,
+  // Adds |entry| to the event store and sets |last_bypass_event_| and
+  // |expiration_ticks_|.
+  void AddAndSetLastBypassEvent(std::unique_ptr<base::Value> entry,
                                 int64_t expiration_ticks) override;
 
   // Returns the list of proxy servers for HTTP origins.
   std::string GetHttpProxyList() const;
-
-  // Returns the list of proxy servers for HTTPS origins.
-  std::string GetHttpsProxyList() const;
 
   // Returns a sanitized version of the last seen bypass event.
   std::string SanitizedLastBypassEvent() const;
@@ -75,17 +70,20 @@ class DataReductionProxyEventStore
  private:
   friend class DataReductionProxyEventStoreTest;
 
-  // A deque of data reduction proxy related events. It is used as a circular
+  // A vector of data reduction proxy related events. It is used as a circular
   // buffer to prevent unbounded memory utilization.
-  std::deque<base::Value*> stored_events_;
+  std::vector<std::unique_ptr<base::Value>> stored_events_;
+  // The index of the oldest event in |stored_events_|.
+  size_t oldest_event_index_;
+
   // Whether the data reduction proxy is enabled or not.
   bool enabled_;
   // The current data reduction proxy configuration.
-  scoped_ptr<base::Value> current_configuration_;
+  std::unique_ptr<base::Value> current_configuration_;
   // The state based on the last secure proxy check.
   SecureProxyCheckState secure_proxy_check_state_;
   // The last seen data reduction proxy bypass event.
-  scoped_ptr<base::Value> last_bypass_event_;
+  std::unique_ptr<base::Value> last_bypass_event_;
   // The expiration time of the |last_bypass_event_|.
   int64_t expiration_ticks_;
 

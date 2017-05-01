@@ -15,17 +15,24 @@
 #include "remoting/protocol/transport.h"
 #include "third_party/webrtc/base/sigslot.h"
 
+// TODO(zhihuang):Replace #include by forward declaration once proper
+// inheritance is defined for cricket::IceTransportInternal and
+// cricket::P2PTransportChannel.
+#include "third_party/webrtc/p2p/base/icetransportinternal.h"
+// TODO(johan): Replace #include by forward declaration once proper inheritance
+// is defined for rtc::PacketTransportInterface and cricket::TransportChannel.
+#include "third_party/webrtc/p2p/base/packettransportinterface.h"
+
 namespace cricket {
 class Candidate;
 class P2PTransportChannel;
 class PortAllocator;
-class TransportChannel;
-class TransportChannelImpl;
 }  // namespace cricket
 
 namespace remoting {
 namespace protocol {
 
+class P2PDatagramSocket;
 class TransportContext;
 
 class IceTransportChannel : public sigslot::has_slots<> {
@@ -59,7 +66,8 @@ class IceTransportChannel : public sigslot::has_slots<> {
     virtual void OnChannelDeleted(IceTransportChannel* transport) = 0;
   };
 
-  typedef base::Callback<void(scoped_ptr<P2PDatagramSocket>)> ConnectedCallback;
+  typedef base::Callback<void(std::unique_ptr<P2PDatagramSocket>)>
+      ConnectedCallback;
 
   explicit IceTransportChannel(
       scoped_refptr<TransportContext> transport_context);
@@ -86,16 +94,16 @@ class IceTransportChannel : public sigslot::has_slots<> {
 
  private:
   void OnPortAllocatorCreated(
-      scoped_ptr<cricket::PortAllocator> port_allocator);
+      std::unique_ptr<cricket::PortAllocator> port_allocator);
 
   void NotifyConnected();
 
-  // Signal handlers for cricket::TransportChannel.
-  void OnCandidateGathered(cricket::TransportChannelImpl* channel,
+  // Signal handlers for cricket::IceTransportInternal.
+  void OnCandidateGathered(cricket::IceTransportInternal* ice_transport,
                            const cricket::Candidate& candidate);
-  void OnRouteChange(cricket::TransportChannel* channel,
+  void OnRouteChange(cricket::IceTransportInternal* ice_transport,
                      const cricket::Candidate& candidate);
-  void OnWritableState(cricket::TransportChannel* channel);
+  void OnWritableState(rtc::PacketTransportInterface* transport);
 
   // Callback for TransportChannelSocketAdapter to notify when the socket is
   // destroyed.
@@ -113,12 +121,12 @@ class IceTransportChannel : public sigslot::has_slots<> {
   ConnectedCallback callback_;
   std::string ice_username_fragment_;
 
-  scoped_ptr<cricket::PortAllocator> port_allocator_;
+  std::unique_ptr<cricket::PortAllocator> port_allocator_;
 
   std::string remote_ice_username_fragment_;
   std::string remote_ice_password_;
   std::list<cricket::Candidate> pending_candidates_;
-  scoped_ptr<cricket::P2PTransportChannel> channel_;
+  std::unique_ptr<cricket::P2PTransportChannel> channel_;
   int connect_attempts_left_;
   base::RepeatingTimer reconnect_timer_;
 

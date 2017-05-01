@@ -39,8 +39,9 @@ class ThreatDOMDetails : public content::RenderFrameObserver {
   // the RenderFrame.
   explicit ThreatDOMDetails(content::RenderFrame* render_frame);
 
-  // RenderViewObserver implementation.
+  // RenderFrameObserver implementation.
   bool OnMessageReceived(const IPC::Message& message) override;
+  void OnDestruct() override;
 
   void OnGetThreatDOMDetails();
 

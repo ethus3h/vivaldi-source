@@ -5,20 +5,16 @@
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_ENROLLMENT_AUTO_ENROLLMENT_CONTROLLER_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_ENROLLMENT_AUTO_ENROLLMENT_CONTROLLER_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/chromeos/policy/auto_enrollment_client.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
-
-namespace policy {
-class ServerBackedStateKeysBroker;
-}
 
 namespace chromeos {
 
@@ -43,6 +39,20 @@ class AutoEnrollmentController {
     MODE_FORCED_RE_ENROLLMENT,
   };
 
+  // Requirement for forced re-enrollment check.
+  enum FRERequirement {
+    // The device was setup (has kActivateDateKey) but doesn't have the
+    // kCheckEnrollmentKey entry in VPD, or the VPD is corrupted.
+    REQUIRED,
+    // The device doesn't have kActivateDateKey, nor kCheckEnrollmentKey entry
+    // while the serial number has been successfully read from VPD.
+    NOT_REQUIRED,
+    // FRE check explicitly required by the flag in VPD.
+    EXPLICITLY_REQUIRED,
+    // FRE check to be skipped, explicitly stated by the flag in VPD.
+    EXPLICITLY_NOT_REQUIRED,
+  };
+
   // Gets the auto-enrollment mode based on command-line flags and official
   // build status.
   static Mode GetMode();
@@ -60,7 +70,7 @@ class AutoEnrollmentController {
   void Retry();
 
   // Registers a callback to invoke on state changes.
-  scoped_ptr<ProgressCallbackList::Subscription> RegisterProgressCallback(
+  std::unique_ptr<ProgressCallbackList::Subscription> RegisterProgressCallback(
       const ProgressCallbackList::CallbackType& callback);
 
   policy::AutoEnrollmentState state() const { return state_; }
@@ -82,7 +92,7 @@ class AutoEnrollmentController {
   policy::AutoEnrollmentState state_;
   ProgressCallbackList progress_callbacks_;
 
-  scoped_ptr<policy::AutoEnrollmentClient> client_;
+  std::unique_ptr<policy::AutoEnrollmentClient> client_;
 
   // This timer acts as a belt-and-suspenders safety for the case where one of
   // the asynchronous steps required to make the auto-enrollment decision
@@ -93,6 +103,9 @@ class AutoEnrollmentController {
   // eventually, which is crucial to not block OOBE forever. See
   // http://crbug.com/433634 for background.
   base::Timer safeguard_timer_;
+
+  // Whether the forced re-enrollment check has to be applied.
+  FRERequirement fre_requirement_ = REQUIRED;
 
   base::WeakPtrFactory<AutoEnrollmentController> client_start_weak_factory_;
 

@@ -7,12 +7,12 @@
 
 #include <stdint.h>
 
-#include <set>
+#include <map>
+#include <memory>
 #include <stack>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/time/time.h"
 #include "storage/browser/fileapi/recursive_operation_delegate.h"
 
@@ -23,13 +23,11 @@ class IOBufferWithSize;
 
 namespace storage {
 class FileStreamReader;
-class ShareableFileReference;
 enum class FlushPolicy;
 }
 
 namespace storage {
 
-class CopyOrMoveFileValidator;
 class FileStreamWriter;
 
 // A delegate class for recursive copy or move operations.
@@ -51,8 +49,8 @@ class CopyOrMoveOperationDelegate
   class STORAGE_EXPORT StreamCopyHelper {
    public:
     StreamCopyHelper(
-        scoped_ptr<storage::FileStreamReader> reader,
-        scoped_ptr<FileStreamWriter> writer,
+        std::unique_ptr<storage::FileStreamReader> reader,
+        std::unique_ptr<FileStreamWriter> writer,
         FlushPolicy flush_policy,
         int buffer_size,
         const FileSystemOperation::CopyFileProgressCallback&
@@ -81,8 +79,8 @@ class CopyOrMoveOperationDelegate
     void Flush(const StatusCallback& callback, bool is_eof);
     void DidFlush(const StatusCallback& callback, bool is_eof, int result);
 
-    scoped_ptr<storage::FileStreamReader> reader_;
-    scoped_ptr<FileStreamWriter> writer_;
+    std::unique_ptr<storage::FileStreamReader> reader_;
+    std::unique_ptr<FileStreamWriter> writer_;
     const FlushPolicy flush_policy_;
     FileSystemOperation::CopyFileProgressCallback file_progress_callback_;
     scoped_refptr<net::IOBufferWithSize> io_buffer_;
@@ -156,7 +154,7 @@ class CopyOrMoveOperationDelegate
   CopyProgressCallback progress_callback_;
   StatusCallback callback_;
 
-  std::set<CopyOrMoveImpl*> running_copy_set_;
+  std::map<CopyOrMoveImpl*, std::unique_ptr<CopyOrMoveImpl>> running_copy_set_;
   base::WeakPtrFactory<CopyOrMoveOperationDelegate> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(CopyOrMoveOperationDelegate);

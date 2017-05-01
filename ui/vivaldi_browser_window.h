@@ -3,20 +3,23 @@
 #ifndef UI_VIVALDI_BROWSER_WINDOW_H_
 #define UI_VIVALDI_BROWSER_WINDOW_H_
 
+#include <memory>
+#include <string>
+
 #include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "extensions/browser/app_window/app_window.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#include "chrome/browser/jumplist_win.h"
+#include "chrome/browser/win/jumplist.h"
 #include "ui/views/win/scoped_fullscreen_visibility.h"
 #endif
 
 class Browser;
-class DownloadShelfView;
 
 #if defined(OS_WIN)
 class JumpList;
@@ -32,7 +35,8 @@ namespace extensions {
 // implement as little as possible for of the BrowerWindow interface, in
 // fact we only implment what is needed to pass data from the app window to the
 // cpp code.
-class VivaldiBrowserWindow : public BrowserWindow {
+class VivaldiBrowserWindow : public BrowserWindow,
+                             public ExclusiveAccessContext {
  public:
   VivaldiBrowserWindow();
   ~VivaldiBrowserWindow() override;
@@ -62,7 +66,7 @@ class VivaldiBrowserWindow : public BrowserWindow {
   //virtual void OnLoadCompleted() override;
 
   // BrowserWindow:
-  void Show() override{}
+  void Show() override;
   void ShowInactive() override{}
   void Hide() override{}
   void SetBounds(const gfx::Rect& bounds) override;
@@ -97,14 +101,7 @@ class VivaldiBrowserWindow : public BrowserWindow {
   void Restore() override{}
   bool ShouldHideUIForFullscreen() const override;
   bool IsFullscreen() const override;
-  bool SupportsFullscreenWithToolbar() const override;
-  void UpdateFullscreenWithToolbar(bool with_toolbar) override {};
-  bool IsFullscreenWithToolbar() const override;
   void ResetToolbarTabState(content::WebContents* contents) override {};
-#if defined(OS_WIN)
-  void SetMetroSnapMode(bool enable) override{}
-  bool IsInMetroSnapMode() const;
-#endif
   bool IsFullscreenBubbleVisible() const override;
   LocationBar* GetLocationBar() const override;
   void SetFocusToLocationBar(bool select_all) override{}
@@ -128,27 +125,17 @@ class VivaldiBrowserWindow : public BrowserWindow {
   bool IsBookmarkBarAnimating() const override;
   bool IsTabStripEditable() const override;
   bool IsToolbarVisible() const override;
-  gfx::Rect GetRootWindowResizerRect() const override;
-  void ConfirmAddSearchProvider(TemplateURL* template_url,
-    Profile* profile) override{}
   void ShowUpdateChromeDialog() override{}
   void ShowBookmarkBubble(const GURL& url,
     bool already_bookmarked) override{}
   void ShowBookmarkAppBubble(
       const WebApplicationInfo& web_app_info,
       const ShowBookmarkAppBubbleCallback& callback) override {};
-  void ShowTranslateBubble(
+  ShowTranslateBubbleResult ShowTranslateBubble(
     content::WebContents* contents,
     translate::TranslateStep step,
     translate::TranslateErrors::Type error_type,
-    bool is_user_gesture) override{}
-#if defined(ENABLE_ONE_CLICK_SIGNIN)
-  void ShowOneClickSigninBubble(
-    OneClickSigninBubbleType type,
-    const base::string16& email,
-    const base::string16& error_message,
-    const StartSyncCallback& start_sync_callback) override{}
-#endif
+    bool is_user_gesture) override;
   bool IsDownloadShelfVisible() const override;
   DownloadShelf* GetDownloadShelf() override;
   void ConfirmBrowserCloseWithPendingDownloads(
@@ -160,12 +147,12 @@ class VivaldiBrowserWindow : public BrowserWindow {
   void ShowWebsiteSettings(Profile* profile,
       content::WebContents* web_contents,
       const GURL& url,
-      const security_state::SecurityStateModel::SecurityInfo& security_info
+      const security_state::SecurityInfo& security_info
     ) override;
   void VivaldiShowWebsiteSettingsAt(Profile* profile,
     content::WebContents* web_contents,
     const GURL& url,
-    const security_state::SecurityStateModel::SecurityInfo& security_info,
+    const security_state::SecurityInfo& security_info,
     gfx::Point pos) override;
   void CutCopyPaste(int command_id) override{}
 
@@ -182,30 +169,49 @@ class VivaldiBrowserWindow : public BrowserWindow {
       content::WebContents* contents,
       autofill::SaveCardBubbleController* controller,
       bool is_user_gesture) override;
+  void ShowOneClickSigninConfirmation(
+    const base::string16& email,
+    const StartSyncCallback& start_sync_callback) override {};
 
-  //extensions::AppWindow* GetAppWindow(content::WebContents* web_contents);
+  // Overriden from ExclusiveAccessContext
+  Profile* GetProfile() override;
+  void EnterFullscreen(const GURL& url,
+                       ExclusiveAccessBubbleType bubble_type) override;
+  void ExitFullscreen() override;
+  void UpdateExclusiveAccessExitBubbleContent(
+      const GURL& url,
+      ExclusiveAccessBubbleType bubble_type) override;
+  void OnExclusiveAccessUserInput() override;
+  content::WebContents* GetActiveWebContents() override;
+  void UnhideDownloadShelf() override;
+  void HideDownloadShelf() override;
+
+  // extensions::AppWindow* GetAppWindow(content::WebContents* web_contents);
   ExclusiveAccessContext* GetExclusiveAccessContext() override;
-  void ToggleFullscreenToolbar() override {}
-  bool ShouldHideFullscreenToolbar() const override;
   void ShowAvatarBubbleFromAvatarButton(
       AvatarBubbleMode mode,
       const signin::ManageAccountsParams& manage_accounts_params,
       signin_metrics::AccessPoint access_point) override {}
-  void CloseModalSigninWindow() override {}
-  void ShowModalSigninWindow(
-      AvatarBubbleMode mode,
-      signin_metrics::AccessPoint access_point) override {}
 
+  gfx::Size GetContentsSize() const override;
+  extensions::AppWindow* GetAppWindow() const;
+
+  void ShowImeWarningBubble(
+      const extensions::Extension* extension,
+      const base::Callback<void(ImeWarningBubblePermissionStatus status)>&
+        callback) override {}
+
+  std::string GetWorkspace() const override;
+  void MaybeShowNewBackShortcutBubble(bool forward) override {}
+  void HideNewBackShortcutBubble() override {}
+  bool IsVisibleOnAllWorkspaces() const override;
 
  protected:
   void DestroyBrowser() override;
 
  private:
   // The Browser object we are associated with.
-  scoped_ptr<Browser> browser_;
-
-  // Is the window active.
-  bool is_active_;
+  std::unique_ptr<Browser> browser_;
 
   // The window bounds.
   gfx::Rect bounds_;
@@ -214,11 +220,6 @@ class VivaldiBrowserWindow : public BrowserWindow {
   // The custom JumpList for Windows 7.
   scoped_refptr<JumpList> jumplist_;
 #endif
-
-  // The download shelf view (view at the bottom of the page).
-  scoped_ptr<DownloadShelfView> download_shelf_;
-
-  extensions::AppWindow* GetAppWindow() const;
 
   DISALLOW_COPY_AND_ASSIGN(VivaldiBrowserWindow);
 };

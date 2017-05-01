@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <tuple>
+
 #include "base/macros.h"
+#include "base/message_loop/message_loop.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "content/common/view_messages.h"
@@ -15,10 +18,10 @@ namespace content {
 class RenderMediaLogTest : public testing::Test {
  public:
   RenderMediaLogTest()
-      : log_(new RenderMediaLog()),
+      : log_(new RenderMediaLog(GURL("http://foo.com"))),
         tick_clock_(new base::SimpleTestTickClock()),
         task_runner_(new base::TestMockTimeTaskRunner()) {
-    log_->SetTickClockForTesting(scoped_ptr<base::TickClock>(tick_clock_));
+    log_->SetTickClockForTesting(std::unique_ptr<base::TickClock>(tick_clock_));
     log_->SetTaskRunnerForTesting(task_runner_);
   }
 
@@ -47,9 +50,9 @@ class RenderMediaLogTest : public testing::Test {
       return std::vector<media::MediaLogEvent>();
     }
 
-    base::Tuple<std::vector<media::MediaLogEvent>> events;
+    std::tuple<std::vector<media::MediaLogEvent>> events;
     ViewHostMsg_MediaLogEvents::Read(msg, &events);
-    return base::get<0>(events);
+    return std::get<0>(events);
   }
 
  private:

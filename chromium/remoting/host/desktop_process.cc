@@ -24,15 +24,21 @@
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/desktop_session_agent.h"
 
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif  // defined(OS_WIN)
+
 namespace remoting {
 
 DesktopProcess::DesktopProcess(
     scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
     scoped_refptr<AutoThreadTaskRunner> input_task_runner,
-    const std::string& daemon_channel_name)
+    scoped_refptr<AutoThreadTaskRunner> io_task_runner,
+    mojo::ScopedMessagePipeHandle daemon_channel_handle)
     : caller_task_runner_(caller_task_runner),
       input_task_runner_(input_task_runner),
-      daemon_channel_name_(daemon_channel_name) {
+      io_task_runner_(io_task_runner),
+      daemon_channel_handle_(std::move(daemon_channel_handle)) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
   DCHECK(base::MessageLoopForUI::IsCurrent());
 }
@@ -58,6 +64,22 @@ void DesktopProcess::InjectSas() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   daemon_channel_->Send(new ChromotingDesktopDaemonMsg_InjectSas());
+}
+
+void DesktopProcess::LockWorkStation() {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+#if defined(OS_WIN)
+  if (base::win::OSInfo::GetInstance()->version_type() ==
+      base::win::VersionType::SUITE_HOME) {
+    return;
+  }
+
+  if (!::LockWorkStation()) {
+    LOG(ERROR) << "LockWorkStation() failed: " << ::GetLastError();
+  }
+#else
+  NOTREACHED();
+#endif  // defined(OS_WIN)
 }
 
 bool DesktopProcess::OnMessageReceived(const IPC::Message& message) {
@@ -89,11 +111,12 @@ void DesktopProcess::OnChannelError() {
 
   caller_task_runner_ = nullptr;
   input_task_runner_ = nullptr;
+  io_task_runner_ = nullptr;
   desktop_environment_factory_.reset();
 }
 
 bool DesktopProcess::Start(
-    scoped_ptr<DesktopEnvironmentFactory> desktop_environment_factory) {
+    std::unique_ptr<DesktopEnvironmentFactory> desktop_environment_factory) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
   DCHECK(!desktop_environment_factory_);
   DCHECK(desktop_environment_factory);
@@ -115,40 +138,23 @@ bool DesktopProcess::Start(
       "ChromotingAudioThread", caller_task_runner_, base::MessageLoop::TYPE_IO);
 #endif  // !defined(OS_WIN)
 
-  // Launch the I/O thread.
-  scoped_refptr<AutoThreadTaskRunner> io_task_runner =
-      AutoThread::CreateWithType(
-          "I/O thread", caller_task_runner_, base::MessageLoop::TYPE_IO);
-
-  // Launch the video capture thread.
-  scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner =
-      AutoThread::Create("Video capture thread", caller_task_runner_);
-
   // Create a desktop agent.
-  desktop_agent_ = new DesktopSessionAgent(audio_task_runner,
-                                           caller_task_runner_,
-                                           input_task_runner_,
-                                           io_task_runner,
-                                           video_capture_task_runner);
+  desktop_agent_ =
+      new DesktopSessionAgent(audio_task_runner, caller_task_runner_,
+                              input_task_runner_, io_task_runner_);
 
   // Start the agent and create an IPC channel to talk to it.
-  IPC::PlatformFileForTransit desktop_pipe;
-  if (!desktop_agent_->Start(AsWeakPtr(), &desktop_pipe)) {
-    desktop_agent_ = nullptr;
-    caller_task_runner_ = nullptr;
-    input_task_runner_ = nullptr;
-    desktop_environment_factory_.reset();
-    return false;
-  }
+  mojo::ScopedMessagePipeHandle desktop_pipe =
+      desktop_agent_->Start(AsWeakPtr());
 
   // Connect to the daemon.
-  daemon_channel_ =
-      IPC::ChannelProxy::Create(daemon_channel_name_, IPC::Channel::MODE_CLIENT,
-                                this, io_task_runner.get());
+  daemon_channel_ = IPC::ChannelProxy::Create(daemon_channel_handle_.release(),
+                                              IPC::Channel::MODE_CLIENT, this,
+                                              io_task_runner_);
 
   // Pass |desktop_pipe| to the daemon.
   daemon_channel_->Send(
-      new ChromotingDesktopDaemonMsg_DesktopAttached(desktop_pipe));
+      new ChromotingDesktopDaemonMsg_DesktopAttached(desktop_pipe.release()));
 
   return true;
 }

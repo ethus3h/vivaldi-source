@@ -19,12 +19,38 @@
 #include <sys/types.h>
 
 #include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
+#include "snapshot/memory_snapshot.h"
 #include "util/misc/uuid.h"
+#include "util/numeric/checked_range.h"
 
 namespace crashpad {
+
+class MemorySnapshot;
+
+//! \brief Information describing a custom user data stream in a minidump.
+class UserMinidumpStream {
+ public:
+  //! \brief Constructs a UserMinidumpStream, takes ownership of \a memory.
+  UserMinidumpStream(uint32_t stream_type, MemorySnapshot* memory)
+      : memory_(memory), stream_type_(stream_type) {}
+
+  const MemorySnapshot* memory() const { return memory_.get(); }
+  uint32_t stream_type() const { return stream_type_; }
+
+ private:
+  //! \brief The memory representing the custom minidump stream.
+  std::unique_ptr<MemorySnapshot> memory_;
+
+  //! \brief The stream type that the minidump stream will be tagged with.
+  uint32_t stream_type_;
+
+  DISALLOW_COPY_AND_ASSIGN(UserMinidumpStream);
+};
 
 //! \brief An abstract interface to a snapshot representing a code module
 //!     (binary image) loaded into a snapshot process.
@@ -56,8 +82,8 @@ class ModuleSnapshot {
     //! \brief The module is a dynamic loader.
     //!
     //! This is the module responsible for loading other modules. This is
-    //! normally `dyld` for Mac OS X and `ld.so` for Linux and other systems
-    //! using ELF.
+    //! normally `dyld` for macOS and `ld.so` for Linux and other systems using
+    //! ELF.
     kModuleTypeDynamicLoader,
   };
 
@@ -71,7 +97,7 @@ class ModuleSnapshot {
   //! \brief Returns the size that the module occupies in the snapshot process’
   //!     address space, starting at its base address.
   //!
-  //! For Mac OS X snapshots, this method only reports the size of the `__TEXT`
+  //! For macOS snapshots, this method only reports the size of the `__TEXT`
   //! segment, because segments may not be loaded contiguously.
   virtual uint64_t Size() const = 0;
 
@@ -87,7 +113,7 @@ class ModuleSnapshot {
   //! If no file version can be determined, the \a version_* parameters are set
   //! to `0`.
   //!
-  //! For Mac OS X snapshots, this is taken from the module’s `LC_ID_DYLIB` load
+  //! For macOS snapshots, this is taken from the module’s `LC_ID_DYLIB` load
   //! command for shared libraries, and is `0` for other module types.
   virtual void FileVersion(uint16_t* version_0,
                            uint16_t* version_1,
@@ -99,8 +125,8 @@ class ModuleSnapshot {
   //! If no source version can be determined, the \a version_* parameters are
   //! set to `0`.
   //!
-  //! For Mac OS X snapshots, this is taken from the module’s
-  //! `LC_SOURCE_VERSION` load command.
+  //! For macOS snapshots, this is taken from the module’s `LC_SOURCE_VERSION`
+  //! load command.
   virtual void SourceVersion(uint16_t* version_0,
                              uint16_t* version_1,
                              uint16_t* version_2,
@@ -126,8 +152,8 @@ class ModuleSnapshot {
   //!
   //! On Windows, this references the PDB file, which contains symbol
   //! information held separately from the module itself. On other platforms,
-  //! this is normally just be the basename of the module, because the debug
-  //! info file’s name is not relevant even in split-debug scenarios.
+  //! this is normally the basename of the module, because the debug info file’s
+  //! name is not relevant even in split-debug scenarios.
   //!
   //! \sa UUIDAndAge()
   virtual std::string DebugFileName() const = 0;
@@ -138,8 +164,8 @@ class ModuleSnapshot {
   //! are intended for diagnostic use, including crash analysis. A module may
   //! contain multiple annotations, so they are returned in a vector.
   //!
-  //! For Mac OS X snapshots, these annotations are found by interpreting the
-  //! module’s `__DATA, __crash_info` section as `crashreporter_annotations_t`.
+  //! For macOS snapshots, these annotations are found by interpreting the
+  //! module’s `__DATA,__crash_info` section as `crashreporter_annotations_t`.
   //! System libraries using the crash reporter client interface may reference
   //! annotations in this structure. Additional annotations messages may be
   //! found in other locations, which may be module-specific. The dynamic linker
@@ -157,8 +183,8 @@ class ModuleSnapshot {
   //! keys and values are strings. These are referred to in Chrome as “crash
   //! keys.”
   //!
-  //! For Mac OS X snapshots, these annotations are found by interpreting the
-  //! `__DATA, __crashpad_info` section as `CrashpadInfo`. Clients can use the
+  //! For macOS snapshots, these annotations are found by interpreting the
+  //! `__DATA,crashpad_info` section as `CrashpadInfo`. Clients can use the
   //! Crashpad client interface to store annotations in this structure. Most
   //! annotations under the client’s direct control will be retrievable by this
   //! method. For clients such as Chrome, this includes the process type.
@@ -168,6 +194,19 @@ class ModuleSnapshot {
   //! system, or snapshot producer may be obtained by calling
   //! ProcessSnapshot::AnnotationsSimpleMap().
   virtual std::map<std::string, std::string> AnnotationsSimpleMap() const = 0;
+
+  //! \brief Returns a set of extra memory ranges specified in the module as
+  //!     being desirable to include in the crash dump.
+  virtual std::set<CheckedRange<uint64_t>> ExtraMemoryRanges() const = 0;
+
+  //! \brief Returns a list of custom minidump stream specified in the module to
+  //!     be included in the crash dump.
+  //!
+  //! \return The caller does not take ownership of the returned objects, they
+  //!     are scoped to the lifetime of the ModuleSnapshot object that they were
+  //!     obtained from.
+  virtual std::vector<const UserMinidumpStream*> CustomMinidumpStreams()
+      const = 0;
 };
 
 }  // namespace crashpad

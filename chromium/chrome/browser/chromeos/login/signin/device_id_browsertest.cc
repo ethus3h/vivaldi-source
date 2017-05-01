@@ -7,17 +7,17 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/message_loop/message_loop.h"
-#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/login/test/oobe_base_test.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/ui/oobe_display.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/chromeos_switches.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/core/common/signin_pref_names.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/remove_user_delegate.h"
@@ -49,6 +49,7 @@ class DeviceIDTest : public OobeBaseTest,
   }
 
   void SetUpOnMainThread() override {
+    user_removal_loop_.reset(new base::RunLoop);
     OobeBaseTest::SetUpOnMainThread();
     LoadRefreshTokenToDeviceIdMap();
   }
@@ -117,15 +118,15 @@ class DeviceIDTest : public OobeBaseTest,
   void SignInOffline(const std::string& user_id, const std::string& password) {
     WaitForSigninScreen();
 
-    JS().ExecuteAsync(
-        base::StringPrintf("chrome.send('authenticateUser', ['%s', '%s'])",
-                           user_id.c_str(), password.c_str()));
+    JS().ExecuteAsync(base::StringPrintf(
+        "chrome.send('authenticateUser', ['%s', '%s', false])", user_id.c_str(),
+        password.c_str()));
     WaitForSessionStart();
   }
 
   void RemoveUser(const AccountId& account_id) {
     user_manager::UserManager::Get()->RemoveUser(account_id, this);
-    user_removal_loop_.Run();
+    user_removal_loop_->Run();
   }
 
  private:
@@ -133,7 +134,7 @@ class DeviceIDTest : public OobeBaseTest,
   void OnBeforeUserRemoved(const AccountId& account_id) override {}
 
   void OnUserRemoved(const AccountId& account_id) override {
-    user_removal_loop_.Quit();
+    user_removal_loop_->Quit();
   }
 
   base::FilePath GetRefreshTokenToDeviceIdMapFilePath() const {
@@ -147,7 +148,7 @@ class DeviceIDTest : public OobeBaseTest,
     if (!base::ReadFileToString(GetRefreshTokenToDeviceIdMapFilePath(),
                                 &file_contents))
       return;
-    scoped_ptr<base::Value> value(base::JSONReader::Read(file_contents));
+    std::unique_ptr<base::Value> value(base::JSONReader::Read(file_contents));
     base::DictionaryValue* dictionary;
     EXPECT_TRUE(value->GetAsDictionary(&dictionary));
     FakeGaia::RefreshTokenToDeviceIdMap map;
@@ -170,7 +171,7 @@ class DeviceIDTest : public OobeBaseTest,
                                 json.c_str(), json.length()));
   }
 
-  base::RunLoop user_removal_loop_;
+  std::unique_ptr<base::RunLoop> user_removal_loop_;
 };
 
 // Add the first user and check that device ID is consistent.

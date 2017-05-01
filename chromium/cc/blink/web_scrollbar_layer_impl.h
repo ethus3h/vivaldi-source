@@ -5,8 +5,9 @@
 #ifndef CC_BLINK_WEB_SCROLLBAR_LAYER_IMPL_H_
 #define CC_BLINK_WEB_SCROLLBAR_LAYER_IMPL_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "cc/blink/cc_blink_export.h"
 #include "third_party/WebKit/public/platform/WebScrollbar.h"
 #include "third_party/WebKit/public/platform/WebScrollbarLayer.h"
@@ -23,9 +24,9 @@ class WebLayerImpl;
 class WebScrollbarLayerImpl : public blink::WebScrollbarLayer {
  public:
   CC_BLINK_EXPORT WebScrollbarLayerImpl(
-      blink::WebScrollbar* scrollbar,
+      std::unique_ptr<blink::WebScrollbar> scrollbar,
       blink::WebScrollbarThemePainter painter,
-      blink::WebScrollbarThemeGeometry* geometry);
+      std::unique_ptr<blink::WebScrollbarThemeGeometry> geometry);
   CC_BLINK_EXPORT WebScrollbarLayerImpl(
       blink::WebScrollbar::Orientation orientation,
       int thumb_thickness,
@@ -38,7 +39,7 @@ class WebScrollbarLayerImpl : public blink::WebScrollbarLayer {
   void setScrollLayer(blink::WebLayer* layer) override;
 
  private:
-  scoped_ptr<WebLayerImpl> layer_;
+  std::unique_ptr<WebLayerImpl> layer_;
 
   DISALLOW_COPY_AND_ASSIGN(WebScrollbarLayerImpl);
 };

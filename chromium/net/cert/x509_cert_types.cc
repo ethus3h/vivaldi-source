@@ -8,9 +8,9 @@
 #include <cstring>
 
 #include "base/logging.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
+#include "net/base/parse_number.h"
 #include "net/cert/x509_certificate.h"
 
 namespace net {
@@ -23,7 +23,8 @@ namespace {
 // untouched otherwise. Returns the parsed integer.
 int ParseIntAndAdvance(const char** field, size_t field_len, bool* ok) {
   int result = 0;
-  *ok &= base::StringToInt(base::StringPiece(*field, field_len), &result);
+  *ok &= ParseInt32(base::StringPiece(*field, field_len),
+                    ParseIntFormat::NON_NEGATIVE, &result);
   *field += field_len;
   return result;
 }
@@ -70,13 +71,9 @@ bool ParseCertificateDate(const base::StringPiece& raw_date,
   if (valid && year_length == 2)
     exploded.year += exploded.year < 50 ? 2000 : 1900;
 
-  valid &= exploded.HasValidValues();
-
   if (!valid)
     return false;
-
-  *time = base::Time::FromUTCExploded(exploded);
-  return true;
+  return base::Time::FromUTCExploded(exploded, time);
 }
 
 }  // namespace net

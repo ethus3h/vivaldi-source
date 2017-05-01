@@ -64,6 +64,10 @@ cvox.TtsCapturingEventListener.prototype.onTtsStart = function() { };
  */
 cvox.TtsCapturingEventListener.prototype.onTtsEnd = function() { };
 
+/**
+ * Called when any utterance gets interrupted.
+ */
+cvox.TtsCapturingEventListener.prototype.onTtsInterrupted = function() { };
 
 /**
  * @interface
@@ -107,6 +111,14 @@ cvox.TtsInterface.prototype.addCapturingEventListener = function(listener) { };
  */
 cvox.TtsInterface.prototype.increaseOrDecreaseProperty =
     function(propertyName, increase) { };
+
+
+/**
+ * Converts an engine property value to a percentage from 0.00 to 1.00.
+ * @param {string} property The property to convert.
+ * @return {?number} The percentage of the property.
+ */
+cvox.TtsInterface.prototype.propertyToPercentage = function(property) { };
 
 
 /**

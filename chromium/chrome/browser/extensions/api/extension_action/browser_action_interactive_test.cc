@@ -19,8 +19,10 @@
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/notification_types.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -97,10 +99,10 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, TestOpenPopup) {
         content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME,
         content::NotificationService::AllSources());
     // Open a new window.
-    new_browser = chrome::FindBrowserWithWebContents(
-        browser()->OpenURL(content::OpenURLParams(
-            GURL("about:"), content::Referrer(), NEW_WINDOW,
-            ui::PAGE_TRANSITION_TYPED, false)));
+    new_browser = chrome::FindBrowserWithWebContents(browser()->OpenURL(
+        content::OpenURLParams(GURL("about:"), content::Referrer(),
+                               WindowOpenDisposition::NEW_WINDOW,
+                               ui::PAGE_TRANSITION_TYPED, false)));
     // Hide all the buttons to test that it opens even when the browser action
     // is in the overflow bucket.
     ToolbarActionsModel::Get(profile())->SetVisibleIconCount(0);
@@ -117,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, TestOpenPopup) {
         content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME,
         content::NotificationService::AllSources());
     // Show second popup in new window.
-    listener.Reply("");
+    listener.Reply("show another");
     frame_observer.Wait();
     EXPECT_TRUE(BrowserActionTestUtil(new_browser).HasPopup());
   }
@@ -145,8 +147,8 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, TestOpenPopupIncognito) {
   EXPECT_FALSE(BrowserActionTestUtil(browser()).HasPopup());
 #endif
   // Incognito window should have a popup.
-  EXPECT_TRUE(BrowserActionTestUtil(BrowserList::GetInstance(
-      chrome::GetActiveDesktop())->GetLastActive()).HasPopup());
+  EXPECT_TRUE(BrowserActionTestUtil(BrowserList::GetInstance()->GetLastActive())
+                  .HasPopup());
 }
 
 // Tests that an extension can open a popup in the last active incognito window
@@ -214,7 +216,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest,
 
   ResultCatcher catcher;
   // Return control to javascript to validate that opening a popup fails now.
-  listener.Reply("");
+  listener.Reply("show another");
   ASSERT_TRUE(catcher.GetNextResult()) << message_;
 }
 
@@ -257,7 +259,14 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, BrowserClickClosesPopup1) {
 }
 
 // Test that the extension popup is closed when the browser window is clicked.
-IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, BrowserClickClosesPopup2) {
+#if defined(OS_WIN)
+// Flaky on Windows: http://crbug.com/639130
+#define MAYBE_BrowserClickClosesPopup2 DISABLED_BrowserClickClosesPopup2
+#else
+#define MAYBE_BrowserClickClosesPopup2 BrowserClickClosesPopup2
+#endif
+IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest,
+                       MAYBE_BrowserClickClosesPopup2) {
   if (!ShouldRunPopupTest())
     return;
 
@@ -288,11 +297,17 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest, TabSwitchClosesPopup) {
   // Add a second tab to the browser and open an extension popup.
   chrome::NewTab(browser());
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(browser()->tab_strip_model()->GetWebContentsAt(1),
+            browser()->tab_strip_model()->GetActiveWebContents());
   OpenExtensionPopupViaAPI();
 
-  // Press CTRL+TAB to change active tabs, the extension popup should close.
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
-      browser(), ui::VKEY_TAB, true, false, false, false));
+  content::WindowedNotificationObserver observer(
+      extensions::NOTIFICATION_EXTENSION_HOST_DESTROYED,
+      content::NotificationService::AllSources());
+  // Change active tabs, the extension popup should close.
+  browser()->tab_strip_model()->ActivateTabAt(0, true);
+  observer.Wait();
+
   EXPECT_FALSE(BrowserActionTestUtil(browser()).HasPopup());
 }
 
@@ -365,7 +380,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionInteractiveTest,
 
   // Create a new browser window to prevent the message loop from terminating.
   browser()->OpenURL(content::OpenURLParams(GURL("about:"), content::Referrer(),
-                                            NEW_WINDOW,
+                                            WindowOpenDisposition::NEW_WINDOW,
                                             ui::PAGE_TRANSITION_TYPED, false));
 
   // Forcibly closing the browser HWND should not cause a crash.

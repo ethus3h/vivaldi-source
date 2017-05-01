@@ -137,7 +137,8 @@ public abstract class SwipableOverlayView extends FrameLayout {
     }
 
     protected void addToParentView(ViewGroup parentView) {
-        if (parentView != null && parentView.indexOfChild(this) == -1) {
+        if (parentView == null) return;
+        if (getParent() == null) {
             parentView.addView(this, createLayoutParams());
 
             // Listen for the layout to know when to animate the View coming onto the screen.
@@ -207,7 +208,7 @@ public abstract class SwipableOverlayView extends FrameLayout {
     private GestureStateListener createGestureStateListener() {
         return new GestureStateListener() {
             @Override
-            public void onFlingStartGesture(int vx, int vy, int scrollOffsetY, int scrollExtentY) {
+            public void onFlingStartGesture(int scrollOffsetY, int scrollExtentY) {
                 if (!isAllowedToAutoHide() || !cancelCurrentAnimation()) return;
                 beginGesture(scrollOffsetY, scrollExtentY);
                 mGestureState = GESTURE_FLINGING;

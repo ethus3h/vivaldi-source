@@ -87,6 +87,9 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
   // In unit tests, it may not.
   bool ControllerHasWebContents() const;
 
+  // Callback for MenuRunner.
+  void OnMenuClosed();
+
   MediaGalleriesDialogController* controller_;
 
   // The contents of the dialog. Owned by the view hierarchy, except in tests.
@@ -107,7 +110,7 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
   // True if the user has pressed accept.
   bool accepted_;
 
-  scoped_ptr<views::MenuRunner> context_menu_runner_;
+  std::unique_ptr<views::MenuRunner> context_menu_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaGalleriesDialogViews);
 };

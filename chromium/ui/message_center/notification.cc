@@ -26,6 +26,12 @@ ButtonInfo::ButtonInfo(const base::string16& title)
     : title(title) {
 }
 
+ButtonInfo::ButtonInfo(const ButtonInfo& other) = default;
+
+ButtonInfo::~ButtonInfo() = default;
+
+ButtonInfo& ButtonInfo::operator=(const ButtonInfo& other) = default;
+
 RichNotificationData::RichNotificationData()
     : priority(DEFAULT_PRIORITY),
       never_timeout(false),
@@ -34,6 +40,10 @@ RichNotificationData::RichNotificationData()
       progress(0),
       should_make_spoken_feedback_for_popup_updates(true),
       clickable(true),
+#if defined(OS_CHROMEOS)
+      pinned(false),
+#endif  // defined(OS_CHROMEOS)
+      renotify(false),
       silent(false) {}
 
 RichNotificationData::RichNotificationData(const RichNotificationData& other)
@@ -49,10 +59,17 @@ RichNotificationData::RichNotificationData(const RichNotificationData& other)
       should_make_spoken_feedback_for_popup_updates(
           other.should_make_spoken_feedback_for_popup_updates),
       clickable(other.clickable),
+#if defined(OS_CHROMEOS)
+      pinned(other.pinned),
+#endif  // defined(OS_CHROMEOS)
       vibration_pattern(other.vibration_pattern),
-      silent(other.silent) {}
+      renotify(other.renotify),
+      silent(other.silent),
+      accessible_name(other.accessible_name) {}
 
 RichNotificationData::~RichNotificationData() {}
+
+Notification::Notification() {}
 
 Notification::Notification(NotificationType type,
                            const std::string& id,
@@ -69,7 +86,6 @@ Notification::Notification(NotificationType type,
       title_(title),
       message_(message),
       icon_(icon),
-      adjust_icon_(true),
       display_source_(display_source),
       origin_url_(origin_url),
       notifier_id_(notifier_id),
@@ -85,7 +101,6 @@ Notification::Notification(const std::string& id, const Notification& other)
       title_(other.title_),
       message_(other.message_),
       icon_(other.icon_),
-      adjust_icon_(other.adjust_icon_),
       display_source_(other.display_source_),
       origin_url_(other.origin_url_),
       notifier_id_(other.notifier_id_),
@@ -101,7 +116,6 @@ Notification::Notification(const Notification& other)
       title_(other.title_),
       message_(other.message_),
       icon_(other.icon_),
-      adjust_icon_(other.adjust_icon_),
       display_source_(other.display_source_),
       origin_url_(other.origin_url_),
       notifier_id_(other.notifier_id_),
@@ -117,7 +131,6 @@ Notification& Notification::operator=(const Notification& other) {
   title_ = other.title_;
   message_ = other.message_;
   icon_ = other.icon_;
-  adjust_icon_ = other.adjust_icon_;
   display_source_ = other.display_source_;
   origin_url_ = other.origin_url_;
   notifier_id_ = other.notifier_id_;
@@ -161,14 +174,14 @@ bool Notification::UseOriginAsContextMessage() const {
 }
 
 // static
-scoped_ptr<Notification> Notification::CreateSystemNotification(
+std::unique_ptr<Notification> Notification::CreateSystemNotification(
     const std::string& notification_id,
     const base::string16& title,
     const base::string16& message,
     const gfx::Image& icon,
     const std::string& system_component_id,
     const base::Closure& click_callback) {
-  scoped_ptr<Notification> notification(new Notification(
+  std::unique_ptr<Notification> notification(new Notification(
       NOTIFICATION_TYPE_SIMPLE, notification_id, title, message, icon,
       base::string16() /* display_source */, GURL(),
       NotifierId(NotifierId::SYSTEM_COMPONENT, system_component_id),

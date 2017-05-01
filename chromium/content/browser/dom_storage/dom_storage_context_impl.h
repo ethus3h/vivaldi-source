@@ -7,24 +7,27 @@
 
 #include <stdint.h>
 
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/atomic_sequence_num.h"
+#include "base/atomicops.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
+#include "base/optional.h"
 #include "base/time/time.h"
+#include "base/trace_event/memory_dump_provider.h"
+#include "content/browser/bad_message.h"
 #include "content/common/content_export.h"
 #include "url/gurl.h"
 
 namespace base {
 class FilePath;
 class NullableString16;
-class Time;
 }
 
 namespace storage {
@@ -61,8 +64,12 @@ struct SessionStorageUsageInfo;
 // DOMStorageHost, and DOMStorageSession. The other classes are for
 // internal consumption.
 class CONTENT_EXPORT DOMStorageContextImpl
-    : public base::RefCountedThreadSafe<DOMStorageContextImpl> {
+    : public base::RefCountedThreadSafe<DOMStorageContextImpl>,
+      public base::trace_event::MemoryDumpProvider {
  public:
+  typedef std::map<int64_t, scoped_refptr<DOMStorageNamespace>>
+      StorageNamespaceMap;
+
   // An interface for observing Local and Session Storage events on the
   // background thread.
   class EventObserver {
@@ -87,12 +94,25 @@ class CONTENT_EXPORT DOMStorageContextImpl
     virtual ~EventObserver() {}
   };
 
+  // Option for PurgeMemory.
+  enum PurgeOption {
+    // Determines if purging is required based on the usage and the platform.
+    PURGE_IF_NEEDED,
+
+    // Purge unopened areas only.
+    PURGE_UNOPENED,
+
+    // Purge aggressively, i.e. discard cache even for areas that have
+    // non-zero open count.
+    PURGE_AGGRESSIVE,
+  };
+
   // |localstorage_directory| and |sessionstorage_directory| may be empty
   // for incognito browser contexts.
   DOMStorageContextImpl(const base::FilePath& localstorage_directory,
                         const base::FilePath& sessionstorage_directory,
                         storage::SpecialStoragePolicy* special_storage_policy,
-                        DOMStorageTaskRunner* task_runner);
+                        scoped_refptr<DOMStorageTaskRunner> task_runner);
 
   // Returns the directory path for localStorage, or an empty directory, if
   // there is no backing on disk.
@@ -112,7 +132,8 @@ class CONTENT_EXPORT DOMStorageContextImpl
   void GetLocalStorageUsage(std::vector<LocalStorageUsageInfo>* infos,
                             bool include_file_info);
   void GetSessionStorageUsage(std::vector<SessionStorageUsageInfo>* infos);
-  void DeleteLocalStorage(const GURL& origin);
+  void DeleteLocalStorageForPhysicalOrigin(const GURL& origin_url);
+  void DeleteLocalStorage(const GURL& origin_url);
   void DeleteSessionStorage(const SessionStorageUsageInfo& usage_info);
 
   // Used by content settings to alter the behavior around
@@ -157,6 +178,10 @@ class CONTENT_EXPORT DOMStorageContextImpl
   std::string AllocatePersistentSessionId();
 
   // Must be called on the background thread.
+  base::Optional<bad_message::BadMessageReason>
+      DiagnoseSessionNamespaceId(int64_t namespace_id);
+
+  // Must be called on the background thread.
   void CreateSessionNamespace(int64_t namespace_id,
                               const std::string& persistent_namespace_id);
   void DeleteSessionNamespace(int64_t namespace_id, bool should_persist_data);
@@ -173,14 +198,20 @@ class CONTENT_EXPORT DOMStorageContextImpl
   // unclean exit.
   void StartScavengingUnusedSessionStorage();
 
+  // Frees up memory when possible. Purges caches and schedules commits
+  // depending on the given |purge_option|.
+  void PurgeMemory(PurgeOption purge_option);
+
+  // base::trace_event::MemoryDumpProvider implementation.
+  bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
+                    base::trace_event::ProcessMemoryDump* pmd) override;
+
  private:
   friend class DOMStorageContextImplTest;
   FRIEND_TEST_ALL_PREFIXES(DOMStorageContextImplTest, Basics);
   friend class base::RefCountedThreadSafe<DOMStorageContextImpl>;
-  typedef std::map<int64_t, scoped_refptr<DOMStorageNamespace>>
-      StorageNamespaceMap;
 
-  ~DOMStorageContextImpl();
+  ~DOMStorageContextImpl() override;
 
   void ClearSessionOnlyOrigins();
 
@@ -209,12 +240,16 @@ class CONTENT_EXPORT DOMStorageContextImpl
   // List of objects observing local storage events.
   base::ObserverList<EventObserver> event_observers_;
 
-  // We use a 32 bit identifier for per tab storage sessions.
+  // We use 32 bit values for per tab storage session ids.
   // At a tab per second, this range is large enough for 68 years.
   // The offset is to more quickly detect the error condition where
   // an id related to one context is mistakenly used in another.
-  base::AtomicSequenceNumber session_id_sequence_;
+  // We don't use a AtomicSequenceNumber so we can read the current value
+  // without having to increment it.
   const int session_id_offset_;
+  base::subtle::Atomic32 session_id_sequence_;
+  // For diagnoostic purposes.
+  std::deque<int64_t> recently_deleted_session_ids_;
 
   bool is_shutdown_;
   bool force_keep_session_state_;
@@ -232,6 +267,9 @@ class CONTENT_EXPORT DOMStorageContextImpl
   // Mapping between persistent namespace IDs and namespace IDs for
   // sessionStorage.
   std::map<std::string, int64_t> persistent_namespace_id_to_namespace_id_;
+
+  // For cleaning up unused databases more aggressively.
+  bool is_low_end_device_;
 };
 
 }  // namespace content

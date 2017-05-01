@@ -286,13 +286,13 @@ TEST_F(SystemMetricsTest, ParseVmstat) {
     "pgrefill_high 0\n"
     "pgrefill_movable 0\n";
   EXPECT_TRUE(ParseProcVmstat(valid_input1, &meminfo));
-  EXPECT_EQ(meminfo.pswpin, 179);
-  EXPECT_EQ(meminfo.pswpout, 406);
-  EXPECT_EQ(meminfo.pgmajfault, 487192);
+  EXPECT_EQ(179LU, meminfo.pswpin);
+  EXPECT_EQ(406LU, meminfo.pswpout);
+  EXPECT_EQ(487192LU, meminfo.pgmajfault);
   EXPECT_TRUE(ParseProcVmstat(valid_input2, &meminfo));
-  EXPECT_EQ(meminfo.pswpin, 12);
-  EXPECT_EQ(meminfo.pswpout, 901);
-  EXPECT_EQ(meminfo.pgmajfault, 2023);
+  EXPECT_EQ(12LU, meminfo.pswpin);
+  EXPECT_EQ(901LU, meminfo.pswpout);
+  EXPECT_EQ(2023LU, meminfo.pgmajfault);
 }
 #endif  // defined(OS_LINUX) || defined(OS_ANDROID)
 
@@ -303,7 +303,7 @@ TEST_F(SystemMetricsTest, ParseVmstat) {
 // calls to it.
 TEST_F(SystemMetricsTest, TestNoNegativeCpuUsage) {
   ProcessHandle handle = GetCurrentProcessHandle();
-  scoped_ptr<ProcessMetrics> metrics(
+  std::unique_ptr<ProcessMetrics> metrics(
       ProcessMetrics::CreateProcessMetrics(handle));
 
   EXPECT_GE(metrics->GetCPUUsage(), 0.0);
@@ -424,7 +424,7 @@ TEST(ProcessMetricsTest, DISABLED_GetNumberOfThreads) {
   ASSERT_GT(initial_threads, 0);
   const int kNumAdditionalThreads = 10;
   {
-    scoped_ptr<Thread> my_threads[kNumAdditionalThreads];
+    std::unique_ptr<Thread> my_threads[kNumAdditionalThreads];
     for (int i = 0; i < kNumAdditionalThreads; ++i) {
       my_threads[i].reset(new Thread("GetNumberOfThreadsTest"));
       my_threads[i]->Start();
@@ -488,7 +488,7 @@ MULTIPROCESS_TEST_MAIN(ChildMain) {
 TEST(ProcessMetricsTest, GetOpenFdCount) {
   ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  const FilePath temp_path = temp_dir.path();
+  const FilePath temp_path = temp_dir.GetPath();
   CommandLine child_command_line(GetMultiProcessTestChildBaseCommandLine());
   child_command_line.AppendSwitchPath(kTempDirFlag, temp_path);
   Process child = SpawnMultiProcessTestChild(
@@ -496,7 +496,7 @@ TEST(ProcessMetricsTest, GetOpenFdCount) {
   ASSERT_TRUE(child.IsValid());
   WaitForEvent(temp_path, kSignalClosed);
 
-  scoped_ptr<ProcessMetrics> metrics(
+  std::unique_ptr<ProcessMetrics> metrics(
       ProcessMetrics::CreateProcessMetrics(child.Handle()));
   EXPECT_EQ(0, metrics->GetOpenFdCount());
   ASSERT_TRUE(child.Terminate(0, true));

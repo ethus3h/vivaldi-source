@@ -9,6 +9,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/values.h"
 #include "chromeos/chromeos_test_utils.h"
@@ -38,9 +39,9 @@ std::string ReadTestData(const std::string& filename) {
   return result;
 }
 
-scoped_ptr<base::DictionaryValue> ReadTestDictionary(
+std::unique_ptr<base::DictionaryValue> ReadTestDictionary(
     const std::string& filename) {
-  scoped_ptr<base::DictionaryValue> dict;
+  std::unique_ptr<base::DictionaryValue> dict;
   base::FilePath path;
   if (!chromeos::test_utils::GetTestDataPath(kNetworkComponentDirectory,
                                              filename,
@@ -50,11 +51,11 @@ scoped_ptr<base::DictionaryValue> ReadTestDictionary(
     return dict;
   }
 
-  JSONFileValueDeserializer deserializer(path);
-  deserializer.set_allow_trailing_comma(true);
+  JSONFileValueDeserializer deserializer(path,
+                                         base::JSON_ALLOW_TRAILING_COMMAS);
 
   std::string error_message;
-  scoped_ptr<base::Value> content =
+  std::unique_ptr<base::Value> content =
       deserializer.Deserialize(NULL, &error_message);
   CHECK(content != NULL) << "Couldn't json-deserialize file '"
                          << filename << "': " << error_message;

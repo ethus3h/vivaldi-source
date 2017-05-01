@@ -7,15 +7,16 @@
 
 #include <stddef.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <memory>
+
 #include "base/strings/string16.h"
 
 struct DevToolsToggleAction {
  public:
   enum Type {
     kShow,
-    kShowConsole,
-    kShowSecurityPanel,
+    kShowConsolePanel,
+    kShowElementsPanel,
     kInspect,
     kToggle,
     kReveal,
@@ -38,8 +39,8 @@ struct DevToolsToggleAction {
   ~DevToolsToggleAction();
 
   static DevToolsToggleAction Show();
-  static DevToolsToggleAction ShowConsole();
-  static DevToolsToggleAction ShowSecurityPanel();
+  static DevToolsToggleAction ShowConsolePanel();
+  static DevToolsToggleAction ShowElementsPanel();
   static DevToolsToggleAction Inspect();
   static DevToolsToggleAction Toggle();
   static DevToolsToggleAction Reveal(const base::string16& url,
@@ -58,7 +59,7 @@ struct DevToolsToggleAction {
   Type type_;
 
   // Additional parameters for the Reveal action; NULL if of any other type.
-  scoped_ptr<RevealParams> params_;
+  std::unique_ptr<RevealParams> params_;
 };
 
 #endif  // CHROME_BROWSER_DEVTOOLS_DEVTOOLS_TOGGLE_ACTION_H_

@@ -5,7 +5,7 @@
 package org.chromium.android_webview.test;
 
 import android.os.Bundle;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.test.util.CommonResources;
@@ -133,7 +133,7 @@ public class SaveRestoreStateTest extends AwTestBase {
     public void testSaveRestoreStateWithTitle() throws Throwable {
         setServerResponseAndLoad(mVars, 1);
         final TestVars restoredVars = saveAndRestoreStateOnUiThread(mVars);
-        pollOnUiThread(new Callable<Boolean>() {
+        pollUiThread(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 return TITLES[0].equals(restoredVars.awContents.getTitle())

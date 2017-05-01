@@ -4,41 +4,26 @@
 
 #include "modules/mediacapturefromelement/OnRequestCanvasDrawListener.h"
 
-#include "platform/Task.h"
-#include "public/platform/Platform.h"
-#include "public/platform/WebTaskRunner.h"
-#include "public/platform/WebTraceLocation.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include <memory>
 
 namespace blink {
 
-OnRequestCanvasDrawListener::OnRequestCanvasDrawListener(const PassOwnPtr<WebCanvasCaptureHandler>& handler)
-    :CanvasDrawListener(handler)
-{
-    m_requestFrame = false;
-}
+OnRequestCanvasDrawListener::OnRequestCanvasDrawListener(
+    std::unique_ptr<WebCanvasCaptureHandler> handler)
+    : CanvasDrawListener(std::move(handler)) {}
 
 OnRequestCanvasDrawListener::~OnRequestCanvasDrawListener() {}
 
 // static
-OnRequestCanvasDrawListener* OnRequestCanvasDrawListener::create(const PassOwnPtr<WebCanvasCaptureHandler>& handler)
-{
-    return new OnRequestCanvasDrawListener(handler);
+OnRequestCanvasDrawListener* OnRequestCanvasDrawListener::create(
+    std::unique_ptr<WebCanvasCaptureHandler> handler) {
+  return new OnRequestCanvasDrawListener(std::move(handler));
 }
 
-bool OnRequestCanvasDrawListener::needsNewFrame() const
-{
-    return m_requestFrame && CanvasDrawListener::needsNewFrame();
+void OnRequestCanvasDrawListener::sendNewFrame(sk_sp<SkImage> image) {
+  m_frameCaptureRequested = false;
+  CanvasDrawListener::sendNewFrame(std::move(image));
 }
 
-void OnRequestCanvasDrawListener::sendNewFrame(const WTF::PassRefPtr<SkImage>& image)
-{
-    m_requestFrame = false;
-    CanvasDrawListener::sendNewFrame(image);
-}
-
-void OnRequestCanvasDrawListener::requestFrame()
-{
-    m_requestFrame = true;
-}
-
-} // namespace blink
+}  // namespace blink

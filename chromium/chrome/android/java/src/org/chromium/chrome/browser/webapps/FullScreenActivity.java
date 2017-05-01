@@ -5,31 +5,31 @@
 package org.chromium.chrome.browser.webapps;
 
 import android.content.Intent;
+import android.util.Pair;
 import android.view.View;
 import android.view.ViewGroup;
 
-import org.chromium.base.Log;
-import org.chromium.base.StreamUtil;
 import org.chromium.base.annotations.SuppressFBWarnings;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.TabState;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerDocument;
+import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
 import org.chromium.chrome.browser.tab.TabUma.TabCreationState;
 import org.chromium.chrome.browser.tabmodel.SingleTabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabSelectionType;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.document.TabDelegate;
 import org.chromium.chrome.browser.widget.ControlContainer;
+import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
 
 /**
  * Base class for task-focused activities that need to display web content in a nearly UI-less
@@ -47,6 +47,9 @@ public abstract class FullScreenActivity extends ChromeActivity {
     private static final String TAG = "FullScreenActivity";
 
     private Tab mTab;
+
+    private WebContents mWebContents;
+    @SuppressWarnings("unused") // Reference needed to prevent GC.
     private WebContentsObserver mWebContentsObserver;
 
     @Override
@@ -56,18 +59,20 @@ public abstract class FullScreenActivity extends ChromeActivity {
     }
 
     @Override
-    public void preInflationStartup() {
-        super.preInflationStartup();
-
-        setTabCreators(createTabDelegate(false), createTabDelegate(true));
-        setTabModelSelector(new SingleTabModelSelector(this, false, false) {
+    protected TabModelSelector createTabModelSelector() {
+        return new SingleTabModelSelector(this, false, false) {
             @Override
             public Tab openNewTab(LoadUrlParams loadUrlParams, TabLaunchType type, Tab parent,
                     boolean incognito) {
                 getTabCreator(incognito).createNewTab(loadUrlParams, type, parent);
                 return null;
             }
-        });
+        };
+    }
+
+    @Override
+    protected Pair<TabDelegate, TabDelegate> createTabCreators() {
+        return Pair.create(createTabDelegate(false), createTabDelegate(true));
     }
 
     /** Creates TabDelegates for opening new Tabs. */
@@ -78,6 +83,7 @@ public abstract class FullScreenActivity extends ChromeActivity {
     @Override
     public void finishNativeInitialization() {
         mTab = createTab();
+        handleTabContentChanged();
         getTabModelSelector().setTab(mTab);
         mTab.show(TabSelectionType.FROM_NEW);
 
@@ -86,7 +92,7 @@ public abstract class FullScreenActivity extends ChromeActivity {
                 (View) controlContainer, (ViewGroup) findViewById(android.R.id.content),
                 controlContainer);
 
-        getActivityTab().setFullscreenManager(getFullscreenManager());
+        if (getFullscreenManager() != null) getFullscreenManager().setTab(getActivityTab());
         super.finishNativeInitialization();
     }
 
@@ -121,43 +127,56 @@ public abstract class FullScreenActivity extends ChromeActivity {
         }
 
         if (tabId != Tab.INVALID_TAB_ID && tabUrl != null && getActivityDirectory() != null) {
-            FileInputStream stream = null;
-            try {
-                // Restore the tab.
-                stream = new FileInputStream(getTabFile(getActivityDirectory(), tabId));
-                TabState tabState = TabState.readState(stream, false);
-                tab = new Tab(tabId, Tab.INVALID_TAB_ID, false, this, getWindowAndroid(),
-                        TabLaunchType.FROM_RESTORE,
-                        TabCreationState.FROZEN_ON_RESTORE, tabState);
-                unfreeze = true;
-            } catch (FileNotFoundException exception) {
-                Log.e(TAG, "Failed to restore tab state.", exception);
-            } catch (IOException exception) {
-                Log.e(TAG, "Failed to restore tab state.", exception);
-            } finally {
-                StreamUtil.closeQuietly(stream);
-            }
+            // Restore the tab.
+            TabState tabState = TabState.restoreTabState(getActivityDirectory(), tabId);
+            tab = new Tab(tabId, Tab.INVALID_TAB_ID, false, this, getWindowAndroid(),
+                    TabLaunchType.FROM_RESTORE,
+                    TabCreationState.FROZEN_ON_RESTORE, tabState);
+            unfreeze = true;
         }
 
         if (tab == null) {
             tab = new Tab(Tab.INVALID_TAB_ID, Tab.INVALID_TAB_ID, false, this, getWindowAndroid(),
-                    TabLaunchType.FROM_MENU_OR_OVERVIEW, null, null);
+                    TabLaunchType.FROM_CHROME_UI, null, null);
         }
 
         tab.initialize(null, getTabContentManager(), createTabDelegateFactory(), false, unfreeze);
-        mWebContentsObserver = new WebContentsObserver(tab.getWebContents()) {
+        tab.addObserver(new EmptyTabObserver() {
+            @Override
+            public void onContentChanged(Tab tab) {
+                assert tab == mTab;
+                handleTabContentChanged();
+            }
+        });
+        return tab;
+    }
+
+    private void handleTabContentChanged() {
+        assert mTab != null;
+
+        WebContents webContents = mTab.getWebContents();
+        if (mWebContents == webContents) return;
+
+        // Clean up any old references to the previous WebContents.
+        if (mWebContentsObserver != null) {
+            mWebContentsObserver.destroy();
+            mWebContentsObserver = null;
+        }
+
+        mWebContents = webContents;
+        if (mWebContents == null) return;
+
+        ContentViewCore.fromWebContents(webContents).setFullscreenRequiredForOrientationLock(false);
+        mWebContentsObserver = new WebContentsObserver(webContents) {
             @Override
             public void didCommitProvisionalLoadForFrame(
                     long frameId, boolean isMainFrame, String url, int transitionType) {
-                if (isMainFrame) {
-                    // Notify the renderer to permanently hide the top controls since they do
-                    // not apply to fullscreen content views.
-                    getActivityTab().updateTopControlsState(
-                            getActivityTab().getTopControlsStateConstraints(), true);
-                }
+                if (!isMainFrame) return;
+                // Notify the renderer to permanently hide the top controls since they do
+                // not apply to fullscreen content views.
+                mTab.updateBrowserControlsState(mTab.getBrowserControlsStateConstraints(), true);
             }
         };
-        return tab;
     }
 
     /**
@@ -172,13 +191,6 @@ public abstract class FullScreenActivity extends ChromeActivity {
      */
     protected File getActivityDirectory() {
         return null;
-    }
-
-    /**
-     * @return {@link File} pointing at the tab state for this Activity.
-     */
-    protected static File getTabFile(File activityDirectory, int tabId) {
-        return new File(activityDirectory, TabState.getTabStateFilename(tabId, false));
     }
 
     @Override

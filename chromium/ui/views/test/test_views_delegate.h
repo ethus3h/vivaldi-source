@@ -5,14 +5,11 @@
 #ifndef UI_VIEWS_TEST_TEST_VIEWS_DELEGATE_H_
 #define UI_VIEWS_TEST_TEST_VIEWS_DELEGATE_H_
 
+#include <memory>
+
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "ui/views/views_delegate.h"
-
-namespace wm {
-class WMState;
-}
 
 namespace views {
 
@@ -37,6 +34,11 @@ class TestViewsDelegate : public ViewsDelegate {
     context_factory_ = context_factory;
   }
 
+  void set_context_factory_private(
+      ui::ContextFactoryPrivate* context_factory_private) {
+    context_factory_private_ = context_factory_private;
+  }
+
   // ViewsDelegate:
 #if defined(OS_WIN)
   HICON GetSmallWindowIcon() const override;
@@ -44,15 +46,13 @@ class TestViewsDelegate : public ViewsDelegate {
   void OnBeforeWidgetInit(Widget::InitParams* params,
                           internal::NativeWidgetDelegate* delegate) override;
   ui::ContextFactory* GetContextFactory() override;
+  ui::ContextFactoryPrivate* GetContextFactoryPrivate() override;
 
  private:
   ui::ContextFactory* context_factory_;
+  ui::ContextFactoryPrivate* context_factory_private_;
   bool use_desktop_native_widgets_;
   bool use_transparent_windows_;
-
-#if defined(USE_AURA)
-  scoped_ptr<wm::WMState> wm_state_;
-#endif
 
   DISALLOW_COPY_AND_ASSIGN(TestViewsDelegate);
 };

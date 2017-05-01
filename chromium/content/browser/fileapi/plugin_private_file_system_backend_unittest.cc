@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "content/public/test/async_file_test_helper.h"
@@ -49,9 +50,8 @@ class PluginPrivateFileSystemBackendTest : public testing::Test {
  protected:
   void SetUp() override {
     ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
-    context_ = CreateFileSystemContextForTesting(
-        NULL /* quota_manager_proxy */,
-        data_dir_.path());
+    context_ = CreateFileSystemContextForTesting(NULL /* quota_manager_proxy */,
+                                                 data_dir_.GetPath());
   }
 
   FileSystemURL CreateURL(const GURL& root_url, const std::string& relative) {

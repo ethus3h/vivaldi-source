@@ -60,7 +60,7 @@ class ChromeOSVersionInfo {
     is_running_on_chromeos_ = false;
 
     std::string lsb_release, lsb_release_time_str;
-    scoped_ptr<Environment> env(Environment::Create());
+    std::unique_ptr<Environment> env(Environment::Create());
     bool parsed_from_env =
         env->GetVar(kLsbReleaseKey, &lsb_release) &&
         env->GetVar(kLsbReleaseTimeKey, &lsb_release_time_str);
@@ -163,7 +163,7 @@ class ChromeOSVersionInfo {
   bool is_running_on_chromeos_;
 };
 
-static LazyInstance<ChromeOSVersionInfo>
+static LazyInstance<ChromeOSVersionInfo>::Leaky
     g_chrome_os_version_info = LAZY_INSTANCE_INITIALIZER;
 
 ChromeOSVersionInfo& GetChromeOSVersionInfo() {
@@ -200,6 +200,16 @@ std::string SysInfo::GetLsbReleaseBoard() {
 }
 
 // static
+std::string SysInfo::GetStrippedReleaseBoard() {
+  std::string board = GetLsbReleaseBoard();
+  const size_t index = board.find("-signed-");
+  if (index != std::string::npos)
+    board.resize(index);
+
+  return base::ToLowerASCII(board);
+}
+
+// static
 Time SysInfo::GetLsbReleaseTime() {
   return GetChromeOSVersionInfo().lsb_release_time();
 }
@@ -212,7 +222,7 @@ bool SysInfo::IsRunningOnChromeOS() {
 // static
 void SysInfo::SetChromeOSVersionInfoForTest(const std::string& lsb_release,
                                             const Time& lsb_release_time) {
-  scoped_ptr<Environment> env(Environment::Create());
+  std::unique_ptr<Environment> env(Environment::Create());
   env->SetVar(kLsbReleaseKey, lsb_release);
   env->SetVar(kLsbReleaseTimeKey,
               DoubleToString(lsb_release_time.ToDoubleT()));

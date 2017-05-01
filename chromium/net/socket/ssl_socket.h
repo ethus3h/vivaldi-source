@@ -6,6 +6,7 @@
 #define NET_SOCKET_SSL_SOCKET_H_
 
 #include "base/strings/string_piece.h"
+#include "net/base/net_export.h"
 #include "net/socket/stream_socket.h"
 
 namespace net {
@@ -26,9 +27,6 @@ public:
                                    const base::StringPiece& context,
                                    unsigned char* out,
                                    unsigned int outlen) = 0;
-
-  // Stores the the tls-unique channel binding (see RFC 5929) in |*out|.
-  virtual int GetTLSUniqueChannelBinding(std::string* out) = 0;
 };
 
 }  // namespace net

@@ -5,11 +5,14 @@
 #ifndef COMPONENTS_PROXIMITY_AUTH_THROTTLED_BLUETOOTH_CONNECTION_FINDER_H
 #define COMPONENTS_PROXIMITY_AUTH_THROTTLED_BLUETOOTH_CONNECTION_FINDER_H
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "components/proximity_auth/connection_finder.h"
+#include "components/cryptauth/bluetooth_throttler.h"
+#include "components/cryptauth/connection.h"
+#include "components/cryptauth/connection_finder.h"
 
 namespace base {
 class TaskRunner;
@@ -18,37 +21,37 @@ class TaskRunner;
 namespace proximity_auth {
 
 class BluetoothConnectionFinder;
-class BluetoothThrottler;
-class Connection;
 
 // A Bluetooth connection finder that delays Find() requests according to the
 // throttler's cooldown period.
-class ThrottledBluetoothConnectionFinder : public ConnectionFinder {
+class ThrottledBluetoothConnectionFinder : public cryptauth::ConnectionFinder {
  public:
   // Note: The |throttler| is not owned, and must outlive |this| instance.
   ThrottledBluetoothConnectionFinder(
-      scoped_ptr<BluetoothConnectionFinder> connection_finder,
+      std::unique_ptr<BluetoothConnectionFinder> connection_finder,
       scoped_refptr<base::TaskRunner> task_runner,
-      BluetoothThrottler* throttler);
+      cryptauth::BluetoothThrottler* throttler);
   ~ThrottledBluetoothConnectionFinder() override;
 
-  // ConnectionFinder:
-  void Find(const ConnectionCallback& connection_callback) override;
+  // cryptauth::ConnectionFinder:
+  void Find(const cryptauth::ConnectionFinder::ConnectionCallback&
+                connection_callback) override;
 
  private:
   // Callback to be called when a connection is found.
-  void OnConnection(const ConnectionCallback& connection_callback,
-                    scoped_ptr<Connection> connection);
+  void OnConnection(const cryptauth::ConnectionFinder::ConnectionCallback&
+                        connection_callback,
+                    std::unique_ptr<cryptauth::Connection> connection);
 
   // The underlying connection finder.
-  scoped_ptr<BluetoothConnectionFinder> connection_finder_;
+  std::unique_ptr<BluetoothConnectionFinder> connection_finder_;
 
   // The task runner used for posting delayed messages.
   scoped_refptr<base::TaskRunner> task_runner_;
 
   // The throttler managing this connection finder. The throttler is not owned,
   // and must outlive |this| instance.
-  BluetoothThrottler* throttler_;
+  cryptauth::BluetoothThrottler* throttler_;
 
   base::WeakPtrFactory<ThrottledBluetoothConnectionFinder> weak_ptr_factory_;
 

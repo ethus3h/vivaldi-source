@@ -8,8 +8,9 @@
 #include <stddef.h>
 
 #include "base/macros.h"
-#include "components/test_runner/web_task.h"
-#include "third_party/WebKit/public/platform/WebMIDIAccessor.h"
+#include "base/memory/weak_ptr.h"
+#include "media/midi/midi_service.mojom.h"
+#include "third_party/WebKit/public/platform/modules/webmidi/WebMIDIAccessor.h"
 
 namespace blink {
 class WebMIDIAccessorClient;
@@ -21,8 +22,8 @@ class TestInterfaces;
 
 class MockWebMIDIAccessor : public blink::WebMIDIAccessor {
  public:
-  explicit MockWebMIDIAccessor(blink::WebMIDIAccessorClient* client,
-                               TestInterfaces* interfaces);
+  MockWebMIDIAccessor(blink::WebMIDIAccessorClient* client,
+                      TestInterfaces* interfaces);
   ~MockWebMIDIAccessor() override;
 
   // blink::WebMIDIAccessor implementation.
@@ -32,13 +33,17 @@ class MockWebMIDIAccessor : public blink::WebMIDIAccessor {
                     size_t length,
                     double timestamp) override;
 
-  // WebTask related methods
-  WebTaskList* mutable_task_list() { return &task_list_; }
-
  private:
+  void addInputPort(midi::mojom::PortState state);
+  void addOutputPort(midi::mojom::PortState state);
+  void reportStartedSession(midi::mojom::Result result);
+
   blink::WebMIDIAccessorClient* client_;
-  WebTaskList task_list_;
   TestInterfaces* interfaces_;
+  unsigned next_input_port_index_;
+  unsigned next_output_port_index_;
+
+  base::WeakPtrFactory<MockWebMIDIAccessor> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(MockWebMIDIAccessor);
 };
